@@ -45,7 +45,7 @@ void showGroupPnlChartDialog(
   );
 }
 
-class _GroupPnlChartDialog extends ConsumerWidget {
+class _GroupPnlChartDialog extends ConsumerStatefulWidget {
   final String groupName;
   final List groupList;
 
@@ -55,7 +55,22 @@ class _GroupPnlChartDialog extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_GroupPnlChartDialog> createState() =>
+      _GroupPnlChartDialogState();
+}
+
+class _GroupPnlChartDialogState extends ConsumerState<_GroupPnlChartDialog> {
+  String get groupName => widget.groupName;
+  List get groupList => widget.groupList;
+
+  @override
+  void dispose() {
+    ref.read(groupPnlChartProvider).markDialogClosed();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final chartProv = ref.watch(groupPnlChartProvider);
     final portfolio = ref.watch(portfolioProvider);
 
@@ -192,7 +207,7 @@ class _GroupPnlChartDialog extends ConsumerWidget {
       child: Column(
         children: [
           // P&L summary row
-          _buildSummaryRow(context, data, label),
+          _buildSummaryRow(context, chartProv, data, label),
           const SizedBox(height: 12),
           // P&L Chart
           Expanded(
@@ -210,12 +225,12 @@ class _GroupPnlChartDialog extends ConsumerWidget {
     );
   }
 
-  Widget _buildSummaryRow(
-      BuildContext context, List<GroupPnlDataPoint> data, String label) {
+  Widget _buildSummaryRow(BuildContext context,
+      GroupPnlChartProvider chartProv, List<GroupPnlDataPoint> data, String label) {
     if (data.isEmpty) return const SizedBox.shrink();
-    final current = data.last.pnl;
-    final peak = data.last.peak;
-    final dd = data.last.drawdown;
+    final current = chartProv.currentPnl;
+    final peak = chartProv.peak;
+    final dd = chartProv.drawdown;
 
     Color pnlColor(double v) {
       if (v > 0) {
