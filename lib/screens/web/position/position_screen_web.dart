@@ -88,9 +88,17 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           if (socketDatas.containsKey(position.token)) {
             final socketData = socketDatas[position.token];
 
-            // Update LTP if valid
+            // Skip "0"/"0.00" — socket cache emits these as defaults when broker
+            // omits lp for illiquid contracts. Letting them through writes
+            // position.lp = 0 and positionCal then computes (avg - 0) * qty,
+            // cascading into a phantom Total P&L on the summary card.
             final lp = socketData['lp']?.toString();
-            if (lp != null && lp != "null" && lp != position.lp) {
+            if (lp != null &&
+                lp != "null" &&
+                lp != "0" &&
+                lp != "0.0" &&
+                lp != "0.00" &&
+                lp != position.lp) {
               position.lp = lp;
               needsUpdate = true;
             }
