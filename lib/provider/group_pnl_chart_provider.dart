@@ -13,14 +13,24 @@ import '../models/portfolio_model/group_pnl_chart_model.dart';
 final groupPnlChartProvider =
     ChangeNotifierProvider((ref) => GroupPnlChartProvider());
 
-/// Group P&L chart provider — two-tier canonical series model.
+/// Group P&L chart provider — API-cached, socket-driven live extension.
 ///
-/// Settled section: 1-min candle points sourced from API. Source of truth.
-/// Drives `settledPeak` and `drawdown`. Never mutated by ticks.
+/// On open: fetch trade book + 1-min candles for the group's positions,
+/// build the cached settled series. Render.
 ///
-/// Live tip: at most one trailing point derived from the current portfolio
-/// `groupPnl`. Replaced every tick. Discarded on minute-roll background
-/// settle and on every reopen incremental fetch.
+/// While open: a 60-second timer appends synthetic minute snapshots from
+/// the latest socket LTPs into a TRANSIENT `_socketPoints` list. These are
+/// shown on the chart but NOT cached. Live tip continues to move with every
+/// websocket tick.
+///
+/// On close: timer cancelled, transient socket state cleared. The cache
+/// (API-derived `settled`, `lastSettledEpoch`, `settledPeak`) is preserved.
+///
+/// On reopen: API fetches the gap from the cached `lastSettledEpoch` to
+/// now, ONLY if at least 60s have passed since the last cached candle.
+/// Brief reopens hit cache with zero API calls. Trade book refetched only
+/// if the qty signature changed. Full rebuild only if the group's position
+/// set changed.
 class GroupPnlChartProvider extends ChangeNotifier {
   final _api = locator<ApiExporter>();
 
@@ -52,7 +62,15 @@ class GroupPnlChartProvider extends ChangeNotifier {
 
   // ─── Lifecycle ───
   bool _dialogOpen = false;
-  Timer? _settleTimer;
+  bool get isOpen => _dialogOpen;
+  Timer? _socketTimer;
+  Timer? _notifyDebounce;
+
+  // ─── Transient (not cached): socket-driven minute snapshots taken
+  // while the dialog is open. Reset every open session. ───
+  final List<GroupPnlDataPoint> _socketPoints = [];
+  double _socketPeak = double.negativeInfinity;
+  int _lastSocketEpoch = 0;
 
   // ─── Summary getters ───
 
@@ -60,20 +78,30 @@ class GroupPnlChartProvider extends ChangeNotifier {
     final c = _activeCanonical;
     if (c == null) return 0;
     if (c.liveTip != null) return c.liveTip!.pnl;
+    if (_socketPoints.isNotEmpty) return _socketPoints.last.pnl;
     if (c.settled.isNotEmpty) return c.settled.last.pnl;
     return 0;
   }
 
   double get peak {
     final c = _activeCanonical;
-    if (c == null || c.settledPeak == double.negativeInfinity) return 0;
-    return c.settledPeak;
+    if (c == null) return 0;
+    final candidates = <double>[];
+    if (c.settledPeak != double.negativeInfinity) {
+      candidates.add(c.settledPeak);
+    }
+    if (_socketPeak != double.negativeInfinity) {
+      candidates.add(_socketPeak);
+    }
+    if (c.liveTip != null) candidates.add(c.liveTip!.pnl);
+    if (candidates.isEmpty) return 0;
+    return candidates.reduce(max);
   }
 
   double get drawdown {
     final c = _activeCanonical;
-    if (c == null || c.settledPeak == double.negativeInfinity) return 0;
-    return currentPnl - c.settledPeak;
+    if (c == null) return 0;
+    return currentPnl - peak;
   }
 
   _CanonicalSeries? get _activeCanonical =>
@@ -96,17 +124,62 @@ class GroupPnlChartProvider extends ChangeNotifier {
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
+    // Group switch: only refresh the trade book flag. Per-group canonical,
+    // candle, and timeline caches survive — they're keyed appropriately
+    // (canonical by group, candles by token, timeline by token+prd) and can
+    // be reused if the user comes back to a previous group.
     if (groupChanged) {
-      _canonicalSeriesCache.clear();
-      _tpCacheOneMin.clear();
-      _timelineMap.clear();
       _tradeBookFetched = false;
     }
 
     final baseKey = _baseCacheKey(groupName, isDay, isNetPnl);
     _activeBaseKey = baseKey;
 
-    final existing = _canonicalSeriesCache[baseKey];
+    var existing = _canonicalSeriesCache[baseKey];
+
+    // A previously-cached canonical with `lastSettledEpoch == 0` means the
+    // initial fetch returned no candles (API failure / no candles yet).
+    // Don't try the incremental path against epoch 0 — drop it and rebuild.
+    if (existing != null && existing.lastSettledEpoch == 0) {
+      _canonicalSeriesCache.remove(baseKey);
+      existing = null;
+    }
+
+    // If the group's position set has changed since we cached the canonical
+    // (e.g., a new strike joined the same-underlying group), the cached
+    // settled curve is wrong because it was summed over a different set.
+    // Drop it and fall through to a full rebuild.
+    if (existing != null) {
+      final cachedKeys = existing.positionCorrections.keys.toSet();
+      final currentKeys = _positions
+          .map((p) =>
+              '${p['token']?.toString() ?? ''}|${p['prd']?.toString() ?? ''}')
+          .toSet();
+      if (cachedKeys.length != currentKeys.length ||
+          !cachedKeys.containsAll(currentKeys)) {
+        _canonicalSeriesCache.remove(baseKey);
+        _tradeBookFetched = false;
+        existing = null;
+      }
+    }
+
+    // If the qty signature has changed since the canonical was built, a
+    // trade has filled. The cached per-position `correction` was computed
+    // against the pre-trade timeline; reusing it would leave a constant
+    // offset on the historical curve (especially visible after closing a
+    // position). Invalidate and let the initial branch rebuild correction
+    // against the post-trade timeline. Candle cache survives.
+    if (existing != null && _computeQtySig() != existing.lastQtySig) {
+      _canonicalSeriesCache.remove(baseKey);
+      _tradeBookFetched = false;
+      existing = null;
+    }
+
+    // Fresh open session: drop any transient socket points from a prior
+    // session. Cache (API-derived) is preserved.
+    _socketPoints.clear();
+    _socketPeak = double.negativeInfinity;
+    _lastSocketEpoch = 0;
 
     _loading = true;
     _error = null;
@@ -118,23 +191,24 @@ class GroupPnlChartProvider extends ChangeNotifier {
         await _fetchOneMinFromMarketOpen();
         final canonical =
             _buildInitialCanonical(isDay: isDay, isNetPnl: isNetPnl);
+        canonical.lastQtySig = _computeQtySig();
         _canonicalSeriesCache[baseKey] = canonical;
         _refreshLiveTipFromCurrentPnl(canonical, isNetPnl: isNetPnl);
         _dataPoints = _downsample(canonical, _interval);
       } else {
-        // Reopen path: refresh trade book (new trades may have happened
-        // while dialog was closed) then fetch only the gap.
-        _tradeBookFetched = false;
-        await _fetchTradeInfo();
-        await _fetchOneMinIncremental(existing.lastSettledEpoch);
-        _appendIncremental(existing, isDay: isDay, isNetPnl: isNetPnl);
+        // Reopen path: sig was already verified equal above, so no trade
+        // book refetch. Skip candle gap fetch if less than 60s since the
+        // last cached candle (no new candle would exist anyway).
+        final nowEpoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        if (nowEpoch - existing.lastSettledEpoch >= 60) {
+          await _fetchOneMinIncremental(existing.lastSettledEpoch);
+          _appendIncremental(existing, isDay: isDay, isNetPnl: isNetPnl);
+        }
         _refreshLiveTipFromCurrentPnl(existing, isNetPnl: isNetPnl);
         _dataPoints = _downsample(existing, _interval);
       }
     } catch (e) {
       _error = 'Failed to load chart data';
-      // Best-effort fallback: if we already had a canonical, surface it
-      // with a fresh live tip so the chart isn't blank.
       if (existing != null) {
         _refreshLiveTipFromCurrentPnl(existing, isNetPnl: isNetPnl);
         _dataPoints = _downsample(existing, _interval);
@@ -144,7 +218,11 @@ class GroupPnlChartProvider extends ChangeNotifier {
       _loading = false;
     }
 
-    _startSettleTimer(isDay: isDay, isNetPnl: isNetPnl);
+    // The dialog may have been closed while we were awaiting the API.
+    // Don't start a timer for a dialog that no longer exists.
+    if (_dialogOpen) {
+      _startSocketTimer(isNetPnl: isNetPnl);
+    }
     notifyListeners();
   }
 
@@ -191,34 +269,59 @@ class GroupPnlChartProvider extends ChangeNotifier {
       final pnlDelta = netQty * prcFtr * mult * (newLp - oldLp);
 
       pos['lp'] = ltp;
+      // Store pnl as raw double to avoid cumulative paisa-level rounding
+      // from toStringAsFixed(2) round-trips on every tick. Readers parse
+      // via .toString() + tryParse which works for both String (initial
+      // groupList values) and double (after first tick).
       final oldPnl =
           double.tryParse(pos['profitNloss']?.toString() ?? '0') ?? 0.0;
       final oldMtm = double.tryParse(pos['mTm']?.toString() ?? '0') ?? 0.0;
-      pos['profitNloss'] = (oldPnl + pnlDelta).toStringAsFixed(2);
-      pos['mTm'] = (oldMtm + pnlDelta).toStringAsFixed(2);
+      pos['profitNloss'] = oldPnl + pnlDelta;
+      pos['mTm'] = oldMtm + pnlDelta;
       updated = true;
     }
     if (!updated) return;
 
+    // Refresh live tip cheaply on every tick (sub-millisecond), but
+    // coalesce UI rebuilds. On a busy minute a liquid contract can fire
+    // 10+ ticks/sec — we cap chart redraws at ~4/sec to keep CPU bounded.
     _refreshLiveTipFromCurrentPnl(c, isNetPnl: isNetPnl);
-    _dataPoints = _downsample(c, _interval);
-    notifyListeners();
+    _scheduleTickNotify();
   }
 
-  /// Called from the dialog's `dispose`. Stops the background settle timer
-  /// and clears the live tip so a stale tick value isn't shown frozen on
-  /// next reopen before the incremental fetch completes.
+  void _scheduleTickNotify() {
+    if (_notifyDebounce != null) return;
+    _notifyDebounce = Timer(const Duration(milliseconds: 250), () {
+      _notifyDebounce = null;
+      final c = _activeCanonical;
+      if (c != null) _dataPoints = _downsample(c, _interval);
+      notifyListeners();
+    });
+  }
+
+  /// Called from the dialog's `dispose`. Stops the socket timer, clears
+  /// transient socket state, and nulls the live tip. Cache untouched.
   void markDialogClosed() {
     _dialogOpen = false;
-    _settleTimer?.cancel();
-    _settleTimer = null;
+    _socketTimer?.cancel();
+    _socketTimer = null;
+    _notifyDebounce?.cancel();
+    _notifyDebounce = null;
+    _socketPoints.clear();
+    _socketPeak = double.negativeInfinity;
+    _lastSocketEpoch = 0;
     final c = _activeCanonical;
     if (c != null) c.liveTip = null;
   }
 
   void clearCache() {
-    _settleTimer?.cancel();
-    _settleTimer = null;
+    _socketTimer?.cancel();
+    _socketTimer = null;
+    _notifyDebounce?.cancel();
+    _notifyDebounce = null;
+    _socketPoints.clear();
+    _socketPeak = double.negativeInfinity;
+    _lastSocketEpoch = 0;
     _tpCacheOneMin.clear();
     _canonicalSeriesCache.clear();
     _timelineMap.clear();
@@ -232,7 +335,8 @@ class GroupPnlChartProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    _settleTimer?.cancel();
+    _socketTimer?.cancel();
+    _notifyDebounce?.cancel();
     super.dispose();
   }
 
@@ -241,34 +345,107 @@ class GroupPnlChartProvider extends ChangeNotifier {
   String _baseCacheKey(String group, bool isDay, bool isNetPnl) =>
       '$group|$isDay|$isNetPnl';
 
-  void _startSettleTimer({required bool isDay, required bool isNetPnl}) {
-    _settleTimer?.cancel();
-    _settleTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      _settleTick(isDay: isDay, isNetPnl: isNetPnl);
+  /// Aggregate quantity signature: sum of trade-side qty fields across all
+  /// positions in the group. Monotonically increases as new trades fill, so
+  /// a change between two reads means a new trade happened. Used to gate
+  /// trade book refetch.
+  int _computeQtySig() {
+    int sig = 0;
+    for (final pos in _positions) {
+      sig += int.tryParse(pos['daybuyqty']?.toString() ?? '0') ?? 0;
+      sig += int.tryParse(pos['daysellqty']?.toString() ?? '0') ?? 0;
+      sig += int.tryParse(pos['cfbuyqty']?.toString() ?? '0') ?? 0;
+      sig += int.tryParse(pos['cfsellqty']?.toString() ?? '0') ?? 0;
+    }
+    return sig;
+  }
+
+  void _startSocketTimer({required bool isNetPnl}) {
+    _socketTimer?.cancel();
+    _socketTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _socketSettleTick(isNetPnl: isNetPnl);
     });
   }
 
-  Future<void> _settleTick({
-    required bool isDay,
-    required bool isNetPnl,
-  }) async {
+  /// Once a minute, snapshot the current socket-driven LTPs (sitting in
+  /// `_positions[i]['lp']`) as a synthetic settled point. NEVER writes to
+  /// `_canonicalSeriesCache` — these points live only in `_socketPoints`
+  /// and are discarded on close. No API calls.
+  void _socketSettleTick({required bool isNetPnl}) {
     if (!_dialogOpen) return;
     final c = _activeCanonical;
     if (c == null) return;
-    final nowEpoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    if (nowEpoch - c.lastSettledEpoch < 60) return;
 
-    try {
-      _tradeBookFetched = false;
-      await _fetchTradeInfo();
-      await _fetchOneMinIncremental(c.lastSettledEpoch);
-      _appendIncremental(c, isDay: isDay, isNetPnl: isNetPnl);
-      _refreshLiveTipFromCurrentPnl(c, isNetPnl: isNetPnl);
-      _dataPoints = _downsample(c, _interval);
-      notifyListeners();
-    } catch (_) {
-      // Next tick will retry.
+    final nowEpoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final boundaryEpoch = (nowEpoch ~/ 60) * 60;
+    // Don't add a duplicate point for the same minute.
+    if (boundaryEpoch <= _lastSocketEpoch) return;
+    // Don't add a synthetic point that overlaps cached settled history.
+    if (boundaryEpoch <= c.lastSettledEpoch) return;
+
+    final posCalcs = _buildPosCalcs(isNetPnl: isNetPnl);
+    // Reuse cached corrections so the synthetic curve aligns with the
+    // cached settled history.
+    for (final pc in posCalcs) {
+      pc.correction = c.positionCorrections[pc.posKey] ?? 0;
     }
+
+    double groupPnl = 0;
+    bool any = false;
+    for (final pc in posCalcs) {
+      if (boundaryEpoch < pc.entryEpoch) continue;
+      double lp =
+          double.tryParse(_lpForToken(pc.posKey).toString()) ?? double.nan;
+      // Fallback: if the token hasn't ticked yet (LP is 0 or unparseable),
+      // use its last cached candle close so we don't drop the position from
+      // the synthetic point — that would create a visible kink.
+      if (lp.isNaN || lp == 0) {
+        if (pc.candles.isNotEmpty) {
+          lp = double.tryParse(pc.candles.last.intc ?? '0') ?? 0;
+        }
+        if (lp.isNaN || lp == 0) continue;
+      }
+      if (pc.timeline.snapshots.isNotEmpty) {
+        groupPnl += pc.timeline.pnlAtTime(boundaryEpoch, lp, pc.prcFtr,
+                pc.mult) +
+            pc.correction;
+      } else {
+        groupPnl += pc.currentPnl;
+      }
+      any = true;
+    }
+    if (!any) return;
+
+    if (_socketPeak == double.negativeInfinity) {
+      _socketPeak = c.settledPeak == double.negativeInfinity
+          ? groupPnl
+          : max(c.settledPeak, groupPnl);
+    } else {
+      _socketPeak = max(_socketPeak, groupPnl);
+    }
+    _lastSocketEpoch = boundaryEpoch;
+
+    _socketPoints.add(GroupPnlDataPoint(
+      time: DateTime.fromMillisecondsSinceEpoch(boundaryEpoch * 1000),
+      pnl: groupPnl,
+      peak: _socketPeak,
+      drawdown: groupPnl - _socketPeak,
+    ));
+
+    _refreshLiveTipFromCurrentPnl(c, isNetPnl: isNetPnl);
+    _dataPoints = _downsample(c, _interval);
+    notifyListeners();
+  }
+
+  /// Look up the current LTP for a position key (token|prd) from
+  /// `_positions`. Falls back to "" if not found.
+  Object _lpForToken(String posKey) {
+    for (final pos in _positions) {
+      final key =
+          '${pos['token']?.toString() ?? ''}|${pos['prd']?.toString() ?? ''}';
+      if (key == posKey) return pos['lp'] ?? '';
+    }
+    return '';
   }
 
   // ─── Internals: API fetches ───
@@ -732,17 +909,27 @@ class GroupPnlChartProvider extends ChangeNotifier {
 
   /// Returns a NEW List instance every call so Syncfusion's `dataSource`
   /// change detection picks it up on widget rebuild.
+  ///
+  /// Merges three sources:
+  ///   1. `c.settled` — API-derived (cached).
+  ///   2. `_socketPoints` — minute snapshots from socket LTP (transient).
+  ///   3. `c.liveTip` — current moment.
   List<GroupPnlDataPoint> _downsample(
       _CanonicalSeries c, String interval) {
+    final all = <GroupPnlDataPoint>[
+      ...c.settled,
+      ..._socketPoints,
+    ];
+
     final result = <GroupPnlDataPoint>[];
     if (interval == '1') {
-      result.addAll(c.settled);
+      result.addAll(all);
     } else {
       final bucketMins = int.tryParse(interval) ?? 5;
       final bucketMs = bucketMins * 60 * 1000;
       int? currentBucket;
       GroupPnlDataPoint? lastInBucket;
-      for (var p in c.settled) {
+      for (var p in all) {
         final bucket = p.time.millisecondsSinceEpoch ~/ bucketMs;
         if (currentBucket == null) {
           currentBucket = bucket;
@@ -770,6 +957,7 @@ class _CanonicalSeries {
   int lastSettledEpoch;
   double settledPeak;
   Map<String, double> positionCorrections;
+  int lastQtySig;
 
   _CanonicalSeries({
     required this.settled,
@@ -777,7 +965,8 @@ class _CanonicalSeries {
     required this.lastSettledEpoch,
     required this.settledPeak,
     Map<String, double>? positionCorrections,
-  }) : positionCorrections = positionCorrections ?? {};
+  })  : lastQtySig = 0,
+        positionCorrections = positionCorrections ?? {};
 }
 
 class _TimelineSnapshot {
