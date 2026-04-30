@@ -99,6 +99,8 @@ class ScreenUtils {
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.caBuyback:
+        return 'Buyback';
     }
   }
 
@@ -199,6 +201,8 @@ class ScreenUtils {
         return Icons.download;
       case ScreenType.closureDetails:
         return Icons.cancel;
+      case ScreenType.caBuyback:
+        return Icons.recycling;
     }
   }
 

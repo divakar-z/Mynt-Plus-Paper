@@ -8,7 +8,6 @@ import 'dart:html' as html;
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
-import 'package:mynt_plus/provider/fund_provider.dart';
 import 'package:mynt_plus/provider/notification_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
@@ -22,7 +21,6 @@ import 'package:mynt_plus/screens/web/profile/logged_user_list_web.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' hide Colors;
 import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../customizable_split_home_screen.dart' show ScreenType, tickerVisibilityNotifier, toggleTickerVisibility;
 import '../../../market_watch/tv_chart/chart_iframe_guard.dart';
 import 'package:mynt_plus/utils/pip_service.dart';
@@ -178,7 +176,6 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
   Widget build(BuildContext context) {
     final userProfile = ref.watch(userProfileProvider);
     final theme = ref.watch(themeProvider);
-    final funds = ref.watch(fundProvider);
     final Preferences pref = locator<Preferences>();
     final String reflink = "https://oa.mynt.in/?ref=${pref.clientId}";
 
@@ -303,7 +300,7 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
               },
             ),
 
-            // Corporation Action
+            // Corporation Action — internal screen (Buyback / Delisting / Takeover / OFS)
             _buildMenuItem(
               context,
               icon: Icons.business_outlined,
@@ -312,10 +309,10 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
               iconColor: iconColor,
               textColor: textColor,
               subtitleColor: subtitleColor,
-              onPressed: (ctx) async {
-                await funds.fetchHstoken(widget.parentContext);
-                final url = 'https://profile.zebuetrade.com/corporateaction?uid=${pref.clientId}&token=${pref.token}';
-                launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+              onPressed: (ctx) {
+                if (widget.onNavigateToScreen != null) {
+                  widget.onNavigateToScreen!(ScreenType.caBuyback);
+                }
               },
             ),
 

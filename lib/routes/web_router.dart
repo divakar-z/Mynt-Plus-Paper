@@ -43,6 +43,7 @@ class WebRoutes {
   static const String tradingViewWebHook = '/tradingview-webhook';
   static const String basketDashboard = '/basket-dashboard';
   static const String pledge = '/pledge';
+  static const String caBuyback = '/corporate-actions';
   static const String refer = '/refer';
   static const String helpSupport = '/help-support';
   static const String settings = '/settings';
@@ -211,6 +212,14 @@ void initializeWebRouter() {
         path: WebRoutes.pledge,
        builder: (context, state) => const CustomizableSplitHomeScreen(
           initialRightPanel: ScreenTypeParam.pledgeUnpledge,
+        ),
+      ),
+
+      // Corporate Actions (Buyback / Delisting / Takeover / OFS)
+      GoRoute(
+        path: WebRoutes.caBuyback,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.caBuyback,
         ),
       ),
 

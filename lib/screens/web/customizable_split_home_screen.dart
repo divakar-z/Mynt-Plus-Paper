@@ -58,6 +58,7 @@ import '../../../provider/mf_provider.dart';
 import '../../../provider/web_subscription_manager.dart';
 import '../../../provider/dashboard_provider.dart';
 import 'profile/Reports/ca_events_screen_web.dart';
+import 'profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
 import 'profile/Reports/client_master_screen_web.dart';
 import '../../../res/res.dart';
 import '../../../provider/sidebar_provider.dart';
@@ -173,6 +174,7 @@ enum ScreenTypeParam {
   benchmarkBacktest,
   saveBasketStrategy,
   profileDetails,
+  caBuyback,
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -710,6 +712,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenTypeParam.profileDetails:
         _replaceScreenInPanel(ScreenType.profileDetails);
+        break;
+      case ScreenTypeParam.caBuyback:
+        _handleCABuybackTap();
         break;
       case ScreenTypeParam.dashboard:
       case ScreenTypeParam.watchlist:
@@ -2723,6 +2728,8 @@ class _CustomizableSplitHomeScreenState
         return const PledgenUnpledge(ddd: "DDDDD");
       case ScreenType.corporateActions:
         return CAEventsScreenWeb(onBack: _goBackInRightPanel);
+      case ScreenType.caBuyback:
+        return CorporateActionsScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.clientMaster:
         return ClientMasterScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.reports:
@@ -2896,6 +2903,8 @@ class _CustomizableSplitHomeScreenState
         return 'Pledge/Unpledge';
       case ScreenType.corporateActions:
         return 'Corporate Actions';
+      case ScreenType.caBuyback:
+        return 'Corporate Action';
       case ScreenType.clientMaster:
         return 'Client Master';
       case ScreenType.reports:
@@ -3005,6 +3014,8 @@ class _CustomizableSplitHomeScreenState
         return Icons.security;
       case ScreenType.corporateActions:
         return Icons.business;
+      case ScreenType.caBuyback:
+        return Icons.business_center_outlined;
       case ScreenType.clientMaster:
         return Icons.description;
       case ScreenType.reports:
@@ -3447,6 +3458,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenType.corporateActions:
         _handleCorporateActionsTap();
+        break;
+      case ScreenType.caBuyback:
+        _handleCABuybackTap();
         break;
       case ScreenType.clientMaster:
         _addScreenAsPanelTab(ScreenType.clientMaster);
@@ -4831,6 +4845,27 @@ class _CustomizableSplitHomeScreenState
     }
   }
 
+  // Handle CA Buyback / Takeover / OFS tap (Profile dropdown → "Corporate Action")
+  void _handleCABuybackTap() async {
+    _addScreenAsPanelTab(ScreenType.caBuyback);
+
+    final portfolio = ref.read(portfolioProvider);
+    final reportsprovider = ref.read(ledgerProvider);
+
+    portfolio.cancelTimer();
+
+    await portfolio.requestWSHoldings(context: context, isSubscribe: false);
+    await portfolio.requestWSPosition(context: context, isSubscribe: false);
+    await ref
+        .read(orderProvider)
+        .requestWSOrderBook(context: context, isSubscribe: false);
+
+    if (reportsprovider.cpactiondata == null &&
+        reportsprovider.cpactionloader != true) {
+      reportsprovider.fetchcpactiondata(context);
+    }
+  }
+
   // Handle corporate actions tap
   void _handleCorporateActionsTap() async {
     // Add corporate actions as a panel tab
@@ -5500,6 +5535,7 @@ enum ScreenType {
   optionChain,
   pledgeUnpledge,
   corporateActions,
+  caBuyback,
   reports,
   settings,
   tradeAction,

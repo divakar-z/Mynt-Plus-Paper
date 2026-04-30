@@ -23,6 +23,7 @@ import 'package:mynt_plus/screens/web/webhook/webhook_tradingview_screen.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/screens/Mobile/bonds/bonds_main_screen.dart';
 import 'package:mynt_plus/screens/web/profile/Reports/ca_events_screen_web.dart';
+import 'package:mynt_plus/screens/web/profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/Reports/client_master_screen_web.dart';
 import 'package:mynt_plus/screens/Mobile/desk_reports/pledge_unpledge_screen.dart';
 import 'package:mynt_plus/screens/web/mutual_fund/mf_main_screen_web.dart';
@@ -140,6 +141,8 @@ class PanelContentBuilder {
         return const PledgenUnpledge(ddd: "DDDDD");
       case ScreenType.corporateActions:
         return CAEventsScreenWeb(onBack: onBack);
+      case ScreenType.caBuyback:
+        return CorporateActionsScreenWeb(onBack: onBack);
       case ScreenType.clientMaster:
         return ClientMasterScreenWeb(onBack: onBack);
       case ScreenType.reports:

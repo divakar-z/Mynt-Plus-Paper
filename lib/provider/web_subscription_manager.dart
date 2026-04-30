@@ -625,6 +625,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       ScreenType.optionChain: SubscriptionType.marketWatch,
       ScreenType.pledgeUnpledge: SubscriptionType.none,
       ScreenType.corporateActions: SubscriptionType.none,
+      ScreenType.caBuyback: SubscriptionType.none,
       ScreenType.reports: SubscriptionType.none,
       ScreenType.settings: SubscriptionType.none,
       ScreenType.tradeAction: SubscriptionType.marketWatch,
