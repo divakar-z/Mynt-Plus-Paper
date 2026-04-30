@@ -822,10 +822,11 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Update your account password',
-            style: MyntWebTextStyles.bodySmall(context,
-                darkColor: MyntColors.textSecondaryDark,
-                lightColor: MyntColors.textSecondary),
+            'Choose your Password',
+            style: MyntWebTextStyles.title(context,
+                fontWeight: MyntFonts.semiBold,
+                darkColor: MyntColors.textPrimaryDark,
+                lightColor: MyntColors.textPrimary),
           ),
           const SizedBox(height: 20),
 
@@ -4786,7 +4787,7 @@ class _TotpInlineWidgetState extends State<_TotpInlineWidget> {
                           color: resolveThemeColor(context,
                               dark: MyntColors.textSecondaryDark,
                               light: MyntColors.textSecondary)),
-                      onPressed: () => _copyToClipboard(widget.secretKey, 'Auth key copied to clipboard'),
+                      onPressed: () => _copyToClipboard(widget.secretKey, 'Auth Key is copied to Clipboard'),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                     ),

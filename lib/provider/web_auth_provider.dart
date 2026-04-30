@@ -122,6 +122,7 @@ class WebAuthProvider extends ChangeNotifier {
   /// Toggle between OTP and TOTP mode
   void toggleTotpMode() {
     _isTotp = !_isTotp;
+    _topflow = false; // Toggling exits the TOTP setup flow back to normal entry
     otpController.clear();
     _otpError = null;
     notifyListeners();
@@ -392,25 +393,25 @@ class WebAuthProvider extends ChangeNotifier {
           notifyListeners();
           return false;
         } else if (errorMsg.contains('otp not valid') || errorMsg.contains('invalid otp') || errorMsg.contains('invalid input')) {
-          _otpError = 'Invalid $otpTypeLabel';
-          // Check context validity before showing toast
+          // API error → toaster only (consistent with login flow)
+          _otpError = null;
           if (context.mounted) {
-            ResponsiveSnackBar.showWarning(context, 'Invalid $otpTypeLabel. Please try again.');
+            ResponsiveSnackBar.showError(context, 'Invalid $otpTypeLabel, Please Try again');
           }
         } else {
-          // Show original error message for other errors
-          _otpError = _mobileOtp!.emsg;
+          // API error → toaster only (raw emsg)
+          _otpError = null;
           if (context.mounted) {
-            ResponsiveSnackBar.showWarning(context, _mobileOtp!.emsg!);
+            ResponsiveSnackBar.showError(context, _mobileOtp!.emsg!);
           }
         }
         notifyListeners();
       } else if (_mobileOtp != null) {
-        // Fallback error message
+        // Fallback — toaster only
         final otpTypeLabel = _isTotp ? 'TOTP' : 'OTP';
-        _otpError = 'Invalid $otpTypeLabel';
+        _otpError = null;
         if (context.mounted) {
-          ResponsiveSnackBar.showWarning(context, 'Verification failed. Please try again.');
+          ResponsiveSnackBar.showError(context, 'Invalid $otpTypeLabel, Please Try again');
         }
         notifyListeners();
       }
@@ -542,7 +543,11 @@ class WebAuthProvider extends ChangeNotifier {
   void startQrLogin(BuildContext context) {
     // Stop any existing poll
     stopQrLogin();
-    
+
+    // Fresh UUID per entry so each visit shows a newly generated QR and the
+    // poll endpoint tracks a distinct session (no stale state across re-entries).
+    _deviceUuid = uuid.v4();
+
     // Construct QR Image URL
     // URL: {BASE_URL}/get_login_qr?unique_id={UUID}&source=WEB
     // Note: Assuming BASE_URL is https://ws.mynt.in/login based on WebAuthApi
