@@ -2241,7 +2241,7 @@ changeHoldingsTabIndex(int index) {
       // Update chart provider if chart dialog is open
       try {
         final chartProv = ref.read(groupPnlChartProvider);
-        if (chartProv.activeGroupName != null && newLp != null) {
+        if (chartProv.isOpen && newLp != null) {
           chartProv.onTickUpdate(
             token: token,
             ltp: newLp,
