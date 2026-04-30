@@ -332,6 +332,37 @@ class ScalperChartManager {
     }
   }
 
+  /// Fully tear down and recreate all 3 charts (index, call, put) using
+  /// each chart's currently-selected symbol and theme. Use this for the
+  /// manual Refresh button — guarantees a clean datafeed, fresh history,
+  /// fresh subscription record, and fresh lastBar.
+  ///
+  /// Trade-off: discards user's per-chart timeframe / indicators / drawings.
+  /// That's acceptable for an explicit refresh; not acceptable for an
+  /// automatic tab-return.
+  void recreateAllCharts() {
+    for (final chartId in const ['index', 'call', 'put']) {
+      final containerId = _containerIds[chartId];
+      if (containerId == null || !_bridgeLoaded) continue;
+
+      final symbol = _getCurrentSymbol(chartId);
+      if (symbol == null) continue;
+
+      final isDark = _chartThemes[chartId] ?? false;
+
+      try {
+        final bridge = _scalperChartsBridge;
+        if (bridge == null) continue;
+
+        if (bridge.hasChart(containerId)) {
+          bridge.removeChart(containerId);
+        }
+        createChart(chartId: chartId, symbol: symbol, isDarkMode: isDark);
+      } catch (_) {
+      }
+    }
+  }
+
   /// Change index chart symbol
   void changeSymbol({
     required String exch,

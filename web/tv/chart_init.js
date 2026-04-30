@@ -25,6 +25,11 @@
    */
   function createDatafeed(user, usession, containerId) {
     var lastBarFromHistory = null;
+    // Tag lastBarFromHistory with the symbol it belongs to. Without this,
+    // a re-subscribe after a setSymbol can seed subscriptions[].lastBar
+    // with a bar from the *previous* symbol, producing a phantom candle
+    // on the first tick of the new symbol.
+    var lastBarSymbol = null;
 
     return {
       onReady: function (callback) {
@@ -144,6 +149,7 @@
                 var desired = desiredSymbols[containerId];
                 if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
                   lastBarFromHistory = bars[bars.length - 1];
+                  lastBarSymbol = symbolInfo.name;
                 } else {
                   console.log('ScalperCharts: Stale getBars (day) for', symbolInfo.name, '- desired:', desired);
                 }
@@ -186,6 +192,7 @@
                 var desired = desiredSymbols[containerId];
                 if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
                   lastBarFromHistory = bars[bars.length - 1];
+                  lastBarSymbol = symbolInfo.name;
                 } else {
                   console.log('ScalperCharts: Stale getBars (intraday) for', symbolInfo.name, '- desired:', desired);
                 }
@@ -208,11 +215,15 @@
           return;
         }
 
-        // Register subscription for this chart container
-        // Dart will push ticks via ScalperCharts.pushTick()
+        // Register subscription for this chart container.
+        // Dart will push ticks via ScalperCharts.pushTick().
+        // Only seed lastBar from history if it belongs to the symbol we're
+        // subscribing to — otherwise we'd inherit a stale bar from a prior
+        // setSymbol cycle and corrupt the first tick's candle.
+        var seedBar = (lastBarSymbol === symbolInfo.name) ? lastBarFromHistory : null;
         subscriptions[containerId] = {
           callback: onRealtimeCallback,
-          lastBar: lastBarFromHistory,
+          lastBar: seedBar,
           resolution: resolution,
           subscriberUID: subscriberUID,
           preVolume: 0,
@@ -437,6 +448,17 @@
       // Bucket to candle boundary
       time = bucketTime(time, sub.resolution, exchange);
 
+      // If lastBar is severely stale (long tab hide / system sleep), drop it.
+      // Without this guard, the first tick after resume creates a phantom
+      // candle whose OHLC are all the same single-tick price.
+      if (sub.lastBar) {
+        var staleGapMs = 60 * 60 * 1000; // 1 hour
+        if (time - sub.lastBar.time > staleGapMs) {
+          sub.lastBar = null;
+          sub.preVolume = 0;
+        }
+      }
+
       // Volume delta calculation
       var curVolume = vol;
       if (curVolume < sub.preVolume) curVolume = sub.preVolume;
@@ -485,18 +507,23 @@
     },
 
     /**
-     * Reset chart data — forces TradingView to re-fetch bars from the datafeed.
-     * Use this when returning from a tab switch or system sleep to fill gaps.
+     * Refetch bar data via TradingView's resetData. Does NOT touch
+     * subscriptions[containerId] — that record is owned by the
+     * subscribeBars / unsubscribeBars cycle, not by us.
+     *
+     * In this TV version, activeChart().resetData() may not always
+     * trigger a fresh subscribeBars cycle, so for a guaranteed full
+     * refresh use the Dart-side recreateAllCharts() instead.
      */
     resetData: function (containerId) {
       var widget = charts[containerId];
-      if (widget) {
-        try {
-          widget.activeChart().resetData();
-          console.log('ScalperCharts: resetData -', containerId);
-        } catch (e) {
-          console.error('ScalperCharts: resetData error -', containerId, e);
-        }
+      if (!widget) return;
+
+      try {
+        widget.activeChart().resetData();
+        console.log('ScalperCharts: resetData -', containerId);
+      } catch (e) {
+        console.error('ScalperCharts: resetData error -', containerId, e);
       }
     },
 

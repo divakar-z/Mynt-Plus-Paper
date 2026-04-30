@@ -60,6 +60,12 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
   /// Track the current theme state to detect changes for index chart
   bool? _lastIndexThemeState;
 
+  /// Track wsConnected state across rebuilds. On a false→true transition
+  /// (a reconnect), re-subscribe scalper's tokens since WebSubscriptionManager
+  /// rebuilds the master subscription list from sources it knows about, and
+  /// scalper's option-chain tokens aren't in any of those sources.
+  bool? _lastKnownWsConnected;
+
   // Search
   final GlobalKey _searchFieldKey = GlobalKey();
   final TextEditingController _searchController = TextEditingController();
@@ -87,7 +93,6 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     scalperChartManager.initialize();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     _searchFocusNode.addListener(_onSearchFocusChange);
-    html.document.addEventListener('visibilitychange', _onVisibilityChange);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeScreen();
@@ -170,16 +175,6 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     );
   }
 
-  /// When the page becomes visible again (after tab switch / system lock),
-  /// reset chart data so TradingView re-fetches history and fills any gaps.
-  void _onVisibilityChange(html.Event event) {
-    if (html.document.visibilityState == 'visible') {
-      scalperChartManager.resetData(chartId: 'index');
-      scalperChartManager.resetData(chartId: 'call');
-      scalperChartManager.resetData(chartId: 'put');
-    }
-  }
-
   Future<void> _loadOptionChain() async {
     if (_hasLoadedOptionChain) return;
 
@@ -203,7 +198,6 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
-    html.document.removeEventListener('visibilitychange', _onVisibilityChange);
     _searchFocusNode.removeListener(_onSearchFocusChange);
     _searchFocusNode.dispose();
     _searchController.dispose();
@@ -227,7 +221,24 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     ref.watch(themeProvider);
     final isDark = isDarkMode(context);
     final indexToken = scalper.selectedIndex.token;
-    final indexData = ref.watch(websocketProvider).socketDatas[indexToken];
+    final ws = ref.watch(websocketProvider);
+    final indexData = ws.socketDatas[indexToken];
+
+    // Detect WebSocket reconnect (false → true) and re-subscribe scalper's tokens.
+    // WebSubscriptionManager handles indices/positions on its own, but scalper's
+    // option-chain subscriptions are direct calls and unknown to the manager —
+    // without this, call/put charts go silent after a >5s tab switch.
+    final wsConnected = ws.wsConnected;
+    if (_lastKnownWsConnected == false && wsConnected) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final s = ref.read(scalperProvider);
+        if (s.callOptions.isNotEmpty || s.putOptions.isNotEmpty) {
+          s.subscribeToWebSocket(context);
+        }
+      });
+    }
+    _lastKnownWsConnected = wsConnected;
 
     // Update index chart when theme changes
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -599,6 +610,10 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
           // Refresh button
           IconButton(
             onPressed: () async {
+              // Force-rebuild all 3 charts to clear any stuck JS-side state
+              // (current strikes are preserved via the manager's cached symbols).
+              scalperChartManager.recreateAllCharts();
+
               _hasLoadedOptionChain = false;
               await _loadOptionChain();
               // Re-apply preference-based strikes (user may have manually changed them)
