@@ -344,6 +344,8 @@ class WebSocketProvider extends ChangeNotifier {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _safeNotifyListeners();
       });
+      // Schedule a frame so the post-frame callback fires even when idle
+      WidgetsBinding.instance.scheduleFrame();
     }
   }
 
@@ -361,6 +363,8 @@ class WebSocketProvider extends ChangeNotifier {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _safeNotifyListeners();
     });
+    // Schedule a frame so the post-frame callback fires even when idle
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   void _startSubscriptionTimer(String key, BuildContext context) {
@@ -744,10 +748,15 @@ class WebSocketProvider extends ChangeNotifier {
 
     log('✅ WebSocket: All connection setup completed');
 
-    // Notify listeners so WebSubscriptionManager can restore subscriptions
+    // Notify listeners so WebSubscriptionManager can restore subscriptions.
+    // scheduleFrame is required: without it, the post-frame callback never
+    // fires when the tab was backgrounded — the notify is queued indefinitely,
+    // WebSubscriptionManager's listener never wakes up, and subscriptions are
+    // never re-sent, so prices only resume after a user click/scroll.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _safeNotifyListeners();
     });
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   /// Send any pending subscriptions after connection is established
@@ -1451,6 +1460,8 @@ class WebSocketProvider extends ChangeNotifier {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _safeNotifyListeners(); // Notify to update UI with new connection count
       });
+      // Schedule a frame so the post-frame callback fires even when idle
+      WidgetsBinding.instance.scheduleFrame();
     }
 
     // Only close if not already closed
@@ -1520,6 +1531,8 @@ class WebSocketProvider extends ChangeNotifier {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _safeNotifyListeners(); // Notify to update UI with new connection count
       });
+      // Schedule a frame so the post-frame callback fires even when idle
+      WidgetsBinding.instance.scheduleFrame();
     }
 
     closeSocket(true);
@@ -1634,6 +1647,8 @@ class WebSocketProvider extends ChangeNotifier {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _safeNotifyListeners();
         });
+        // Schedule a frame so the post-frame callback fires even when idle
+        WidgetsBinding.instance.scheduleFrame();
       }
     }
   }
@@ -1754,6 +1769,8 @@ class WebSocketProvider extends ChangeNotifier {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _safeNotifyListeners();
         });
+        // Schedule a frame so the post-frame callback fires even when idle
+        WidgetsBinding.instance.scheduleFrame();
       });
     } else {
       log('📵 WebSocket: No network, aborting reconnection');
@@ -1763,6 +1780,8 @@ class WebSocketProvider extends ChangeNotifier {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _safeNotifyListeners();
       });
+      // Schedule a frame so the post-frame callback fires even when idle
+      WidgetsBinding.instance.scheduleFrame();
     }
   }
 
