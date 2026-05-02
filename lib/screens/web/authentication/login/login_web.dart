@@ -52,10 +52,18 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   String resendTime = "01.29";
 
   // QR Countdown Timer — visible on the QR login screen. Independent of the
-  // provider's internal poll timer; expiry returns the user to the login form.
+  // provider's internal poll timer.
+  // On expiry the QR auto-refreshes (fresh UUID + fresh image + fresh timer)
+  // for up to [_qrMaxRefreshCycles] cycles. After the budget is exhausted, an
+  // explicit "Reload" icon is shown (WhatsApp Web pattern) so the user can
+  // restart the cycle on demand — total visible QRs before reload prompt =
+  // 1 initial + [_qrMaxRefreshCycles] auto-refreshes.
   Timer? _qrCountdownTimer;
   static const int _qrCountdownStart = 89;
+  static const int _qrMaxRefreshCycles = 2;
   int _qrStart = _qrCountdownStart;
+  int _qrRefreshCount = 0;
+  bool _qrExpired = false;
 
   void startTimer() {
     _timer?.cancel();
@@ -451,7 +459,11 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
 
 
   /// Handle "Scan QR" Login - Switch to Inline QR Screen
-  void _handleQrLogin() {
+  /// [resetRefreshCount] is true when the user explicitly enters the QR screen
+  /// (so the auto-refresh budget starts fresh) and false when called from the
+  /// countdown expiry path (so consecutive auto-refreshes count toward the cap).
+  void _handleQrLogin({bool resetRefreshCount = true}) {
+    if (resetRefreshCount) _qrRefreshCount = 0;
     final webAuth = ref.read(webAuthProvider);
 
     // Clear any prior QR session state before starting fresh — guarantees a
@@ -465,6 +477,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
       _showQrScreen = true;
       _showOtpScreen = false;
       _showForgotPassword = false; // Ensure other screens are hidden
+      _qrExpired = false;
     });
 
     // Begin user-visible countdown
@@ -476,6 +489,8 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     final webAuth = ref.read(webAuthProvider);
 
     _stopQrCountdown();
+    _qrRefreshCount = 0;
+    _qrExpired = false;
     webAuth.cancelQrLogin(); // Use cancelQrLogin to clear mobileOtp and prevent stale data
 
     if (!mounted) return;
@@ -484,8 +499,11 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     });
   }
 
-  /// Start the visible QR countdown. Resets to [_qrCountdownStart] each call,
-  /// and on expiry routes back to the login form (same as Back to login).
+  /// Start the visible QR countdown. Resets to [_qrCountdownStart] each call.
+  /// On expiry, auto-refreshes with a new QR + new timer for up to
+  /// [_qrMaxRefreshCycles] cycles; after that, surfaces a Reload icon
+  /// (WhatsApp pattern) so the user can re-fetch on demand instead of
+  /// being kicked back to the login form.
   void _startQrCountdown() {
     _qrCountdownTimer?.cancel();
     _qrStart = _qrCountdownStart;
@@ -498,8 +516,17 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
       if (_qrStart <= 1) {
         timer.cancel();
         _qrCountdownTimer = null;
-        // Expiry → go back to login (mirrors Back to login behavior).
-        _handleCancelQrLogin();
+        if (_qrRefreshCount < _qrMaxRefreshCycles) {
+          // Within budget → auto-refresh in place: fresh QR + fresh timer.
+          _qrRefreshCount++;
+          _handleQrLogin(resetRefreshCount: false);
+        } else {
+          // Budget exhausted → stop polling, clear QR image, switch UI to
+          // a Reload icon. User stays on the QR screen and can tap Reload
+          // to start a fresh cycle (counter resets via _handleQrLogin).
+          ref.read(webAuthProvider).cancelQrLogin();
+          if (mounted) setState(() => _qrExpired = true);
+        }
       } else {
         setState(() => _qrStart--);
       }
@@ -668,6 +695,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
         forpass.newPassword.text,
         context,
         preventNavigation: true,
+        // Forgot-password flow labels the field "Generated Password" — tell
+        // the provider to relabel the API's "Old Password" wording in errors.
+        isGeneratedPasswordFlow: !_isPasswordExpired,
       );
 
       // Check if change password was successful
@@ -794,39 +824,87 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                           const SizedBox(height: 32),
 
                           // QR Login Screen
-                          if (_showQrScreen) 
+                          if (_showQrScreen)
                             Consumer(
                               builder: (context, ref, _) {
                                 final wa = ref.watch(webAuthProvider);
                                 return Column(
                                   children: [
                                     Container(
-                                        height: 350, width: 350,
-                                        alignment: Alignment.center,
-                                        child: wa.qrLoginImageUrl != null
-                                          ? Image.network(wa.qrLoginImageUrl!)
-                                          : MyntLoader.simple(size: MyntLoaderSize.medium)
+                                      height: 295,
+                                      width: 295,
+                                      alignment: Alignment.center,
+                                      // When expired, frame the empty area
+                                      // with a subtle border so the reload
+                                      // icon doesn't float in blank space —
+                                      // matches the visual presence of the
+                                      // QR image when active.
+                                      decoration: _qrExpired
+                                          ? BoxDecoration(
+                                              border: Border.all(
+                                                color: resolveThemeColor(
+                                                  context,
+                                                  dark: MyntColors.dividerDark,
+                                                  light: MyntColors.divider,
+                                                ),
+                                                width: 1,
+                                              ),
+                                              // borderRadius: BorderRadius.circular(8),
+                                            )
+                                          : null,
+                                      child: _qrExpired
+                                          // Budget exhausted → centered Reload
+                                          // icon. Tapping fetches a fresh QR
+                                          // and restarts the cycle (counter
+                                          // and timer both reset via
+                                          // _handleQrLogin).
+                                          ? InkWell(
+                                              onTap: _handleQrLogin,
+                                              borderRadius: BorderRadius.circular(60),
+                                              child: Container(
+                                                width: 96,
+                                                height: 96,
+                                                alignment: Alignment.center,
+                                                decoration: const BoxDecoration(
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: Icon(
+                                                  Icons.refresh,
+                                                  size: 60,
+                                                  color: resolveThemeColor(context,
+                                                      dark: MyntColors.textPrimaryDark,
+                                                      light: MyntColors.textPrimary),
+                                                ),
+                                              ),
+                                            )
+                                          : (wa.qrLoginImageUrl != null
+                                              ? Image.network(wa.qrLoginImageUrl!)
+                                              : MyntLoader.simple(size: MyntLoaderSize.medium)),
                                     ),
                                     const SizedBox(height: 16),
                                     Text(
-                                      "Scan QR code from profile tab top appbar of MYNT to login.",
+                                      _qrExpired
+                                          ? "Click to refresh QR code"
+                                          : "Scan QR code from profile tab top appbar of MYNT to login.",
                                       textAlign: TextAlign.center,
                                       style: MyntWebTextStyles.body(context, color: resolveThemeColor(context,
                                           dark: MyntColors.textSecondaryDark,
                                           light: MyntColors.textSecondary)),
                                     ),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      "QR expires in ${formattedTime(timeInSecond: _qrStart)}",
-                                      textAlign: TextAlign.center,
-                                      style: MyntWebTextStyles.body(
-                                        context,
-                                        fontWeight: MyntFonts.semiBold,
-                                        color: resolveThemeColor(context,
-                                            dark: MyntColors.textPrimaryDark,
-                                            light: MyntColors.textPrimary),
+                                    if (!_qrExpired) ...[
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        "QR expires in ${formattedTime(timeInSecond: _qrStart)}",
+                                        textAlign: TextAlign.center,
+                                        style: MyntWebTextStyles.body(
+                                          context,
+                                          fontWeight: MyntFonts.semiBold,
+                                          color: resolveThemeColor(context,
+                                              dark: MyntColors.textPrimaryDark,
+                                              light: MyntColors.textPrimary),
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                     const SizedBox(height: 16),
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.end,

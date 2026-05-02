@@ -251,7 +251,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         ConstantName.sessCheck = true;
         if (context.mounted) {
           ResponsiveSnackBar.showSuccess(
-              context, 'Generated Password has been sent to your registered Mobile Number / Email');
+              context, 'Generated Password has been sent to Your Mobile Number and Email');
         }
 
         userIdController.text = '${_forgetPasswordModel!.clientid}';
@@ -304,7 +304,9 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
 
 // Fetching data from the api and stored in a variable
   fetchChangePassword(String userId, String oldpassword, String password,
-      BuildContext context, {bool preventNavigation = false}) async {
+      BuildContext context,
+      {bool preventNavigation = false,
+      bool isGeneratedPasswordFlow = false}) async {
     try {
       toggleLoadingOn(true);
       _changepasswordmodel =
@@ -336,9 +338,33 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
               context, Routes.loginScreen, (route) => route.isFirst);
         }
       } else if (_changepasswordmodel!.stat == "Not_Ok") {
-        final errorMsg = _changepasswordmodel!.emsg?.replaceAll("Error Occurred :", "") ?? 'Failed to change password';
+        final rawMsg = _changepasswordmodel!.emsg
+                ?.replaceAll("Error Occurred :", "")
+                .trim() ??
+            'Failed to change password';
+        final rawLower = rawMsg.toLowerCase();
+        String toastMsg;
+        if (rawLower.contains('previous 3 passwords') ||
+            rawLower.contains('last 3 passwords')) {
+          // Standardize the password-reuse error wording across all flows
+          // (Forgot, Password Expired, Settings) — backend phrasing is
+          // verbose and grammatically awkward.
+          toastMsg = 'New password cannot match your last 3 passwords';
+        } else if (isGeneratedPasswordFlow) {
+          // On the Forgot Password flow the field above this toast is
+          // labeled "Generated Password", but the backend's error wording
+          // is "Invalid Old Password" because it doesn't distinguish flows.
+          // Substitute "Old Password" → "Generated Password" so the toast
+          // matches the field the user is looking at.
+          toastMsg = rawMsg.replaceAll(
+            RegExp(r'old password', caseSensitive: false),
+            'Generated Password',
+          );
+        } else {
+          toastMsg = rawMsg;
+        }
         if (context.mounted) {
-          ResponsiveSnackBar.showError(context, errorMsg);
+          ResponsiveSnackBar.showError(context, toastMsg);
         }
       } else if (_changepasswordmodel!.emsg ==
           "Session Expired :  Invalid Session Key") {
