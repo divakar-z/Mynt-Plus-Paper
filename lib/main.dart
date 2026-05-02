@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import 'package:mynt_plus/notification/notification_service.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 // Web URL strategy - enables path-based URLs instead of hash-based
 import 'package:flutter_web_plugins/url_strategy.dart';
@@ -205,9 +206,28 @@ Future<void> initializeFirebaseAsync() async {
 
     // Handle foreground messages
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-   
-
-      handleNotificationMessage(message);
+      if (kIsWeb) {
+        // On web, the tab being visible means the browser hands the push to
+        // this Dart-side handler instead of showing an OS notification — by
+        // design (avoids redundant popups when the user is already on the
+        // page). awesome_notifications doesn't render on web, so we surface
+        // the message as an in-page toast instead, matching the convention
+        // used by Slack / Gmail Web.
+        final notification = message.notification;
+        if (notification != null) {
+          final title = notification.title ?? '';
+          final body = notification.body ?? '';
+          final text = [title, body].where((s) => s.isNotEmpty).join('\n');
+          if (text.isNotEmpty) {
+            final ctx = getNavigatorContext();
+            if (ctx != null && ctx.mounted) {
+              ResponsiveSnackBar.showInfo(ctx, text);
+            }
+          }
+        }
+      } else {
+        handleNotificationMessage(message);
+      }
       _messageStreamController.sink.add(message);
     });
 
