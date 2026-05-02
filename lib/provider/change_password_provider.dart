@@ -324,7 +324,16 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         ConstantName.sessCheck = true;
         ref.read(authProvider).clearTextField();
         if (context.mounted) {
-          ResponsiveSnackBar.showSuccess(context, '${_changepasswordmodel!.dmsg}');
+          // Soften the API's "Password Change Success" phrasing to natural
+          // English while preserving the trailing dynamic part (e.g.
+          // "Your new password will expire in 365 days").
+          final rawSuccess = _changepasswordmodel!.dmsg ??
+              'Password changed successfully';
+          final successMsg = rawSuccess.replaceAll(
+            RegExp(r'password change success', caseSensitive: false),
+            'Password changed successfully',
+          );
+          ResponsiveSnackBar.showSuccess(context, successMsg);
         }
         pref.setHideLoginOptBtn(false);
         // ref.read(authProvider).loginMethCtrl.text = pref.clientId!;
