@@ -44,7 +44,7 @@ class _SharingScreen extends State<SharingScreen> {
       // final myController = TextEditingController(text: ledgerprovider.selectnetpledge.text);
       // String selectedValue = ledgerprovider.segmentvalue;
 
-      String sharingapiforcalendar = 'https://profile.mynt.in/dailypnl?ucode=';
+      String sharingapiforcalendar = 'https://app.mynt.in/dailypnl?ucode=';
 
 // Optional: remove duplicates if needed (based on value)
       final seen = <String>{};
