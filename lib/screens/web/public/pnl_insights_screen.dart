@@ -135,13 +135,12 @@ class _PnlInsightsScreenState extends ConsumerState<PnlInsightsScreen> {
   }
 
   double get _unrealisedPnl {
-    // Commodity hardcodes 0 (matches Vue Daily_pnl.vue:2857). For other
-    // segments, sum unrealised across trades whose date is in range.
-    if (_model?.isCommodity == true) return 0;
-    final trades = _model?.data?.trades ?? const <SharedTrade>[];
-    return trades
-        .where((t) => _inRange(t.tradeDate))
-        .fold<double>(0, (s, t) => s + t.unrealisedPnl);
+    // Match the in-app calenderPnl screen: sum unrealised across all Data2
+    // entries with no date filter. Open positions are a snapshot of what's
+    // still held — carry-forward holdings opened before from_date are real
+    // and must be included. The model's unrealisedTotal also applies the
+    // commodity-zero override (Daily_pnl.vue:2857 parity).
+    return _model?.data?.unrealisedTotal ?? 0;
   }
 
   double get _totalCharges => _model?.data?.totalCharges ?? 0;
@@ -512,8 +511,13 @@ class _PnlInsightsScreenState extends ConsumerState<PnlInsightsScreen> {
         children: [
           _statCard('Realised P&L', _realisedPnl, cardWidth, _signColor(_realisedPnl)),
           _statCard('Unrealised P&L', _unrealisedPnl, cardWidth, _signColor(_unrealisedPnl)),
-          _statCard('Charges & taxes', _totalCharges, cardWidth,
-              _redIfNonZero(_totalCharges)),
+          _statCard(
+              'Charges & taxes',
+              _totalCharges,
+              cardWidth,
+              resolveThemeColor(context,
+                  dark: MyntColors.textPrimaryDark,
+                  light: MyntColors.textPrimary)),
           _statCard('Net Realised P&L', _netRealised, cardWidth, _signColor(_netRealised)),
         ],
       );
@@ -574,13 +578,7 @@ class _PnlInsightsScreenState extends ConsumerState<PnlInsightsScreen> {
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
   }
 
-  Color _redIfNonZero(double v) => v == 0
-      ? resolveThemeColor(context,
-          dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary)
-      : resolveThemeColor(context,
-          dark: MyntColors.lossDark, light: MyntColors.loss);
-
-  // Indian rupee formatter — matches the in-app `_formatAmount`
+// Indian rupee formatter — matches the in-app `_formatAmount`
   // (calenderPnl_screen.dart): "₹1,23,456.78" with negatives as "-₹...".
   static final NumberFormat _inrFormat = NumberFormat('#,##,##0.00', 'en_IN');
   String _formatAmount(double value) {

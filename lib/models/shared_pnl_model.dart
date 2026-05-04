@@ -181,11 +181,12 @@ class SharedPnlData {
     final dateWise = root['dateWise'];
     final stat = root['stat'];
 
-    // Script Wise — synthetic trade per symbol, fields lifted from details.sum.
-    // Backend `sum` typically gives total_buy_qty + total_buy_amt but no
-    // explicit total_buy_rate; derive rate = amt / qty before parsing so the
-    // SharedTrade ends up with a non-zero rate. Mirrors the in-app fallback in
-    // calenderPnl_screen.dart:_buildScriptWiseSection.
+    // Script Wise — synthetic trade per symbol. Mirrors the in-app
+    // calenderPnl_screen.dart:_buildScriptWiseSection (lines 1003-1075):
+    // each field is looked up first under `details.sum` and then at the
+    // symbol-level `details` map, since backends sometimes hoist totals out
+    // of `sum`. Rate/amt fall back across multiple aliases, and amt is
+    // derived from rate*qty (or vice versa) when one side is missing.
     final trades = <SharedTrade>[];
     if (symbolWise is Map) {
       symbolWise.forEach((symbol, details) {
@@ -195,37 +196,56 @@ class SharedPnlData {
             ? Map<String, dynamic>.from(sum)
             : <String, dynamic>{};
 
-        final buyQty = _toDouble(sumMap['total_buy_qty'] ??
-            sumMap['BUYQTY'] ??
-            sumMap['buy_qty']);
-        final buyAmt = _toDouble(sumMap['total_buy_amt'] ??
-            sumMap['BUYAMT'] ??
-            sumMap['buy_amt'] ??
-            sumMap['BUY_AMT']);
-        if ((sumMap['total_buy_rate'] == null ||
-                _toDouble(sumMap['total_buy_rate']) == 0) &&
-            buyQty > 0 &&
-            buyAmt != 0) {
-          sumMap['total_buy_rate'] = buyAmt / buyQty;
+        double readField(List<String> keys) {
+          for (final k in keys) {
+            final v = sumMap[k];
+            if (v != null) {
+              final d = _toDouble(v);
+              if (d != 0) return d;
+            }
+          }
+          for (final k in keys) {
+            final v = details[k];
+            if (v != null) {
+              final d = _toDouble(v);
+              if (d != 0) return d;
+            }
+          }
+          return 0;
         }
 
-        final sellQty = _toDouble(sumMap['total_sell_qty'] ??
-            sumMap['SALEQTY'] ??
-            sumMap['sell_qty']);
-        final sellAmt = _toDouble(sumMap['total_sell_amt'] ??
-            sumMap['SALEAMT'] ??
-            sumMap['sell_amt'] ??
-            sumMap['SALE_AMT']);
-        if ((sumMap['total_sell_rate'] == null ||
-                _toDouble(sumMap['total_sell_rate']) == 0) &&
-            sellQty > 0 &&
-            sellAmt != 0) {
-          sumMap['total_sell_rate'] = sellAmt / sellQty;
-        }
+        final buyQty =
+            readField(['total_buy_qty', 'BUYQTY', 'buy_qty']);
+        final sellQty =
+            readField(['total_sell_qty', 'SALEQTY', 'sell_qty']);
+        final buyRate = readField(
+            ['total_buy_rate', 'avg_buy_rate', 'BUYRATE', 'buy_rate']);
+        final sellRate = readField(
+            ['total_sell_rate', 'avg_sell_rate', 'SALERATE', 'sell_rate']);
+        final buyAmt = readField(
+            ['total_buy_amt', 'BUYAMT', 'buy_amt', 'BUY_AMT']);
+        final sellAmt = readField(
+            ['total_sell_amt', 'SALEAMT', 'sell_amt', 'SALE_AMT']);
+        final netQty =
+            readField(['Updated_NETQTY', 'NETQTY', 'net_qty']);
+        final closePrice =
+            readField(['CLOSING_PRICE', 'CL_PRICE', 'close_price']);
+
+        final resolvedBuyRate = buyRate != 0
+            ? buyRate
+            : (buyQty > 0 && buyAmt != 0 ? buyAmt / buyQty : 0.0);
+        final resolvedSellRate = sellRate != 0
+            ? sellRate
+            : (sellQty > 0 && sellAmt != 0 ? sellAmt / sellQty : 0.0);
 
         final merged = <String, dynamic>{
-          ...sumMap,
           'symbol': symbol,
+          'total_buy_qty': buyQty,
+          'total_sell_qty': sellQty,
+          'total_buy_rate': resolvedBuyRate,
+          'total_sell_rate': resolvedSellRate,
+          'Updated_NETQTY': netQty,
+          'CLOSING_PRICE': closePrice,
           'realisedpnl':
               details['realised_pnl'] ?? details['realisedpnl'] ?? 0,
           'unrealisedpnl': 0,
