@@ -246,6 +246,14 @@ void _clearBadgeOnStartup() async {
   await AwesomeNotifications().resetGlobalBadge();
 }
 
+// Public web routes that don't require auth and shouldn't trigger
+// notification permission prompts or Firebase messaging init on load.
+bool _isPublicWebRoute() {
+  if (!kIsWeb) return false;
+  final path = Uri.base.path;
+  return path == '/dailypnl' || path.startsWith('/dailypnl/');
+}
+
 // This method represents the project's entry level.
 void main() async {
   // Track startup time
@@ -276,10 +284,13 @@ void main() async {
   }
   setupLocator();
 
-  // Initialize preferences and notifications in parallel for faster startup
+  final bool isPublicRoute = _isPublicWebRoute();
+
+  // Initialize preferences and notifications in parallel for faster startup.
+  // Public viewer skips notification init — visitors shouldn't see permission prompts.
   final Preferences pref = locator<Preferences>();
   await Future.wait([
-    NotificationService.initializeNotification(),
+    if (!isPublicRoute) NotificationService.initializeNotification(),
     pref.init(),
   ]);
 
@@ -300,10 +311,11 @@ void main() async {
 
   runApp(const ProviderScope(child: MyApp()));
 
-  // Initialize Firebase after the app has started (non-blocking)
-  // Web: Firebase core only (for Analytics)
-  // Mobile: Full Firebase (Analytics, Crashlytics, Messaging)
-  initializeFirebaseAsync();
+  // Initialize Firebase after the app has started (non-blocking).
+  // Skip on public routes to avoid messaging permission prompts for visitors.
+  if (!isPublicRoute) {
+    initializeFirebaseAsync();
+  }
 }
 
 class MyApp extends ConsumerWidget {
