@@ -111,7 +111,8 @@ class _GttOrderBookDetailScreenWebState
         _gttOrder.perChange = pc;
       }
 
-      if (chng != null && chng != "null") {
+      if (chng != null && chng != "null" && chng != "" &&
+          chng != "0" && chng != "0.0" && chng != "0.00") {
         _gttOrder.change = chng;
       }
     }

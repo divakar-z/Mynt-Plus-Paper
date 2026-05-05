@@ -88,18 +88,22 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           if (socketDatas.containsKey(position.token)) {
             final socketData = socketDatas[position.token];
 
-            // Zero/null filtering is now handled centrally by
-            // WebSocketProvider._sanitizePriceFields at message ingest, so we
-            // just need a simple null check here.
+            // Strict guard — defense in depth, independent of central sanitiser.
+            // Rejects null, "null", "", "0", "0.0", "0.00" so broker zero
+            // defaults can never write into position.lp and produce phantom
+            // P&L. Same pattern applied to pc.
             final lp = socketData['lp']?.toString();
-            if (lp != null && lp != position.lp) {
+            if (lp != null && lp != "null" && lp != "" &&
+                lp != "0" && lp != "0.0" && lp != "0.00" &&
+                lp != position.lp) {
               position.lp = lp;
               needsUpdate = true;
             }
 
-            // Update percent change if available
             final pc = socketData['pc']?.toString();
-            if (pc != null && pc != "null" && pc != position.perChange) {
+            if (pc != null && pc != "null" && pc != "" &&
+                pc != "0" && pc != "0.0" && pc != "0.00" &&
+                pc != position.perChange) {
               position.perChange = pc;
               needsUpdate = true;
             }
