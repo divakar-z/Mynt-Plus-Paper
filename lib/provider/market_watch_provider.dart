@@ -609,10 +609,10 @@ class MarketWatchProvider extends DefaultChangeNotifier {
             socketDatas.containsKey(token)) {
           final socketData = socketDatas[token];
 
-          // Update ltp from socket 'lp' field
-          if (socketData['lp'] != null &&
-              socketData['lp'].toString() != "null" &&
-              socketData['lp'].toString() != "0.00") {
+          // Update ltp from socket 'lp' field. Zero/null filtering happens
+          // centrally in WebSocketProvider._sanitizePriceFields, so a simple
+          // null check is enough here.
+          if (socketData['lp'] != null) {
             _scrips[i]['ltp'] = socketData['lp'].toString();
             dataUpdated = true;
           }

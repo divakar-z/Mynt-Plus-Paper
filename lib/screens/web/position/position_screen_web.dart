@@ -88,17 +88,11 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           if (socketDatas.containsKey(position.token)) {
             final socketData = socketDatas[position.token];
 
-            // Skip "0"/"0.00" — socket cache emits these as defaults when broker
-            // omits lp for illiquid contracts. Letting them through writes
-            // position.lp = 0 and positionCal then computes (avg - 0) * qty,
-            // cascading into a phantom Total P&L on the summary card.
+            // Zero/null filtering is now handled centrally by
+            // WebSocketProvider._sanitizePriceFields at message ingest, so we
+            // just need a simple null check here.
             final lp = socketData['lp']?.toString();
-            if (lp != null &&
-                lp != "null" &&
-                lp != "0" &&
-                lp != "0.0" &&
-                lp != "0.00" &&
-                lp != position.lp) {
+            if (lp != null && lp != position.lp) {
               position.lp = lp;
               needsUpdate = true;
             }
