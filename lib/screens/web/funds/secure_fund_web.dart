@@ -562,18 +562,18 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         ),
 
         // Collateral Additional (conditional)
-        if (funds.fundDetailModel?.brkcollamt != null &&
-            funds.fundDetailModel?.brkcollamt != 0.00)
-          _buildInfoRow(
-            "Collateral Additional",
-            getFormatter(
-              value: _safeParseDouble(
-                  "${funds.fundDetailModel?.brkcollamt ?? 0.00}"),
-              v4d: false,
-              noDecimal: false,
-            ),
-            theme,
-          ),
+        // if (funds.fundDetailModel?.brkcollamt != null &&
+        //     funds.fundDetailModel?.brkcollamt != 0.00)
+        //   _buildInfoRow(
+        //     "Collateral Additional",
+        //     getFormatter(
+        //       value: _safeParseDouble(
+        //           "${funds.fundDetailModel?.brkcollamt ?? 0.00}"),
+        //       v4d: false,
+        //       noDecimal: false,
+        //     ),
+        //     theme,
+        //   ),
 
         // Additional Credits
         if (filteredCredits.isNotEmpty) ...[

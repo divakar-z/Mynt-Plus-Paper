@@ -412,7 +412,7 @@ class _ToastItemWidgetState extends State<_ToastItemWidget> {
         break;
       case SnackBarType.error:
         statusColor = ToastGlobals.error;
-        statusIcon = Icons.error_rounded;
+        statusIcon = Icons.cancel_rounded;
         break;
       case SnackBarType.warning:
         statusColor = ToastGlobals.warning;

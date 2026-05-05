@@ -1,3 +1,4 @@
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart';
 
 import '../locator/constant.dart';
@@ -10,6 +11,15 @@ mixin IndexApi on ApiCore {
 
   Future<Response> getNotifyMsg() async {
     try {
+      // Self-heal the FCM token if main.dart's getToken() hasn't resolved yet.
+      // On web, getToken() is slower than mobile (depends on SW + permission +
+      // Google FCM round-trip), so it can lose the race against login. By the
+      // time addtoken fires post-login, FCM is ready — refetching here populates
+      // the cached value so the backend gets a real token instead of "".
+      if ((ConstantName.msgToken ?? '').isEmpty) {
+        ConstantName.msgToken = await FirebaseMessaging.instance.getToken();
+      }
+
       final uri = Uri.parse("https://besim.zebull.in/nlog/addtoken");
       final res = await apiClient.post(uri,
           headers: defaultHeaders,

@@ -1,4 +1,5 @@
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -217,13 +218,15 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
-  validateOldPassword() {
+  validateOldPassword({bool isPasswordExpired = true}) {
     // Remove spaces from password
     if (oldPassword.text.contains(' ')) {
       oldPassword.text = oldPassword.text.replaceAll(' ', '');
     }
     if (oldPassword.text.trim().isEmpty) {
-      oldPasswordError = "Please enter the Old Password";
+      oldPasswordError = isPasswordExpired
+          ? "Please enter the Old Password"
+          : "Please enter the Generated Password";
     } else {
       oldPasswordError = "";
     }
@@ -248,7 +251,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         ConstantName.sessCheck = true;
         if (context.mounted) {
           ResponsiveSnackBar.showSuccess(
-              context, 'New Password has been sent to your registered Mobile Number /Email');
+              context, 'Generated Password has been sent to Your Mobile Number and Email');
         }
 
         userIdController.text = '${_forgetPasswordModel!.clientid}';
@@ -256,7 +259,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         Future.delayed(const Duration(milliseconds: 200), () {
           forgetMethod();
           clearError();
-          if (context.mounted) {
+          if (context.mounted && !kIsWeb) {
             Navigator.pushNamed(context, Routes.changePass, arguments: "No");
           }
         });
@@ -264,7 +267,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         // Show the specific error message from API
         final errorMsg = _forgetPasswordModel!.emsg ?? 'Invalid Client ID or Mobile number';
         if (context.mounted) {
-          ResponsiveSnackBar.showWarning(context, errorMsg);
+          ResponsiveSnackBar.showError(context, errorMsg);
         }
       } else if (_forgetPasswordModel!.emsg ==
           "Session Expired :  Invalid Session Key") {
@@ -273,7 +276,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         // Fallback for any other status
         final errorMsg = _forgetPasswordModel!.emsg ?? 'Something went wrong. Please try again.';
         if (context.mounted) {
-          ResponsiveSnackBar.showWarning(context, errorMsg);
+          ResponsiveSnackBar.showError(context, errorMsg);
         }
       }
 
@@ -301,7 +304,9 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
 
 // Fetching data from the api and stored in a variable
   fetchChangePassword(String userId, String oldpassword, String password,
-      BuildContext context, {bool preventNavigation = false}) async {
+      BuildContext context,
+      {bool preventNavigation = false,
+      bool isGeneratedPasswordFlow = false}) async {
     try {
       toggleLoadingOn(true);
       _changepasswordmodel =
@@ -319,7 +324,16 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         ConstantName.sessCheck = true;
         ref.read(authProvider).clearTextField();
         if (context.mounted) {
-          ResponsiveSnackBar.showSuccess(context, '${_changepasswordmodel!.dmsg}');
+          // Soften the API's "Password Change Success" phrasing to natural
+          // English while preserving the trailing dynamic part (e.g.
+          // "Your new password will expire in 365 days").
+          final rawSuccess = _changepasswordmodel!.dmsg ??
+              'Password changed successfully';
+          final successMsg = rawSuccess.replaceAll(
+            RegExp(r'password change success', caseSensitive: false),
+            'Password changed successfully',
+          );
+          ResponsiveSnackBar.showSuccess(context, successMsg);
         }
         pref.setHideLoginOptBtn(false);
         // ref.read(authProvider).loginMethCtrl.text = pref.clientId!;
@@ -333,9 +347,33 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
               context, Routes.loginScreen, (route) => route.isFirst);
         }
       } else if (_changepasswordmodel!.stat == "Not_Ok") {
-        final errorMsg = _changepasswordmodel!.emsg?.replaceAll("Error Occurred :", "") ?? 'Failed to change password';
+        final rawMsg = _changepasswordmodel!.emsg
+                ?.replaceAll("Error Occurred :", "")
+                .trim() ??
+            'Failed to change password';
+        final rawLower = rawMsg.toLowerCase();
+        String toastMsg;
+        if (rawLower.contains('previous 3 passwords') ||
+            rawLower.contains('last 3 passwords')) {
+          // Standardize the password-reuse error wording across all flows
+          // (Forgot, Password Expired, Settings) — backend phrasing is
+          // verbose and grammatically awkward.
+          toastMsg = 'New password cannot match your last 3 passwords';
+        } else if (isGeneratedPasswordFlow) {
+          // On the Forgot Password flow the field above this toast is
+          // labeled "Generated Password", but the backend's error wording
+          // is "Invalid Old Password" because it doesn't distinguish flows.
+          // Substitute "Old Password" → "Generated Password" so the toast
+          // matches the field the user is looking at.
+          toastMsg = rawMsg.replaceAll(
+            RegExp(r'old password', caseSensitive: false),
+            'Generated Password',
+          );
+        } else {
+          toastMsg = rawMsg;
+        }
         if (context.mounted) {
-          ResponsiveSnackBar.showWarning(context, errorMsg);
+          ResponsiveSnackBar.showError(context, toastMsg);
         }
       } else if (_changepasswordmodel!.emsg ==
           "Session Expired :  Invalid Session Key") {
@@ -344,7 +382,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         // Fallback for any other status
         final errorMsg = _changepasswordmodel!.emsg ?? 'Something went wrong. Please try again.';
         if (context.mounted) {
-          ResponsiveSnackBar.showWarning(context, errorMsg);
+          ResponsiveSnackBar.showError(context, errorMsg);
         }
       }
 
