@@ -70,10 +70,21 @@ class Pledgeresdtls {
 
   Pledgeresdtls({this.pledgeresdtlstwo});
 
+  // Handles two response shapes from /reqid_details:
+  //  - OLD: pledgeresdtls is an Object containing isinresdtls (array).
+  //  - NEW: pledgeresdtls is an Array of ISIN items; card-level fields
+  //    (resid, reqid, resstatus, reqstatus, restime, ...) live on the
+  //    OUTER object (this json). Normalize both into Pledgeresdtlstwo.
   Pledgeresdtls.fromJson(Map<String, dynamic> json) {
-    pledgeresdtlstwo = json['pledgeresdtls'] != null
-        ? Pledgeresdtlstwo.fromJson(json['pledgeresdtls'])
-        : null;
+    final inner = json['pledgeresdtls'];
+    if (inner is List) {
+      pledgeresdtlstwo = Pledgeresdtlstwo.fromJson(json)
+        ..isinresdtls = inner
+            .map((v) => Isinresdtls.fromJson(v as Map<String, dynamic>))
+            .toList();
+    } else if (inner is Map<String, dynamic>) {
+      pledgeresdtlstwo = Pledgeresdtlstwo.fromJson(inner);
+    }
   }
 
   Map<String, dynamic> toJson() {
@@ -90,6 +101,7 @@ class Pledgeresdtlstwo {
   String? pledgeidentifier;
   String? remarks;
   String? reqid;
+  String? reqstatus;
   String? reserrmsg;
   String? reserror;
   String? resid;
@@ -101,6 +113,7 @@ class Pledgeresdtlstwo {
       this.pledgeidentifier,
       this.remarks,
       this.reqid,
+      this.reqstatus,
       this.reserrmsg,
       this.reserror,
       this.resid,
@@ -108,7 +121,7 @@ class Pledgeresdtlstwo {
       this.restime});
 
   Pledgeresdtlstwo.fromJson(Map<String, dynamic> json) {
-    if (json['isinresdtls'] != null) {
+    if (json['isinresdtls'] != null && json['isinresdtls'] is List) {
       isinresdtls = <Isinresdtls>[];
       json['isinresdtls'].forEach((v) {
         isinresdtls!.add(Isinresdtls.fromJson(v));
@@ -116,11 +129,12 @@ class Pledgeresdtlstwo {
     }
     pledgeidentifier = json['pledgeidentifier'];
     remarks = json['remarks'];
-    reqid = json['reqid'];
+    reqid = json['reqid']?.toString();
+    reqstatus = json['reqstatus']?.toString();
     reserrmsg = json['reserrmsg'];
     reserror = json['reserror'];
-    resid = json['resid'];
-    resstatus = json['resstatus'];
+    resid = json['resid']?.toString();
+    resstatus = json['resstatus']?.toString();
     restime = json['restime'];
   }
 
@@ -136,6 +150,7 @@ class Pledgeresdtlstwo {
     data['reserror'] = reserror;
     data['resid'] = resid;
     data['resstatus'] = resstatus;
+    data['reqstatus'] = reqstatus;
     data['restime'] = restime;
     return data;
   }
@@ -149,6 +164,10 @@ class Isinresdtls {
   String? isinresid;
   String? quantity;
   String? status;
+  String? reqstatus;
+  String? script;
+  String? price;
+  String? value;
 
   Isinresdtls(
       {this.errorcode,
@@ -157,16 +176,28 @@ class Isinresdtls {
       this.isinreqid,
       this.isinresid,
       this.quantity,
-      this.status});
+      this.status,
+      this.reqstatus,
+      this.script,
+      this.price,
+      this.value});
 
   Isinresdtls.fromJson(Map<String, dynamic> json) {
     errorcode = json['errorcode'];
     errormsg = json['errormsg'];
     isin = json['isin'];
-    isinreqid = json['isinreqid'];
-    isinresid = json['isinresid'];
-    quantity = json['quantity'];
-    status = json['status'];
+    isinreqid = json['isinreqid']?.toString();
+    isinresid = json['isinresid']?.toString();
+    quantity = json['quantity']?.toString();
+    status = json['status']?.toString();
+    reqstatus = json['reqstatus']?.toString();
+    // New format may carry only reqstatus; surface it as status for UI fallbacks.
+    if ((status == null || status!.isEmpty) && reqstatus != null) {
+      status = reqstatus;
+    }
+    script = json['script']?.toString();
+    price = json['Price']?.toString() ?? json['price']?.toString();
+    value = json['value']?.toString();
   }
 
   Map<String, dynamic> toJson() {
@@ -178,6 +209,10 @@ class Isinresdtls {
     data['isinresid'] = isinresid;
     data['quantity'] = quantity;
     data['status'] = status;
+    data['reqstatus'] = reqstatus;
+    data['script'] = script;
+    data['Price'] = price;
+    data['value'] = value;
     return data;
   }
 }

@@ -128,41 +128,22 @@ class _PledgeResponseBody extends StatelessWidget {
   }
 
   // ── Status helpers ──
+  // CDSL's new pledge API exposes reqstatus alongside resstatus; either being
+  // '1' means rejected. Anything else is treated as a successful response.
 
-  String _getStatusLabel(String? status) {
-    if (status == '0') return 'Completed';
-    if (status == '1') return 'Rejected';
-    return 'Pending';
-  }
+  bool _isRejected(String? a, String? b) => a == '1' || b == '1';
 
-  Color _getStatusBgColor(BuildContext context, String? status) {
-    if (status == '0') {
-      return resolveThemeColor(context,
-              dark: MyntColors.profitDark, light: MyntColors.profit)
-          .withValues(alpha: 0.1);
-    } else if (status == '1') {
-      return resolveThemeColor(context,
-              dark: MyntColors.lossDark, light: MyntColors.loss)
-          .withValues(alpha: 0.1);
-    }
-    return const Color(0xffF9B039).withValues(alpha: 0.1);
-  }
-
-  Color _getStatusTextColor(BuildContext context, String? status) {
-    if (status == '0') {
-      return resolveThemeColor(context,
-          dark: MyntColors.profitDark, light: MyntColors.profit);
-    } else if (status == '1') {
-      return resolveThemeColor(context,
-          dark: MyntColors.lossDark, light: MyntColors.loss);
-    }
-    return const Color(0xffF9B039);
-  }
-
-  Widget _buildStatusBadge(BuildContext context, String? status) {
-    final label = _getStatusLabel(status);
-    final bgColor = _getStatusBgColor(context, status);
-    final textColor = _getStatusTextColor(context, status);
+  Widget _buildStatusBadge(BuildContext context,
+      {String? reqstatus, String? resstatus}) {
+    final rejected = _isRejected(reqstatus, resstatus);
+    final label = rejected ? 'Rejected' : 'Success';
+    final color = rejected
+        ? resolveThemeColor(context,
+            dark: MyntColors.lossDark, light: MyntColors.loss)
+        : resolveThemeColor(context,
+            dark: MyntColors.profitDark, light: MyntColors.profit);
+    final bgColor = color.withValues(alpha: 0.1);
+    final textColor = color;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -185,14 +166,11 @@ class _PledgeResponseBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final resStatus = ledgerprovider.cdslresponsedata?.cDSLResp?.pledgeresdtls
-        ?.pledgeresdtlstwo?.resstatus;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // ── Summary Card ──
-        _buildSummaryCard(context, resStatus),
+        _buildSummaryCard(context),
 
         const SizedBox(height: 16),
 
@@ -206,10 +184,16 @@ class _PledgeResponseBody extends StatelessWidget {
 
   // ── Summary Card ──
 
-  Widget _buildSummaryCard(BuildContext context, String? resStatus) {
+  Widget _buildSummaryCard(BuildContext context) {
     final data = ledgerprovider.cdslresponsedata;
     final pledgeTwo =
         data?.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo;
+    // CDSL ID: prefer resid, fall back to reqid so an ID is always visible
+    // while the response is still pending.
+    final resid = pledgeTwo?.resid;
+    final cdslId = (resid != null && resid.isNotEmpty)
+        ? resid
+        : (pledgeTwo?.reqid ?? '--');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
@@ -262,7 +246,11 @@ class _PledgeResponseBody extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text('Status', style: _labelStyle(context)),
-                          _buildStatusBadge(context, resStatus),
+                          _buildStatusBadge(
+                            context,
+                            reqstatus: pledgeTwo?.reqstatus,
+                            resstatus: pledgeTwo?.resstatus,
+                          ),
                         ],
                       ),
                       const SizedBox(height: 16),
@@ -283,7 +271,7 @@ class _PledgeResponseBody extends StatelessWidget {
                       _buildInfoRow(
                         context,
                         'CDSL ID',
-                        pledgeTwo?.resid ?? '--',
+                        cdslId,
                         alignRight: true,
                       ),
                     ],
@@ -329,21 +317,19 @@ class _PledgeResponseBody extends StatelessWidget {
       );
     }
 
+    // Final column order: Script, ISIN, Req Id, Res Id, Quantity, Price, Value, Status.
     return LayoutBuilder(
       builder: (context, constraints) {
         final double totalWidth = constraints.maxWidth - 48;
-        final double isinWidth = totalWidth * 0.22;
-        final double reqIdWidth = totalWidth * 0.22;
-        final double resIdWidth = totalWidth * 0.22;
-        final double qtyWidth = totalWidth * 0.14;
-        final double statusWidth = totalWidth * 0.20;
-
         final columnWidths = {
-          0: shadcn.FixedTableSize(isinWidth),
-          1: shadcn.FixedTableSize(reqIdWidth),
-          2: shadcn.FixedTableSize(resIdWidth),
-          3: shadcn.FixedTableSize(qtyWidth),
-          4: shadcn.FixedTableSize(statusWidth),
+          0: shadcn.FixedTableSize(totalWidth * 0.14), // Script
+          1: shadcn.FixedTableSize(totalWidth * 0.14), // ISIN
+          2: shadcn.FixedTableSize(totalWidth * 0.13), // Req Id
+          3: shadcn.FixedTableSize(totalWidth * 0.13), // Res Id
+          4: shadcn.FixedTableSize(totalWidth * 0.10), // Quantity
+          5: shadcn.FixedTableSize(totalWidth * 0.10), // Price
+          6: shadcn.FixedTableSize(totalWidth * 0.10), // Value
+          7: shadcn.FixedTableSize(totalWidth * 0.16), // Status
         };
 
         return Padding(
@@ -358,11 +344,14 @@ class _PledgeResponseBody extends StatelessWidget {
                   rows: [
                     shadcn.TableHeader(
                       cells: [
-                        _buildHeaderCellWidget(context, 'ISIN', 0),
-                        _buildHeaderCellWidget(context, 'Request Id', 1),
-                        _buildHeaderCellWidget(context, 'Res Id', 2),
-                        _buildHeaderCellWidget(context, 'Quantity', 3, true),
-                        _buildHeaderCellWidget(context, 'Status', 4),
+                        _buildHeaderCellWidget(context, 'Script', 0),
+                        _buildHeaderCellWidget(context, 'ISIN', 1),
+                        _buildHeaderCellWidget(context, 'Req Id', 2),
+                        _buildHeaderCellWidget(context, 'Res Id', 3),
+                        _buildHeaderCellWidget(context, 'Quantity', 4, true),
+                        _buildHeaderCellWidget(context, 'Price', 5, true),
+                        _buildHeaderCellWidget(context, 'Value', 6, true),
+                        _buildHeaderCellWidget(context, 'Status', 7),
                       ],
                     ),
                   ],
@@ -383,14 +372,16 @@ class _PledgeResponseBody extends StatelessWidget {
                               context,
                               rowIndex: index,
                               columnIndex: 0,
-                              child: Text(val.isin ?? '--',
-                                  style: _cellStyle(context)),
+                              child: Text(val.script ?? '--',
+                                  style: _cellStyle(context),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1),
                             ),
                             _buildDataCellWidget(
                               context,
                               rowIndex: index,
                               columnIndex: 1,
-                              child: Text(val.isinreqid ?? '--',
+                              child: Text(val.isin ?? '--',
                                   style: _cellStyle(context),
                                   overflow: TextOverflow.ellipsis,
                                   maxLines: 1),
@@ -399,13 +390,24 @@ class _PledgeResponseBody extends StatelessWidget {
                               context,
                               rowIndex: index,
                               columnIndex: 2,
-                              child: Text(val.isinresid ?? '--',
-                                  style: _cellStyle(context)),
+                              child: Text(val.isinreqid ?? '--',
+                                  style: _cellStyle(context),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1),
                             ),
                             _buildDataCellWidget(
                               context,
                               rowIndex: index,
                               columnIndex: 3,
+                              child: Text(val.isinresid ?? '--',
+                                  style: _cellStyle(context),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1),
+                            ),
+                            _buildDataCellWidget(
+                              context,
+                              rowIndex: index,
+                              columnIndex: 4,
                               alignRight: true,
                               child: Text(val.quantity ?? '--',
                                   style: _cellStyle(context)),
@@ -413,8 +415,28 @@ class _PledgeResponseBody extends StatelessWidget {
                             _buildDataCellWidget(
                               context,
                               rowIndex: index,
-                              columnIndex: 4,
-                              child: _buildStatusBadge(context, val.status),
+                              columnIndex: 5,
+                              alignRight: true,
+                              child: Text(val.price ?? '--',
+                                  style: _cellStyle(context)),
+                            ),
+                            _buildDataCellWidget(
+                              context,
+                              rowIndex: index,
+                              columnIndex: 6,
+                              alignRight: true,
+                              child: Text(val.value ?? '--',
+                                  style: _cellStyle(context)),
+                            ),
+                            _buildDataCellWidget(
+                              context,
+                              rowIndex: index,
+                              columnIndex: 7,
+                              child: _buildStatusBadge(
+                                context,
+                                reqstatus: val.reqstatus,
+                                resstatus: val.status,
+                              ),
                             ),
                           ],
                         );
@@ -436,7 +458,7 @@ class _PledgeResponseBody extends StatelessWidget {
       BuildContext context, String label, int columnIndex,
       [bool alignRight = false]) {
     final isFirstColumn = columnIndex == 0;
-    final isLastColumn = columnIndex == 4;
+    final isLastColumn = columnIndex == 7;
 
     EdgeInsets headerPadding;
     if (isFirstColumn) {
@@ -474,7 +496,7 @@ class _PledgeResponseBody extends StatelessWidget {
     bool alignRight = false,
   }) {
     final isFirstColumn = columnIndex == 0;
-    final isLastColumn = columnIndex == 4;
+    final isLastColumn = columnIndex == 7;
 
     EdgeInsets cellPadding;
     if (isFirstColumn) {
