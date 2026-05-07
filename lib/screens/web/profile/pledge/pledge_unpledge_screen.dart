@@ -657,10 +657,11 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
   Widget _buildCdslReportScreen(
       LDProvider ledgerprovider, ThemesProvider theme) {
     final data = ledgerprovider.cdslresponsedata!;
-    final status =
-        data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo?.resstatus;
-    final isinList =
-        data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo?.isinresdtls ?? [];
+    final two = data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo;
+    // CDSL's new pledge API: rejected if either reqstatus or resstatus == '1'.
+    // Anything else is treated as Success (Pending state dropped).
+    final rejected = two?.reqstatus == '1' || two?.resstatus == '1';
+    final isinList = two?.isinresdtls ?? [];
 
     final isDark = theme.isDarkMode;
     final borderColor =
@@ -757,32 +758,23 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
                                   decoration: BoxDecoration(
                                     borderRadius:
                                         BorderRadius.circular(4),
-                                    color: status == '0'
-                                        ? MyntColors.profitDark
+                                    color: rejected
+                                        ? MyntColors.lossDark
                                             .withValues(alpha: 0.15)
-                                        : status == '1'
-                                            ? MyntColors.lossDark
-                                                .withValues(alpha: 0.15)
-                                            : MyntColors.pending
-                                                .withValues(alpha: 0.15),
+                                        : MyntColors.profitDark
+                                            .withValues(alpha: 0.15),
                                   ),
                                   child: Text(
-                                    status == '0'
-                                        ? 'Completed'
-                                        : status == '1'
-                                            ? 'Rejected'
-                                            : 'Pending',
+                                    rejected ? 'Rejected' : 'Success',
                                     style: MyntWebTextStyles.para(context,
                                         fontWeight: MyntFonts.semiBold,
-                                        color: status == '0'
+                                        color: rejected
                                             ? resolveThemeColor(context,
+                                                dark: MyntColors.lossDark,
+                                                light: MyntColors.loss)
+                                            : resolveThemeColor(context,
                                                 dark: MyntColors.profitDark,
-                                                light: MyntColors.profit)
-                                            : status == '1'
-                                                ? resolveThemeColor(context,
-                                                    dark: MyntColors.lossDark,
-                                                    light: MyntColors.loss)
-                                                : MyntColors.pending),
+                                                light: MyntColors.profit)),
                                   ),
                                 ),
                               ],
@@ -796,11 +788,6 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
                             _summaryRow(
                                 'CDSL Response Time',
                                 '${data.cDSLRespTime}',
-                                theme),
-                            const SizedBox(height: 12),
-                            _summaryRow(
-                                'CDSL ID',
-                                '${data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo?.resid}',
                                 theme),
                           ],
                         ),
