@@ -318,9 +318,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
 
     // Helper function to check if a string is a valid numeric price
     bool isValidNumeric(String? value) {
-      if (value == null || value == "null") {
-        return false;
-      }
+      if (value == null || value == "null" || value == "") return false;
+      if (value == "0" || value == "0.0" || value == "0.00") return false;
       return double.tryParse(value) != null;
     }
 

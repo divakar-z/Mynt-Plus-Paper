@@ -53,14 +53,17 @@ class _SetAlertWebState extends State<SetAlertWeb> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         setState(() {
+          // Price fields are nullable post-sanitisation (null when broker
+          // emits "0"/"0.00" defaults for illiquid contracts). Fall back
+          // to "0.00" so downstream double.parse() doesn't see "null".
           depthdata.ap = "${socketData['ap']}";
-          depthdata.lp = "${socketData['lp']}";
-          depthdata.pc = "${socketData['pc']}";
-          depthdata.o = "${socketData['o']}";
-          depthdata.l = "${socketData['l']}";
-          depthdata.c = "${socketData['c']}";
-          depthdata.chng = "${socketData['chng']}";
-          depthdata.h = "${socketData['h']}";
+          depthdata.lp = socketData['lp']?.toString() ?? "0.00";
+          depthdata.pc = socketData['pc']?.toString() ?? "0.00";
+          depthdata.o = socketData['o']?.toString() ?? "0.00";
+          depthdata.l = socketData['l']?.toString() ?? "0.00";
+          depthdata.c = socketData['c']?.toString() ?? "0.00";
+          depthdata.chng = socketData['chng']?.toString() ?? "0.00";
+          depthdata.h = socketData['h']?.toString() ?? "0.00";
           depthdata.poi = "${socketData['poi']}";
           depthdata.v = "${socketData['v']}";
           depthdata.toi = "${socketData['toi']}";

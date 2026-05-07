@@ -1213,8 +1213,11 @@ class _OrderBookLTPCellState extends ConsumerState<_OrderBookLTPCell> {
           final newLtp = data[widget.token]['lp']?.toString();
           if (newLtp != null &&
               newLtp != ltp &&
-              newLtp != '0.00' &&
-              newLtp != 'null') {
+              newLtp != 'null' &&
+              newLtp != '' &&
+              newLtp != '0' &&
+              newLtp != '0.0' &&
+              newLtp != '0.00') {
             setState(() => ltp = newLtp);
           }
         });

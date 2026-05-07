@@ -656,7 +656,10 @@ class _FutureScreenWebState extends ConsumerState<FutureScreenWeb> {
                                               socketData['change']?.toString();
                                           if (chng != null &&
                                               chng != "null" &&
-                                              chng.isNotEmpty) {
+                                              chng.isNotEmpty &&
+                                              chng != "0" &&
+                                              chng != "0.0" &&
+                                              chng != "0.00") {
                                             try {
                                               displayData.change = chng;
                                             } catch (e) {}
@@ -668,7 +671,10 @@ class _FutureScreenWebState extends ConsumerState<FutureScreenWeb> {
                                                       ?.toString();
                                           if (pc != null &&
                                               pc != "null" &&
-                                              pc.isNotEmpty) {
+                                              pc.isNotEmpty &&
+                                              pc != "0" &&
+                                              pc != "0.0" &&
+                                              pc != "0.00") {
                                             try {
                                               displayData.perChange = pc;
                                             } catch (e) {}

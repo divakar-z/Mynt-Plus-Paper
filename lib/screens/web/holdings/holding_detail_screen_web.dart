@@ -107,27 +107,17 @@ class _HoldingDetailScreenWebState
     final socketData = wsProvider.socketDatas[_exchTsym.token];
 
     if (socketData != null) {
-      // Update with initial socket data
+      // Update with initial socket data — strict guards match the listener
+      // body below so broker zero defaults can never overwrite valid API data.
       final lp = socketData['lp']?.toString();
       final pc = socketData['pc']?.toString();
       final chng = socketData['chng']?.toString();
       final c = socketData['c']?.toString();
 
-      if (lp != null && lp != "null") {
-        _exchTsym.lp = lp;
-      }
-
-      if (pc != null && pc != "null") {
-        _exchTsym.perChange = pc;
-      }
-
-      if (chng != null && chng != "null") {
-        _exchTsym.change = chng;
-      }
-
-      if (c != null && c != "null") {
-        _exchTsym.close = c;
-      }
+      if (_isValidValue(lp)) _exchTsym.lp = lp;
+      if (_isValidValue(pc)) _exchTsym.perChange = pc;
+      if (_isValidValue(chng)) _exchTsym.change = chng;
+      if (_isValidValue(c)) _exchTsym.close = c;
 
       _updateProfitLossValues();
     }

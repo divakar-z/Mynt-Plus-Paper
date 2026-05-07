@@ -37,11 +37,13 @@ class OrderScreenHeaderWeb extends ConsumerWidget {
           final lp = socketDatas[headerData.token]['lp']?.toString();
           final pc = socketDatas[headerData.token]['pc']?.toString();
 
-          if (lp != null && lp != "null" && lp != "0" && lp != "0.00") {
+          if (lp != null && lp != "null" && lp != "" &&
+              lp != "0" && lp != "0.0" && lp != "0.00") {
             headerData.ltp = lp;
           }
 
-          if (pc != null && pc != "null") {
+          if (pc != null && pc != "null" && pc != "" &&
+              pc != "0" && pc != "0.0" && pc != "0.00") {
             headerData.perChange = pc;
           }
         }

@@ -134,7 +134,8 @@ class _TradeBookDetailScreenWebState
                 updatedTradeData.perChange = pc;
               }
 
-              if (chng != null && chng != "null") {
+              if (chng != null && chng != "null" && chng != "" &&
+                  chng != "0" && chng != "0.0" && chng != "0.00") {
                 updatedTradeData.change = chng;
               }
             }

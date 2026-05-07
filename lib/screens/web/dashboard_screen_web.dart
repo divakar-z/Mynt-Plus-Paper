@@ -111,9 +111,11 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         if (socketDatas.containsKey(position.token)) {
           final socketData = socketDatas[position.token];
 
-          // Update LTP if valid
+          // Update LTP if valid (strict guard rejects null/zero defaults)
           final lp = socketData['lp']?.toString();
-          if (lp != null && lp != "null" && lp != position.lp) {
+          if (lp != null && lp != "null" && lp != "" &&
+              lp != "0" && lp != "0.0" && lp != "0.00" &&
+              lp != position.lp) {
             position.lp = lp;
             needsUpdate = true;
           }
