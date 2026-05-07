@@ -160,7 +160,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get deviceLogin => '$mainBaseURL/device_login';
   String get validateSession => '$mainBaseURL/validate_session';
 
-  String get forgetPassword => '$mainBaseURL/ForgetPassword';
+  String get forgetPassword => '$mainBaseURLnew/ForgetPassword';
 
   String get myntchangePassword => 'https://go.mynt.in/NorenWClientWeb/Changepwd';
 

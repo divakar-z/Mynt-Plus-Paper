@@ -24,6 +24,7 @@ import '../../../../routes/route_names.dart';
 import '../../../../sharedWidget/functions.dart';
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../utils/no_emoji_inputformatter.dart';
+import '../../../../utils/responsive_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
 
@@ -64,6 +65,13 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   int _qrStart = _qrCountdownStart;
   int _qrRefreshCount = 0;
   bool _qrExpired = false;
+
+  // New Password — transient max-length error.
+  // Fired only when the user actually attempts to type/paste beyond 12 chars
+  // (caught by the custom inputFormatter). Auto-hides after 2 seconds so the
+  // field doesn't carry a permanent error after the user stops trying.
+  bool _showNewPwdMaxLengthError = false;
+  Timer? _newPwdMaxLengthHideTimer;
 
   void startTimer() {
     _timer?.cancel();
@@ -166,7 +174,21 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     focusNode1.dispose();
     _timer?.cancel();
     _qrCountdownTimer?.cancel();
+    _newPwdMaxLengthHideTimer?.cancel();
     super.dispose();
+  }
+
+  /// Triggered by the New Password field's custom inputFormatter when the
+  /// user attempts to type/paste beyond 12 chars. Shows the inline red
+  /// "Maximum 12 characters allowed" error briefly, then auto-hides after
+  /// 2 seconds so the message disappears once the user stops trying.
+  void _triggerNewPwdMaxLengthError() {
+    if (!mounted) return;
+    _newPwdMaxLengthHideTimer?.cancel();
+    setState(() => _showNewPwdMaxLengthError = true);
+    _newPwdMaxLengthHideTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showNewPwdMaxLengthError = false);
+    });
   }
 
   /// Helper method for consistent Mobile/Client ID input decoration
@@ -1007,8 +1029,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                                   icon: const Icon(Icons.copy, size: 20),
                                                   onPressed: () {
                                                     Clipboard.setData(ClipboardData(text: webAuth.totpData?.pwd ?? ""));
-                                                    ScaffoldMessenger.of(context).showSnackBar(
-                                                      const SnackBar(content: Text("Auth Key is copied to Clipboard")),
+                                                    ResponsiveSnackBar.showSuccess(
+                                                      context,
+                                                      "Auth Key is copied to Clipboard",
                                                     );
                                                   },
                                                 ),
@@ -1637,6 +1660,37 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                               readOnly: forpass.loading,
                               obscureText: forpass.hidenewpassword,
                               textInputAction: TextInputAction.done,
+                              // Backend enforces max 12 chars + alphanumeric +
+                              // allowed specials (#, $, -, *, @). Mirror that
+                              // at the input level so users get immediate
+                              // feedback instead of typing past 12 and only
+                              // hitting the API error on submit.
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(
+                                  RegExp(r'[A-Za-z0-9#$\-*@]'),
+                                ),
+                                // Custom max-length formatter: when input
+                                // would exceed 12, truncate AND fire the
+                                // transient red error so the user knows the
+                                // 13th keystroke (or oversized paste) was
+                                // rejected. Built-in maxLength would silently
+                                // block without surfacing the reason.
+                                TextInputFormatter.withFunction(
+                                  (oldValue, newValue) {
+                                    if (newValue.text.length > 12) {
+                                      _triggerNewPwdMaxLengthError();
+                                      final truncated =
+                                          newValue.text.substring(0, 12);
+                                      return TextEditingValue(
+                                        text: truncated,
+                                        selection: TextSelection.collapsed(
+                                            offset: truncated.length),
+                                      );
+                                    }
+                                    return newValue;
+                                  },
+                                ),
+                              ],
                               style: MyntWebTextStyles.title(
                                 context,
                                 fontWeight: MyntFonts.medium,
@@ -1698,7 +1752,18 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                               },
                             ),
                             const SizedBox(height: 5),
-                            if (forpass.newPasswordError != null &&
+                          
+                            if (_showNewPwdMaxLengthError)
+                              Text(
+                                "Password must be exactly 12 characters",
+                                style: MyntWebTextStyles.para(
+                                  context,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.lossDark,
+                                      light: MyntColors.loss),
+                                ),
+                              )
+                            else if (forpass.newPasswordError != null &&
                                 forpass.newPasswordError!.isNotEmpty &&
                                 forpass.newPasswordError != "")
                               Text(

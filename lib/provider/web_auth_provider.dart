@@ -314,7 +314,14 @@ class WebAuthProvider extends ChangeNotifier {
 
       if (result != null && (result['stat'] == 'Ok' || (result['msg'] != null && result['msg'].toString().toLowerCase().contains('otp')))) {
         if (context.mounted) {
-          ResponsiveSnackBar.showSuccess(context, 'OTP sent successfully');
+          // _topflow is true only when the user is in the "Set up TOTP" flow,
+          // where the OTP is for identity verification before revealing the
+          // TOTP secret. Use a more specific success message in that case;
+          // regular OTP login / resend keep the generic message.
+          final successMsg = _topflow
+              ? '4-digit TOTP Setup code sent successfully'
+              : 'OTP sent successfully';
+          ResponsiveSnackBar.showSuccess(context, successMsg);
         }
         _setLoading(false);
         return true;
