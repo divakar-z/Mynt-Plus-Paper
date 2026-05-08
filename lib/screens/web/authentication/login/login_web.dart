@@ -52,6 +52,27 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   int _start = 89;
   String resendTime = "01.29";
 
+  // QR Countdown Timer — visible on the QR login screen. Independent of the
+  // provider's internal poll timer.
+  // On expiry the QR auto-refreshes (fresh UUID + fresh image + fresh timer)
+  // for up to [_qrMaxRefreshCycles] cycles. After the budget is exhausted, an
+  // explicit "Reload" icon is shown (WhatsApp Web pattern) so the user can
+  // restart the cycle on demand — total visible QRs before reload prompt =
+  // 1 initial + [_qrMaxRefreshCycles] auto-refreshes.
+  Timer? _qrCountdownTimer;
+  static const int _qrCountdownStart = 89;
+  static const int _qrMaxRefreshCycles = 2;
+  int _qrStart = _qrCountdownStart;
+  int _qrRefreshCount = 0;
+  bool _qrExpired = false;
+
+  // New Password — transient max-length error.
+  // Fired only when the user actually attempts to type/paste beyond 12 chars
+  // (caught by the custom inputFormatter). Auto-hides after 2 seconds so the
+  // field doesn't carry a permanent error after the user stops trying.
+  bool _showNewPwdMaxLengthError = false;
+  Timer? _newPwdMaxLengthHideTimer;
+
   void startTimer() {
     _timer?.cancel();
     const oneSec = Duration(seconds: 1);
@@ -131,9 +152,10 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   void _setupQrLoginListener() {
     ref.listenManual<WebAuthProvider>(webAuthProvider, (previous, next) {
       if (_showQrScreen && next.mobileOtp?.stat == 'Ok' && next.mobileOtp?.apitoken != null) {
-        // Login Successful via QR
-        // Note: Navigation and initialLoadMethods are handled by web_auth_provider
-        // No need to call them here to avoid duplicate API calls
+        // Login Successful via QR — kill the visible countdown so it doesn't
+        // tick down to expiry and try to navigate after we've already left.
+        // Navigation and initialLoadMethods are handled by web_auth_provider.
+        _stopQrCountdown();
       }
     });
   }
@@ -151,7 +173,22 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     focusNode.dispose();
     focusNode1.dispose();
     _timer?.cancel();
+    _qrCountdownTimer?.cancel();
+    _newPwdMaxLengthHideTimer?.cancel();
     super.dispose();
+  }
+
+  /// Triggered by the New Password field's custom inputFormatter when the
+  /// user attempts to type/paste beyond 12 chars. Shows the inline red
+  /// "Maximum 12 characters allowed" error briefly, then auto-hides after
+  /// 2 seconds so the message disappears once the user stops trying.
+  void _triggerNewPwdMaxLengthError() {
+    if (!mounted) return;
+    _newPwdMaxLengthHideTimer?.cancel();
+    setState(() => _showNewPwdMaxLengthError = true);
+    _newPwdMaxLengthHideTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showNewPwdMaxLengthError = false);
+    });
   }
 
   /// Helper method for consistent Mobile/Client ID input decoration
@@ -246,13 +283,12 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     // Validate inputs and show appropriate messages
     if (_isProcessing) return;
 
-    if (webAuth.loginController.text.trim().isEmpty) {
-      ResponsiveSnackBar.showWarning(context, 'Please enter your Mobile / Client ID');
-      return;
-    }
-
-    if (webAuth.passwordController.text.isEmpty) {
-      ResponsiveSnackBar.showWarning(context, 'Please enter your password');
+    // Field-level validation → inline errors only (no toast)
+    final auth = ref.read(authProvider);
+    auth.validateLogin();
+    auth.validatePass();
+    if ((auth.loginMethError ?? '').isNotEmpty ||
+        (auth.passError ?? '').isNotEmpty) {
       return;
     }
 
@@ -335,15 +371,8 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
 
     if (_isProcessing) return;
 
-    // Validate OTP length
-    final requiredLength = webAuth.isTotp ? 6 : 4;
-    if (otp.trim().length != requiredLength) {
-      if (mounted) {
-        ResponsiveSnackBar.showWarning(
-          context,
-          'Please enter $requiredLength digit ${webAuth.isTotp ? 'TOTP' : 'OTP'}',
-        );
-      }
+    // Validate OTP length → inline error (no toast)
+    if (!webAuth.validateOtp()) {
       return;
     }
 
@@ -452,27 +481,84 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
 
 
   /// Handle "Scan QR" Login - Switch to Inline QR Screen
-  void _handleQrLogin() {
+  /// [resetRefreshCount] is true when the user explicitly enters the QR screen
+  /// (so the auto-refresh budget starts fresh) and false when called from the
+  /// countdown expiry path (so consecutive auto-refreshes count toward the cap).
+  void _handleQrLogin({bool resetRefreshCount = true}) {
+    if (resetRefreshCount) _qrRefreshCount = 0;
     final webAuth = ref.read(webAuthProvider);
-    
-    // Start QR polling
+
+    // Clear any prior QR session state before starting fresh — guarantees a
+    // newly generated QR every time the user enters the screen.
+    webAuth.cancelQrLogin();
+
+    // Start QR polling (regenerates _deviceUuid → fresh QR image)
     webAuth.startQrLogin(context);
-    
+
     setState(() {
       _showQrScreen = true;
       _showOtpScreen = false;
       _showForgotPassword = false; // Ensure other screens are hidden
+      _qrExpired = false;
     });
+
+    // Begin user-visible countdown
+    _startQrCountdown();
   }
 
   /// Cancel QR Login - Back to Login Form
   void _handleCancelQrLogin() {
     final webAuth = ref.read(webAuthProvider);
+
+    _stopQrCountdown();
+    _qrRefreshCount = 0;
+    _qrExpired = false;
     webAuth.cancelQrLogin(); // Use cancelQrLogin to clear mobileOtp and prevent stale data
 
+    if (!mounted) return;
     setState(() {
       _showQrScreen = false;
     });
+  }
+
+  /// Start the visible QR countdown. Resets to [_qrCountdownStart] each call.
+  /// On expiry, auto-refreshes with a new QR + new timer for up to
+  /// [_qrMaxRefreshCycles] cycles; after that, surfaces a Reload icon
+  /// (WhatsApp pattern) so the user can re-fetch on demand instead of
+  /// being kicked back to the login form.
+  void _startQrCountdown() {
+    _qrCountdownTimer?.cancel();
+    _qrStart = _qrCountdownStart;
+    if (mounted) setState(() {});
+    _qrCountdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_qrStart <= 1) {
+        timer.cancel();
+        _qrCountdownTimer = null;
+        if (_qrRefreshCount < _qrMaxRefreshCycles) {
+          // Within budget → auto-refresh in place: fresh QR + fresh timer.
+          _qrRefreshCount++;
+          _handleQrLogin(resetRefreshCount: false);
+        } else {
+          // Budget exhausted → stop polling, clear QR image, switch UI to
+          // a Reload icon. User stays on the QR screen and can tap Reload
+          // to start a fresh cycle (counter resets via _handleQrLogin).
+          ref.read(webAuthProvider).cancelQrLogin();
+          if (mounted) setState(() => _qrExpired = true);
+        }
+      } else {
+        setState(() => _qrStart--);
+      }
+    });
+  }
+
+  /// Stop and clear the visible QR countdown without navigating.
+  void _stopQrCountdown() {
+    _qrCountdownTimer?.cancel();
+    _qrCountdownTimer = null;
   }
 
   /// Handle "Generate TOTP" button click
@@ -589,7 +675,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   Future<void> _handleForgotPasswordSubmit() async {
     final forpass = ref.read(changePasswordProvider);
 
-    // Validate first
+    // Validate first — inline error only, no toast
     if (!forpass.validateForgetpassWord()) {
       return;
     }
@@ -621,7 +707,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     final forpass = ref.read(changePasswordProvider);
 
     // Validate both fields
-    forpass.validateOldPassword();
+    forpass.validateOldPassword(isPasswordExpired: _isPasswordExpired);
     forpass.validateNewPassword();
 
     if (forpass.oldPasswordError == "" && forpass.newPasswordError == "") {
@@ -631,6 +717,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
         forpass.newPassword.text,
         context,
         preventNavigation: true,
+        // Forgot-password flow labels the field "Generated Password" — tell
+        // the provider to relabel the API's "Old Password" wording in errors.
+        isGeneratedPasswordFlow: !_isPasswordExpired,
       );
 
       // Check if change password was successful
@@ -728,29 +817,23 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                             ),
                           ),
                           const SizedBox(height: 24),
-                          // Welcome Text
-
-                             if (!(pref.islogOut == true &&
-                              (pref.clientId?.isNotEmpty == true ||
-                                  pref.clientMob?.isNotEmpty == true)))
-                          Text(
-                            "Welcome to Zebu",
-                            style: MyntWebTextStyles.titlesub(
-                              
-                              context,
-                             color: resolveThemeColor(context,
-                                      dark: MyntColors.textSecondaryDark,
-                                      light: MyntColors.textSecondary),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
                           // Main Heading
 
                           if (!(pref.islogOut == true &&
                               (pref.clientId?.isNotEmpty == true ||
                                   pref.clientMob?.isNotEmpty == true)))
                           Text(
-                            _showChangePassword ? "Change or Reset Password" : _showForgotPassword ? "Forgot Password" : "Login to MYNT",
+                            _showChangePassword
+                                ? "Choose your Password"
+                                : _showForgotPassword
+                                    ? "Forgot Password"
+                                    : _showOtpScreen
+                                        ? (webAuth.isTotp
+                                            ? "Enter the 6-digit TOTP"
+                                            : (webAuth.topflow
+                                                ? "Enter OTP to set up TOTP"
+                                                : "Enter the 4-digit OTP"))
+                                        : "Sign in with MYNT",
                             style: webText(
                               context,
                               size: MediaQuery.of(context).size.width < 600 ? 18 : 22,
@@ -763,27 +846,87 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                           const SizedBox(height: 32),
 
                           // QR Login Screen
-                          if (_showQrScreen) 
+                          if (_showQrScreen)
                             Consumer(
                               builder: (context, ref, _) {
                                 final wa = ref.watch(webAuthProvider);
                                 return Column(
                                   children: [
                                     Container(
-                                        height: 350, width: 350,
-                                        alignment: Alignment.center,
-                                        child: wa.qrLoginImageUrl != null
-                                          ? Image.network(wa.qrLoginImageUrl!)
-                                          : MyntLoader.simple(size: MyntLoaderSize.medium)
+                                      height: 295,
+                                      width: 295,
+                                      alignment: Alignment.center,
+                                      // When expired, frame the empty area
+                                      // with a subtle border so the reload
+                                      // icon doesn't float in blank space —
+                                      // matches the visual presence of the
+                                      // QR image when active.
+                                      decoration: _qrExpired
+                                          ? BoxDecoration(
+                                              border: Border.all(
+                                                color: resolveThemeColor(
+                                                  context,
+                                                  dark: MyntColors.dividerDark,
+                                                  light: MyntColors.divider,
+                                                ),
+                                                width: 1,
+                                              ),
+                                              // borderRadius: BorderRadius.circular(8),
+                                            )
+                                          : null,
+                                      child: _qrExpired
+                                          // Budget exhausted → centered Reload
+                                          // icon. Tapping fetches a fresh QR
+                                          // and restarts the cycle (counter
+                                          // and timer both reset via
+                                          // _handleQrLogin).
+                                          ? InkWell(
+                                              onTap: _handleQrLogin,
+                                              borderRadius: BorderRadius.circular(60),
+                                              child: Container(
+                                                width: 96,
+                                                height: 96,
+                                                alignment: Alignment.center,
+                                                decoration: const BoxDecoration(
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: Icon(
+                                                  Icons.refresh,
+                                                  size: 60,
+                                                  color: resolveThemeColor(context,
+                                                      dark: MyntColors.textPrimaryDark,
+                                                      light: MyntColors.textPrimary),
+                                                ),
+                                              ),
+                                            )
+                                          : (wa.qrLoginImageUrl != null
+                                              ? Image.network(wa.qrLoginImageUrl!)
+                                              : MyntLoader.simple(size: MyntLoaderSize.medium)),
                                     ),
                                     const SizedBox(height: 16),
                                     Text(
-                                      "Scan QR code from profile tab top appbar of MYNT to login.",
+                                      _qrExpired
+                                          ? "Click to refresh QR code"
+                                          : "Scan QR code from profile tab top appbar of MYNT to login.",
                                       textAlign: TextAlign.center,
                                       style: MyntWebTextStyles.body(context, color: resolveThemeColor(context,
                                           dark: MyntColors.textSecondaryDark,
                                           light: MyntColors.textSecondary)),
                                     ),
+                                    if (!_qrExpired) ...[
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        "QR expires in ${formattedTime(timeInSecond: _qrStart)}",
+                                        textAlign: TextAlign.center,
+                                        style: MyntWebTextStyles.body(
+                                          context,
+                                          fontWeight: MyntFonts.semiBold,
+                                          color: resolveThemeColor(context,
+                                              dark: MyntColors.textPrimaryDark,
+                                              light: MyntColors.textPrimary),
+                                        ),
+                                      ),
+                                    ],
                                     const SizedBox(height: 16),
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.end,
@@ -886,8 +1029,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                                   icon: const Icon(Icons.copy, size: 20),
                                                   onPressed: () {
                                                     Clipboard.setData(ClipboardData(text: webAuth.totpData?.pwd ?? ""));
-                                                    ScaffoldMessenger.of(context).showSnackBar(
-                                                      const SnackBar(content: Text("Auth key copied to clipboard!")),
+                                                    ResponsiveSnackBar.showSuccess(
+                                                      context,
+                                                      "Auth Key is copied to Clipboard",
                                                     );
                                                   },
                                                 ),
@@ -1077,8 +1221,8 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                    ),
                                    decoration: InputDecoration(
                                      filled: false,
-                                     labelText: webAuth.topflow 
-                                         ? "Enter 4 digit OTP sent to mobile/email to generate the TOTP"
+                                     labelText: webAuth.topflow
+                                         ? "Enter 4-digit OTP sent to mobile/email to set up TOTP"
                                          : "Enter ${webAuth.isTotp ? '6' : '4'} digit ${webAuth.isTotp ? 'TOTP' : 'OTP'}",
                                      floatingLabelBehavior: FloatingLabelBehavior.auto,
                                      labelStyle: MyntWebTextStyles.body(
@@ -1116,7 +1260,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                                 Text("Resend", style: MyntWebTextStyles.caption(context, color: resolveThemeColor(context,
                                                     dark: MyntColors.textSecondaryDark,
                                                     light: MyntColors.textSecondary))),
-                                                Text("in $_start", style: MyntWebTextStyles.caption(context, color: resolveThemeColor(context,
+                                                Text("in ${formattedTime(timeInSecond: _start)}", style: MyntWebTextStyles.caption(context, color: resolveThemeColor(context,
                                                     dark: MyntColors.textSecondaryDark,
                                                     light: MyntColors.textSecondary), fontWeight: FontWeight.bold)),
                                              ],
@@ -1138,7 +1282,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                                         if (!mounted) return;
                                                         _handleGenerateTotpFlow(); // Start Generate TOTP flow
                                                     },
-                                                    child: Text("Generate TOTP", style: MyntWebTextStyles.caption(context,  color: resolveThemeColor(context,
+                                                    child: Text("Set up TOTP", style: MyntWebTextStyles.caption(context,  color: resolveThemeColor(context,
                                             dark: MyntColors.secondaryDark,
                                             light: MyntColors.secondary), fontWeight: MyntFonts.semiBold)),
                                                   )
@@ -1210,7 +1354,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                  child: (_isProcessing || auth.loading)
                                      ? MyntLoader.inline()
                                      : Text(
-                                         "Continue",
+                                         "Verify",
                                          style: MyntWebTextStyles.title(
                                            context,
                                            fontWeight: MyntFonts.bold,
@@ -1219,9 +1363,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                        ),
                                ),
                             ),
-                            
+
                             const SizedBox(height: 24),
-                            
+
                             // Bottom Toolbar (Toggle / Forgot / Scan QR)
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1346,7 +1490,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                  child: (forpass.loading)
                                      ? MyntLoader.inline()
                                      : Text(
-                                         "Continue",
+                                         "Reset",
                                          style: MyntWebTextStyles.title(
                                            context,
                                            fontWeight: MyntFonts.bold,
@@ -1356,7 +1500,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                ),
                              ),
                              const SizedBox(height: 24),
-                             
+
                              // Back to Login Button
                              Align(
                                alignment: Alignment.centerLeft, // Left aligned as per image? Or Center? Image shows left.
@@ -1387,48 +1531,48 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                           ] else if (_showChangePassword) ...[
                             // Change Password Form
 
-                            // Client ID Field (Disabled)
-                            TextFormField(
-                              controller: forpass.userIdController,
-                              readOnly: true,
-                              style: MyntWebTextStyles.title(
-                                context,
-                                fontWeight: MyntFonts.medium,
-                                color: resolveThemeColor(context,
-                                    dark: MyntColors.textSecondaryDark,
-                                    light: MyntColors.textSecondary),
-                              ),
-                              decoration: InputDecoration(
-                                filled: false,
-                                labelText: "Client ID",
-                                floatingLabelBehavior: FloatingLabelBehavior.auto,
-                                labelStyle: MyntWebTextStyles.body(
-                                  context,
-                                  fontWeight: MyntFonts.regular,
-                                  color: resolveThemeColor(context,
-                                      dark: MyntColors.textSecondaryDark,
-                                      light: MyntColors.textSecondary),
-                                ),
-                                enabledBorder: UnderlineInputBorder(
-                                  borderSide: BorderSide(
-                                      color: resolveThemeColor(context,
-                                          dark: MyntColors.dividerDark,
-                                          light: MyntColors.divider),
-                                      width: 1),
-                                ),
-                                disabledBorder: UnderlineInputBorder(
-                                  borderSide: BorderSide(
-                                      color: resolveThemeColor(context,
-                                          dark: MyntColors.dividerDark,
-                                          light: MyntColors.divider),
-                                      width: 1),
-                                ),
-                                counterText: "",
-                                contentPadding:
-                                    const EdgeInsets.symmetric(vertical: 8),
-                              ),
-                            ),
-                            const SizedBox(height: 20),
+                            // // Client ID Field (Disabled)
+                            // TextFormField(
+                            //   controller: forpass.userIdController,
+                            //   readOnly: true,
+                            //   style: MyntWebTextStyles.title(
+                            //     context,
+                            //     fontWeight: MyntFonts.medium,
+                            //     color: resolveThemeColor(context,
+                            //         dark: MyntColors.textSecondaryDark,
+                            //         light: MyntColors.textSecondary),
+                            //   ),
+                            //   decoration: InputDecoration(
+                            //     filled: false,
+                            //     labelText: "Client ID",
+                            //     floatingLabelBehavior: FloatingLabelBehavior.auto,
+                            //     labelStyle: MyntWebTextStyles.body(
+                            //       context,
+                            //       fontWeight: MyntFonts.regular,
+                            //       color: resolveThemeColor(context,
+                            //           dark: MyntColors.textSecondaryDark,
+                            //           light: MyntColors.textSecondary),
+                            //     ),
+                            //     enabledBorder: UnderlineInputBorder(
+                            //       borderSide: BorderSide(
+                            //           color: resolveThemeColor(context,
+                            //               dark: MyntColors.dividerDark,
+                            //               light: MyntColors.divider),
+                            //           width: 1),
+                            //     ),
+                            //     disabledBorder: UnderlineInputBorder(
+                            //       borderSide: BorderSide(
+                            //           color: resolveThemeColor(context,
+                            //               dark: MyntColors.dividerDark,
+                            //               light: MyntColors.divider),
+                            //           width: 1),
+                            //     ),
+                            //     counterText: "",
+                            //     contentPadding:
+                            //         const EdgeInsets.symmetric(vertical: 8),
+                            //   ),
+                            // ),
+                            // const SizedBox(height: 20),
 
                             // Old/Generated Password Field
                             TextFormField(
@@ -1490,7 +1634,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                     const EdgeInsets.symmetric(vertical: 8),
                               ),
                               onChanged: (v) {
-                                forpass.validateOldPassword();
+                                forpass.validateOldPassword(isPasswordExpired: _isPasswordExpired);
                                 forpass.activateChangePass();
                               },
                             ),
@@ -1516,6 +1660,37 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                               readOnly: forpass.loading,
                               obscureText: forpass.hidenewpassword,
                               textInputAction: TextInputAction.done,
+                              // Backend enforces max 12 chars + alphanumeric +
+                              // allowed specials (#, $, -, *, @). Mirror that
+                              // at the input level so users get immediate
+                              // feedback instead of typing past 12 and only
+                              // hitting the API error on submit.
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(
+                                  RegExp(r'[A-Za-z0-9#$\-*@]'),
+                                ),
+                                // Custom max-length formatter: when input
+                                // would exceed 12, truncate AND fire the
+                                // transient red error so the user knows the
+                                // 13th keystroke (or oversized paste) was
+                                // rejected. Built-in maxLength would silently
+                                // block without surfacing the reason.
+                                TextInputFormatter.withFunction(
+                                  (oldValue, newValue) {
+                                    if (newValue.text.length > 12) {
+                                      _triggerNewPwdMaxLengthError();
+                                      final truncated =
+                                          newValue.text.substring(0, 12);
+                                      return TextEditingValue(
+                                        text: truncated,
+                                        selection: TextSelection.collapsed(
+                                            offset: truncated.length),
+                                      );
+                                    }
+                                    return newValue;
+                                  },
+                                ),
+                              ],
                               style: MyntWebTextStyles.title(
                                 context,
                                 fontWeight: MyntFonts.medium,
@@ -1577,7 +1752,18 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                               },
                             ),
                             const SizedBox(height: 5),
-                            if (forpass.newPasswordError != null &&
+                          
+                            if (_showNewPwdMaxLengthError)
+                              Text(
+                                "Password must be exactly 12 characters",
+                                style: MyntWebTextStyles.para(
+                                  context,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.lossDark,
+                                      light: MyntColors.loss),
+                                ),
+                              )
+                            else if (forpass.newPasswordError != null &&
                                 forpass.newPasswordError!.isNotEmpty &&
                                 forpass.newPasswordError != "")
                               Text(
@@ -1616,7 +1802,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                 child: (forpass.loading)
                                     ? MyntLoader.inline()
                                     : Text(
-                                        "Continue",
+                                        "Set New Password",
                                         style: MyntWebTextStyles.title(
                                           context,
                                           fontWeight: MyntFonts.bold,
@@ -1632,7 +1818,14 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                               alignment: Alignment.centerLeft,
                               child: InkWell(
                                 onTap: () {
+                                  final auth = ref.read(authProvider);
                                   setState(() {
+                                    // Pre-populate login Client ID for convenience, clear stale password
+                                    if (forpass.userIdController.text.isNotEmpty) {
+                                      auth.loginMethCtrl.text = forpass.userIdController.text;
+                                    }
+                                    auth.passCtrl.clear();
+                                    auth.passError = null;
                                     _showChangePassword = false;
                                     _isPasswordExpired = false;
                                     forpass.changePassMethod();

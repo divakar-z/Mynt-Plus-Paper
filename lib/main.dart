@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import 'package:mynt_plus/notification/notification_service.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 // Web URL strategy - enables path-based URLs instead of hash-based
 import 'package:flutter_web_plugins/url_strategy.dart';
@@ -205,9 +206,28 @@ Future<void> initializeFirebaseAsync() async {
 
     // Handle foreground messages
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-   
-
-      handleNotificationMessage(message);
+      if (kIsWeb) {
+        // On web, the tab being visible means the browser hands the push to
+        // this Dart-side handler instead of showing an OS notification — by
+        // design (avoids redundant popups when the user is already on the
+        // page). awesome_notifications doesn't render on web, so we surface
+        // the message as an in-page toast instead, matching the convention
+        // used by Slack / Gmail Web.
+        final notification = message.notification;
+        if (notification != null) {
+          final title = notification.title ?? '';
+          final body = notification.body ?? '';
+          final text = [title, body].where((s) => s.isNotEmpty).join('\n');
+          if (text.isNotEmpty) {
+            final ctx = getNavigatorContext();
+            if (ctx != null && ctx.mounted) {
+              ResponsiveSnackBar.showInfo(ctx, text);
+            }
+          }
+        }
+      } else {
+        handleNotificationMessage(message);
+      }
       _messageStreamController.sink.add(message);
     });
 
@@ -224,6 +244,14 @@ Future<void> initializeFirebaseAsync() async {
 void _clearBadgeOnStartup() async {
   // await AwesomeNotifications().cancelAll();
   await AwesomeNotifications().resetGlobalBadge();
+}
+
+// Public web routes that don't require auth and shouldn't trigger
+// notification permission prompts or Firebase messaging init on load.
+bool _isPublicWebRoute() {
+  if (!kIsWeb) return false;
+  final path = Uri.base.path;
+  return path == '/dailypnl' || path.startsWith('/dailypnl/');
 }
 
 // This method represents the project's entry level.
@@ -256,10 +284,13 @@ void main() async {
   }
   setupLocator();
 
-  // Initialize preferences and notifications in parallel for faster startup
+  final bool isPublicRoute = _isPublicWebRoute();
+
+  // Initialize preferences and notifications in parallel for faster startup.
+  // Public viewer skips notification init — visitors shouldn't see permission prompts.
   final Preferences pref = locator<Preferences>();
   await Future.wait([
-    NotificationService.initializeNotification(),
+    if (!isPublicRoute) NotificationService.initializeNotification(),
     pref.init(),
   ]);
 
@@ -280,10 +311,11 @@ void main() async {
 
   runApp(const ProviderScope(child: MyApp()));
 
-  // Initialize Firebase after the app has started (non-blocking)
-  // Web: Firebase core only (for Analytics)
-  // Mobile: Full Firebase (Analytics, Crashlytics, Messaging)
-  initializeFirebaseAsync();
+  // Initialize Firebase after the app has started (non-blocking).
+  // Skip on public routes to avoid messaging permission prompts for visitors.
+  if (!isPublicRoute) {
+    initializeFirebaseAsync();
+  }
 }
 
 class MyApp extends ConsumerWidget {

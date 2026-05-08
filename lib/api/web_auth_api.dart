@@ -62,9 +62,16 @@ class WebAuthApi {
         final model = MobileLoginModel.fromJson(json as Map<String, dynamic>);
         // Show error if stat is not Ok - check both emsg and msg fields
         if (model.stat != 'Ok') {
-          final errorMessage = model.emsg ?? model.msg;
-          if (errorMessage != null && errorMessage.isNotEmpty) {
-            ResponsiveSnackBar.showError(context, errorMessage);
+          final rawError = model.emsg ?? model.msg;
+          if (rawError != null && rawError.isNotEmpty) {
+            // Override the verbose API wording ("Invalid Input : Wrong
+            // Password") with the standardized auth-module phrasing
+            // "Wrong Password, Please Try again" — matches the OTP/TOTP
+            // toast convention. Any other API error passes through as-is.
+            final toastMsg = rawError.toLowerCase().contains('wrong password')
+                ? 'Wrong Password, Please Try again'
+                : rawError;
+            ResponsiveSnackBar.showError(context, toastMsg);
           }
         }
         return model;

@@ -766,7 +766,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
   }
 
   void _showSharingDialog(BuildContext context, LDProvider ledgerprovider) {
-    const sharingUrl = 'https://profile.mynt.in/dailypnl?ucode=';
+    const sharingUrl = 'https://app.mynt.in/dailypnl?ucode=';
     final secondaryColor = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final textColor = resolveThemeColor(context,
@@ -985,25 +985,92 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     final Map<String, _ScriptWiseRowData> scriptMap = {};
 
     if (isCommodity && ledgerprovider.calenderpnlAllData?.symbolWise != null) {
-      // Use symbolWise data from commodity response
+      // Commodity payload shape (mirrors Vue's commodity Script Wise
+      // mapping at Daily_pnl.vue:2823-2831 — `details.sum` is spread into
+      // the row and `details.realised_pnl` comes from outside `sum`):
+      //   symbolWise: {
+      //     "<symbol>": {
+      //        realised_pnl,
+      //        sum: { total_buy_qty, total_buy_rate, total_sell_qty,
+      //               total_sell_rate, Updated_NETQTY, CLOSING_PRICE, ... },
+      //        trades: [...]
+      //     }
+      //   }
+      double readNum(Map? m, List<String> keys) {
+        if (m == null) return 0;
+        for (final k in keys) {
+          final v = m[k];
+          if (v == null) continue;
+          if (v is num) return v.toDouble();
+          if (v is String) {
+            final parsed = double.tryParse(v);
+            if (parsed != null) return parsed;
+          }
+        }
+        return 0;
+      }
+
+      // Reads a value from `sum` first, then falls back to the symbol-level
+      // map. Backend sometimes hoists fields up to the symbol level.
+      double readField(Map? sum, Map symbolData, List<String> keys) {
+        final fromSum = readNum(sum, keys);
+        if (fromSum != 0) return fromSum;
+        return readNum(symbolData, keys);
+      }
+
       (ledgerprovider.calenderpnlAllData!.symbolWise as Map)
           .forEach((symbol, symbolData) {
-        final buyQty = (symbolData['buy_qty'] ?? 0).toDouble();
-        final buyAmt = (symbolData['buy_amt'] ?? 0).toDouble();
-        final sellQty = (symbolData['sell_qty'] ?? 0).toDouble();
-        final sellAmt = (symbolData['sell_amt'] ?? 0).toDouble();
-        final netQty = (symbolData['net_qty'] ?? 0).toDouble();
-        final closePrice = (symbolData['close_price'] ?? 0).toDouble();
-        final realisedPnl = (symbolData['realised_pnl'] ?? 0).toDouble();
+        if (symbolData is! Map) return;
+        final sum = symbolData['sum'] is Map
+            ? symbolData['sum'] as Map
+            : null;
+
+        final buyQty = readField(
+            sum, symbolData, ['total_buy_qty', 'BUYQTY', 'buy_qty']);
+        final buyRate = readField(sum, symbolData, [
+          'total_buy_rate',
+          'avg_buy_rate',
+          'BUYRATE',
+          'buy_rate',
+        ]);
+        final sellQty = readField(
+            sum, symbolData, ['total_sell_qty', 'SALEQTY', 'sell_qty']);
+        final sellRate = readField(sum, symbolData, [
+          'total_sell_rate',
+          'avg_sell_rate',
+          'SALERATE',
+          'sell_rate',
+        ]);
+        final netQty = readField(
+            sum, symbolData, ['Updated_NETQTY', 'NETQTY', 'net_qty']);
+        final closePrice = readField(
+            sum, symbolData, ['CLOSING_PRICE', 'CL_PRICE', 'close_price']);
+        final realisedPnl = readNum(
+            symbolData, ['realised_pnl', 'realisedpnl', 'PL_AMT']);
+
+        final buyAmt = readField(sum, symbolData,
+            ['total_buy_amt', 'BUYAMT', 'buy_amt', 'BUY_AMT']);
+        final sellAmt = readField(sum, symbolData,
+            ['total_sell_amt', 'SALEAMT', 'sell_amt', 'SALE_AMT']);
+
+        final resolvedBuyRate = buyRate != 0
+            ? buyRate
+            : (buyQty > 0 && buyAmt != 0 ? buyAmt / buyQty : 0.0);
+        final resolvedSellRate = sellRate != 0
+            ? sellRate
+            : (sellQty > 0 && sellAmt != 0 ? sellAmt / sellQty : 0.0);
+        final resolvedBuyAmt = buyAmt != 0 ? buyAmt : buyQty * resolvedBuyRate;
+        final resolvedSellAmt =
+            sellAmt != 0 ? sellAmt : sellQty * resolvedSellRate;
 
         scriptMap[symbol] = _ScriptWiseRowData(
           symbol: symbol,
           buyQty: buyQty,
-          buyRate: buyQty > 0 ? buyAmt / buyQty : 0,
-          buyAmt: buyAmt,
+          buyRate: resolvedBuyRate,
+          buyAmt: resolvedBuyAmt,
           sellQty: sellQty,
-          sellRate: sellQty > 0 ? sellAmt / sellQty : 0,
-          sellAmt: sellAmt,
+          sellRate: resolvedSellRate,
+          sellAmt: resolvedSellAmt,
           netQty: netQty,
           closePrice: closePrice,
           realisedPnl: realisedPnl,

@@ -289,15 +289,14 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
   // This preserves existing values from API when socket data has default "0.00" values
   void _processDepthData(GetQuotes depthData, Map<String, dynamic> socketData) {
     if (socketData['ap'] != null) depthData.ap = "${socketData['ap']}";
-    // LTP should always update if present (even for low-priced stocks)
-    if (socketData['lp'] != null) depthData.lp = "${socketData['lp']}";
-    // CRITICAL FIX: For OHLC and change fields, only update if socket value is valid (> 0)
-    // This prevents default "0.00" values from overwriting valid API data
+    // Strict guard for all price fields — rejects null and broker zero
+    // defaults so stale "0.00" can never overwrite valid API data.
+    if (_isValidValue(socketData['lp'])) depthData.lp = "${socketData['lp']}";
     if (_isValidValue(socketData['pc'])) depthData.pc = "${socketData['pc']}";
     if (_isValidValue(socketData['o'])) depthData.o = "${socketData['o']}";
     if (_isValidValue(socketData['l'])) depthData.l = "${socketData['l']}";
     if (_isValidValue(socketData['c'])) depthData.c = "${socketData['c']}";
-    if (socketData['chng'] != null) depthData.chng = "${socketData['chng']}";
+    if (_isValidValue(socketData['chng'])) depthData.chng = "${socketData['chng']}";
     if (_isValidValue(socketData['h'])) depthData.h = "${socketData['h']}";
     if (socketData['poi'] != null) depthData.poi = "${socketData['poi']}";
     if (socketData['v'] != null) depthData.v = "${socketData['v']}";

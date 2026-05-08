@@ -99,22 +99,15 @@ class _PositionDetailScreenWebState
     final socketData = wsProvider.socketDatas[_positionData.token];
 
     if (socketData != null) {
-      // Update with initial socket data
+      // Update with initial socket data — strict guards match the listener
+      // body below so broker zero defaults can never overwrite valid API data.
       final lp = socketData['lp']?.toString();
       final pc = socketData['pc']?.toString();
       final chng = socketData['chng']?.toString();
 
-      if (lp != null && lp != "null") {
-        _positionData.lp = lp;
-      }
-
-      if (pc != null && pc != "null") {
-        _positionData.perChange = pc;
-      }
-
-      if (chng != null && chng != "null") {
-        _positionData.chng = chng;
-      }
+      if (_isValidValue(lp)) _positionData.lp = lp;
+      if (_isValidValue(pc)) _positionData.perChange = pc;
+      if (_isValidValue(chng)) _positionData.chng = chng;
 
       _updateProfitLossValues();
     }

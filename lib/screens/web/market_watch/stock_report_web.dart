@@ -203,14 +203,17 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
 
   // Process WebSocket data for live updates (same as scrip_depth_info.dart)
   void _processDepthData(GetQuotes depthData, Map<String, dynamic> socketData) {
+    // Price fields are nullable post-sanitisation (null when broker emits
+    // "0"/"0.00" defaults for illiquid contracts). Fall back to "0.00" so
+    // downstream double.parse() doesn't see "null".
     depthData.ap = "${socketData['ap']}";
-    depthData.lp = "${socketData['lp']}";
-    depthData.pc = "${socketData['pc']}";
-    depthData.o = "${socketData['o']}";
-    depthData.l = "${socketData['l']}";
-    depthData.c = "${socketData['c']}";
-    depthData.chng = "${socketData['chng']}";
-    depthData.h = "${socketData['h']}";
+    depthData.lp = socketData['lp']?.toString() ?? "0.00";
+    depthData.pc = socketData['pc']?.toString() ?? "0.00";
+    depthData.o = socketData['o']?.toString() ?? "0.00";
+    depthData.l = socketData['l']?.toString() ?? "0.00";
+    depthData.c = socketData['c']?.toString() ?? "0.00";
+    depthData.chng = socketData['chng']?.toString() ?? "0.00";
+    depthData.h = socketData['h']?.toString() ?? "0.00";
     depthData.poi = "${socketData['poi']}";
     depthData.v = "${socketData['v']}";
     depthData.toi = "${socketData['toi']}";

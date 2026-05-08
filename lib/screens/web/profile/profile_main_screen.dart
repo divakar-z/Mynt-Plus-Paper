@@ -540,6 +540,13 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   bool _stickyOrderWindow = false;
   bool _quickOrderScreen = false;
 
+  // New Password (Change Password section) — transient max-length error.
+  // Same pattern as the login screen's Forgot/Change Password field: fired
+  // only when the user actually attempts to type/paste beyond 12 chars
+  // (caught by the custom inputFormatter). Auto-hides after 2 seconds.
+  bool _showNewPwdMaxLengthError = false;
+  Timer? _newPwdMaxLengthHideTimer;
+
   @override
   void initState() {
     super.initState();
@@ -555,7 +562,21 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   void dispose() {
     mktProtCtrl.dispose();
     qtyCtrl.dispose();
+    _newPwdMaxLengthHideTimer?.cancel();
     super.dispose();
+  }
+
+  /// Triggered by the New Password field's custom inputFormatter when the
+  /// user attempts to type/paste beyond 12 chars. Shows the inline red
+  /// "Password must be exactly 12 characters" error briefly, then auto-hides
+  /// after 2 seconds so the message disappears once the user stops trying.
+  void _triggerNewPwdMaxLengthError() {
+    if (!mounted) return;
+    _newPwdMaxLengthHideTimer?.cancel();
+    setState(() => _showNewPwdMaxLengthError = true);
+    _newPwdMaxLengthHideTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showNewPwdMaxLengthError = false);
+    });
   }
 
   /// Load saved order preferences from authProvider (same logic as order_prefere_screen.dart)
@@ -822,10 +843,11 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Update your account password',
-            style: MyntWebTextStyles.bodySmall(context,
-                darkColor: MyntColors.textSecondaryDark,
-                lightColor: MyntColors.textSecondary),
+            'Choose your Password',
+            style: MyntWebTextStyles.title(context,
+                fontWeight: MyntFonts.semiBold,
+                darkColor: MyntColors.textPrimaryDark,
+                lightColor: MyntColors.textPrimary),
           ),
           const SizedBox(height: 20),
 
@@ -899,6 +921,27 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
               height: 40,
               obscureText: changePassword.hidenewpassword,
               readOnly: changePassword.loading,
+              // Backend enforces max 12 chars + alphanumeric + allowed
+              // specials (#, $, -, *, @). Mirror that at the input level so
+              // disallowed characters can't be typed and overflow gets
+              // surfaced via the transient red error below.
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(
+                  RegExp(r'[A-Za-z0-9#$\-*@]'),
+                ),
+                TextInputFormatter.withFunction((oldValue, newValue) {
+                  if (newValue.text.length > 12) {
+                    _triggerNewPwdMaxLengthError();
+                    final truncated = newValue.text.substring(0, 12);
+                    return TextEditingValue(
+                      text: truncated,
+                      selection: TextSelection.collapsed(
+                          offset: truncated.length),
+                    );
+                  }
+                  return newValue;
+                }),
+              ],
               trailingWidget: IconButton(
                 icon: Icon(
                   changePassword.hidenewpassword ? Icons.visibility_off : Icons.visibility,
@@ -920,7 +963,21 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
               },
             ),
           ),
-          if (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty)
+          // Transient red error: takes priority over the missing-requirements
+          // error so the user sees the most recent reason their input was
+          // rejected (overflow attempt vs unmet requirements).
+          if (_showNewPwdMaxLengthError)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                "Password must be exactly 12 characters",
+                style: MyntWebTextStyles.caption(context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.lossDark,
+                        light: MyntColors.loss)),
+              ),
+            )
+          else if (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 5),
               child: Text(
@@ -4786,7 +4843,7 @@ class _TotpInlineWidgetState extends State<_TotpInlineWidget> {
                           color: resolveThemeColor(context,
                               dark: MyntColors.textSecondaryDark,
                               light: MyntColors.textSecondary)),
-                      onPressed: () => _copyToClipboard(widget.secretKey, 'Auth key copied to clipboard'),
+                      onPressed: () => _copyToClipboard(widget.secretKey, 'Auth Key is copied to Clipboard'),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                     ),

@@ -5,8 +5,10 @@ import 'dart:developer';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:mynt_plus/main.dart' show rootNavigatorKey;
 import 'package:mynt_plus/provider/fund_provider.dart';
 import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/provider/network_state_provider.dart';
@@ -28,32 +30,54 @@ import 'web_subscription_manager.dart';
 
 final websocketProvider = ChangeNotifierProvider((ref) => WebSocketProvider(ref));
 
+/// Lifecycle states of the WebSocket connection.
+///
+/// Owned by [WebSocketProvider]. The legacy boolean flags
+/// (`_wsConnected`, `_connecting`, `_reconnecting`) are kept as derived mirrors
+/// of this state so existing readers continue to work — but the source of
+/// truth is `_state`, mutated only via `_transitionTo()`.
+enum SocketState {
+  /// Idle — no channel, no pending work. Initial state and post-logout.
+  disconnected,
+
+  /// `WebSocketChannel.connect()` has been called; waiting for `ck` reply.
+  connecting,
+
+  /// Server replied `ck`; channel is open and probe timer is running.
+  connected,
+
+  /// A reconnect is scheduled. Backoff timer is armed.
+  backoffWait,
+
+  /// Network is offline (per `connectivity_plus`). No reconnect attempts
+  /// until `Connectivity → wifi/mobile` event fires.
+  zombie,
+}
+
+/// Indian market sessions used to choose how aggressively we probe for
+/// liveness. During active equity hours the bar is tight (10s of silence
+/// = suspicious); off-hours we probe rarely (60s).
+enum MarketSession { equity, mcxRegular, mcxExtended, off }
+
 class WebSocketProvider extends ChangeNotifier {
   final Ref ref;
   WebSocketProvider(this.ref);
 
   // Constants
-  static const int _maxReconnectAttempts = 8; // Increased for poor networks
-  static const int _subscriptionTimeout = 10; // Increased timeout for slow networks
-  static const Duration _reconnectDelay = Duration(seconds: 2);
-  static const Duration _lowBandwidthPingInterval = Duration(seconds: 10); // Ping to keep connection alive
+  static const int _maxReconnectAttempts = 8; // Hard cap on reconnect attempts
+  static const int _subscriptionTimeout = 10; // Subscription ack timeout
 
-  // Network quality tracking
-  Timer? _pingTimer;
-  DateTime? _lastMessageTime;
-  bool _isLowBandwidth = false;
-  int _failedPingCount = 0;
-  static const int _maxFailedPings = 3;
-
-  // State management
+  // State management.
+  // _wsConnected/_connecting/_reconnecting are derived mirrors of _state,
+  // maintained by _transitionTo. Reads stay backward-compatible — writes
+  // should always go through _transitionTo, not direct assignment.
   bool _wsConnected = false;
   bool _connecting = false;
   int _connectionCount = 0;
   bool _retryScreen = false;
-  // Removed unused _wsMount field
   BuildContext? _context;
-  bool _reconnecting = false; // Track if we're already in the reconnection process
-  bool _reconnectionSuccess = false; // Track if we've successfully reconnected
+  bool _reconnecting = false;
+  bool _reconnectionSuccess = false;
 
   // When true, UI should NOT show "Connection lost"/"Connected" toasts.
   // Set by WebSubscriptionManager during intentional tab-switch reconnects.
@@ -62,12 +86,6 @@ class WebSocketProvider extends ChangeNotifier {
   void setTabSwitchReconnect(bool value) {
     _isTabSwitchReconnect = value;
   }
-  
-  // Track server-initiated closures to prevent reconnection loops
-  DateTime? _lastServerClosure;
-  int _consecutiveServerClosures = 0;
-  static const int _maxConsecutiveClosures = 3; // Stop reconnecting after 3 consecutive closures
-  static const Duration _serverClosureCooldown = Duration(seconds: 10); // Cooldown period
 
   // WebSocket and subscription management
   WebSocketChannel? _channel;
@@ -89,9 +107,9 @@ class WebSocketProvider extends ChangeNotifier {
   Map get socketDatas => _socketDatas;
   bool get reconnectionSuccess => _reconnectionSuccess;
   
-  // Get cached LTP for a token
+  // Get cached LTP for a token. Used by mobile order_book.
   String? getCachedLTP(String token) => _ltpCache[token];
-  
+
   // Get best available LTP (socket > cache > fallback)
   String getBestLTP(String token, String fallbackLTP) {
     // First check if we have current socket data
@@ -144,69 +162,422 @@ class WebSocketProvider extends ChangeNotifier {
   // Track if provider is disposed to prevent "Trying to render a disposed EngineFlutterView" errors
   bool _isDisposed = false;
 
-  /// Safely notify listeners, checking if provider is disposed first.
-  /// Prevents "Trying to render a disposed EngineFlutterView" errors on web.
+  /// Phase-aware safe notify.
+  ///
+  /// Notifies listeners directly when the scheduler is idle (the common case
+  /// for socket-message callbacks). When called from inside a build / layout /
+  /// paint / mouse-tracker phase, defers to a post-frame callback AND schedules
+  /// a frame so the deferred notify is guaranteed to fire — even on a fully
+  /// idle browser tab where Flutter would not otherwise render a frame.
+  ///
+  /// This replaces the old pattern of wrapping every `_safeNotifyListeners()`
+  /// call in `addPostFrameCallback + scheduleFrame`. The connection-success
+  /// path used to skip the `scheduleFrame` half, which caused the
+  /// "prices only update after I click" production bug — the post-frame
+  /// callback would queue indefinitely on a backgrounded tab.
   void _safeNotifyListeners() {
-    if (_isDisposed) {
-      log('WebSocket: Skipping notifyListeners - provider is disposed');
+    if (_isDisposed) return;
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.idle ||
+        phase == SchedulerPhase.postFrameCallbacks) {
+      try {
+        notifyListeners();
+      } catch (e) {
+        log('WebSocket: notifyListeners error (likely disposed): $e');
+      }
       return;
     }
-    try {
-      notifyListeners();
-    } catch (e) {
-      log('WebSocket: Error in notifyListeners (likely disposed): $e');
-    }
+    // Mid-build/layout/paint/mouse-tracker — defer to next frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_isDisposed) return;
+      try {
+        notifyListeners();
+      } catch (e) {
+        log('WebSocket: deferred notifyListeners error: $e');
+      }
+    });
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   // Buffer for pending socket data updates - key: token, value: pending update data
   final Map<String, Map<String, dynamic>> _pendingSocketUpdates = {};
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // SOCKET STATE MACHINE  (replaces scattered _wsConnected / _connecting /
+  //                       _reconnecting writes — those flags are now derived
+  //                       mirrors maintained by _transitionTo)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  SocketState _state = SocketState.disconnected;
+  SocketState get state => _state;
+
+  /// Fixed backoff schedule. Replaces the old `2 × (count+1) × multiplier`
+  /// formula that inflated to 16+ s after a few failures. Capped at 8 s so
+  /// recovery time stays bounded even on sustained bad networks.
+  static const List<Duration> _backoffSchedule = [
+    Duration(milliseconds: 200),
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 8),
+    Duration(seconds: 8),
+    Duration(seconds: 8),
+  ];
+
+  Duration _backoffForAttempt(int attempt) {
+    if (attempt < 1) return _backoffSchedule.first;
+    if (attempt > _backoffSchedule.length) return _backoffSchedule.last;
+    return _backoffSchedule[attempt - 1];
+  }
+
+  /// Probe machinery — replaces the broken ping/pong path.
+  /// The server doesn't pong, so we probe via a fresh subscribe to a symbol
+  /// we already track. The server replies with `dk` (subscription confirmed)
+  /// regardless of market hours — that reply is what proves the socket is
+  /// alive. See `_pickProbeSymbol` for the symbol-selection rules.
+  Timer? _probeTimer;
+  Timer? _probeTimeoutTimer;
+  DateTime? _lastInboundFrameTime;
+  DateTime? _probeSentAt;
+
+  /// Hard-coded fallback for the rare case of a logged-in user with zero
+  /// active subscriptions (e.g. they're on a screen that displays no
+  /// market data). NIFTY 50 token format per Mynt convention.
+  static const String _probeFallbackSymbol = 'NSE|26000';
+
+  /// Single point that mutates `_state`. All callers — connection handlers,
+  /// reconnect, close, network listener — go through this. Each transition
+  /// also synchronises the legacy boolean flags so existing readers
+  /// (`wsConnected`, downstream `if (_connecting)`-style checks inside this
+  /// class) keep working without per-site changes.
+  ///
+  /// Same-state re-entry is allowed for `backoffWait` only: when an attempt
+  /// fails (`onError` / `onDone` while we're still in backoffWait), we need
+  /// to schedule a fresh backoff cycle by re-running `_onEnterBackoffWait`.
+  /// All other states are no-ops on same-state re-entry.
+  void _transitionTo(SocketState next) {
+    if (_state == next && next != SocketState.backoffWait) return;
+    log('🔄 Socket state: $_state → $next');
+    _state = next;
+    switch (next) {
+      case SocketState.disconnected:
+        _wsConnected = false;
+        _connecting = false;
+        _reconnecting = false;
+        _onEnterDisconnected();
+        break;
+      case SocketState.connecting:
+        _wsConnected = false;
+        _connecting = true;
+        _reconnecting = false;
+        // _onEnterConnecting work is already inside `establishConnection`;
+        // it is the side effect of moving to this state and is invoked
+        // explicitly from the caller (no auto-trigger here to avoid
+        // recursion through establishConnection's own guards).
+        break;
+      case SocketState.connected:
+        _wsConnected = true;
+        _connecting = false;
+        _reconnecting = false;
+        _onEnterConnected();
+        break;
+      case SocketState.backoffWait:
+        _wsConnected = false;
+        _connecting = false;
+        _reconnecting = true;
+        _onEnterBackoffWait();
+        break;
+      case SocketState.zombie:
+        _wsConnected = false;
+        _connecting = false;
+        _reconnecting = false;
+        _onEnterZombie();
+        break;
+    }
+    _safeNotifyListeners();
+  }
+
+  void _onEnterConnected() {
+    _connectionCount = 0;
+    _retryScreen = false;
+    _lastInboundFrameTime = DateTime.now();
+    // Probe is a web-specific concern — relies on web_subscription_manager
+    // and is the workaround for browser-tab/visibility issues. Mobile uses
+    // the OS-driven connectivity_plus signals which are reliable.
+    if (kIsWeb) _startProbeTimer();
+    // Tab-switch flow used to clear this flag from a 500 ms Future.delayed
+    // BEFORE the reconnect actually completed. Move it to the success edge
+    // so toast suppression matches reality.
+    if (_isTabSwitchReconnect) _isTabSwitchReconnect = false;
+  }
+
+  void _onEnterBackoffWait() {
+    _stopProbeTimer();
+    _channelSubscription?.cancel();
+    _channelSubscription = null;
+    _channel?.sink.close();
+    _channel = null;
+
+    _connectionCount++;
+    if (_connectionCount > _maxReconnectAttempts) {
+      log('❌ Socket: max reconnect attempts ($_maxReconnectAttempts) reached');
+      _retryScreen = true;
+      _transitionTo(SocketState.disconnected);
+      return;
+    }
+
+    final delay = _backoffForAttempt(_connectionCount);
+    log('⏱️  Socket: backoff $delay before attempt $_connectionCount');
+    _reconnectBackoff?.cancel();
+    _reconnectBackoff = Timer(delay, () {
+      if (_isDisposed) return;
+      // Network gate: if connectivity says we're offline, park in zombie
+      // and wait for the connectivity listener to wake us.
+      ConnectivityResult connStatus;
+      try {
+        connStatus = ref.read(networkStateProvider).connectionStatus;
+      } catch (_) {
+        connStatus = ConnectivityResult.wifi; // assume online on read failure
+      }
+      if (connStatus == ConnectivityResult.none) {
+        _transitionTo(SocketState.zombie);
+        return;
+      }
+      _attemptStateMachineConnect();
+    });
+  }
+
+  void _onEnterDisconnected() {
+    _stopProbeTimer();
+    _reconnectBackoff?.cancel();
+    _channelSubscription?.cancel();
+    _channelSubscription = null;
+    _channel?.sink.close();
+    _channel = null;
+  }
+
+  void _onEnterZombie() {
+    _stopProbeTimer();
+    _reconnectBackoff?.cancel();
+    _channelSubscription?.cancel();
+    _channelSubscription = null;
+    _channel?.sink.close();
+    _channel = null;
+  }
+
+  /// Drives the connect attempt from the state machine. Mirrors the path
+  /// the old `_attemptReconnection` used, but without the cascading
+  /// `Future.delayed(500ms)` and inflating-backoff timer.
+  ///
+  /// CRITICAL: clear the legacy `_reconnecting` and `_connecting` mirrors
+  /// before calling `establishConnection`. Otherwise its early-return guards
+  /// see `_reconnecting=true` (set by `backoffWait` entry) and defer into a
+  /// `Future.delayed(500ms)` whose closure does nothing for connect frames
+  /// (channelInput is empty) — the connect attempt is silently dropped and
+  /// no socket ever opens. This was flaw F9 in the design doc.
+  void _attemptStateMachineConnect() {
+    if (_isDisposed) return;
+    if (_state == SocketState.connected) return;
+    final ctx = _safeContext();
+    if (ctx == null) {
+      log('⚠️  Socket: no valid context for connect, aborting');
+      return;
+    }
+    // Clear legacy mirrors. State machine still represents the truth; once
+    // establishConnection sets _connecting=true and ck arrives,
+    // _handleConnectionSuccess transitions us to connected.
+    _reconnecting = false;
+    _connecting = false;
+    establishConnection(channelInput: '', task: 'c', context: ctx);
+  }
+
+  /// Public: external trigger for "the connection looks suspect, force a
+  /// fresh attempt" (used by `WebSubscriptionManager` on tab return / user
+  /// retry / network restore).
+  void markZombie() {
+    if (_state == SocketState.zombie) return;
+    _transitionTo(SocketState.zombie);
+  }
+
+  /// Public: pause the probe timer. Used when the browser tab is hidden —
+  /// browser throttles timers to ~1/min on background tabs, so the probe
+  /// would either fire spuriously or get throttled into uselessness. We
+  /// just stop it; the tab-visible handler triggers a fresh state cycle.
+  void pauseProbe() => _stopProbeTimer();
+
+  /// Public: restart probing if we are still in `connected` state.
+  void resumeProbe() {
+    if (_state == SocketState.connected) _startProbeTimer();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PROBE & MARKET-HOURS HELPERS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _startProbeTimer() {
+    _stopProbeTimer();
+    // Tick every 5 s and check whether we have crossed the market-aware
+    // probe threshold. Cheaper than scheduling-on-message since we'd have
+    // to constantly cancel/recreate timers under heavy market data.
+    _probeTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_state != SocketState.connected) {
+        _stopProbeTimer();
+        return;
+      }
+      if (_lastInboundFrameTime == null) return;
+      if (_probeSentAt != null) return; // already waiting for a probe reply
+      final idle = DateTime.now().difference(_lastInboundFrameTime!);
+      if (idle >= _probeThreshold()) _sendProbe();
+    });
+  }
+
+  void _stopProbeTimer() {
+    _probeTimer?.cancel();
+    _probeTimer = null;
+    _probeTimeoutTimer?.cancel();
+    _probeTimeoutTimer = null;
+    _probeSentAt = null;
+  }
+
+  String? _pickProbeSymbol() {
+    // Prefer a symbol the user is already subscribed to — re-subscribing is
+    // free (server replies `dk` either way) and doesn't create unwanted
+    // server-side state.
+    try {
+      final manager = ref.read(webSubscriptionManagerProvider);
+      if (manager.activeSubscriptions.isNotEmpty) {
+        return manager.activeSubscriptions.first;
+      }
+    } catch (_) {}
+    // Fallback: NIFTY 50. Only fires when the user has no active
+    // subscriptions, which is rare (most screens subscribe on mount).
+    return _probeFallbackSymbol;
+  }
+
+  void _sendProbe() {
+    if (_state != SocketState.connected || _channel == null) return;
+    final symbol = _pickProbeSymbol();
+    if (symbol == null) return;
+    log('🟡 Socket probe: re-subscribing $symbol to verify liveness');
+    try {
+      _channel!.sink.add(jsonEncode({"t": "d", "k": symbol}));
+      _probeSentAt = DateTime.now();
+      _probeTimeoutTimer = Timer(const Duration(seconds: 5), _onProbeTimeout);
+    } catch (e) {
+      log('🔴 Socket probe send failed: $e');
+      _transitionTo(SocketState.backoffWait);
+    }
+  }
+
+  void _onProbeTimeout() {
+    if (_state != SocketState.connected) return;
+    log('🔴 Socket probe timed out (>5s no reply) — connection appears dead');
+    _probeSentAt = null;
+    _transitionTo(SocketState.backoffWait);
+  }
+
+  /// Indian market session lookup. Hardcoded because this app is India-only.
+  ///   Equity (NSE/BSE):     09:00 – 15:45 IST  weekdays
+  ///   MCX evening session:  09:00 – 23:30 IST  (or 23:50 during US DST)
+  MarketSession _currentSession() {
+    final ist = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+    final isWeekday = ist.weekday >= DateTime.monday && ist.weekday <= DateTime.friday;
+    if (!isWeekday) return MarketSession.off;
+
+    final mins = ist.hour * 60 + ist.minute;
+    const equityStart = 9 * 60;
+    const equityEnd = 15 * 60 + 45;
+    final mcxEnd = _isUsDstActive(ist) ? (23 * 60 + 50) : (23 * 60 + 30);
+
+    if (mins >= equityStart && mins < equityEnd) return MarketSession.equity;
+    if (mins >= equityEnd && mins < mcxEnd) return MarketSession.mcxExtended;
+    if (mins >= equityStart && mins < mcxEnd) return MarketSession.mcxRegular;
+    return MarketSession.off;
+  }
+
+  /// US DST window: 2nd Sunday of March → 1st Sunday of November.
+  /// Mynt commodity evening session shifts by 20 min based on this.
+  bool _isUsDstActive(DateTime ist) {
+    DateTime nthSunday(int year, int month, int n) {
+      var d = DateTime(year, month, 1);
+      while (d.weekday != DateTime.sunday) {
+        d = d.add(const Duration(days: 1));
+      }
+      return d.add(Duration(days: 7 * (n - 1)));
+    }
+    final start = nthSunday(ist.year, 3, 2);
+    final end = nthSunday(ist.year, 11, 1);
+    return ist.isAfter(start) && ist.isBefore(end);
+  }
+
+  Duration _probeThreshold() {
+    switch (_currentSession()) {
+      case MarketSession.equity:
+        return const Duration(seconds: 10);
+      case MarketSession.mcxRegular:
+      case MarketSession.mcxExtended:
+        return const Duration(seconds: 30);
+      case MarketSession.off:
+        return const Duration(seconds: 60);
+    }
+  }
+
+  /// Returns a usable BuildContext for snackbar / navigation calls. Falls
+  /// back to the global `rootNavigatorKey` from main.dart when the cached
+  /// `_context` has been disposed (e.g. screen unmounted while reconnect
+  /// was in flight). Replaces the old "log and silently abort" failure
+  /// mode in `_handleConnectionClosed`.
+  BuildContext? _safeContext() {
+    try {
+      if (_context?.mounted == true) return _context;
+    } catch (_) {}
+    return rootNavigatorKey.currentContext;
+  }
+
+  /// Defensive sanitiser called from `_updateSocketData` and
+  /// `_initializeTokenData`. The broker emits "0" / "0.00" defaults for
+  /// price fields when it doesn't have real data (illiquid contracts,
+  /// market-warmup window after reconnect). Letting these through writes
+  /// `position.lp = 0` downstream and produces phantom P&L.
+  ///
+  /// We set the field to `null` (NOT remove the key) so consumers using
+  /// `data.containsKey('lp')` continue to behave the same — they just
+  /// see `null` as "no real value yet".
+  static const _priceFields = ['lp', 'c', 'pc', 'o', 'h', 'l'];
+  void _sanitizePriceFields(Map<String, dynamic> data) {
+    for (final field in _priceFields) {
+      final raw = data[field];
+      if (raw == null) continue;
+      final str = raw.toString();
+      if (str.isEmpty || str == 'null' ||
+          str == '0' || str == '0.0' || str == '0.00') {
+        data[field] = null;
+      }
+    }
+  }
+
+  // ────── End of state machine / probe / sanitiser additions ──────
+
   void changeretryscreen(bool value) {
     _retryScreen = value;
-    // Use post-frame callback to avoid modifying provider during build
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _safeNotifyListeners();
-    });
+    _safeNotifyListeners();
   }
 
   void changeconnectioncount() {
     _connectionCount = 0;
-    // Use post-frame callback to avoid modifying provider during build
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _safeNotifyListeners();
-    });
-  }
-
-  void resetConnectionCount() {
-    _connectionCount = 0;
-    _reconnectionSuccess = true;
-
-    // Use post-frame callback to avoid modifying provider during build
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _safeNotifyListeners();
-    });
-
-    // Reset reconnection success flag after a delay to allow UI to update
-    Future.delayed(const Duration(seconds: 1), () {
-      _reconnectionSuccess = false;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _safeNotifyListeners();
-      });
-    });
+    _safeNotifyListeners();
   }
 
   /// Force-reset all connection state for a fresh session (e.g. after login).
-  /// This handles the case where session expired while the user was away,
-  /// leaving _connecting/_reconnecting stuck as true. closeSocket() can't
-  /// fix this because its guard `if (_connecting && !_wsConnected) return;`
-  /// prevents cleanup during an in-progress connection attempt.
+  /// Used by auth_provider to make sure no stale state survives across logins.
+  /// Bypasses the closeSocket guard that would normally prevent close during
+  /// an in-progress connection attempt.
   void resetForNewSession() {
     log('🔄 WebSocket: resetForNewSession called');
 
-    // Cancel all timers first
-    _stopPingTimer();
-    _reconnectBackoff?.cancel();
-    _reconnectBackoff = null;
+    // Cancel subscription timers (state machine handles probe / backoff /
+    // channel teardown via the disconnected entry handler).
     _subscriptionDebounce?.cancel();
     _subscriptionDebounce = null;
     for (var timer in _subscriptionTimers.values) {
@@ -214,34 +585,24 @@ class WebSocketProvider extends ChangeNotifier {
     }
     _subscriptionTimers.clear();
 
-    // Complete any pending connection completer
     if (_connectionCompleter != null && !_connectionCompleter!.isCompleted) {
       _connectionCompleter!.completeError('Session reset');
     }
 
-    // Close the channel if it exists
-    _channelSubscription?.cancel();
-    _channelSubscription = null;
-    _channel?.sink.close();
-    _channel = null;
-
-    // Reset ALL flags
-    _wsConnected = false;
-    _connecting = false;
-    _reconnecting = false;
     _connectionCount = 0;
-    _consecutiveServerClosures = 0;
-    _lastServerClosure = null;
     _retryScreen = false;
-    _isLowBandwidth = false;
-    _failedPingCount = 0;
+    _isTabSwitchReconnect = false;
+    _lastInboundFrameTime = null;
 
-    // Clear subscriptions and data
+    // Clear subscriptions and data.
     _sentSubscriptions.clear();
     _pendingSubscriptions['t'] = [];
     _pendingSubscriptions['d'] = [];
     _socketDatas.clear();
     _ltpCache.clear();
+
+    // Drive a clean teardown via the state machine.
+    _transitionTo(SocketState.disconnected);
 
     log('✅ WebSocket: State reset complete');
   }
@@ -254,113 +615,75 @@ class WebSocketProvider extends ChangeNotifier {
   }
 
   void closeSocket(bool mounted, {bool force = false, bool preserveData = false}) {
-    // Prevent closing if already closed to avoid unnecessary operations
-    if (!_wsConnected && _channel == null && !_connecting) {
+    // Already closed — skip.
+    if (_state == SocketState.disconnected && _channel == null && !_connecting) {
       log('ℹ️  WebSocket: Already closed, skipping');
       return;
     }
 
-    // Prevent closing if socket is currently being established
-    // UNLESS force=true (used by logout/session expiry to ensure clean state)
-    if (_connecting && !_wsConnected && !force) {
+    // Don't close mid-connect unless forced (logout / session reset).
+    // _connecting is the source of truth here — it's set by establishConnection
+    // and covers both the initial-connect path (state stays disconnected) and
+    // the state-machine driven path (state is backoffWait when establishConn
+    // is called from _attemptStateMachineConnect, which clears _connecting=false
+    // momentarily then establishConnection sets it true again).
+    if (_connecting && !force) {
       log('⚠️  WebSocket: Preventing close during connection establishment');
       return;
     }
 
-    // Get stack trace to see who is calling closeSocket
-    final stackTrace = StackTrace.current;
-    final callerLines = stackTrace.toString().split('\n');
-    // Find the actual caller (skip closeSocket itself)
-    String callerInfo = 'Unknown';
-    for (int i = 1; i < callerLines.length && i < 6; i++) {
-      final line = callerLines[i].trim();
-      if (!line.contains('closeSocket') && line.isNotEmpty) {
-        callerInfo = line;
-        break;
-      }
-    }
-
-    log('🔴 WebSocket: Closing connection (mounted: $mounted)');
-    log('   Caller: $callerInfo');
+    final caller = StackTrace.current.toString().split('\n').skip(1).take(2).join(' | ');
+    log('🔴 WebSocket: Closing connection (mounted: $mounted) caller: $caller');
 
     wsmount = mounted;
-    _wsConnected = false;
-    _connecting = false;
-    _reconnecting = false; // Reset reconnection flag to ensure we can reconnect properly
 
-    // Stop ping timer
-    _stopPingTimer();
-
-    // Cancel any outstanding connection completion
+    // Cancel outstanding connection completer.
     if (_connectionCompleter != null && !_connectionCompleter!.isCompleted) {
       _connectionCompleter!.completeError("WebSocket connection closed intentionally");
     }
 
-    // Cancel stream subscription BEFORE closing channel to prevent memory leaks
-    _channelSubscription?.cancel();
-    _channelSubscription = null;
-
-    // Properly close channel
-    _channel?.sink.close();
-    _channel = null; // Set to null to ensure we create a new one on reconnect
-
-    // Cancel all timers to prevent further reconnection attempts
+    // Cancel subscription timers (separate from probe / backoff which the
+    // state machine entry handler will cancel).
     for (var timer in _subscriptionTimers.values) {
       timer.cancel();
     }
     _subscriptionTimers.clear();
-
-    // Cancel backoff timer if it exists
-    _reconnectBackoff?.cancel();
-    _reconnectBackoff = null;
-
-    // Cancel subscription debounce timer
     _subscriptionDebounce?.cancel();
     _subscriptionDebounce = null;
 
-    // Clear sent subscriptions tracking to allow resubscription on reconnect
+    // Clear subscription tracking so the next connect re-sends everything.
     _sentSubscriptions.clear();
     _pendingSubscriptions['t'] = [];
     _pendingSubscriptions['d'] = [];
 
     if (preserveData) {
-      // Tab-switch reconnect: keep socket data and LTP cache so UI doesn't flash 0.0
-      // Stale prices are better than no prices — new data will overwrite when it arrives
-      log('Preserved socket data and LTP cache for tab-switch reconnect');
+      // Tab-switch / reconnect-soon: keep socket data and LTP cache so UI
+      // doesn't flash 0.00. New ticks will overwrite when they arrive.
+      log('Preserved socket data and LTP cache');
     } else {
-      // Full close (logout/re-login): clear everything for fresh state
-      // This fixes the issue where old token data prevents updateHoldingValues()
-      // from being called on re-login (tokens already exist, so _updateSocketData()
-      // is called instead of the new token path that calls updateHoldingValues())
+      // Full close (logout / re-login): clear everything for fresh state.
       _socketDatas.clear();
       _ltpCache.clear();
-      log('Cleared all WebSocket subscriptions tracking and socket data');
+      log('Cleared socket data and LTP cache');
     }
+
+    // Transition handles channel close, subscription cancel, probe stop,
+    // backoff cancel, and notify.
+    _transitionTo(SocketState.disconnected);
 
     log('✅ WebSocket: Connection closed successfully');
-
-    if (mounted) {
-      // Use post-frame callback to avoid modifying provider during build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _safeNotifyListeners();
-      });
-    }
   }
 
+  /// Legacy "set connection state" API. Today every caller passes `false`
+  /// (auth_provider on logout × 3, network_state_provider on loss × 1).
+  /// Routes through the state machine so the legacy flags stay in sync.
   void websockConn(bool value) {
-    _wsConnected = value;
-
-    // Start ping timer if connected in potential low bandwidth
     if (value) {
-      _startPingTimer();
+      // No production callers pass true today, but preserve semantic.
+      _transitionTo(SocketState.connected);
     } else {
-      _stopPingTimer();
+      _transitionTo(SocketState.disconnected);
     }
-
-    // Use post-frame callback to avoid modifying provider during build
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _safeNotifyListeners();
-    });
   }
 
   void _startSubscriptionTimer(String key, BuildContext context) {
@@ -394,57 +717,6 @@ class WebSocketProvider extends ChangeNotifier {
     }
   }
 
-  void _startPingTimer() {
-    _stopPingTimer();
-    _lastMessageTime = DateTime.now();
-
-    // Set up a timer to ping the server periodically to keep connection alive
-    _pingTimer = Timer.periodic(_lowBandwidthPingInterval, (timer) {
-      if (_wsConnected && _channel != null) {
-        // If we haven't received a message in a while, send a ping
-        final now = DateTime.now();
-        if (_lastMessageTime != null && now.difference(_lastMessageTime!).inSeconds > _lowBandwidthPingInterval.inSeconds - 5) {
-          _sendPing();
-        }
-      } else {
-        _stopPingTimer();
-      }
-    });
-  }
-
-  void _sendPing() {
-    // **FIX: Check if provider is disposed before sending ping**
-    if (_isDisposed) {
-      return;
-    }
-
-    try {
-      if (_wsConnected && _channel != null) {
-        // Send a lightweight ping message
-        _channel!.sink.add(jsonEncode({"t": "h"})); // Heartbeat/ping message
-
-        // Track failed pings
-        _failedPingCount++;
-
-        // If we've failed too many pings, try to reconnect
-        if (_failedPingCount >= _maxFailedPings && !_reconnecting) {
-          _isLowBandwidth = true;
-          if (_context != null && !_isDisposed) {
-            reconnect(_context!);
-          }
-        }
-      }
-    } catch (e) {
-      // Handle ping failure
-    }
-  }
-
-  void _stopPingTimer() {
-    _pingTimer?.cancel();
-    _pingTimer = null;
-    _failedPingCount = 0;
-  }
-
   Future<void> establishConnection({
     required String channelInput,
     required String task,
@@ -473,10 +745,8 @@ class WebSocketProvider extends ChangeNotifier {
     if (_connecting) {
       log('⏳ WebSocket: Connection already in progress, waiting');
       try {
-        // Use a shorter timeout for waiting on an existing connection attempt in low bandwidth
-        final timeout = _isLowBandwidth ? const Duration(seconds: 20) : const Duration(seconds: 10);
-
-        await _connectionCompleter?.future.timeout(timeout, onTimeout: () {
+        await _connectionCompleter?.future
+            .timeout(const Duration(seconds: 10), onTimeout: () {
           throw TimeoutException('Connection attempt timed out');
         });
 
@@ -494,15 +764,22 @@ class WebSocketProvider extends ChangeNotifier {
       return;
     }
 
-    // Prevent duplicate connection attempts
+    // Reconnect already in progress (state machine is in backoffWait).
+    // For subscribe requests (channelInput non-empty), defer to
+    // _handleSubscription which queues into _pendingSubscriptions — those
+    // get drained by _sendPendingSubscriptionsAfterConnect when the
+    // state machine reaches connected. For pure connect requests
+    // (channelInput empty), the state machine will drive the connect itself.
     if (_reconnecting) {
       log('⏸️  WebSocket: Reconnection in progress, deferring');
-      // Wait a bit and retry
-      Future.delayed(const Duration(milliseconds: 500), () {
-        if (!_wsConnected && !_connecting && channelInput.isNotEmpty) {
+      if (channelInput.isNotEmpty) {
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (_isDisposed) return;
+          // Always queue — _handleSubscription handles both connected
+          // (sends immediately) and not-connected (queues into pending).
           _handleSubscription(channelInput, task, context);
-        }
-      });
+        });
+      }
       return;
     }
 
@@ -525,8 +802,9 @@ class WebSocketProvider extends ChangeNotifier {
     }
 
     try {
-      // Connect with a timeout appropriate for network conditions
-      final connectTimeout = _isLowBandwidth ? const Duration(seconds: 15) : const Duration(seconds: 10);
+      // Fixed connect timeout — bandwidth-aware doubling removed with the
+      // _isLowBandwidth flag (driven by the broken ping path).
+      final connectTimeout = const Duration(seconds: 10);
 
       final uri = Uri.parse(ApiLinks.wsURL);
 
@@ -600,9 +878,22 @@ class WebSocketProvider extends ChangeNotifier {
 
   void _handleWebSocketMessage(dynamic event) {
     try {
-      // Update last message time for ping tracking
-      _lastMessageTime = DateTime.now();
-      _failedPingCount = 0;
+      // Drop stale messages from a closed channel. Stream subscription
+      // cancellation is async — a buffered frame can arrive between
+      // `_channelSubscription.cancel()` and the actual cancellation
+      // taking effect. Without this guard, a stray `ck` reply after an
+      // intentional close would falsely transition us to `connected`
+      // even though `_channel` is already null.
+      if (_isDisposed || _channel == null) return;
+
+      // Stamp inbound time so the probe timer can detect "no traffic in N
+      // seconds" and any in-flight probe gets cancelled (its reply arrived).
+      _lastInboundFrameTime = DateTime.now();
+      if (_probeSentAt != null) {
+        _probeTimeoutTimer?.cancel();
+        _probeTimeoutTimer = null;
+        _probeSentAt = null;
+      }
 
       final res = jsonDecode(event.toString());
 
@@ -610,19 +901,15 @@ class WebSocketProvider extends ChangeNotifier {
         log("🟢 WebSocket: ✅ Connected successfully");
         _handleConnectionSuccess();
       } else if (res['t']?.toString().toLowerCase() == "tf" || res['t']?.toString().toLowerCase() == "df") {
-        // log("Socket Data: ${res.toString()}");
         _handleMarketData(res);
       } else if (res['t']?.toString().toLowerCase() == "tk" || res['t']?.toString().toLowerCase() == "dk") {
-        // log("Socket Data: ${res.toString()}");
         _handleTokenData(res);
       } else if (res['t']?.toString().toLowerCase() == "om" && _context != null) {
         _handleOrderMessage(res);
       } else if (res['t']?.toString().toLowerCase() == "am" && _context != null) {
         _handleAlertMessage(res);
-      } else if (res['t']?.toString().toLowerCase() == "h") {
-        // Handle heartbeat/ping response
-        _failedPingCount = 0;
       }
+      // Note: server doesn't send "h" heartbeat replies — handler removed.
 
       // Throttle UI updates to 330ms intervals to improve performance
       _scheduleThrottledUpdate();
@@ -659,12 +946,8 @@ class WebSocketProvider extends ChangeNotifier {
         // would never get notified, causing UI to show stale data.
         _socketDataController.add(_socketDatas);
 
-        // Use post-frame callback to avoid modifying provider during build
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _safeNotifyListeners();
-        });
-        // Schedule a frame so the post-frame callback fires even when idle
-        WidgetsBinding.instance.scheduleFrame();
+        // Phase-aware notify (handles both idle and mid-build cases internally).
+        _safeNotifyListeners();
       }
     });
   }
@@ -686,10 +969,10 @@ class WebSocketProvider extends ChangeNotifier {
         // Notify stream of new token
         _socketDataController.add(_socketDatas);
 
-        // Update portfolio if we have valid price data
-        if (_socketDatas[token]['lp'] != null &&
-            _socketDatas[token]['lp'] != '0' &&
-            _socketDatas[token]['lp'] != '0.00') {
+        // Update portfolio if we have valid price data. _initializeTokenData
+        // now sanitises lp (sets to null if "0"/"0.00"), so a simple null
+        // check is enough — no more inline string comparisons.
+        if (_socketDatas[token]['lp'] != null) {
           ref.read(portfolioProvider).updateHoldingValues(token, _socketDatas[token]);
           // Also update position values for ticker header to show live P&L
           ref.read(portfolioProvider).updatePositionValues(token, _socketDatas[token]);
@@ -715,39 +998,30 @@ class WebSocketProvider extends ChangeNotifier {
   void _handleConnectionSuccess() {
     log('🟢 WebSocket: Connection established and ready');
 
-    _wsConnected = true;
-    _connecting = false;
-    resetConnectionCount(); // Reset connection count properly
-    _reconnecting = false;
-    _retryScreen = false; // Ensure retry screen is not shown
-
-    // Reset low bandwidth mode on successful connection
-    _isLowBandwidth = false;
-
-    // Reset consecutive server closures counter on successful connection
-    _consecutiveServerClosures = 0;
-    _lastServerClosure = null;
-
-    // Start ping timer for connection monitoring
-    _startPingTimer();
-
-    // Cancel any backoff timer
+    // Cancel any pending backoff timer (no longer needed — we connected).
     _reconnectBackoff?.cancel();
     _reconnectBackoff = null;
 
-    if (!_connectionCompleter!.isCompleted) {
+    // Briefly flag success so UI can show a "connected" toast.
+    _reconnectionSuccess = true;
+    Future.delayed(const Duration(seconds: 1), () {
+      _reconnectionSuccess = false;
+      _safeNotifyListeners();
+    });
+
+    if (_connectionCompleter != null && !_connectionCompleter!.isCompleted) {
       _connectionCompleter?.complete();
     }
 
-    // Send any pending subscriptions that were queued while connecting
+    // Single state transition handles: _wsConnected=true, _connecting=false,
+    // _reconnecting=false, _retryScreen=false, _connectionCount=0,
+    // _lastInboundFrameTime=now, probe timer started, tab-switch flag cleared.
+    _transitionTo(SocketState.connected);
+
+    // Send any pending subscriptions that were queued while connecting.
     _sendPendingSubscriptionsAfterConnect();
 
     log('✅ WebSocket: All connection setup completed');
-
-    // Notify listeners so WebSubscriptionManager can restore subscriptions
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _safeNotifyListeners();
-    });
   }
 
   /// Send any pending subscriptions after connection is established
@@ -985,6 +1259,12 @@ class WebSocketProvider extends ChangeNotifier {
     final data = _socketDatas[key];
     if (data == null) return;
 
+    // Sanitise price fields at ingest. Broker emits "0" / "0.00" defaults
+    // for illiquid contracts and during reconnect warm-up. Stripping them
+    // here (to null) is the single point of defense against phantom P&L.
+    // Replaces the ad-hoc guards in position/portfolio/market_watch.
+    _sanitizePriceFields(res);
+
     // Track if we've made meaningful updates that require UI refresh
     bool hasUpdates = false;
 
@@ -996,24 +1276,19 @@ class WebSocketProvider extends ChangeNotifier {
       hasUpdates = true;
     }
 
-    // Update only fields that are present in the new data and have changed
+    // Update only fields that are present in the new data and have changed.
+    // Price-zero filtering already handled by _sanitizePriceFields above.
     for (final field in res.keys) {
       final value = res[field];
 
-      // Skip update for null values
+      // Skip update for null values (sanitiser may have nulled price fields).
       if (value == null) continue;
-
-      // For price fields, only update if new value is non-zero
-      if (['lp', 'c', 'pc', 'o', 'h', 'l'].contains(field)) {
-        final numValue = double.tryParse(value.toString()) ?? 0.0;
-        if (numValue <= 0.0) continue;
-      }
 
       // Only update if value is different from current
       if (data[field] != value) {
         data[field] = value;
         hasUpdates = true;
-        
+
         // Cache LTP value for future use during refresh
         if (field == 'lp') {
           _ltpCache[key] = value.toString();
@@ -1061,18 +1336,15 @@ class WebSocketProvider extends ChangeNotifier {
 
       _socketDataController.add(_socketDatas);
 
-      // CRITICAL: Use post-frame callback to avoid mouse tracker assertion errors
-      // ("!_debugDuringDeviceUpdate is not true"). Direct notifyListeners() during
-      // frame rendering causes conflicts with Flutter's mouse tracking phase.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _safeNotifyListeners();
-      });
-      // Schedule a frame so the post-frame callback actually fires even when idle
-      WidgetsBinding.instance.scheduleFrame();
+      // _safeNotifyListeners is phase-aware: direct notify when idle,
+      // post-frame defer only when called from inside a build/layout phase.
+      _safeNotifyListeners();
 
-      // Minimize portfolio recalculations by checking if this is a price update
-      // and only update if we have valid price data
-      if ((res.containsKey('lp') || res.containsKey('pc') || res.containsKey('c')) && data["lp"] != null && data["lp"] != "0" && data["lp"] != "0.00") {
+      // Minimize portfolio recalculations by checking if this is a price
+      // update and only update if we have valid price data. _sanitizePriceFields
+      // already nulled out "0"/"0.00" defaults — null check is sufficient.
+      if ((res.containsKey('lp') || res.containsKey('pc') || res.containsKey('c')) &&
+          data["lp"] != null) {
         ref.read(portfolioProvider).updateHoldingValues(key, data);
         // Also update position values for ticker header to show live P&L
         ref.read(portfolioProvider).updatePositionValues(key, data);
@@ -1083,17 +1355,21 @@ class WebSocketProvider extends ChangeNotifier {
   void _initializeTokenData(String key, Map<String, dynamic> res) {
     final data = _socketDatas[key];
 
-    // Initialize basic fields
-    data["pc"] = res["pc"] ?? "0.00";
+    // Sanitise the inbound payload so any "0"/"0.00" defaults become null.
+    _sanitizePriceFields(res);
+
+    // Initialize basic fields. ap is intentionally not sanitised (it's an
+    // average price, can legitimately be 0 on certain instruments).
+    data["pc"] = res["pc"];
     data["ap"] = res["ap"] ?? "0.00";
-    data["o"] = res["o"] ?? "0.00";
-    data["h"] = res["h"] ?? "0.00";
-    data["l"] = res["l"] ?? "0.00";
-    data["c"] = res["c"] ?? "0.00";
-    data["lp"] = res["lp"] ?? "0.00";
-    
-    // Cache initial LTP value
-    if (res["lp"] != null && res["lp"] != "0.00") {
+    data["o"] = res["o"];
+    data["h"] = res["h"];
+    data["l"] = res["l"];
+    data["c"] = res["c"];
+    data["lp"] = res["lp"];
+
+    // Cache initial LTP value (only when present after sanitisation).
+    if (res["lp"] != null) {
       _ltpCache[key] = res["lp"].toString();
     }
     
@@ -1133,18 +1409,6 @@ class WebSocketProvider extends ChangeNotifier {
   }
 
   void _handleSubscription(String channelInput, String task, BuildContext context) {
-    // In low bandwidth mode, we filter out less critical subscriptions
-    if (_isLowBandwidth && task.toLowerCase() != "u" && channelInput.contains(',')) {
-      // If in low bandwidth mode, consider batching or prioritizing subscriptions
-      // For example, we might only subscribe to the most important symbols
-      final symbols = channelInput.split('#');
-      // if (symbols.length > 10) {
-      //   // If too many symbols, only subscribe to the first 10 in low bandwidth mode
-      //   final prioritySymbols = symbols.take(10).join('#');
-      channelInput = symbols.join('#');
-      // }
-    }
-
     if (task.toLowerCase() != "u" && task.toLowerCase() != 'ud' && !channelInput.startsWith('|')) {
       _startSubscriptionTimer(channelInput, context);
     }
@@ -1359,411 +1623,125 @@ class WebSocketProvider extends ChangeNotifier {
   }
 
   void _handleConnectionClosed(BuildContext context) {
-    log('🔴 WebSocket: Connection closed by server');
-    
-    // Don't process if already reconnecting or if we're disposing
-    if (_reconnecting) {
-      log('⏸️  WebSocket: Already reconnecting, ignoring');
-      return;
-    }
-    
-    // Track server closures
-    final now = DateTime.now();
-    if (_lastServerClosure != null && 
-        now.difference(_lastServerClosure!) < const Duration(seconds: 5)) {
-      // Server closed connection again within 5 seconds - increment counter
-      _consecutiveServerClosures++;
-    } else {
-      // Reset counter if enough time has passed
-      _consecutiveServerClosures = 1;
-    }
-    _lastServerClosure = now;
-    
-    // Check if server keeps closing - stop reconnecting if too many consecutive closures
-    if (_consecutiveServerClosures >= _maxConsecutiveClosures) {
-      log('⛔ WebSocket: Too many consecutive server closures, stopping reconnection');
-      
-      // Reset after cooldown period
-      Future.delayed(_serverClosureCooldown, () {
-        _consecutiveServerClosures = 0;
-      });
-      
-      // Only close if not already closed
-      if (_wsConnected || _channel != null) {
-        closeSocket(true);
-      }
-      return;
-    }
-    
-    // Check if we're in cooldown period
-    if (_lastServerClosure != null && 
-        now.difference(_lastServerClosure!) < _serverClosureCooldown &&
-        _consecutiveServerClosures > 1) {
-      log('⏸️  WebSocket: In cooldown period, skipping reconnection');
-      
-      // Only close if not already closed
-      if (_wsConnected || _channel != null) {
-        closeSocket(true);
-      }
-      return;
-    }
-    
-    // Check if there are active subscriptions before reconnecting
-    // On web, skip this check because after page refresh, subscriptions haven't been added yet
-    // but screens will subscribe once they mount - we just need to ensure socket is connected
-    try {
-      final subscriptionManager = ref.read(subscriptionManagerProvider);
-      if (!subscriptionManager.hasActiveSubscriptions) {
-        // On web, check if user is logged in - if so, still reconnect
-        // because screens will add subscriptions after they mount
-        if (kIsWeb) {
-          final isLoggedIn = _isUserLoggedIn();
-          if (isLoggedIn) {
-            log('ℹ️  WebSocket: Web - No subscriptions but user logged in, reconnecting');
-          } else {
-            log('ℹ️  WebSocket: Web - No subscriptions, user not logged in, skipping');
-            if (_wsConnected || _channel != null) {
-              closeSocket(true);
-            }
-            return;
-          }
-        } else {
-          // Mobile: keep existing behavior
-          log('ℹ️  WebSocket: No active subscriptions, skipping reconnection');
-
-          // Only close if not already closed
-          if (_wsConnected || _channel != null) {
-            closeSocket(true);
-          }
-          return;
-        }
-      }
-    } catch (e) {
-      // Subscription manager might not be available, continue with reconnection
-      log('⚠️  WebSocket: Could not check subscriptions: $e');
-    }
-    
-    if (!_reconnecting) {
-      _connectionCount++;
-      log('📊 WebSocket: Connection count: $_connectionCount');
-
-      // Use post-frame callback to avoid modifying provider during build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _safeNotifyListeners(); // Notify to update UI with new connection count
-      });
-    }
-
-    // Only close if not already closed
-    if (_wsConnected || _channel != null) {
-      closeSocket(true);
-    }
+    log('🔴 WebSocket: onDone fired');
+    if (_isDisposed) return;
 
     if (_connectionCompleter != null && !_connectionCompleter!.isCompleted) {
       _connectionCompleter?.completeError("WebSocket connection closed.");
     }
 
-    if (_connectionCount < _maxReconnectAttempts) {
-      // Use longer delay if server has closed multiple times
-      final delaySeconds = _consecutiveServerClosures > 1 ? 5 : 2;
-      log('🔄 WebSocket: Scheduling reconnection in $delaySeconds seconds');
+    // Network is offline — wait for connectivity restore listener.
+    if (_state == SocketState.zombie) return;
 
-      Future.delayed(Duration(seconds: delaySeconds), () {
-        // **FIX: Check if provider is disposed before reconnecting from Future.delayed**
-        if (_isDisposed) {
-          log('WebSocket: Skipping reconnect from _handleConnectionClosed - provider is disposed');
-          return;
-        }
+    // Post-logout / shutdown: state was reset to disconnected by closeSocket
+    // and there is nobody to reconnect for. Skip silently.
+    if (_state == SocketState.disconnected && !_isUserLoggedIn()) return;
 
-        if (!_wsConnected && !_reconnecting) {
-          // Use passed context if mounted, otherwise fall back to stored _context
-          // This handles page refresh scenario where original context is no longer valid
-          BuildContext? validContext;
-          try {
-            if (context.mounted) {
-              validContext = context;
-            }
-          } catch (e) {
-            // Context may throw if widget is disposed
-          }
+    // Logged in but no subscriptions and no screens means no point reconnecting
+    // (preserves the original "no active subs" early-return behavior).
+    try {
+      final subscriptionManager = ref.read(subscriptionManagerProvider);
+      final hasMobileSubs = subscriptionManager.hasActiveSubscriptions;
+      final hasWebSubs = kIsWeb
+          ? ref.read(webSubscriptionManagerProvider).hasActiveSubscriptions
+          : false;
+      // On web we still reconnect when logged in even without active subs,
+      // because screens about to mount need a live socket. On mobile the
+      // legacy behavior was stricter — keep it.
+      if (!kIsWeb && !hasMobileSubs && !hasWebSubs) {
+        log('ℹ️  Mobile: No active subs, moving to disconnected');
+        _transitionTo(SocketState.disconnected);
+        return;
+      }
+    } catch (_) {/* fall through to reconnect attempt */}
 
-          // Fall back to stored context if passed context is not valid
-          if (validContext == null && _context != null) {
-            try {
-              if (_context!.mounted) {
-                validContext = _context;
-              }
-            } catch (e) {
-              // Stored context may also be invalid
-            }
-          }
-
-          if (validContext != null) {
-            reconnect(validContext);
-          } else {
-            log('⚠️  WebSocket: No valid context for reconnection');
-          }
-        }
-      });
-    } else {
-      log('❌ WebSocket: Max reconnection attempts reached');
-    }
+    // Transitions:
+    //   connected → backoffWait    : real server-side close, retry
+    //   disconnected → backoffWait : initial-connect failure (state machine
+    //                                hadn't transitioned yet), retry
+    //   backoffWait → backoffWait  : failed reconnect attempt — same-state
+    //                                re-entry schedules the next backoff cycle
+    _transitionTo(SocketState.backoffWait);
   }
 
   void _handleConnectionError(dynamic error, BuildContext context) {
-    log('❌ WebSocket: Connection error: $error');
-    
-    if (!_reconnecting) {
-      _connectionCount++;
-      log('📊 WebSocket: Connection count: $_connectionCount');
-
-      // Use post-frame callback to avoid modifying provider during build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _safeNotifyListeners(); // Notify to update UI with new connection count
-      });
-    }
-
-    closeSocket(true);
+    log('❌ WebSocket: onError fired: $error');
+    if (_isDisposed) return;
 
     if (_connectionCompleter != null && !_connectionCompleter!.isCompleted) {
       _connectionCompleter?.completeError(error);
     }
 
-    if (_connectionCount < _maxReconnectAttempts) {
-      log('🔄 WebSocket: Scheduling reconnection after error');
-      // Use post-frame callback to avoid provider modification during build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Use passed context if mounted, otherwise fall back to stored _context
-        BuildContext? validContext;
-        try {
-          if (context.mounted) {
-            validContext = context;
-          }
-        } catch (e) {
-          // Context may throw if widget is disposed
-        }
+    // Network is offline — wait for connectivity restore listener.
+    if (_state == SocketState.zombie) return;
 
-        // Fall back to stored context if passed context is not valid
-        if (validContext == null && _context != null) {
-          try {
-            if (_context!.mounted) {
-              validContext = _context;
-            }
-          } catch (e) {
-            // Stored context may also be invalid
-          }
-        }
+    // Post-logout / shutdown: nobody to reconnect for.
+    if (_state == SocketState.disconnected && !_isUserLoggedIn()) return;
 
-        if (validContext != null) {
-          reconnect(validContext);
-        } else {
-          log('⚠️  WebSocket: No valid context for reconnection after error');
-        }
-      });
-    } else {
-      log('❌ WebSocket: Max reconnection attempts reached');
-    }
+    // All other cases (including disconnected+loggedIn for initial connect
+    // failure) → schedule a backoff retry. Same-state re-entry handles the
+    // case where we were already in backoffWait when the failure arrived.
+    _transitionTo(SocketState.backoffWait);
   }
 
+  /// External reconnect entry-point. Called by:
+  ///   - sharedWidget reload buttons (UI)
+  ///   - internet_widget recovery
+  ///   - network_state_provider on connectivity change
+  ///   - web_subscription_manager force-reconnect (tab return)
+  ///
+  /// Signature unchanged for backward compat with all 6 call sites. The
+  /// passed context is cached for snackbar use; if it later goes stale,
+  /// reconnect logic falls back to `rootNavigatorKey` via `_safeContext()`.
   void reconnect(BuildContext context) {
-    // **FIX: Check if provider is disposed before reconnecting**
-    if (_isDisposed) {
-      log('WebSocket: Skipping reconnect - provider is disposed');
+    if (_isDisposed) return;
+    _context = context;
+
+    // Already in flight or already connected — nothing to do.
+    if (_state == SocketState.connecting ||
+        _state == SocketState.backoffWait) {
+      log('⏸️  Socket: reconnect requested but already attempting');
+      return;
+    }
+    if (_state == SocketState.connected && _channel != null) {
+      log('✅ Socket: reconnect requested but already connected');
       return;
     }
 
-    // Prevent multiple simultaneous reconnection attempts
-    if (_reconnecting) {
-      log('⏸️  WebSocket: Reconnection already in progress');
-      return;
+    log('🔄 Socket: external reconnect request from ${StackTrace.current.toString().split('\n').take(2).last.trim()}');
+
+    // User-driven retry → reset attempt count so we get the fast initial
+    // backoff (200 ms) instead of inheriting a stale 8 s.
+    _connectionCount = 0;
+    _retryScreen = false;
+
+    // Refresh data on web only if not on login screen — preserves the old
+    // _refreshData() side-effect from _attemptReconnection.
+    if (currentRouteName != Routes.loginScreen) {
+      _refreshData(context);
     }
 
-    // If already connected, don't reconnect
-    if (_wsConnected && _channel != null) {
-      log('✅ WebSocket: Already connected, skipping reconnection');
-      return;
-    }
-    
-    // Get stack trace to see who is calling reconnect
-    final stackTrace = StackTrace.current;
-    final caller = stackTrace.toString().split('\n').take(3).join('\n');
-    
-    log('🔄 WebSocket: Initiating reconnection (attempt $_connectionCount)');
-    log('   Caller: $caller');
-    
-    _reconnecting = true;
-
-    // Cancel any existing backoff timer
-    _reconnectBackoff?.cancel();
-
-    // Use exponential backoff based on connection count
-    // With longer delays for low bandwidth conditions
-    final multiplier = _isLowBandwidth ? 2 : 1;
-    final backoffDelay = Duration(seconds: _reconnectDelay.inSeconds * (_connectionCount + 1) * multiplier);
-
-    // If retry screen is active, attempt immediate reconnection
-    if (_retryScreen) {
-      log('⚡ WebSocket: Immediate reconnection (retry screen)');
-      _attemptReconnection(context);
-    } else {
-      // Check if we're connected to a network before scheduling reconnection
-      ConnectivityResult connectionStatus;
-      try {
-        connectionStatus = ref.read(networkStateProvider).connectionStatus;
-      } catch (e) {
-        log('WebSocket: Error reading networkStateProvider in reconnect: $e');
-        _reconnecting = false;
-        return;
-      }
-
-      if (connectionStatus != ConnectivityResult.none) {
-        log('⏱️  WebSocket: Scheduling reconnection in ${backoffDelay.inSeconds}s');
-        _reconnectBackoff = Timer(backoffDelay, () {
-          // **FIX: Check disposed before timer callback executes**
-          if (_isDisposed) {
-            log('WebSocket: Skipping reconnection timer callback - provider is disposed');
-            return;
-          }
-          log('⏰ WebSocket: Backoff delay completed');
-          _attemptReconnection(context);
-        });
-      } else {
-        log('📵 WebSocket: No network, aborting reconnection');
-        // Reset reconnecting flag if no network is available
-        _reconnecting = false;
-        // Use post-frame callback to avoid modifying provider during build
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _safeNotifyListeners();
-        });
-      }
-    }
-  }
-
-  void _attemptReconnection(BuildContext context) {
-    // **FIX: Check if provider is disposed before attempting reconnection**
-    // This prevents "provider[_addListener] is not a function" errors
-    if (_isDisposed) {
-      log('WebSocket: Skipping _attemptReconnection - provider is disposed');
-      _reconnecting = false;
-      return;
-    }
-
-    // Check if already connected before attempting
-    if (_wsConnected && _channel != null) {
-      log('✅ WebSocket: Already connected, canceling reconnection');
-      _reconnecting = false;
-      return;
-    }
-
-    log('🔄 WebSocket: Attempting reconnection');
-
-    ConnectivityResult connectionStatus;
-    try {
-      connectionStatus = ref.read(networkStateProvider).connectionStatus;
-    } catch (e) {
-      log('WebSocket: Error reading networkStateProvider (likely disposed): $e');
-      _reconnecting = false;
-      return;
-    }
-
-    if (connectionStatus != ConnectivityResult.none) {
-      log('📶 WebSocket: Network available');
-      
-      // Reset retry screen flag as we're attempting reconnection
-      _retryScreen = false;
-
-      // Make sure we only try to refresh data once per reconnection attempt
-      if (!_wsConnected) {
-        if (currentRouteName != Routes.loginScreen){
-          log('🔄 WebSocket: Refreshing data');
-          _refreshData(context);
-        }
-      }
-      
-
-      log('🔌 WebSocket: Establishing base connection');
-
-      // First establish a base connection if needed
-      // Only if not already connecting
-      if (!_connecting && !_wsConnected) {
-        // CRITICAL FIX: Reset _reconnecting before calling establishConnection
-        // Otherwise establishConnection sees _reconnecting=true and defers, causing a deadlock:
-        //   1. reconnect() sets _reconnecting=true
-        //   2. _attemptReconnection() calls establishConnection()
-        //   3. establishConnection() sees _reconnecting=true and defers (returns without connecting)
-        //   4. _reconnecting never gets reset, socket never connects
-        // The _connecting flag already prevents duplicate connection attempts.
-        _reconnecting = false;
-
-        establishConnection(
-          channelInput: "",
-          task: "c",
+    // Mobile-only: restore touchline / depth subs from the legacy globals.
+    // Web restoration is handled by WebSubscriptionManager's listener which
+    // wakes up via the notify in _handleConnectionSuccess.
+    if (!kIsWeb) {
+      if (ConstantName.lastSubscribe.isNotEmpty) {
+        connectTouchLine(
+          input: ConstantName.lastSubscribe,
+          task: "t",
           context: context,
         );
-      } else {
-        log('⏸️  WebSocket: Connection already in progress');
       }
-
-      // After connection, subscribe to stored channels if they exist
-      // Give a slight delay to ensure connection is established
-      Future.delayed(const Duration(milliseconds: 500), () {
-        // Check connection status after delay
-        if (_wsConnected) {
-          log('✅ WebSocket: Reconnection successful');
-
-          // On web, WebSubscriptionManager handles subscription restoration via its listener
-          // which is triggered by notifyListeners() in _handleConnectionSuccess
-          if (kIsWeb) {
-            log('   WebSubscriptionManager handles restoration on web');
-          } else {
-            // On mobile, restore from saved constants
-            log('📡 WebSocket: Restoring subscriptions (mobile)');
-
-            if (ConstantName.lastSubscribe.isNotEmpty) {
-              log('   ➕ Restoring tick subscriptions');
-              connectTouchLine(
-                input: ConstantName.lastSubscribe,
-                task: "t",
-                context: context,
-              );
-            }
-
-            if (ConstantName.lastSubscribeDepth.isNotEmpty) {
-              log('   ➕ Restoring depth subscriptions');
-              connectTouchLine(
-                input: ConstantName.lastSubscribeDepth,
-                task: "d",
-                context: context,
-              );
-            }
-          }
-        } else if (_reconnecting) {
-          // Connection still in progress or failed
-          log('⏳ WebSocket: Connection pending');
-
-          // Don't reset _reconnecting here - let it continue trying
-          // The connection handler will set it to false on success/failure
-          return;
-        }
-
-        // Reset reconnecting flag after attempt, regardless of success
-        // The actual connection state is tracked by _wsConnected
-        _reconnecting = false;
-        log('🔄 WebSocket: Reconnection attempt completed');
-
-        // Use post-frame callback to avoid modifying provider during build
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _safeNotifyListeners();
-        });
-      });
-    } else {
-      log('📵 WebSocket: No network, aborting reconnection');
-      // Reset reconnecting flag if no network is available
-      _reconnecting = false;
-      // Use post-frame callback to avoid modifying provider during build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _safeNotifyListeners();
-      });
+      if (ConstantName.lastSubscribeDepth.isNotEmpty) {
+        connectTouchLine(
+          input: ConstantName.lastSubscribeDepth,
+          task: "d",
+          context: context,
+        );
+      }
     }
+
+    _transitionTo(SocketState.backoffWait);
   }
 
   @override
@@ -1774,7 +1752,7 @@ class WebSocketProvider extends ChangeNotifier {
     log('🔴 WebSocket: Disposing provider');
 
     // Ensure all timers are canceled
-    _stopPingTimer();
+    _stopProbeTimer();
     _holdStartTime?.cancel();
     _reconnectBackoff?.cancel();
     _debounceTimer?.cancel(); // Cancel debounce timer
