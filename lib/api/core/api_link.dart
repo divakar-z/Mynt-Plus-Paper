@@ -388,7 +388,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get reportspledge => 'https://rekycbe.mynt.in/pledge/';
   String get fundforprofile => 'https://fundapi.mynt.in/api/';
   String get caevents => 'https://v3.mynt.in/equity/';
-  String get position => 'https://be.zebull.in/api/';
+  String get position => 'https://a1.zebuetrade.com/position/';
   String get cmrdownload => 'https://rekycbe.mynt.in/report/cmr';
 
 //mf new3
