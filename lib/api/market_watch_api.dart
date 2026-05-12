@@ -143,15 +143,39 @@ mixin MarketWatchApi on ApiCore {
   }
 
 // Get Predefined MArket scrips (NIFTY,BANK NIFTY,SENSEX)
+// New endpoint accepts one wlname per call, so fire 3 in parallel and stitch
+// the results back into the existing PreDefinedMWlist shape.
+
+  Future<List<WatchListValues>> _fetchPreDefMWByName(String wlname) async {
+    final uri = Uri.parse(apiLinks.preDefdMWatchScrip);
+    final res = await apiClient.post(uri,
+        headers: defaultHeaders,
+        body:
+            '''jData={"uid":"${prefs.clientId}","wlname":"$wlname"}&jKey=${prefs.clientSession}''');
+    final json = jsonDecode(res.body) as Map<String, dynamic>;
+    if (json['stat'] != 'Ok') return [];
+    final List<WatchListValues> values = [];
+    if (json['values'] != null) {
+      for (final v in (json['values'] as List)) {
+        values.add(WatchListValues.fromJson(v as Map<String, dynamic>));
+      }
+    }
+    return values;
+  }
 
   Future<PreDefinedMWlist> getPreDefMWScrip() async {
     try {
-      final uri = Uri.parse(apiLinks.preDefdMWatchScrip);
-      final res = await apiClient.post(uri, headers: defaultHeaders);
-      // log(" Pre Def Market WatchScrip => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return PreDefinedMWlist.fromJson(json as Map<String, dynamic>);
+      final results = await Future.wait([
+        _fetchPreDefMWByName('NIFTY50:NSE'),
+        _fetchPreDefMWByName('NIFTYBANK:NSE'),
+        _fetchPreDefMWByName('SENSEX:BSE'),
+      ]);
+      return PreDefinedMWlist(
+        nIFTY50NSE: results[0],
+        nIFTYBANKNSE: results[1],
+        sENSEXBSE: results[2],
+        stat: 'Ok',
+      );
     } catch (e) {
       rethrow;
     }
