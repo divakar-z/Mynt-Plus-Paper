@@ -797,8 +797,9 @@ class _CorporateActionsScreenWebState
                   message: item.name ?? '',
                   child: Text(
                     item.name ?? '-',
-                    maxLines: 2,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: _bodyStyle(context),
                   ),
                 ),
