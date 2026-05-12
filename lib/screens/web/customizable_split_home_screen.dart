@@ -4386,6 +4386,9 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.reports:
         urlPath = WebRoutes.reports;
         break;
+      case ScreenType.caBuyback:
+        urlPath = WebRoutes.caBuyback;
+        break;
       case ScreenType.ledger:
         urlPath = '/ledger';
         break;

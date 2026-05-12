@@ -1305,28 +1305,30 @@ class LDProvider extends DefaultChangeNotifier {
       final res = await api.putorderapicopaction(
           tabval, sym, exchange, issueType, qty, price, ordertype, appno);
 
+      // The dialog has already been popped above, so `context.mounted` is
+      // false here. The shared snackbar helpers fall back to the global
+      // navigator context — they don't need a live dialog context to render.
       if (res.msg == 'success') {
         await ordercheckfunction();
         _cpactionloader = false;
-
-        // Safely show snackbar
-        if (context.mounted) {
-            successMessage(
-              context,
-              ordertype == 'ER' ? 'Order placed' : 'Order cancelled',
-          );
-        }
+        successMessage(
+          context,
+          ordertype == 'ER' ? 'Order placed' : 'Order cancelled',
+        );
       } else if (res.msg == 'error occured on data fetch') {
         await ordercheckfunction();
         _cpactionloader = false;
-
-        // Safely show snackbar
-        if (context.mounted) {
-            warningMessage(
-              context,
-              "${res.msg}", // 'Order cancelled',
-          );
-        }
+        warningMessage(context, "${res.msg}");
+      } else {
+        // Any other response — surface whatever the backend sent (msg, emsg,
+        // or a generic message) instead of silently swallowing it.
+        _cpactionloader = false;
+        final fallback = (res.emsg?.isNotEmpty == true)
+            ? res.emsg!
+            : (res.msg?.isNotEmpty == true
+                ? res.msg!
+                : 'Something went wrong, please try again');
+        warningMessage(context, fallback);
       }
     } catch (e) {
       if (context.mounted) {

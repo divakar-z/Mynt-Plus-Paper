@@ -102,9 +102,11 @@ class _CorporateActionsScreenWebState
     final label = _typeLabel(issueType);
     switch (label) {
       case 'BUYBACK':
-      case 'DELISTING':
         return resolveThemeColor(context,
             dark: MyntColors.lossDark, light: MyntColors.loss);
+      case 'DELISTING':
+        return resolveThemeColor(context,
+            dark: MyntColors.warningDark, light: MyntColors.warning);
       case 'TAKEOVER':
         return resolveThemeColor(context,
             dark: MyntColors.profitDark, light: MyntColors.profit);
@@ -247,8 +249,9 @@ class _CorporateActionsScreenWebState
           ),
         ),
       ),
-      child: Padding(
+      child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        alignment: Alignment.centerLeft,
         child: child,
       ),
     );
@@ -289,40 +292,31 @@ class _CorporateActionsScreenWebState
         : resolveThemeColor(context,
             dark: MyntColors.secondaryDark, light: MyntColors.secondary);
 
+    final hasBidQty = item.bidqty != null &&
+        item.bidqty != 'null' &&
+        item.bidqty!.isNotEmpty;
+
+    final button = shadcn.GhostButton(
+      density: shadcn.ButtonDensity.compact,
+      onPressed: () => _handleActionTap(context, item, lp, isPending),
+      child: Text(
+        isPending ? 'Cancel' : 'Order',
+        style: MyntWebTextStyles.body(
+          context,
+          color: actionColor,
+          fontWeight: MyntFonts.semiBold,
+        ),
+      ),
+    );
+
     return Align(
       alignment: Alignment.centerLeft,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          shadcn.GhostButton(
-            density: shadcn.ButtonDensity.compact,
-            onPressed: () => _handleActionTap(context, item, lp, isPending),
-            child: Text(
-              isPending ? 'Cancel' : 'Order',
-              style: MyntWebTextStyles.body(
-                context,
-                color: actionColor,
-                fontWeight: MyntFonts.semiBold,
-              ),
-            ),
-          ),
-          if (item.bidqty != null &&
-              item.bidqty != 'null' &&
-              item.bidqty!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: Text(
-                '${item.bidqty} qty bid',
-                style: MyntWebTextStyles.caption(
-                  context,
-                  darkColor: MyntColors.textSecondaryDark,
-                  lightColor: MyntColors.textSecondary,
-                ),
-              ),
-            ),
-        ],
-      ),
+      child: hasBidQty
+          ? Tooltip(
+              message: '${item.bidqty} qty bid',
+              child: button,
+            )
+          : button,
     );
   }
 
@@ -330,12 +324,13 @@ class _CorporateActionsScreenWebState
       LDProvider lp, bool isPending) async {
     final isOFS = _typeLabel(item.issueType) == 'OFS';
 
+   
     // Mobile parity: pending → cancel dialog directly.
     // For new orders: only OFS or eligible CA users can place an order.
-     if (!isPending && !isOFS && item.eligibleornot != 'yes') {
-       warningMessage(context, 'Not Eligible');
-       return;
-     }
+    if (!isPending && !isOFS && item.eligibleornot != 'yes') {
+      warningMessage(context, 'Not Eligible');
+      return;
+    }
 
     // Reset / seed provider state before opening the dialog,
     // matching the mobile flow.

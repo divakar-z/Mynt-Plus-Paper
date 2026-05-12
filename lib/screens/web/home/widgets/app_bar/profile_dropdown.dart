@@ -300,11 +300,11 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
               },
             ),
 
-            // Corporation Action — internal screen (Buyback / Delisting / Takeover / OFS)
+            // Corporate Action — internal screen (Buyback / Delisting / Takeover / OFS)
             _buildMenuItem(
               context,
               icon: Icons.business_outlined,
-              title: 'Corporation Action',
+              title: 'Corporate Action',
               subtitle: 'Buyback, Delisting, Takeover, OFS',
               iconColor: iconColor,
               textColor: textColor,
@@ -312,6 +312,9 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
               onPressed: (ctx) {
                 if (widget.onNavigateToScreen != null) {
                   widget.onNavigateToScreen!(ScreenType.caBuyback);
+                } else {
+                  Navigator.pushNamed(
+                      widget.parentContext, WebRoutes.caBuyback);
                 }
               },
             ),
