@@ -301,13 +301,10 @@ class _IndexBottomSheetWebState extends ConsumerState<IndexBottomSheetWeb> {
                 child: PageView.builder(
                   controller: _pageController,
                   itemCount: _exchanges.length,
-                  onPageChanged: (index) async {
+                  onPageChanged: (index) {
                     setState(() {
                       _currentPageIndex = index;
                     });
-                    // Call the existing function to update the list
-                    await indexProvide.fetchIndexList(
-                        _exchanges[index], context);
                   },
                   itemBuilder: (context, pageIndex) {
                     final scrollController = _scrollControllers[pageIndex]!;
