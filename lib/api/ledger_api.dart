@@ -264,15 +264,13 @@ mixin LedgerApi on ApiCore {
           // headers: testingrameshheader,
           body: jsonEncode(data));
       final json = jsonDecode((res.body));
-      if (json['msg'] == 'success') {
-        return placeOrderResponseCopModel
-            .fromJson(json as Map<String, dynamic>);
-      } else if (json['msg'] == 'error occured on data fetch') {
-        return placeOrderResponseCopModel
-            .fromJson(json as Map<String, dynamic>);
-      } else {
-        return placeOrderResponseCopModel.fromJson({});
+      // Always parse the response so callers can surface unexpected backend
+      // errors (e.g. `{"emsg": "clientid not exist"}`) instead of getting an
+      // empty model with no clue what went wrong.
+      if (json is Map<String, dynamic>) {
+        return placeOrderResponseCopModel.fromJson(json);
       }
+      return placeOrderResponseCopModel.fromJson({});
     } catch (e) {
       rethrow;
     }

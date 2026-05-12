@@ -32,6 +32,7 @@ import '../../../provider/fund_provider.dart';
 import '../../../provider/stocks_provider.dart';
 import '../../../provider/web_subscription_manager.dart';
 import 'profile/Reports/ca_events_screen_web.dart';
+import 'profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
 import 'profile/Reports/client_master_screen_web.dart';
 import '../../../res/res.dart';
 import '../../../res/global_font_web.dart';
@@ -437,6 +438,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return const PledgenUnpledge(ddd: "DDDDD");
       case ScreenType.corporateActions:
         return CAEventsScreenWeb(onBack: () => _showScreenInWindow(ScreenType.reports));
+      case ScreenType.caBuyback:
+        return CorporateActionsScreenWeb(onBack: () => _showScreenInWindow(ScreenType.dashboard));
       case ScreenType.clientMaster:
         return ClientMasterScreenWeb(onBack: () => _showScreenInWindow(ScreenType.reports));
       case ScreenType.reports:
@@ -547,6 +550,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Pledge/Unpledge';
       case ScreenType.corporateActions:
         return 'Corporate Actions';
+      case ScreenType.caBuyback:
+        return 'Corporate Action';
       case ScreenType.clientMaster:
         return 'Client Master';
       case ScreenType.reports:
