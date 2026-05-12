@@ -46,6 +46,9 @@ class DetailsChangeCurrentStatus {
   String? segmentFileId;
   String? segmentSession;
   String? segmentStatus;
+  String? accSgtAtveSts;
+  bool? last7DaysCheck;
+  bool? rekycStatus;
 
   DetailsChangeCurrentStatus(
       {this.dDPIClientEmail,
@@ -94,7 +97,10 @@ class DetailsChangeCurrentStatus {
       this.segmentESignPath,
       this.segmentFileId,
       this.segmentSession,
-      this.segmentStatus});
+      this.segmentStatus,
+      this.accSgtAtveSts,
+      this.last7DaysCheck,
+      this.rekycStatus});
 
   DetailsChangeCurrentStatus.fromJson(Map<String, dynamic> json) {
     dDPIClientEmail = json['DDPI_client_email'];
@@ -144,6 +150,13 @@ class DetailsChangeCurrentStatus {
     segmentFileId = json['segment_file_id'];
     segmentSession = json['segment_session'];
     segmentStatus = json['segment_status'];
+    accSgtAtveSts = json['acc_sgt_atve_sts']?.toString();
+    last7DaysCheck = json['last_7_days_check'] is bool
+        ? json['last_7_days_check'] as bool
+        : json['last_7_days_check']?.toString().toLowerCase() == 'true';
+    rekycStatus = json['rekyc_status'] is bool
+        ? json['rekyc_status'] as bool
+        : json['rekyc_status']?.toString().toLowerCase() == 'true';
   }
 
   Map<String, dynamic> toJson() {
@@ -195,6 +208,9 @@ class DetailsChangeCurrentStatus {
     data['segment_file_id'] = segmentFileId;
     data['segment_session'] = segmentSession;
     data['segment_status'] = segmentStatus;
+    data['acc_sgt_atve_sts'] = accSgtAtveSts;
+    data['last_7_days_check'] = last7DaysCheck;
+    data['rekyc_status'] = rekycStatus;
     return data;
   }
 }

@@ -19,6 +19,7 @@ import 'package:mynt_plus/sharedWidget/snack_bar.dart';
 import 'package:mynt_plus/utils/digio_esign.dart';
 import 'package:mynt_plus/routes/route_names.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 class ProfileSectionScreenWeb extends ConsumerStatefulWidget {
   final String sectionTitle;
@@ -57,6 +58,34 @@ class _ProfileSectionScreenWebState
       ref.read(profileAllDetailsProvider).fetchPendingstatus();
       ref.read(profileAllDetailsProvider).fetchMobEmailStatus();
     });
+  }
+
+  // ─── Personal-info edit gate (closed → non-individual → inactive → 7-day).
+  // Used by DDPI activation. Re-KYC is intentionally skipped here per spec.
+  String? _personalInfoEditBlockReason({required bool checkRekyc}) {
+    final provider = ref.read(profileAllDetailsProvider);
+    final clientData = provider.clientAllDetails.clientData;
+    final mobStatus = provider.mobEmailStatus;
+    if (clientData == null || mobStatus == null) return null;
+
+    if (clientData.isClientClosed) {
+      return 'Your trading account is closed.';
+    }
+    if (!clientData.isIndividual) {
+      return "Non-individual accounts can't modify data here. "
+          "Please contact support at (+91) 93 8010 8010 for help.";
+    }
+    if ((mobStatus.accSgtAtveSts ?? '').toLowerCase() != 'active') {
+      return 'Modification not allowed for inactive client codes. '
+          'Please reactivate the account.';
+    }
+    if (mobStatus.last7DaysCheck != true) {
+      return 'Modification request not allowed within 7 days of activation';
+    }
+    if (checkRekyc && provider.rekycStatus.toLowerCase() == 'yes') {
+      return 'Modification not allowed while Re-KYC is in progress.';
+    }
+    return null;
   }
 
   // ─── Pending status helpers ───
@@ -216,11 +245,19 @@ class _ProfileSectionScreenWebState
   Widget _buildBankDetailsContent(WidgetRef ref, ThemesProvider theme) {
     final profileDetails = ref.watch(profileAllDetailsProvider);
     final bankData = profileDetails.clientAllDetails.bankData;
+    final clientData = profileDetails.clientAllDetails.clientData;
     final mobStatus = profileDetails.mobEmailStatus;
+    final statusLoading = profileDetails.mobEmailStatusLoading;
     final bankStatus = mobStatus?.bankStatus ?? '';
     final isPending = bankStatus == 'e-signed pending';
     final isInProcess = bankStatus == 'e-signed completed';
     final actionsDisabled = isPending || isInProcess;
+    // Account-level gates from mobEmailStatus / clientData payload.
+    final isAccountActive =
+        (mobStatus?.accSgtAtveSts ?? '').toLowerCase() == 'active';
+    final isPast7Days = mobStatus?.last7DaysCheck == true;
+    final bool isClientClosed = clientData?.isClientClosed ?? false;
+    final bool isIndividual = clientData?.isIndividual ?? true;
 
     final textColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
@@ -258,39 +295,76 @@ class _ProfileSectionScreenWebState
                   fontWeight: MyntFonts.medium,
                 ).copyWith(decoration: TextDecoration.none),
               ),
-              if (!actionsDisabled)
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: (bankData != null && bankData.length >= 5)
-                        ? null
-                        : () => _showAddEditBankDialog(theme),
-                    borderRadius: BorderRadius.circular(3),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: resolveThemeColor(context, dark: 
-                        MyntColors.secondary, light: MyntColors.primary),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.add, size: 15, color: Colors.white),
-                          const SizedBox(width: 6),
-                          Text(
-                            "Add Bank",
-                            style: MyntWebTextStyles.bodySmall(context,
-                              color: Colors.white,
-                              fontWeight: MyntFonts.semiBold,
-                            ).copyWith(decoration: TextDecoration.none),
+              if (statusLoading)
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: primaryColor,
+                  ),
+                )
+              else if (!actionsDisabled)
+                Builder(builder: (context) {
+                  final atMaxBanks = bankData != null && bankData.length >= 5;
+                  final addDisabled = atMaxBanks ||
+                      isClientClosed ||
+                      !isIndividual ||
+                      !isAccountActive ||
+                      !isPast7Days;
+                  final addTooltip = atMaxBanks
+                      ? "Maximum bank accounts reached."
+                      : isClientClosed
+                          ? "Your trading account is closed."
+                          : !isAccountActive
+                              ? "Modification not allowed for inactive client codes. "
+                                  "Please reactivate the account."
+                              : !isIndividual
+                                  ? "Non-individual accounts can't modify data here. "
+                                      "Please contact support at (+91) 93 8010 8010 for help."
+                                  : !isPast7Days
+                                      ? "Modification request not allowed within 7 days of activation."
+                                      : "";
+                  final addButton = Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: addDisabled
+                          ? null
+                          : () => _showAddEditBankDialog(theme),
+                      borderRadius: BorderRadius.circular(3),
+                      child: Opacity(
+                        opacity: addDisabled ? 0.5 : 1.0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: resolveThemeColor(context,
+                                dark: MyntColors.secondary,
+                                light: MyntColors.primary),
+                            borderRadius: BorderRadius.circular(4),
                           ),
-                        ],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.add, size: 15, color: Colors.white),
+                              const SizedBox(width: 6),
+                              Text(
+                                "Add Bank",
+                                style: MyntWebTextStyles.bodySmall(context,
+                                  color: Colors.white,
+                                  fontWeight: MyntFonts.semiBold,
+                                ).copyWith(decoration: TextDecoration.none),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
+                  );
+                  return addDisabled
+                      ? Tooltip(message: addTooltip, child: addButton)
+                      : addButton;
+                }),
             ],
           ),
           const SizedBox(height: 8),
@@ -305,8 +379,10 @@ class _ProfileSectionScreenWebState
           const SizedBox(height: 20),
           Divider(height: 1, thickness: 1, color: dividerColor),
 
-          // Bank list
-          if (bankData == null || bankData.isEmpty)
+          // Bank list — hidden entirely when account is closed.
+          if (isClientClosed)
+            const SizedBox.shrink()
+          else if (bankData == null || bankData.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 32),
               child: Center(
@@ -456,24 +532,83 @@ class _ProfileSectionScreenWebState
                         const SizedBox(width: 12),
 
                         // Action buttons
-                        if (!actionsDisabled)
-                          Column(
-                            children: [
-                              // Edit icon
-                              InkWell(
-                                onTap: () => _showAddEditBankDialog(theme,
-                                    editingBank: bank),
-                                borderRadius: BorderRadius.circular(16),
+                        if (statusLoading)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 6),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: primaryColor,
+                              ),
+                            ),
+                          )
+                        else if (!actionsDisabled)
+                          Builder(builder: (context) {
+                            final editDisabled = isClientClosed ||
+                                !isIndividual ||
+                                !isAccountActive ||
+                                !isPast7Days;
+                            final editTooltip = !isAccountActive
+                                ? "Modification not allowed for inactive client codes. "
+                                    "Please reactivate the account."
+                                : !isIndividual
+                                    ? "Non-individual accounts can't modify data here. "
+                                        "Please contact support at (+91) 93 8010 8010 for help."
+                                    : !isPast7Days
+                                        ? "Modification request not allowed within 7 days of activation."
+                                        : "Edit";
+                            final setPrimaryDisabled =
+                                isClientClosed || !isPast7Days;
+                            final setPrimaryTooltip = !isPast7Days
+                                ? "Modification request not allowed within 7 days of activation."
+                                : "";
+                            final editIcon = InkWell(
+                              onTap: editDisabled
+                                  ? null
+                                  : () => _showAddEditBankDialog(theme,
+                                      editingBank: bank),
+                              borderRadius: BorderRadius.circular(16),
+                              child: Opacity(
+                                opacity: editDisabled ? 0.4 : 1.0,
                                 child: Padding(
-                                  padding: const EdgeInsets.all(6),
-                                  child: Icon(Icons.edit_outlined, size: 16,
-                                      color: primaryColor),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 6),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.edit_outlined,
+                                          size: 16, color: primaryColor),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        "EDIT",
+                                        style: MyntWebTextStyles.caption(
+                                          context,
+                                          color: primaryColor,
+                                          fontWeight: MyntFonts.semiBold,
+                                        ).copyWith(
+                                          letterSpacing: 0.5,
+                                          decoration: TextDecoration.none,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                              // More options for non-primary
-                              if (!bankIsPrimary) ...[
-                                const SizedBox(height: 4),
-                                PopupMenuButton<String>(
+                            );
+                            return Column(
+                              children: [
+                                // Edit icon
+                                Tooltip(
+                                  message: editTooltip,
+                                  child: editIcon,
+                                ),
+                                // More options for non-primary
+                                if (!bankIsPrimary) ...[
+                                  const SizedBox(height: 4),
+                                  PopupMenuButton<String>(
                                   padding: EdgeInsets.zero,
                                   constraints:
                                       const BoxConstraints(minWidth: 160),
@@ -483,26 +618,34 @@ class _ProfileSectionScreenWebState
                                   color: cardBg,
                                   onSelected: (value) {
                                     if (value == 'set_primary') {
+                                      if (setPrimaryDisabled) return;
                                       _showSetPrimaryDialog(bank, theme);
                                     } else if (value == 'delete') {
-                                      _showDeleteBankDialog(bank, theme);
+                                      if (isClientClosed) return;
+                                      _showDeleteBankDialog(bank, theme,
+                                          isIndividual: isIndividual);
                                     }
                                   },
                                   itemBuilder: (ctx) => [
                                     PopupMenuItem<String>(
                                       value: 'set_primary',
-                                      child: Text("Set as Primary",
-                                        style: MyntWebTextStyles.bodySmall(
-                                            context,
-                                          darkColor: MyntColors.textPrimaryDark,
-                                          lightColor: MyntColors.textPrimary,
-                                          fontWeight: MyntFonts.medium,
-                                        ).copyWith(
-                                            decoration: TextDecoration.none),
+                                      enabled: !setPrimaryDisabled,
+                                      child: Tooltip(
+                                        message: setPrimaryTooltip,
+                                        child: Text("Set as Primary",
+                                          style: MyntWebTextStyles.bodySmall(
+                                              context,
+                                            darkColor: MyntColors.textPrimaryDark,
+                                            lightColor: MyntColors.textPrimary,
+                                            fontWeight: MyntFonts.medium,
+                                          ).copyWith(
+                                              decoration: TextDecoration.none),
+                                        ),
                                       ),
                                     ),
                                     PopupMenuItem<String>(
                                       value: 'delete',
+                                      enabled: !isClientClosed,
                                       child: Text("Delete",
                                         style: MyntWebTextStyles.bodySmall(
                                             context,
@@ -521,7 +664,8 @@ class _ProfileSectionScreenWebState
                                 ),
                               ],
                             ],
-                          ),
+                          );
+                          }),
                       ],
                     ),
                   ),
@@ -654,18 +798,35 @@ class _ProfileSectionScreenWebState
 
           const SizedBox(height: 16),
 
-          // Regulation note
-          Text(
-            "*As per the regulation, you can have up to 5 bank a/c linked to trading a/c",
-            style: MyntWebTextStyles.caption(context,
-              darkColor: MyntColors.textTertiaryDark,
-              lightColor: MyntColors.textTertiary,
-              fontWeight: MyntFonts.regular,
-            ).copyWith(
-              decoration: TextDecoration.none,
-              fontStyle: FontStyle.italic,
-            ),
-          ),
+          // Regulation note / max-reached warning
+          Builder(builder: (context) {
+            final atMaxBanks = bankData != null && bankData.length >= 5;
+            if (atMaxBanks) {
+              final warningColor = resolveThemeColor(context,
+                  dark: MyntColors.errorDark, light: MyntColors.error);
+              return Text(
+                "You have reached the maximum of 5 linked bank accounts.",
+                style: MyntWebTextStyles.caption(context,
+                  color: warningColor,
+                  fontWeight: MyntFonts.medium,
+                ).copyWith(
+                  decoration: TextDecoration.none,
+                  fontStyle: FontStyle.italic,
+                ),
+              );
+            }
+            return Text(
+              "*As per the regulation, you can have up to 5 bank a/c linked to trading a/c",
+              style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textTertiaryDark,
+                lightColor: MyntColors.textTertiary,
+                fontWeight: MyntFonts.regular,
+              ).copyWith(
+                decoration: TextDecoration.none,
+                fontStyle: FontStyle.italic,
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -886,131 +1047,120 @@ class _ProfileSectionScreenWebState
   }
 
   // ─── Delete Bank Confirmation Dialog ───
-  void _showDeleteBankDialog(dynamic bank, ThemesProvider theme) {
-    final isDark = theme.isDarkMode;
-    showDialog(
+  void _showDeleteBankDialog(dynamic bank, ThemesProvider theme,
+      {bool isIndividual = true}) {
+    final deleteCtaDisabled = !isIndividual;
+    showGeneralDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        backgroundColor:
-            isDark ? const Color(0xFF121212) : const Color(0xFFF1F3F8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Delete Bank?',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: isDark
-                            ? colors.textPrimaryDark
-                            : colors.textPrimaryLight,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withValues(alpha: 0.3),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (ctx, animation, secondaryAnimation) {
+        return Center(
+          child: shadcn.Card(
+            borderRadius: BorderRadius.circular(8),
+            padding: EdgeInsets.zero,
+            child: Container(
+              width: 400,
+              constraints: const BoxConstraints(maxHeight: 250),
+              decoration: BoxDecoration(
+                color: resolveThemeColor(ctx,
+                    dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                            color: shadcn.Theme.of(ctx).colorScheme.border),
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: Icon(Icons.close,
-                          size: 20,
-                          color: isDark
-                              ? colors.textSecondaryDark
-                              : colors.textSecondaryLight),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Delete Bank',
+                          style: MyntWebTextStyles.title(
+                            ctx,
+                            color: resolveThemeColor(
+                              ctx,
+                              dark: MyntColors.textPrimaryDark,
+                              light: MyntColors.textPrimary,
+                            ),
+                          ),
+                        ),
+                        MyntCloseButton(onPressed: () => Navigator.of(ctx).pop()),
+                      ],
                     ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                RichText(
-                  text: TextSpan(
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark
-                          ? colors.textSecondaryDark
-                          : colors.textSecondaryLight,
-                    ),
-                    children: [
-                      const TextSpan(
-                          text: 'Are you sure you want to delete '),
-                      TextSpan(
-                        text:
-                            '"${bank.bankName ?? ''} (${bank.bankAcNo ?? ''})"',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const TextSpan(
-                          text: "?\nYou can't undo this action."),
-                    ],
                   ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 44,
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(
-                                color: isDark
-                                    ? Colors.grey[600]!
-                                    : const Color(0xFFE0E0E0)),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Are you sure you want to delete "${bank.bankName ?? ''} (${bank.bankAcNo ?? ''})"?',
+                            textAlign: TextAlign.center,
+                            style: MyntWebTextStyles.body(
+                              ctx,
+                              fontWeight: FontWeight.w500,
+                              color: resolveThemeColor(
+                                ctx,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary,
+                              ),
                             ),
                           ),
-                          child: Text(
-                            'Cancel',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: isDark
-                                  ? colors.textPrimaryDark
-                                  : const Color(0xFF333333),
+                          const SizedBox(height: 24),
+                          Opacity(
+                            opacity: deleteCtaDisabled ? 0.5 : 1.0,
+                            child: MyntButton(
+                              type: MyntButtonType.primary,
+                              size: MyntButtonSize.large,
+                              label: 'Delete',
+                              isFullWidth: true,
+                              backgroundColor: resolveThemeColor(
+                                ctx,
+                                dark: MyntColors.errorDark,
+                                light: MyntColors.tertiary,
+                              ),
+                              onPressed: deleteCtaDisabled
+                                  ? null
+                                  : () {
+                                      Navigator.of(ctx).pop();
+                                      _deleteBankAction(bank);
+                                    },
                             ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: SizedBox(
-                        height: 44,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _deleteBankAction(bank);
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFE53935),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          child: const Text(
-                            'Delete',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
+      transitionBuilder: (ctx, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+            parent: animation, curve: Curves.easeOut, reverseCurve: Curves.easeIn);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.95, end: 1.0).animate(curved),
+            child: child,
+          ),
+        );
+      },
     );
   }
 
@@ -1038,131 +1188,106 @@ class _ProfileSectionScreenWebState
 
   // ─── Set as Primary Confirmation Dialog ───
   void _showSetPrimaryDialog(dynamic bank, ThemesProvider theme) {
-    final isDark = theme.isDarkMode;
-    showDialog(
+    showGeneralDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        backgroundColor:
-            isDark ? const Color(0xFF121212) : const Color(0xFFF1F3F8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Set as Primary?',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: isDark
-                            ? colors.textPrimaryDark
-                            : colors.textPrimaryLight,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withValues(alpha: 0.3),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (ctx, animation, secondaryAnimation) {
+        return Center(
+          child: shadcn.Card(
+            borderRadius: BorderRadius.circular(8),
+            padding: EdgeInsets.zero,
+            child: Container(
+              width: 400,
+              constraints: const BoxConstraints(maxHeight: 250),
+              decoration: BoxDecoration(
+                color: resolveThemeColor(ctx,
+                    dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                            color: shadcn.Theme.of(ctx).colorScheme.border),
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: Icon(Icons.close,
-                          size: 20,
-                          color: isDark
-                              ? colors.textSecondaryDark
-                              : colors.textSecondaryLight),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Set as Primary',
+                          style: MyntWebTextStyles.title(
+                            ctx,
+                            color: resolveThemeColor(
+                              ctx,
+                              dark: MyntColors.textPrimaryDark,
+                              light: MyntColors.textPrimary,
+                            ),
+                          ),
+                        ),
+                        MyntCloseButton(onPressed: () => Navigator.of(ctx).pop()),
+                      ],
                     ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                RichText(
-                  text: TextSpan(
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isDark
-                          ? colors.textSecondaryDark
-                          : colors.textSecondaryLight,
-                    ),
-                    children: [
-                      const TextSpan(
-                          text:
-                              'Are you sure you want to set this bank as primary '),
-                      TextSpan(
-                        text:
-                            '"${bank.bankName ?? ''} (${bank.bankAcNo ?? ''})"',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const TextSpan(
-                          text: "?\nYou can't undo this action."),
-                    ],
                   ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 44,
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(
-                                color: isDark
-                                    ? Colors.grey[600]!
-                                    : const Color(0xFFE0E0E0)),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Are you sure you want to set "${bank.bankName ?? ''} (${bank.bankAcNo ?? ''})" as primary?',
+                            textAlign: TextAlign.center,
+                            style: MyntWebTextStyles.body(
+                              ctx,
+                              fontWeight: FontWeight.w500,
+                              color: resolveThemeColor(
+                                ctx,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary,
+                              ),
                             ),
                           ),
-                          child: Text(
-                            'Cancel',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: isDark
-                                  ? colors.textPrimaryDark
-                                  : const Color(0xFF333333),
-                            ),
+                          const SizedBox(height: 24),
+                          MyntPrimaryButton(
+                            size: MyntButtonSize.large,
+                            label: 'Set as Primary',
+                            isFullWidth: true,
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              _setPrimaryBankAction(bank);
+                            },
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: SizedBox(
-                        height: 44,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _setPrimaryBankAction(bank);
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0037B7),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          child: const Text(
-                            'Set as Primary',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
+      transitionBuilder: (ctx, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+            parent: animation, curve: Curves.easeOut, reverseCurve: Curves.easeIn);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.95, end: 1.0).animate(curved),
+            child: child,
+          ),
+        );
+      },
     );
   }
 
@@ -1347,11 +1472,15 @@ class _ProfileSectionScreenWebState
     final profileprovider = ref.watch(profileAllDetailsProvider);
     final themeVal = ref.watch(themeProvider);
     final mobStatus = profileprovider.mobEmailStatus;
-    final ddpiActive =
-        profileprovider.clientAllDetails.clientData!.dDPI == 'Y';
-    final poaActive =
-        profileprovider.clientAllDetails.clientData!.pOA == 'Y';
+    final clientData = profileprovider.clientAllDetails.clientData;
+    final ddpiActive = clientData?.dDPI == 'Y';
+    final poaActive = clientData?.pOA == 'Y';
     final ddpiStatus = mobStatus?.dDPIStatus ?? '';
+    // Account-level gates for the Activate DDPI button.
+    final bool isClientClosed = clientData?.isClientClosed ?? false;
+    final bool isIndividual = clientData?.isIndividual ?? true;
+    final bool isAccountActive =
+        (mobStatus?.accSgtAtveSts ?? '').toLowerCase() == 'active';
 
     final cardBg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
@@ -1613,16 +1742,58 @@ class _ProfileSectionScreenWebState
               ).copyWith(decoration: TextDecoration.none),
             ),
             const SizedBox(height: 18),
-            Material(
+            Builder(builder: (context) {
+              final ddpiBusy = _ddpiActivateLoading ||
+                  ddpiStatus == 'e-signed pending' ||
+                  ddpiStatus == 'e-signed completed';
+              // Visual disable per spec: closed account, non-individual, inactive.
+              final ddpiDisabled = ddpiBusy ||
+                  isClientClosed ||
+                  !isIndividual ||
+                  !isAccountActive;
+              // Tooltip priority per spec: non-individual → inactive.
+              final ddpiTooltip = !isIndividual
+                  ? "Non-individual accounts can't modify data here. "
+                      "Please contact support at (+91) 93 8010 8010 for help."
+                  : !isAccountActive
+                      ? "Modification not allowed for inactive client codes. "
+                          "Please reactivate the account."
+                      : isClientClosed
+                          ? "Your trading account is closed."
+                          : "";
+              final ddpiButton = Material(
               color: Colors.transparent,
               child: InkWell(
-                onTap: _ddpiActivateLoading ||
-                        ddpiStatus == 'e-signed pending' ||
-                        ddpiStatus == 'e-signed completed'
+                onTap: ddpiDisabled
                     ? null
                     : () async {
+                        // Personal-info gates: closed → non-individual →
+                        // inactive → 7-day. Re-KYC is intentionally skipped.
+                        final blockReason = _personalInfoEditBlockReason(
+                            checkRekyc: false);
+                        if (blockReason != null) {
+                          warningMessage(context, blockReason);
+                          return;
+                        }
+                        // Equity segment precondition (BSE_CASH / NSE_CASH
+                        // active). MF segments are intentionally excluded.
+                        final segments = ref
+                            .read(profileAllDetailsProvider)
+                            .clientAllDetails
+                            .clientData
+                            ?.segmentsData;
+                        final hasActiveEquityCheck = segments != null &&
+                            segments.any((s) =>
+                                (s.cOMPANYCODE == 'BSE_CASH' ||
+                                    s.cOMPANYCODE == 'NSE_CASH') &&
+                                s.exchangeACTIVEINACTIVE == 'A');
+                        if (!hasActiveEquityCheck) {
+                          warningMessage(context,
+                              'You need to enable the Equity segment before activating DDPI.');
+                          return;
+                        }
                         final pendingStatuses = ref
-                            .watch(profileAllDetailsProvider)
+                            .read(profileAllDetailsProvider)
                             .pendingStatusList;
                         if (pendingStatuses.isNotEmpty &&
                             pendingStatuses[0].data != null) {
@@ -1671,7 +1842,14 @@ class _ProfileSectionScreenWebState
                         ),
                 ),
               ),
-            ),
+            );
+              return Opacity(
+                opacity: ddpiDisabled && !ddpiBusy ? 0.5 : 1.0,
+                child: ddpiTooltip.isNotEmpty
+                    ? Tooltip(message: ddpiTooltip, child: ddpiButton)
+                    : ddpiButton,
+              );
+            }),
             const SizedBox(height: 14),
             Text(
               "*As per the regulation, DDPI activation will be one time process.",
@@ -2210,6 +2388,16 @@ class _ProfileSectionScreenWebState
     bool mtfCl = clientData?.mTFCl == 'Y';
     bool mtfClAuto = clientData?.mTFClAuto == "Y";
 
+    // gates: accountstatus != 'client_close' -> button visible
+    //            CATEGORY != 'I' || !atve_sts || client_close || !last7days -> button disabled
+    final bool isClientClosed = clientData?.isClientClosed ?? false;
+    final bool isIndividual = clientData?.isIndividual ?? false;
+    final bool accSgtAtveSts =
+        (mobStatus?.accSgtAtveSts ?? '').toLowerCase() == 'active';
+    final bool isPast7Days = mobStatus?.last7DaysCheck == true;
+    final bool mtfActionDisabled =
+        !isIndividual || !accSgtAtveSts || isClientClosed || !isPast7Days;
+
     final cardBg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
     final cardBorder = resolveThemeColor(context,
@@ -2328,26 +2516,38 @@ color: resolveThemeColor(context,
                                 width: 20, height: 20,
                                 child: CircularProgressIndicator(
                                     strokeWidth: 2, color: primaryColor))
-                            : Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: () => _openMtfEsign(
-                                    fileId: mobStatus?.mtfFileid ?? '',
-                                    email: (mobStatus?.mtfClientEmail ?? '').toLowerCase(),
-                                    session: mobStatus?.mtfSession ?? '',
+                            : Builder(builder: (context) {
+                                // Resume E-sign link per spec:
+                                // disabled when !last7days || !atve_sts.
+                                final esignDisabled =
+                                    !isPast7Days || !accSgtAtveSts;
+                                return Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: esignDisabled
+                                        ? null
+                                        : () => _openMtfEsign(
+                                              fileId: mobStatus?.mtfFileid ?? '',
+                                              email: (mobStatus?.mtfClientEmail ?? '')
+                                                  .toLowerCase(),
+                                              session: mobStatus?.mtfSession ?? '',
+                                            ),
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Opacity(
+                                      opacity: esignDisabled ? 0.5 : 1.0,
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 12, vertical: 6),
+                                        child: Text('Click here E-sign',
+                                            style: MyntWebTextStyles.bodySmall(context,
+                                                color: primaryColor,
+                                                fontWeight: MyntFonts.semiBold)
+                                                .copyWith(decoration: TextDecoration.none)),
+                                      ),
+                                    ),
                                   ),
-                                  borderRadius: BorderRadius.circular(6),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 6),
-                                    child: Text('Click here E-sign',
-                                        style: MyntWebTextStyles.bodySmall(context,
-                                            color: primaryColor,
-                                            fontWeight: MyntFonts.semiBold)
-                                            .copyWith(decoration: TextDecoration.none)),
-                                  ),
-                                ),
-                              ),
+                                );
+                              }),
                         const SizedBox(width: 4),
                         _mtfCancelLoading
                             ? SizedBox(
@@ -2459,7 +2659,12 @@ color: resolveThemeColor(context,
           ],
 
           // ── DDPI active but MTF not active: activation section ──
-          if ((DDPIActive || POAActive) && !(mtfCl && mtfClAuto)) ...[
+          // Hidden entirely when an MTF e-sign request is in flight
+          // (status card above is shown instead, per spec).
+          if ((DDPIActive || POAActive) &&
+              !(mtfCl && mtfClAuto) &&
+              mtfStatus != 'e-signed pending' &&
+              mtfStatus != 'e-signed completed') ...[
             const SizedBox(height: 24),
             Text(
               "Would you like to activate Margin Trading Facility (MTF) on your account?",
@@ -2470,10 +2675,23 @@ color: resolveThemeColor(context,
               ).copyWith(decoration: TextDecoration.none),
             ),
             const SizedBox(height: 18),
-            Material(
+            Builder(builder: (context) {
+              // Tooltip priority per spec (desktop active branch):
+              // closed → !atve_sts → CATEGORY != 'I' → "".
+              final mtfTooltip = isClientClosed
+                  ? "Your trading account is closed"
+                  : !accSgtAtveSts
+                      ? "Modification not allowed for inactive client codes. "
+                          "Please reactivate the account."
+                      : !isIndividual
+                          ? "Non-individual accounts can't modify data here. "
+                              "Please contact support at (+91) 93 8010 8010 for help."
+                          : "";
+              final mtfButton = Material(
               color: Colors.transparent,
               child: InkWell(
                 onTap: _mtfSubmitLoading ||
+                        mtfActionDisabled ||
                         mtfStatus == 'e-signed pending' ||
                         mtfStatus == 'e-signed completed'
                     ? null
@@ -2500,6 +2718,7 @@ color: resolveThemeColor(context,
                       horizontal: 24, vertical: 12),
                   decoration: BoxDecoration(
                     color: (_mtfSubmitLoading ||
+                            mtfActionDisabled ||
                             mtfStatus == 'e-signed pending' ||
                             mtfStatus == 'e-signed completed')
                         ? primaryColor.withValues(alpha: 0.4)
@@ -2521,7 +2740,11 @@ color: resolveThemeColor(context,
                         ),
                 ),
               ),
-            ),
+            );
+              return mtfTooltip.isNotEmpty
+                  ? Tooltip(message: mtfTooltip, child: mtfButton)
+                  : mtfButton;
+            }),
           ],
         ],
       ),
@@ -2631,7 +2854,11 @@ color: resolveThemeColor(context,
 
   // ─── MTF E-Sign Confirmation Dialog ───
   void _showMtfEsignConfirmationDialog() {
-    final mobStatus = ref.read(profileAllDetailsProvider).mobEmailStatus;
+    final provider = ref.read(profileAllDetailsProvider);
+    final mobStatus = provider.mobEmailStatus;
+    final clientData = provider.clientAllDetails.clientData;
+    final ddpiActive = clientData?.dDPI == 'Y';
+    final poaActive = clientData?.pOA == 'Y';
     final textColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final subtitleColor = resolveThemeColor(context,
@@ -2640,6 +2867,26 @@ color: resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
     final primaryColor = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
+
+    Widget statusChip(String label, bool active) {
+      final bg = active
+          ? Colors.green.withValues(alpha: 0.12)
+          : Colors.red.withValues(alpha: 0.12);
+      final fg = active ? Colors.green.shade700 : Colors.red.shade700;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: fg.withValues(alpha: 0.4)),
+        ),
+        child: Text(
+          '$label: ${active ? 'Y' : 'N'}',
+          style: MyntWebTextStyles.bodySmall(context,
+              fontWeight: MyntFonts.semiBold, color: fg),
+        ),
+      );
+    }
 
     showDialog(
       context: context,
@@ -2676,6 +2923,15 @@ color: resolveThemeColor(context,
               Text('Your MTF Request is not yet Completed.',
                   style: MyntWebTextStyles.bodySmall(context,
                       fontWeight: MyntFonts.medium, color: textColor)),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  statusChip('DDPI', ddpiActive),
+                  statusChip('POA', poaActive),
+                ],
+              ),
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
@@ -3017,6 +3273,18 @@ color: resolveThemeColor(context,
     final profileDetails = ref.watch(profileAllDetailsProvider);
     final mobStatus = profileDetails.mobEmailStatus;
     final closureStatus = mobStatus?.closureStatus;
+    final clientData = profileDetails.clientAllDetails.clientData;
+
+    //   accountstatus == 'client_close' || CATEGORY != 'I' -> disable initiate
+    final bool isClientClosed = clientData?.isClientClosed ?? false;
+    final bool isIndividual = clientData?.isIndividual ?? false;
+    final bool initiateDisabled = isClientClosed || !isIndividual;
+    final String? initiateDisabledTooltip = isClientClosed
+        ? 'Your trading account is closed'
+        : (!isIndividual
+            ? "Non-individual accounts can't modify data here. "
+                "Please contact support at (+91) 93 8010 8010 for help."
+            : null);
 
     final cardBg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
@@ -3195,29 +3463,43 @@ color: resolveThemeColor(context,
                 ).copyWith(decoration: TextDecoration.none),
               ),
               const SizedBox(height: 18),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _showClosureConfirmDialog(theme),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: resolveThemeColor(context,
-                          dark: MyntColors.secondary, light: MyntColors.primary),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      "Initiate Closure",
-                      style: MyntWebTextStyles.body(context,
-                        color: Colors.white,
-                        fontWeight: MyntFonts.semiBold,
-                      ).copyWith(decoration: TextDecoration.none),
+              Builder(builder: (context) {
+                final btn = Opacity(
+                  opacity: initiateDisabled ? 0.5 : 1.0,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: initiateDisabled
+                          ? null
+                          : () => _showClosureConfirmDialog(theme),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.secondary,
+                              light: MyntColors.primary),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          "Initiate Closure",
+                          style: MyntWebTextStyles.body(context,
+                            color: Colors.white,
+                            fontWeight: MyntFonts.semiBold,
+                          ).copyWith(decoration: TextDecoration.none),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
+                );
+                return Align(
+                  alignment: Alignment.centerLeft,
+                  child: initiateDisabledTooltip == null
+                      ? btn
+                      : Tooltip(message: initiateDisabledTooltip, child: btn),
+                );
+              }),
             ],
 
             const SizedBox(height: 16),
@@ -3441,9 +3723,20 @@ color: resolveThemeColor(context,
                               ? null
                               : () async {
                                   setDialogState(() => submitLoading = true);
-                                  await _submitClosureRequest(
-                                      ctx, closureReason, themeVal);
-                                  setDialogState(() => submitLoading = false);
+                                  try {
+                                    await _submitClosureRequest(
+                                        ctx, closureReason, themeVal);
+                                  } catch (e) {
+                                    if (mounted) {
+                                      warningMessage(context,
+                                          'Something went wrong. Please try again.');
+                                    }
+                                  } finally {
+                                    if (Navigator.canPop(ctx)) {
+                                      setDialogState(
+                                          () => submitLoading = false);
+                                    }
+                                  }
                                 },
                         ),
                       ],
@@ -3551,16 +3844,19 @@ color: resolveThemeColor(context,
                             const TextSpan(text: 'Insufficient balance, Add fund '),
                             WidgetSpan(
                               alignment: PlaceholderAlignment.middle,
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.pop(ctx);
-                                  WebNavigationHelper.navigateTo(Routes.fundscreen);
-                                },
-                                child: Text(
-                                  'Click here',
-                                  style: MyntWebTextStyles.bodySmall(ctx,
-                                      color: primaryColor,
-                                      fontWeight: MyntFonts.semiBold),
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.click,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    Navigator.pop(ctx);
+                                    WebNavigationHelper.navigateTo(Routes.fundscreen);
+                                  },
+                                  child: Text(
+                                    'Click here',
+                                    style: MyntWebTextStyles.bodySmall(ctx,
+                                        color: primaryColor,
+                                        fontWeight: MyntFonts.semiBold),
+                                  ),
                                 ),
                               ),
                             ),
@@ -3586,7 +3882,123 @@ color: resolveThemeColor(context,
     );
   }
 
+  // ─── Margin / Holdings Dialog (positive balance OR holdings present) ───
+  void _showMarginPositiveDialog({
+    required double balance,
+    required bool hasHoldings,
+    required int holdingsCount,
+  }) {
+    final String title = hasHoldings ? 'Holdings Present' : 'Account Closure ?';
+    final String body = hasHoldings
+        ? 'You have ${holdingsCount > 0 ? '$holdingsCount ' : ''}holdings in your demat account. '
+            'Please sell or transfer your holdings before submitting your closure request.'
+        : 'Please withdraw your available balance of Rs ${balance.toStringAsFixed(2)} '
+            'before submitting your closure request.';
+    final String linkLabel =
+        hasHoldings ? 'Go to Holdings' : 'Withdraw Your Amount';
+    final String linkRoute =
+        hasHoldings ? Routes.holdingscreen : Routes.fundscreen;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final cardBg = resolveThemeColor(ctx,
+            dark: MyntColors.cardDark, light: MyntColors.card);
+        final textColor = resolveThemeColor(ctx,
+            dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+        final subtitleColor = resolveThemeColor(ctx,
+            dark: MyntColors.textSecondaryDark,
+            light: MyntColors.textSecondary);
+        final dividerColor = resolveThemeColor(ctx,
+            dark: MyntColors.dividerDark, light: MyntColors.divider);
+        final primaryColor = resolveThemeColor(ctx,
+            dark: MyntColors.primaryDark, light: MyntColors.primary);
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            width: 420,
+            decoration: BoxDecoration(
+                color: cardBg, borderRadius: BorderRadius.circular(8)),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border(bottom: BorderSide(color: dividerColor)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(title,
+                          style:
+                              MyntWebTextStyles.title(ctx, color: textColor)),
+                      MyntCloseButton(onPressed: () => Navigator.pop(ctx)),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        body,
+                        style: MyntWebTextStyles.bodySmall(ctx,
+                            color: subtitleColor,
+                            fontWeight: MyntFonts.regular),
+                      ),
+                      const SizedBox(height: 20),
+                      RichText(
+                        text: TextSpan(
+                          style: MyntWebTextStyles.bodySmall(ctx,
+                              color: subtitleColor,
+                              fontWeight: MyntFonts.regular),
+                          children: [
+                            const TextSpan(text: 'Click here to '),
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: GestureDetector(
+                                onTap: () {
+                                  Navigator.pop(ctx);
+                                  WebNavigationHelper.navigateTo(linkRoute);
+                                },
+                                child: Text(
+                                  linkLabel,
+                                  style: MyntWebTextStyles.bodySmall(ctx,
+                                      color: primaryColor,
+                                      fontWeight: MyntFonts.semiBold),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      MyntPrimaryButton(
+                        label: 'Close',
+                        size: MyntButtonSize.large,
+                        isFullWidth: true,
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   // ─── Positive Balance Dialog (shown when user needs to withdraw before closing) ───
+  // ignore: unused_element
   void _showPositiveBalanceDialog(double balance) {
     showDialog(
       context: context,
@@ -3712,40 +4124,78 @@ color: resolveThemeColor(context,
       return;
     }
 
-    // Step 1: Check balance
-    final balCheck = await provider.closeaccnalprov(reason, clientData);
+    // Step 1: Run balance check + holdings check in parallel
+    final results = await Future.wait([
+      provider.closeaccnalprov(reason, clientData),
+      provider.checkHoldingsForClosure(),
+    ]);
+    final balCheck = results[0];
+    final holdingCheck = results[1] as Map<String, dynamic>?;
 
     if (balCheck == null) {
       if (mounted) warningMessage(context, 'Failed to check balance');
       return;
     }
 
-    final String msg1 = balCheck['msg1'] ?? '';
+    final String msg1 = (balCheck['msg1'] ?? '').toString().toLowerCase();
+    final String msg2 = (balCheck['msg2'] ?? '').toString().toLowerCase();
+    final String stat = (balCheck['stat'] ?? '').toString();
     final double balance = (balCheck['balance'] is num)
         ? (balCheck['balance'] as num).toDouble()
         : 0;
-    final String stat = balCheck['stat'] ?? '';
 
-    // Negative balance → insufficient funds
-    if (balance < 0 || msg1.toLowerCase().contains('negative')) {
+    // Holdings stored for later transfer flow (parity with `holdingres`).
+    // Note: API may return holdings as a List, a flag string ("yes"/"no"),
+    // or absent — handle all shapes defensively.
+    final dynamic rawHoldings = holdingCheck?['holdings'];
+    final List holdingsList = rawHoldings is List ? rawHoldings : const [];
+    final bool hasHoldings = msg2.contains('some holdings');
+
+    // Spec rule 1: msg1 == 'negative ledger balance' && stat == 'Not Ok'
+    if (msg1.contains('negative') && stat == 'Not Ok') {
       Navigator.pop(dialogCtx);
       if (mounted) {
-        final clientId = clientData.cLIENTID ?? '';
-        _showNegativeBalanceDialog(balance, clientId);
+        _showNegativeBalanceDialog(balance, clientData.cLIENTID ?? '');
       }
       return;
     }
 
-    // Positive balance with holdings → need to withdraw first
-    if (stat != 'Ok' && balance > 0) {
+    // Spec rule 3: msg2 == 'some holdings' OR msg2 == 'zero ledger balance'
+    if (hasHoldings || msg2.contains('zero ledger balance')) {
       Navigator.pop(dialogCtx);
       if (mounted) {
-        _showPositiveBalanceDialog(balance);
+        _showMarginPositiveDialog(
+          balance: balance,
+          hasHoldings: hasHoldings,
+          holdingsCount: holdingsList.length,
+        );
       }
       return;
     }
 
-    // Step 2: Submit closure API (simple case — no holdings transfer)
+    // Spec rule 4: msg1 == 'positive ledger balance' && stat == 'Not Ok'
+    if (msg1.contains('positive') && stat == 'Not Ok') {
+      Navigator.pop(dialogCtx);
+      if (mounted) {
+        _showMarginPositiveDialog(
+          balance: balance,
+          hasHoldings: false,
+          holdingsCount: 0,
+        );
+      }
+      return;
+    }
+
+    // Spec rule 2: stat == 'Ok' → proceed with closure
+    if (stat != 'Ok') {
+      Navigator.pop(dialogCtx);
+      if (mounted) {
+        warningMessage(context, 'Unable to process closure. Please try again.');
+      }
+      return;
+    }
+
+    // Step 2: Submit closure API (no holdings here — handled above).
     final segmentsData = clientData.segmentsData;
     final bankDataJson =
         segmentsData != null ? jsonEncode(segmentsData.map((s) => s.toJson()).toList()) : '[]';
@@ -3757,6 +4207,7 @@ color: resolveThemeColor(context,
       reason,
       clientData,
       bankDataJson,
+      hasHoldings: false,
     );
 
     if (closureResp is Map &&
@@ -4450,7 +4901,7 @@ class _BankChangeDialogState extends State<_BankChangeDialog> {
       error(context, 'Please wait while IFSC code is being verified');
       return;
     }
-    if (_proofType.isEmpty) {
+    if (!widget.isEdit && _proofType.isEmpty) {
       error(context, 'Please select a proof type');
       return;
     }
@@ -4780,38 +5231,40 @@ class _BankChangeDialogState extends State<_BankChangeDialog> {
                 ],
                 const SizedBox(height: 16),
 
-                // Proof Type (only for add, not edit if keeping Vue pattern - but Vue shows it for edit too with file upload)
-                _buildLabel('Proof Type'),
-                const SizedBox(height: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: _inputFillColor,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: _borderColor),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value: _proofType.isEmpty ? null : _proofType,
-                      hint: Text('Proof type',
-                          style: MyntWebTextStyles.placeholder(context,
-                            color: _textSecondary)),
-                      isExpanded: true,
-                      dropdownColor: _cardBg,
-                      style: MyntWebTextStyles.body(context, color: _textPrimary),
-                      items: _proofTypes.map((t) {
-                        return DropdownMenuItem(
-                          value: t,
-                          child: Text(t),
-                        );
-                      }).toList(),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _proofType = v);
-                      },
+                // Proof Type (hidden when editing an existing bank)
+                if (!widget.isEdit) ...[
+                  _buildLabel('Proof Type'),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: _inputFillColor,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: _borderColor),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _proofType.isEmpty ? null : _proofType,
+                        hint: Text('Proof type',
+                            style: MyntWebTextStyles.placeholder(context,
+                              color: _textSecondary)),
+                        isExpanded: true,
+                        dropdownColor: _cardBg,
+                        style: MyntWebTextStyles.body(context, color: _textPrimary),
+                        items: _proofTypes.map((t) {
+                          return DropdownMenuItem(
+                            value: t,
+                            child: Text(t),
+                          );
+                        }).toList(),
+                        onChanged: (v) {
+                          if (v != null) setState(() => _proofType = v);
+                        },
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
+                  const SizedBox(height: 16),
+                ],
 
                 // Bank Proof Upload
                 _buildLabel('Bank Proof'),

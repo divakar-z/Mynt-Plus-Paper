@@ -305,6 +305,23 @@ mixin ProfileAllDetailsApi on ApiCore {
 }
 
 
+  /// Calls /checkrekyc to determine whether a Re-KYC is currently in progress
+  /// for the logged-in client. Returns the raw rekyc_status string ("Yes" / "No") or null on error.
+  Future<String?> checkRekycStatusApi() async {
+    try {
+      final uri = Uri.parse(apiLinks.checkRekycURL);
+      final res = await apiClient.post(
+        uri,
+        headers: funddefaultHeaders,
+        body: jsonEncode({"client_code": prefs.clientId}),
+      );
+      final json = jsonDecode(res.body);
+      return json['rekyc_status']?.toString();
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<DetailsChangeCurrentStatus> fetchMobEmailStatusApi() async {
     try {
       final uri = Uri.parse(apiLinks.detailschangecurrentstatusURL);
@@ -967,12 +984,22 @@ mixin ProfileAllDetailsApi on ApiCore {
   /// Submit nominee form - POST /nominee (multipart/form-data)
   Future<Map<String, dynamic>?> nomineeSubmitApi({
     required Map<String, String> fields,
+    Map<String, ({String filename, Uint8List bytes})>? files,
   }) async {
     try {
       final uri = Uri.parse(apiLinks.nomineeSubmitURL);
       var request = http.MultipartRequest('POST', uri);
       request.headers.addAll(funddefaultHeaders);
       request.fields.addAll(fields);
+      if (files != null) {
+        for (final entry in files.entries) {
+          request.files.add(http.MultipartFile.fromBytes(
+            entry.key,
+            entry.value.bytes,
+            filename: entry.value.filename,
+          ));
+        }
+      }
 
       var response = await request.send();
       if (response.statusCode == 200) {
@@ -1156,9 +1183,12 @@ mixin ProfileAllDetailsApi on ApiCore {
 
       final json = jsonDecode(res.body);
 
-      double balance = json['balance'] ?? 0.0;
+      double balance = (json['balance'] is num)
+          ? (json['balance'] as num).toDouble()
+          : 0.0;
       String msg1 = json['msg1'] ?? '';
       String msg2 = json['msg2'] ?? '';
+      String stat = json['stat'] ?? '';
       String stage = '';
 
       if (balance > 0 && msg2.isEmpty) {
@@ -1186,6 +1216,7 @@ mixin ProfileAllDetailsApi on ApiCore {
         "balance": balance,
         "msg1": msg1,
         "msg2": msg2,
+        "stat": stat,
       };
 
       // if (json['msg1'] == 'zero ledger balance' &&
@@ -1204,7 +1235,7 @@ mixin ProfileAllDetailsApi on ApiCore {
     }
   }
 
-  holdingsapiceckapi() async {
+  Future<Map<String, dynamic>?> holdingsapiceckapi() async {
     try {
       final uri = Uri.parse(apiLinks.getholdingscheckURL);
 
@@ -1216,14 +1247,19 @@ mixin ProfileAllDetailsApi on ApiCore {
 
       final json = jsonDecode(res.body);
       // print("djsonjson ==> ${json}");
-      return json['total'];
+      return {
+        "stat": json['stat'] ?? '',
+        "holdings": json['holdings'] ?? json['data']?['holdings'] ?? [],
+        "raw": json,
+      };
     } catch (e) {
-      rethrow;
+      return null;
     }
   }
 
-  acccloserapi(String dpid, String boid, String filepath, String reason,
-      fulldataprf, bankdata) async {
+  Future<dynamic> acccloserapi(String dpid, String boid, String filepath,
+      String reason, fulldataprf, bankdata,
+      {bool hasHoldings = false}) async {
     List<Map<String, dynamic>> decodedBankData =
         List<Map<String, dynamic>>.from(jsonDecode(bankdata));
 
@@ -1256,7 +1292,7 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.fields['dp_code'] = "${fulldataprf.toJson()['CLIENT_DP_CODE']}";
       request.fields['segments'] = bankDataString;
       request.fields['reason'] = reason;
-      request.fields['transfer'] = dpid == "" ? "no" : 'yes';
+      request.fields['transfer'] = hasHoldings ? 'yes' : 'no';
 
       request.fields['address'] =
           "${fulldataprf.toJson()['CL_RESI_ADD1']},${fulldataprf.toJson()['CL_RESI_ADD2']},${fulldataprf.toJson()['CL_RESI_ADD3']}";
@@ -1378,18 +1414,17 @@ mixin ProfileAllDetailsApi on ApiCore {
   }
 
   // ─── KRA Image Check ───
-  Future<String?> kraImageCheckApi() async {
+  Future<bool> kraImageCheckApi() async {
     try {
-      final uri = Uri.parse(apiLinks.checkingImgURL);
-      final res = await apiClient.post(
+      final uri = Uri.parse('${apiLinks.checkingImgURL}/${prefs.clientId}');
+      final res = await apiClient.get(
         uri,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({"client_id": "${prefs.clientId}"}),
       );
       final json = jsonDecode(res.body);
-      return json['data']?.toString();
+      return json['data'] == true;
     } catch (e) {
-      return null;
+      return false;
     }
   }
 

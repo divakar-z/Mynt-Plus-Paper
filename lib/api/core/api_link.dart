@@ -321,6 +321,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
       '$profileDetailsURL/add_mob_email_stat';
   String get profileAllDetailsURL => '$profileDetailsURL/profile';
   String get rekycpendingstatusURL => '$profileDetailsURL/rekyc_pending_details';
+  String get checkRekycURL => 'https://ekycbe.mynt.in/zebu/checkrekyc';
   String get cancelPendingesignURL => '${profileDetailsURL}manual_cancel_request';
   String get fetctfileidURL => '$profileDetailsURL/add_mob_email_stat';
   String get fetctfileidURLnominee => '$profileDetailsURL/nom_stat';
