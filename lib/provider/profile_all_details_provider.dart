@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -36,6 +39,25 @@ class ProfileProvider extends DefaultChangeNotifier {
     notifyListeners();
     try {
       _clientAllDetails = await api.getClientProfileAllDetailsApi();
+      // Debug log of the entire decrypted profile response
+      // if (kDebugMode) {
+      //   final isClosed =
+      //       _clientAllDetails?.clientData?.isClientClosed ?? false;
+      //   debugPrint(
+      //     '[ProfileDecrypt] clientStatus='
+      //     '${isClosed ? 'client_close' : 'not_close'}',
+      //   );
+      //   final encoded =
+      //       jsonEncode(_clientAllDetails?.toJson() ?? <String, dynamic>{});
+      //   // Chunked print to avoid Logcat/devtools truncation of large payloads.
+      //   const int chunk = 800;
+      //   for (int i = 0; i < encoded.length; i += chunk) {
+      //     debugPrint(
+      //       '[ProfileDecrypt] '
+      //       '${encoded.substring(i, i + chunk > encoded.length ? encoded.length : i + chunk)}',
+      //     );
+      //   }
+      // }
     } catch (e) {
     } finally {
       _isLoading = false;
@@ -333,14 +355,39 @@ class ProfileProvider extends DefaultChangeNotifier {
   DetailsChangeCurrentStatus? _mobEmailStatus;
   DetailsChangeCurrentStatus? get mobEmailStatus => _mobEmailStatus;
 
+  // True until the first /add_mob_email_stat response arrives. Used by the UI to show a loader
+  bool _mobEmailStatusLoading = true;
+  bool get mobEmailStatusLoading => _mobEmailStatusLoading;
+
   bool _segmentSubmitting = false;
   bool get segmentSubmitting => _segmentSubmitting;
 
   Future fetchMobEmailStatus() async {
+    _mobEmailStatusLoading = true;
+    notifyListeners();
     try {
       _mobEmailStatus = await api.fetchMobEmailStatusApi();
-      notifyListeners();
     } catch (e) {
+    } finally {
+      _mobEmailStatusLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // ─── Re-KYC status (Personal Info gate) ───
+  // the raw 'Yes'/'No' string. Email/Mobile edits are blocked when == 'Yes'.
+  String _rekycStatus = '';
+  String get rekycStatus => _rekycStatus;
+
+  Future fetchRekycStatus() async {
+    _rekycStatus = '';
+    try {
+      final status = await api.checkRekycStatusApi();
+      _rekycStatus = status ?? '';
+    } catch (_) {
+      _rekycStatus = '';
+    } finally {
+      notifyListeners();
     }
   }
 
@@ -609,11 +656,11 @@ class ProfileProvider extends DefaultChangeNotifier {
   }
 
   // ─── KRA Image Check ───
-  Future<String?> kraImageCheck() async {
+  Future<bool> kraImageCheck() async {
     try {
       return await api.kraImageCheckApi();
     } catch (e) {
-      return null;
+      return false;
     }
   }
 
@@ -755,9 +802,10 @@ class ProfileProvider extends DefaultChangeNotifier {
   /// Submit nominee form to /nominee
   Future<Map<String, dynamic>?> submitNominee({
     required Map<String, String> fields,
+    Map<String, ({String filename, Uint8List bytes})>? files,
   }) async {
     try {
-      final result = await api.nomineeSubmitApi(fields: fields);
+      final result = await api.nomineeSubmitApi(fields: fields, files: files);
       if (result != null && result['msg'] == 'Success') {
         await fetchNomineeStatus();
         await fetchClientProfileAllDetails();
@@ -883,16 +931,28 @@ class ProfileProvider extends DefaultChangeNotifier {
   }
 
   Future<dynamic> closeaccfinalspro(String dpid, String boid, String filepath,
-      String reason, fulldataprf, bankdata) async {
+      String reason, fulldataprf, bankdata,
+      {bool hasHoldings = false}) async {
     try {
       dynamic chackaccClosureResp = await api.acccloserapi(
-          dpid, boid, filepath, reason, fulldataprf, bankdata);
+          dpid, boid, filepath, reason, fulldataprf, bankdata,
+          hasHoldings: hasHoldings);
       notifyListeners();
       return chackaccClosureResp;
     } catch (e) {
       return null;
     } finally {
       notifyListeners();
+    }
+  }
+
+  Future<Map<String, dynamic>?> checkHoldingsForClosure() async {
+    try {
+      final resp = await api.holdingsapiceckapi();
+      notifyListeners();
+      return resp;
+    } catch (e) {
+      return null;
     }
   }
 }

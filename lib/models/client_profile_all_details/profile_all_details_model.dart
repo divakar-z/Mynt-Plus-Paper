@@ -77,7 +77,25 @@ class ClientData {
   String? bIRTHDATE;
   String? oCCUPATION;
   String? maritalStatus;
+  String? cATEGORY;
   List<SegmentsData>? segmentsData;
+  
+  bool get isIndividual => cATEGORY == 'I';
+
+  /// Derived account-closed flag
+  /// Scans segments_data[].inactivetype_DESC for closure markers
+  /// ("Close Client-Close" / "close-Close"), normalized for case + whitespace.
+  bool get isClientClosed {
+    final segs = segmentsData;
+    if (segs == null) return false;
+    for (final s in segs) {
+      final desc = s.inactivetypeDESC?.trim().toLowerCase() ?? '';
+      if (desc == 'close client-close' || desc == 'close-close') {
+        return true;
+      }
+    }
+    return false;
+  }
 
   ClientData(
       {this.cLIENTID,
@@ -163,6 +181,7 @@ class ClientData {
     bIRTHDATE = json['BIRTH_DATE'].toString();
     oCCUPATION = json['OCCUPATION'].toString();
     maritalStatus = json['Marital_status'].toString();
+    cATEGORY = json['CATEGORY']?.toString();
     if (json['segments_data'] != null) {
       segmentsData = <SegmentsData>[];
       json['segments_data'].forEach((v) {
@@ -213,6 +232,7 @@ class ClientData {
     data['BIRTH_DATE'] = bIRTHDATE;
     data['OCCUPATION'] = oCCUPATION;
     data['Marital_status'] = maritalStatus;
+    data['CATEGORY'] = cATEGORY;
     if (segmentsData != null) {
       data['segments_data'] = segmentsData!.map((v) => v.toJson()).toList();
     }

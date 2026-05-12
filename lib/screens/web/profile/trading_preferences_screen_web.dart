@@ -27,6 +27,7 @@ class _TradingPreferencesScreenWebState
     extends ConsumerState<TradingPreferencesScreenWeb> {
   bool _segmentEsignLoading = false;
   bool _segmentCancelLoading = false;
+  bool _initialLoadDone = false;
   final ValueNotifier<int?> _hoveredRowIndex = ValueNotifier<int?>(null);
 
   @override
@@ -38,10 +39,15 @@ class _TradingPreferencesScreenWebState
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      ref.read(profileAllDetailsProvider).fetchClientProfileAllDetails();
-      ref.read(profileAllDetailsProvider).fetchMobEmailStatus();
+      final provider = ref.read(profileAllDetailsProvider);
+      await Future.wait([
+        provider.fetchClientProfileAllDetails(),
+        provider.fetchMobEmailStatus(),
+      ]);
+      if (!mounted) return;
+      setState(() => _initialLoadDone = true);
     });
   }
 
@@ -250,6 +256,22 @@ class _TradingPreferencesScreenWebState
         segmentStatus != 'e-signed pending' &&
         segmentStatus != 'e-signed completed';
 
+    // ─── Segment edit-gate reasons (for tooltip + button disable) ───
+    // Only client-closed and non-individual block this button on web; the
+    // atve_sts / 7-day / Re-KYC checks gate other screens, not this one.
+    final clientData = clientAllDetails?.clientData;
+    String? segmentEditBlockReason;
+    if (clientData != null) {
+      if (clientData.isClientClosed) {
+        segmentEditBlockReason = 'Your trading account is closed.';
+      } else if (!clientData.isIndividual) {
+        segmentEditBlockReason =
+            "Non-individual accounts can't modify data here. "
+            "Please contact support at (+91) 93 8010 8010 for help.";
+      }
+    }
+    final bool segmentEditDisabled = segmentEditBlockReason != null;
+
     return Scaffold(
       backgroundColor: bgColor,
       body: Column(
@@ -294,7 +316,7 @@ class _TradingPreferencesScreenWebState
           ),
           const SizedBox(height: 20),
 
-          if (isLoading)
+          if (!_initialLoadDone || isLoading)
             Expanded(child: Center(child: MyntLoader.simple()))
           else if (segmentsData == null || segmentsData.isEmpty)
             Expanded(
@@ -490,39 +512,53 @@ class _TradingPreferencesScreenWebState
                     // Activate Segments button
                     if (showActivateBtn) ...[
                       const SizedBox(height: 24),
-                      InkWell(
-                        onTap: () {
-                          if (_hasNoActiveSegments(segmentsData)) {
-                            _showNoActiveSegmentsDialog(
-                              panNo: clientAllDetails?.clientData?.pANNO ?? '',
-                              clientId:
-                                  clientAllDetails?.clientData?.cLIENTID ?? '',
-                            );
-                          } else {
-                            _showSegmentChangeDialog(context, segmentsData);
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: resolveThemeColor(context,
-                                dark: MyntColors.secondary,
-                                light: MyntColors.primary),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.add,
-                                  size: 18, color: Colors.white),
-                              const SizedBox(width: 6),
-                              Text('Activate Segments',
-                                  style: MyntWebTextStyles.bodySmall(context,
-                                      color: Colors.white,
-                                      fontWeight: MyntFonts.semiBold)),
-                            ],
+                      Tooltip(
+                        message: segmentEditBlockReason ?? '',
+                        child: Opacity(
+                          opacity: segmentEditDisabled ? 0.5 : 1.0,
+                          child: InkWell(
+                            onTap: segmentEditDisabled
+                                ? () => warningMessage(
+                                    context, segmentEditBlockReason!)
+                                : () {
+                                    if (_hasNoActiveSegments(segmentsData)) {
+                                      _showNoActiveSegmentsDialog(
+                                        panNo: clientAllDetails
+                                                ?.clientData?.pANNO ??
+                                            '',
+                                        clientId: clientAllDetails
+                                                ?.clientData?.cLIENTID ??
+                                            '',
+                                      );
+                                    } else {
+                                      _showSegmentChangeDialog(
+                                          context, segmentsData);
+                                    }
+                                  },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: resolveThemeColor(context,
+                                    dark: MyntColors.secondary,
+                                    light: MyntColors.primary),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.add,
+                                      size: 18, color: Colors.white),
+                                  const SizedBox(width: 6),
+                                  Text('Activate Segments',
+                                      style: MyntWebTextStyles.bodySmall(
+                                          context,
+                                          color: Colors.white,
+                                          fontWeight: MyntFonts.semiBold)),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -1169,8 +1205,7 @@ class _SegmentChangeRequestDialogState
     final successColor = resolveThemeColor(context,
         dark: MyntColors.successDark, light: MyntColors.success);
 
-    final canSubmit = (_equity || _fno || _currency || _commodity) &&
-        (!_needsProof || _proofBytes != null);
+    final canSubmit = _equity || _fno || _currency || _commodity;
 
     final bgColor = resolveThemeColor(context,
         dark: MyntColors.backgroundColorDark,
@@ -1380,6 +1415,11 @@ class _SegmentChangeRequestDialogState
                 child: ElevatedButton(
                   onPressed: (canSubmit && !_submitting)
                       ? () async {
+                          if (_needsProof && _proofBytes == null) {
+                            warningMessage(
+                                context, 'Upload your income proof');
+                            return;
+                          }
                           setState(() => _submitting = true);
                           await widget.onSubmit(
                             _equity,
@@ -1399,7 +1439,7 @@ class _SegmentChangeRequestDialogState
                     disabledBackgroundColor: dividerColor,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
+                          horizontal: 16, vertical: 18),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(4),
                     ),
