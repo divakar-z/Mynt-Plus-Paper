@@ -45,6 +45,7 @@ class _ProfileSectionScreenWebState
   bool _ddpiEsignLoading = false;
   bool _closureEsignLoading = false;
   bool _closureCancelLoading = false;
+  bool _closureInitiateLoading = false;
   bool _mtfEsignLoading = false;
   bool _bankEsignLoading = false;
   bool _bankCancelLoading = false;
@@ -3464,12 +3465,14 @@ color: resolveThemeColor(context,
               ),
               const SizedBox(height: 18),
               Builder(builder: (context) {
+                final bool busy = _closureInitiateLoading;
+                final bool disabled = initiateDisabled || busy;
                 final btn = Opacity(
-                  opacity: initiateDisabled ? 0.5 : 1.0,
+                  opacity: disabled ? 0.5 : 1.0,
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: initiateDisabled
+                      onTap: disabled
                           ? null
                           : () => _showClosureConfirmDialog(theme),
                       borderRadius: BorderRadius.circular(8),
@@ -3482,13 +3485,23 @@ color: resolveThemeColor(context,
                               light: MyntColors.primary),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(
-                          "Initiate Closure",
-                          style: MyntWebTextStyles.body(context,
-                            color: Colors.white,
-                            fontWeight: MyntFonts.semiBold,
-                          ).copyWith(decoration: TextDecoration.none),
-                        ),
+                        child: busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white),
+                                ),
+                              )
+                            : Text(
+                                "Initiate Closure",
+                                style: MyntWebTextStyles.body(context,
+                                  color: Colors.white,
+                                  fontWeight: MyntFonts.semiBold,
+                                ).copyWith(decoration: TextDecoration.none),
+                              ),
                       ),
                     ),
                   ),
@@ -3963,16 +3976,19 @@ color: resolveThemeColor(context,
                             const TextSpan(text: 'Click here to '),
                             WidgetSpan(
                               alignment: PlaceholderAlignment.middle,
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.pop(ctx);
-                                  WebNavigationHelper.navigateTo(linkRoute);
-                                },
-                                child: Text(
-                                  linkLabel,
-                                  style: MyntWebTextStyles.bodySmall(ctx,
-                                      color: primaryColor,
-                                      fontWeight: MyntFonts.semiBold),
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.click,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    Navigator.pop(ctx);
+                                    WebNavigationHelper.navigateTo(linkRoute);
+                                  },
+                                  child: Text(
+                                    linkLabel,
+                                    style: MyntWebTextStyles.bodySmall(ctx,
+                                        color: primaryColor,
+                                        fontWeight: MyntFonts.semiBold),
+                                  ),
                                 ),
                               ),
                             ),
@@ -4124,6 +4140,8 @@ color: resolveThemeColor(context,
       return;
     }
 
+    if (mounted) setState(() => _closureInitiateLoading = true);
+    try {
     // Step 1: Run balance check + holdings check in parallel
     final results = await Future.wait([
       provider.closeaccnalprov(reason, clientData),
@@ -4224,6 +4242,9 @@ color: resolveThemeColor(context,
           ? (closureResp['msg'] ?? 'Closure request failed')
           : 'Closure request failed';
       if (mounted) warningMessage(context, msg.toString());
+    }
+    } finally {
+      if (mounted) setState(() => _closureInitiateLoading = false);
     }
   }
 
