@@ -240,11 +240,13 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
         child: Column(
           children: [
             _buildHeader(context, theme, ledgerprovider),
+            _buildSegmentTabs(context, ledgerprovider),
+            const SizedBox(height: 12),
             Expanded(
               child: Stack(
                 children: [
                   isLoading
-                      ? Center(child: MyntLoader.simple())
+                      ? Center(child: MyntLoader.branded())
                       : ledgerprovider.calenderpnlAllData == null
                           ? const Center(
                             child: NoDataFound(secondaryEnabled: false))
@@ -409,9 +411,6 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Segment tabs
-          _buildSegmentTabs(context, ledgerprovider),
-          const SizedBox(height: 12),
           // Summary cards + share card
           _buildSummaryCards(context, data, netValue, ledgerprovider),
           const SizedBox(height: 16),
