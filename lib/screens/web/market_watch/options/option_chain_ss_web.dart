@@ -38,6 +38,8 @@ class OptionChainSSWeb extends ConsumerStatefulWidget {
       onBasketModeChanged; // Callback to notify parent of basket mode changes
   final Function(VoidCallback)?
       onToggleCallbackReady; // Callback to provide toggle function to parent
+  final VoidCallback?
+      onChartRequested; // Notify parent to switch its right-panel to the Chart tab
   // final String isBasket;
 
   const OptionChainSSWeb({
@@ -45,6 +47,7 @@ class OptionChainSSWeb extends ConsumerStatefulWidget {
     required this.wlValue,
     this.onBasketModeChanged,
     this.onToggleCallbackReady,
+    this.onChartRequested,
     // required this.isBasket
   });
 
@@ -298,6 +301,7 @@ class _OptionChainSSState extends ConsumerState<OptionChainSSWeb> {
                         swipecontroller: swipecontroller,
                         showPriceView: showPriceView,
                         isBasketMode: isBasketMode,
+                        onChartRequested: widget.onChartRequested,
                       ),
                     ),
                   ],
@@ -1124,6 +1128,7 @@ class _OptionChainContent extends ConsumerStatefulWidget {
   final SwipeActionController swipecontroller;
   final bool showPriceView;
   final bool isBasketMode;
+  final VoidCallback? onChartRequested;
 
   const _OptionChainContent({
     required this.strikePriceKey,
@@ -1131,6 +1136,7 @@ class _OptionChainContent extends ConsumerStatefulWidget {
     required this.swipecontroller,
     required this.showPriceView,
     required this.isBasketMode,
+    this.onChartRequested,
   });
 
   @override
@@ -1447,6 +1453,9 @@ class _OptionChainContentState extends ConsumerState<_OptionChainContent> {
                     swipeController: widget.swipecontroller,
                     index: dataIndex,
                     atmKey: rowData.isATM ? widget.strikePriceKey : null,
+                    onChartRequested: widget.onChartRequested == null
+                        ? null
+                        : (_) => widget.onChartRequested!.call(),
                   );
                 },
               ),
