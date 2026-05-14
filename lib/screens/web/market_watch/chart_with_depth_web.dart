@@ -1124,6 +1124,11 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
             _toggleBasketModeCallback = toggleCallback;
           });
         },
+        onChartRequested: () {
+          if (_tabController != null && _tabController!.index != 1) {
+            _tabController!.animateTo(1);
+          }
+        },
       );
     }
 
