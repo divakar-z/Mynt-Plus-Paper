@@ -1255,10 +1255,13 @@ mixin ProfileAllDetailsApi on ApiCore {
           }));
 
       final json = jsonDecode(res.body);
-      // print("djsonjson ==> ${json}");
+      final String stat = (json['stat'] ?? '').toString();
+      final String holdings = stat == 'Ok'
+          ? (json['holdings']?.toString() ?? '')
+          : '';
       return {
-        "stat": json['stat'] ?? '',
-        "holdings": json['holdings'] ?? json['data']?['holdings'] ?? [],
+        "stat": stat,
+        "holdings": holdings,
         "raw": json,
       };
     } catch (e) {
@@ -1268,7 +1271,9 @@ mixin ProfileAllDetailsApi on ApiCore {
 
   Future<dynamic> acccloserapi(String dpid, String boid, String filepath,
       String reason, fulldataprf, bankdata,
-      {bool hasHoldings = false}) async {
+      {bool hasHoldings = false,
+      Uint8List? fileBytes,
+      String? fileName}) async {
     List<Map<String, dynamic>> decodedBankData =
         List<Map<String, dynamic>>.from(jsonDecode(bankdata));
 
@@ -1310,7 +1315,13 @@ mixin ProfileAllDetailsApi on ApiCore {
       // request.fields['cmr_file'] = "";
 //  request.files
 //             .add(await http.MultipartFile.fromPath('cmr_file', filepath));
-      if (filepath.isNotEmpty) {
+      if (fileBytes != null && fileBytes.isNotEmpty) {
+        request.files.add(http.MultipartFile.fromBytes(
+          'cmr_file',
+          fileBytes,
+          filename: fileName ?? 'cmr_file.pdf',
+        ));
+      } else if (filepath.isNotEmpty) {
         request.files
             .add(await http.MultipartFile.fromPath('cmr_file', filepath));
       }
