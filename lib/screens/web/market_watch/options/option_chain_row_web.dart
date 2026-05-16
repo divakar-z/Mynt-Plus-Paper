@@ -5,7 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_swipe_action_cell/flutter_swipe_action_cell.dart';
-// import '../../../../models/marketwatch_model/get_quotes.dart';
+import '../../../../models/marketwatch_model/get_quotes.dart';
 import '../../../../models/marketwatch_model/opt_chain_model.dart';
 import '../../../../models/order_book_model/order_book_model.dart';
 import '../../../../provider/market_watch_provider.dart';
@@ -44,6 +44,7 @@ class OptionChainRowWeb extends ConsumerStatefulWidget {
   final SwipeActionController? swipeController;
   final int index;
   final GlobalKey? atmKey; // Key to mark ATM row for scrolling
+  final void Function(OptionValues option)? onChartRequested;
 
   const OptionChainRowWeb({
     super.key,
@@ -54,6 +55,7 @@ class OptionChainRowWeb extends ConsumerStatefulWidget {
     this.swipeController,
     required this.index,
     this.atmKey,
+    this.onChartRequested,
   });
 
   @override
@@ -260,6 +262,11 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
                       ),
                       HoverActionButton.icon(
                         context: context,
+                        iconAsset: assets.chart,
+                        onPressed: () => _handleChartTap(option),
+                      ),
+                      HoverActionButton.icon(
+                        context: context,
                         iconAsset: isInWatchlist
                             ? assets.bookmarkIcon
                             : assets.bookmarkLineIcon,
@@ -278,7 +285,7 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
           },
         ),
     );
-    
+
   }
 
   Widget _buildStrikeCell() {
@@ -461,6 +468,11 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
                       ),
                       HoverActionButton.icon(
                         context: context,
+                        iconAsset: assets.chart,
+                        onPressed: () => _handleChartTap(option),
+                      ),
+                      HoverActionButton.icon(
+                        context: context,
                         iconAsset: isInWatchlist
                             ? assets.bookmarkIcon
                             : assets.bookmarkLineIcon,
@@ -606,6 +618,32 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
     );
   }
 
+
+  Future<void> _handleChartTap(OptionValues option) async {
+    if (option.tsym?.contains("|||") ?? false) {
+      showResponsiveWarningMessage(context, "Symbol not available for trading");
+      return;
+    }
+
+    final marketWatch = ref.read(marketWatchProvider);
+
+    final depthArgs = DepthInputArgs(
+      exch: option.exch?.toString() ?? '',
+      token: option.token?.toString() ?? '',
+      tsym: option.tsym?.toString() ?? '',
+      instname: '',
+      symbol: option.symbol?.toString() ?? option.tsym?.toString() ?? '',
+      expDate: option.expDate?.toString() ?? '',
+      option: option.option?.toString() ?? '',
+      isOption: true,
+    );
+
+    marketWatch.scripdepthsize(false);
+    await marketWatch.calldepthApis(context, depthArgs, "");
+
+    if (!mounted) return;
+    widget.onChartRequested?.call(option);
+  }
 
   Future<void> _handleSaveToWatchlist(OptionValues option) async {
     final scripData = ref.read(marketWatchProvider);

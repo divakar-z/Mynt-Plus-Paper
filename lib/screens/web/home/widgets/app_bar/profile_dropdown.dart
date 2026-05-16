@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' as material;
 import 'package:flutter/material.dart'
     hide MenuController, TextButton, AlertDialog, DropdownMenu, showDialog;
@@ -9,6 +10,7 @@ import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/notification_provider.dart';
+import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
@@ -48,10 +50,32 @@ class ProfileDropdown extends ConsumerStatefulWidget {
 }
 
 class _ProfileDropdownState extends ConsumerState<ProfileDropdown> {
+  final TapGestureRecognizer _reopenAccountRecognizer = TapGestureRecognizer()
+    ..onTap = () {
+      html.window.open('https://oa.mynt.in/', '_blank');
+    };
+
+  @override
+  void dispose() {
+    _reopenAccountRecognizer.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     // Capture parent context for navigation
     final parentContext = context;
+
+    // `accountstatus == 'client_close'` derivation
+    // (segments_data[].inactivetype_DESC ∈ {"Close Client-Close",
+    // "close-Close"}). When true, render the red alert + tooltip on the
+    // profile activator and the inline top-bar warning text on wider screens.
+    final clientData =
+        ref.watch(profileAllDetailsProvider).clientAllDetailsSafe?.clientData;
+    final bool isClientClosed = clientData?.isClientClosed ?? false;
+    const String closedMsg = 'Your trading account is closed.';
+    final bool showInlineWarning =
+        MediaQuery.of(context).size.width >= 1000;
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -77,6 +101,53 @@ class _ProfileDropdownState extends ConsumerState<ProfileDropdown> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (isClientClosed && showInlineWarning) ...[
+              Builder(builder: (context) {
+                final errorColor = resolveThemeColor(
+                  context,
+                  dark: MyntColors.errorDark,
+                  light: MyntColors.error,
+                );
+                final baseStyle = MyntWebTextStyles.bodySmall(
+                  context,
+                  fontWeight: MyntFonts.medium,
+                  color: errorColor,
+                );
+                return RichText(
+                  text: TextSpan(
+                    style: baseStyle,
+                    children: [
+                      const TextSpan(text: 'Your trading account is closed . '),
+                      TextSpan(
+                        text: 'Click here',
+                        style: baseStyle.copyWith(
+                          decoration: TextDecoration.underline,
+                        ),
+                        recognizer: _reopenAccountRecognizer,
+                        mouseCursor: SystemMouseCursors.click,
+                      ),
+                      const TextSpan(text: ' to reopen your account.'),
+                    ],
+                  ),
+                );
+              }),
+              const SizedBox(width: 8),
+            ],
+            if (isClientClosed) ...[
+              material.Tooltip(
+                message: closedMsg,
+                child: Icon(
+                  Icons.error_outline,
+                  size: 20,
+                  color: resolveThemeColor(
+                    context,
+                    dark: MyntColors.errorDark,
+                    light: MyntColors.error,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
             Text(
               widget.clientId,
               style: MyntWebTextStyles.body(

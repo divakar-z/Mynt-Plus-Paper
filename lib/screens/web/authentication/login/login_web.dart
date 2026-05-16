@@ -1271,7 +1271,11 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                                     if (!mounted) return;
                                                     _handleWebResendOtp(); // Use new web resend OTP
                                                 },
-                                                child: Text("Resend OTP", style: MyntWebTextStyles.caption(context, color: resolveThemeColor(context,
+                                                child: Text(
+                                                    webAuth.topflow
+                                                        ? "Resend Setup OTP"
+                                                        : "Resend OTP",
+                                                    style: MyntWebTextStyles.caption(context, color: resolveThemeColor(context,
                                                     dark: MyntColors.secondaryDark,
                                                     light: MyntColors.secondary), fontWeight: FontWeight.bold)),
                                               )

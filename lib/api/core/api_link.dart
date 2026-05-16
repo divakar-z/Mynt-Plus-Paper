@@ -53,7 +53,6 @@ class ApiLinks {
   String get watchList => '$goMyntURL/MWList';
   String get tpseries => '$goMyntURL/TPSeries';
   String get preDefinedMWList => '$goMyntURL/PreDefinedMWList';
-  // String get preDefinedMarketWatchScrip => '$goMyntURL/PreDefinedMW';
   String get marketWatchScrip => '$goMyntURL/MarketWatch';
   String get securityInfo => '$goMyntURL/GetSecurityInfo';
   String get getQuotes => '$goMyntURL/GetQuotes';
@@ -157,8 +156,8 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
 
   String get loginOtp => '$mainBaseURL/otp_send_Tv';
   String get loginOtpVerify => 'https://ws.mynt.in/login/otp_verify';
-  String get deviceLogin => '$mainBaseURL/device_login';
-  String get validateSession => '$mainBaseURL/validate_session';
+  String get deviceLogin => '$mainBaseURLnew/device_login';
+  String get validateSession => '$mainBaseURLnew/validate_session';
 
   String get forgetPassword => '$mainBaseURLnew/ForgetPassword';
 
@@ -166,8 +165,8 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
 
   String get placeSipOrder => '$goMyntURL/PlaceSipOrder';
 
-  String get preDefdMWatchScrip => 'https://copy.mynt.in/PreDefinedMW';
-  String get getAllIndx => '$mainBaseURL/GetIndexList';
+  String get preDefdMWatchScrip => 'https://go.mynt.in/NorenWClientWeb/PreDefinedMW';
+  String get getAllIndx => 'https://go.mynt.in/NorenWClientWeb/GetIndexList';
 
   // Position Group
   String get positionGrp => 'https://copy.mynt.in/Getpositiongrp';
@@ -182,7 +181,6 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
 
   // String get fundamental => '$scripOverviewUrl/stockFundamentalDetails';
   // String get stockHoldings => '$scripOverviewUrl/stockHoldings';
-  // String get preDefWLscrip => '$scripOverviewUrl/PreDefinedMW';
 
   String get scripOverviewUrl1 => 'http://192.168.5.209:5005';
 
@@ -321,6 +319,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
       '$profileDetailsURL/add_mob_email_stat';
   String get profileAllDetailsURL => '$profileDetailsURL/profile';
   String get rekycpendingstatusURL => '$profileDetailsURL/rekyc_pending_details';
+  String get checkRekycURL => 'https://ekycbe.mynt.in/zebu/checkrekyc';
   String get cancelPendingesignURL => '${profileDetailsURL}manual_cancel_request';
   String get fetctfileidURL => '$profileDetailsURL/add_mob_email_stat';
   String get fetctfileidURLnominee => '$profileDetailsURL/nom_stat';
