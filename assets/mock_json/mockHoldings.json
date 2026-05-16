@@ -1,0 +1,261 @@
+[
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "BSE",
+                "token": "539506",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "ADCON",
+                "pp": "2",
+                "ti": "0.01",
+                "ls": "1",
+                "isin": "INE805Q01028",
+                "cname": "Adcon Capital Services Limited"
+            }
+        ],
+        "upldprc": "1.06",
+        "sell_amt": "0.000000",
+        "holdqty": "0",
+        "brk_hair_cut": "1.00",
+        "npoadqty": "7",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "0.53"
+    },
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "NSE",
+                "token": "21428",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "TATSILV-EQ",
+                "pp": "2",
+                "ti": "0.01",
+                "ls": "1",
+                "isin": "INF277KA1984",
+                "cname": "TATAAML-TATSILV"
+            }
+        ],
+        "upldprc": "19.19",
+        "sell_amt": "0.000000",
+        "holdqty": "0",
+        "brk_hair_cut": "1.00",
+        "npoadqty": "22",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "27.45"
+    },
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "BSE",
+                "token": "531893",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "SAWACA",
+                "pp": "2",
+                "ti": "0.01",
+                "ls": "1",
+                "isin": "INE248B01023",
+                "cname": "SAWACA ENTERPRISES LIMITED"
+            }
+        ],
+        "upldprc": "0.79",
+        "sell_amt": "0.000000",
+        "holdqty": "0",
+        "brk_hair_cut": "1.00",
+        "npoadqty": "1",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "0.37"
+    },
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "NSE",
+                "token": "10666",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "PNB-EQ",
+                "pp": "2",
+                "ti": "0.01",
+                "ls": "1",
+                "isin": "INE160A01022",
+                "cname": "PUNJAB NATIONAL BANK"
+            },
+            {
+                "exch": "BSE",
+                "token": "532461",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "PNB",
+                "pp": "2",
+                "ti": "0.05",
+                "ls": "1",
+                "isin": "INE160A01022",
+                "cname": "PUNJAB NATIONAL BANK"
+            }
+        ],
+        "upldprc": "114.85",
+        "sell_amt": "0.000000",
+        "holdqty": "0",
+        "brk_hair_cut": "0.12",
+        "npoadqty": "1",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "104.62"
+    },
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "NSE",
+                "token": "9348",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "IOB-EQ",
+                "pp": "2",
+                "ti": "0.01",
+                "ls": "1",
+                "isin": "INE565A01014",
+                "cname": "INDIAN OVERSEAS BANK"
+            },
+            {
+                "exch": "BSE",
+                "token": "532388",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "IOB",
+                "pp": "2",
+                "ti": "0.01",
+                "ls": "1",
+                "isin": "INE565A01014",
+                "cname": "INDIAN OVERSEAS BANK"
+            }
+        ],
+        "upldprc": "36.44",
+        "sell_amt": "0.000000",
+        "holdqty": "0",
+        "brk_hair_cut": "0.14",
+        "npoadqty": "22",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "33.82"
+    },
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "BSE",
+                "token": "0",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "PIYUSH",
+                "pp": "2",
+                "ti": "0.05",
+                "ls": "1",
+                "isin": "INE10W701018",
+                "cname": "Piyush Limited"
+            }
+        ],
+        "upldprc": "668.00",
+        "sell_amt": "0.000000",
+        "holdqty": "0",
+        "brk_hair_cut": "1.00",
+        "npoadqty": "100",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "668.00"
+    },
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "NSE",
+                "token": "0",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "EFCILR",
+                "pp": "2",
+                "ti": "1.00",
+                "ls": "1",
+                "isin": "INE886D01026",
+                "cname": "EFC (I) Limited"
+            }
+        ],
+        "upldprc": "150.00",
+        "sell_amt": "0.000000",
+        "holdqty": "250",
+        "brk_hair_cut": "1.00",
+        "npoadqty": "250",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "150.00"
+    },
+    {
+        "stat": "Ok",
+        "exch_tsym": [
+            {
+                "exch": "NSE",
+                "token": "0",
+                "cm_e": "COLLATERAL Not Allowed",
+                "fo_e": "COLLATERAL Not Allowed",
+                "cur_e": "COLLATERAL Not Allowed",
+                "tsym": "PRABHAPP",
+                "pp": "2",
+                "ti": "0.01",
+                "ls": "1",
+                "isin": "IN90I0M01014",
+                "cname": "Prabha Energy Limited"
+            }
+        ],
+        "upldprc": "47.52",
+        "sell_amt": "0.000000",
+        "holdqty": "0",
+        "brk_hair_cut": "1.00",
+        "npoadqty": "0",
+        "s_prdt_ali": "CNC",
+        "prd": "C",
+        "btstqty": "0",
+        "usedqty": "0",
+        "trdqty": "0",
+        "c": "47.52"
+    }
+
+]

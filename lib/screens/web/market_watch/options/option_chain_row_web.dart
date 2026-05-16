@@ -262,7 +262,7 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
                       ),
                       HoverActionButton.icon(
                         context: context,
-                        iconAsset: assets.chart,
+                        iconAsset: assets.chartnew,
                         onPressed: () => _handleChartTap(option),
                       ),
                       HoverActionButton.icon(
@@ -468,7 +468,7 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
                       ),
                       HoverActionButton.icon(
                         context: context,
-                        iconAsset: assets.chart,
+                        iconAsset: assets.chartnew,
                         onPressed: () => _handleChartTap(option),
                       ),
                       HoverActionButton.icon(

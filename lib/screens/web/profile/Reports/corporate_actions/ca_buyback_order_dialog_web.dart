@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../../models/desk_reports_model/cp_action_model.dart';
 import '../../../../../provider/fund_provider.dart';
 import '../../../../../provider/ledger_provider.dart';
-import '../../../../../provider/profile_all_details_provider.dart';
 import '../../../../../provider/thems.dart';
 import '../../../../../res/mynt_web_color_styles.dart';
 import '../../../../../res/mynt_web_text_styles.dart';
@@ -74,19 +73,16 @@ class _CABuybackOrderDialogWebState
     return (qty == null || qty == 'null') ? '0' : qty;
   }
 
-  /// Mobile parity: when the user has no POA / DDPI authorisation, the qty cap
-  /// is the e-DIS-approved qty, not the total holdings — because the depository
-  /// can only release approved shares on settlement.
-  String _qtyCapForUser(bool poaActive, bool ddpiActive) {
+  /// Qty cap shown / enforced in the order form.
+  ///
+  /// Always the e-DIS-approved count (`approvedqty` ← Noren's `npoadqty`).
+  /// Per backend: the depository will only release shares for which e-DIS
+  /// has been done, so the user can never tender more than that — regardless
+  /// of POA/DDPI status.
+  String _qtyCapForUser() {
     if (_isOFS) return '';
-    if (poaActive || ddpiActive) return _maxQty;
     final approved = widget.action.approvedqty;
     return (approved == null || approved == 'null') ? '0' : approved;
-  }
-
-  bool _approvedQtyIsZero() {
-    final a = widget.action.approvedqty;
-    return a == null || a == 'null' || a == '0';
   }
 
   /// Price to pre-fill into the OFS price field when "Cut off price" is ticked.
@@ -232,17 +228,19 @@ class _CABuybackOrderDialogWebState
 
   @override
   Widget build(BuildContext context) {
-    final clientData = ref
-        .watch(profileAllDetailsProvider)
-        .clientAllDetailsSafe
-        ?.clientData;
-    final poaActive = clientData?.pOA == 'Y';
-    final ddpiActive = clientData?.dDPI == 'Y';
+    // Gate 2 (per backend): mirror the Holdings tab's e-DIS button condition.
+    // The button fires when any holding's `npoadqty` is not the literal
+    // "null" — meaning the user has shares needing e-DIS attention.
+    // Per-scrip equivalent here: if THIS scrip's npoadqty != "null" AND
+    // there's nothing saleable yet, route to the authorize prompt.
+    final npoadqty = widget.action.npoadqty;
+    final needsEdis = npoadqty != null && npoadqty != 'null';
+    final approvedQty =
+        int.tryParse(widget.action.approvedqty ?? '0') ?? 0;
     final needsEdisAuth = !widget.isCancel &&
         !_isOFS &&
-        !poaActive &&
-        !ddpiActive &&
-        _approvedQtyIsZero();
+        needsEdis &&
+        approvedQty == 0;
 
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
@@ -403,23 +401,19 @@ class _CABuybackOrderDialogWebState
   Widget _orderBody() {
     final lp = ref.watch(ledgerProvider);
     final fund = ref.watch(fundProvider);
-    final clientData = ref
-        .watch(profileAllDetailsProvider)
-        .clientAllDetailsSafe
-        ?.clientData;
-    final poaActive = clientData?.pOA == 'Y';
-    final ddpiActive = clientData?.dDPI == 'Y';
     final a = widget.action;
 
-    // Mobile parity: when the user lacks POA & DDPI and has zero e-DIS-approved
-    // shares, the order form is replaced by an "authorise e-DIS first" prompt.
-    final needsEdisAuth =
-        !_isOFS && !poaActive && !ddpiActive && _approvedQtyIsZero();
+    // Gate 2 (per backend): mirror the Holdings tab's e-DIS button — if
+    // npoadqty is non-null AND nothing is currently saleable, the user
+    // must authorize e-DIS first.
+    final needsEdis = a.npoadqty != null && a.npoadqty != 'null';
+    final approvedQty = int.tryParse(a.approvedqty ?? '0') ?? 0;
+    final needsEdisAuth = !_isOFS && needsEdis && approvedQty == 0;
     if (needsEdisAuth) {
       return _edisAuthBody(lp);
     }
 
-    final qtyCap = _qtyCapForUser(poaActive, ddpiActive);
+    final qtyCap = _qtyCapForUser();
 
     final rows = <_SummaryRow>[
       if (_isOFS) ...[
@@ -532,7 +526,14 @@ class _CABuybackOrderDialogWebState
               lightColor: MyntColors.textPrimary,
             ),
           ),
-          if (lp.captionforofs.isNotEmpty &&
+          // Only surface true balance/limit errors here. The provider also
+          // sets "Required amount for bid…" and "Enter bid quantity and
+          // price" as captions, but those are redundant — the big ₹ amount
+          // above already communicates the bid value, and field-level errors
+          // already cover invalid qty/price. Painting either of those in red
+          // is just noise.
+          if ((lp.captionforofs.contains('Insufficient') ||
+                  lp.captionforofs.contains('exceeds')) &&
               lp.requiredamountforofs.isNotEmpty &&
               lp.requiredamountforofs != '0') ...[
             const SizedBox(height: 4),
@@ -582,18 +583,8 @@ class _CABuybackOrderDialogWebState
 
   // ── Submit gating (mobile parity) ──────────────────────────────────────
 
-  /// Read the current qty cap (havingqty if POA/DDPI active, else approvedqty).
-  String _currentQtyCap() {
-    if (_isOFS) return '';
-    final clientData = ref
-        .read(profileAllDetailsProvider)
-        .clientAllDetailsSafe
-        ?.clientData;
-    return _qtyCapForUser(
-      clientData?.pOA == 'Y',
-      clientData?.dDPI == 'Y',
-    );
-  }
+  /// Read the current qty cap (always approvedqty — see [_qtyCapForUser]).
+  String _currentQtyCap() => _qtyCapForUser();
 
   /// Web-only friendlier qty errors:
   ///   • qty <= 0  → "Quantity must be greater than 0"
@@ -680,7 +671,7 @@ class _CABuybackOrderDialogWebState
     );
   }
 
-  // ── Body: e-DIS authorisation prompt (non-OFS, no POA/DDPI, 0 approved) ───
+  // ── Body: e-DIS authorisation prompt (non-OFS, npoadqty > 0, 0 approved) ──
 
   Widget _edisAuthBody(LDProvider lp) {
     final theme = ref.watch(themeProvider);
@@ -689,8 +680,8 @@ class _CABuybackOrderDialogWebState
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          "You're not eligible to perform this action as your DDPI and "
-          "POA are inactive. To proceed, please complete your e-DIS.",
+          "You have shares pending e-DIS authorization. "
+          "Complete e-DIS to make them available for this action.",
           style: MyntWebTextStyles.body(
             context,
             fontWeight: MyntFonts.medium,
