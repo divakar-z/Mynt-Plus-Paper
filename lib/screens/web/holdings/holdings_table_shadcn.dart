@@ -426,6 +426,7 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
           token: token,
           qty: pnlTotalQty,
           avgPrice: double.tryParse(holding.avgPrc ?? '0') ?? 0.0,
+          rpnl: double.tryParse(holding.rpnl ?? '0') ?? 0.0,
           initialValue: exchTsym?.profitNloss ?? '0.00',
         );
 
@@ -1236,12 +1237,14 @@ class _OverallPnLCell extends ConsumerStatefulWidget {
   final String token;
   final int qty;
   final double avgPrice;
+  final double rpnl;
   final String initialValue;
 
   const _OverallPnLCell({
     required this.token,
     required this.qty,
     required this.avgPrice,
+    required this.rpnl,
     required this.initialValue,
   });
 
@@ -1264,8 +1267,12 @@ class _OverallPnLCellState extends ConsumerState<_OverallPnLCell> {
       final newLtp = data[widget.token]['lp']?.toString();
       if (newLtp != null && newLtp != '0.00' && newLtp != 'null') {
         final ltp = double.tryParse(newLtp) ?? 0.0;
+        // Mirror PortfolioProvider._updateDerivedValues: total per-row P&L is
+        // unrealized + realized. Sold rows (qty=0) keep showing rpnl instead
+        // of flickering to 0 on each tick.
         final newPnL =
-            ((ltp - widget.avgPrice) * widget.qty).toStringAsFixed(2);
+            (((ltp - widget.avgPrice) * widget.qty) + widget.rpnl)
+                .toStringAsFixed(2);
         if (newPnL != overallPnL) {
           setState(() => overallPnL = newPnL);
         }

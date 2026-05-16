@@ -1071,10 +1071,15 @@ changeHoldingsTabIndex(int index) {
       for (int i = startIndex; i < endIndex; i++) {
         final holding = holdingsModel![i];
 
-        // Direct non-null access with fallbacks
-        final profitNloss =
-            double.tryParse(holding.exchTsym![0].profitNloss ?? '0.0')! +
-                double.tryParse(holding.rpnl ?? '0.0')!;
+        // Per-row profitNloss is set by _updateDerivedValues as
+        // (currentValue - invested) + rpnl, so it already includes the
+        // realized component. Falling back to rpnl only when profitNloss
+        // hasn't been written yet (pre-first-WS-tick window) keeps sold
+        // rows from briefly contributing 0 to the aggregate.
+        final profitNlossStr = holding.exchTsym![0].profitNloss;
+        final profitNloss = profitNlossStr != null
+            ? (double.tryParse(profitNlossStr) ?? 0.0)
+            : (double.tryParse(holding.rpnl ?? '0.0') ?? 0.0);
         final oneDayChg =
             double.tryParse(holding.exchTsym![0].oneDayChg ?? '0.0') ?? 0.0;
         final invested = double.tryParse(holding.invested ?? '0.0') ?? 0.0;
