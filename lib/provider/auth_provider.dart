@@ -51,6 +51,7 @@ import '../sharedWidget/risk_disclosure_bottom_sheet.dart';
 import '../sharedWidget/snack_bar.dart';
 import '../utils/overlay_manager.dart';
 import '../utils/responsive_snackbar.dart';
+import 'api_key_provider.dart';
 import 'change_password_provider.dart';
 import 'core/default_change_notifier.dart';
 import 'fund_provider.dart';
@@ -1017,6 +1018,10 @@ class AuthProvider extends DefaultChangeNotifier {
         ref.read(optionFlashProvider).closePanel();
 
         ref.read(ledgerProvider).clearOnLogout();
+
+        // Clear API key + TOTP state so the next logged-in user does not see
+        // the previous user's TOTP secret on opening the settings section.
+        ref.read(apikeyprovider).clearOnLogout();
 
         // Reset web auth provider state to ensure clean login on web
         if (kIsWeb) {

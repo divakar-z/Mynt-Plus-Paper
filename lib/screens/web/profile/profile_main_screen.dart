@@ -547,6 +547,11 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   bool _showNewPwdMaxLengthError = false;
   Timer? _newPwdMaxLengthHideTimer;
 
+  // True once we've kicked off the TOTP fetch for this mounting of the
+  // settings section. Reset on widget dispose (i.e., on logout/navigate-away),
+  // so re-entering settings after re-login refetches cleanly.
+  bool _totpFetchTriggered = false;
+
   @override
   void initState() {
     super.initState();
@@ -670,13 +675,20 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
             
             // TOTP
             shadcn.AccordionItem(
-              trigger: shadcn.AccordionTrigger(
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Text('TOTP', style: MyntWebTextStyles.titlesub(context, 
-                      color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),fontWeight: MyntFonts.medium).copyWith(decoration: TextDecoration.none)),
+              trigger: Listener(
+                // Listener observes pointer events without consuming them, so
+                // AccordionTrigger still toggles expansion normally. We use it
+                // to lazily fetch the TOTP key the first time the section is
+                // tapped instead of on screen load.
+                onPointerDown: (_) => _ensureTotpFetched(),
+                child: shadcn.AccordionTrigger(
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Text('TOTP', style: MyntWebTextStyles.titlesub(context,
+                        color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),fontWeight: MyntFonts.medium).copyWith(decoration: TextDecoration.none)),
+                    ),
                   ),
                 ),
               ),
@@ -795,20 +807,52 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
     );
   }
 
+  /// Kick off a TOTP fetch the first time the user expands the TOTP section.
+  /// Idempotent for the lifetime of this State — re-running has no effect.
+  /// State is reset when the widget is disposed (e.g., on logout/navigation),
+  /// so a fresh login starts with a clean fetch.
+  void _ensureTotpFetched() {
+    if (_totpFetchTriggered) return;
+    _totpFetchTriggered = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(apikeyprovider).fetchTotp();
+    });
+  }
+
   Widget _buildTotpContent(ThemesProvider theme, BuildContext context) {
     final apikeys = ref.watch(apikeyprovider);
     final isDark = theme.isDarkMode;
 
-    // If we have a TOTP key, show the inline TOTP widget
-    final totpPwd = apikeys.totpkey?.pwd;
-    if (totpPwd != null) {
-      return _TotpInlineWidget(
-        secretKey: totpPwd,
-        isDark: isDark,
+    // In-flight fetch/generate — show a loader.
+    if (apikeys.isFetchingTotp) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
       );
     }
 
-    // Otherwise show generate button
+    // Key already exists (non-empty pwd) — show the inline TOTP widget.
+    // Regenerate hits the same GenSecretKey endpoint as the initial generate.
+    final totpPwd = apikeys.totpkey?.pwd;
+    if (totpPwd != null && totpPwd.isNotEmpty) {
+      return _TotpInlineWidget(
+        // Keyed by the secret so a regenerate forces the timer/HMAC
+        // state inside the widget to reset cleanly.
+        key: ValueKey(totpPwd),
+        secretKey: totpPwd,
+        isDark: isDark,
+        onRegenerate: () => ref.read(apikeyprovider).generateTotp(),
+      );
+    }
+
+    // GetSecretKey returned empty (or hasn't run yet) — show generate button.
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
@@ -823,10 +867,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
           const SizedBox(height: 16),
           MyntPrimaryButton(
             label: "Generate TOTP",
-            onPressed: () async {
-              await ref.read(apikeyprovider).fetchTotp();
-              if (mounted) setState(() {});
-            },
+            onPressed: () => ref.read(apikeyprovider).generateTotp(),
           ),
         ],
       ),
@@ -4630,10 +4671,13 @@ class _ApiKeyBottomTabsState extends ConsumerState<ApiKeyBottomTabs>
 class _TotpInlineWidget extends StatefulWidget {
   final String secretKey;
   final bool isDark;
+  final VoidCallback? onRegenerate;
 
   const _TotpInlineWidget({
+    super.key,
     required this.secretKey,
     required this.isDark,
+    this.onRegenerate,
   });
 
   @override
@@ -4789,13 +4833,47 @@ class _TotpInlineWidgetState extends State<_TotpInlineWidget> {
           ),
           const SizedBox(height: 16),
 
-          // Authenticator Key Label
-          Text(
-            'Authenticator Key',
-            style: MyntWebTextStyles.bodySmall(context,
-                darkColor: MyntColors.textSecondaryDark,
-                lightColor: MyntColors.textSecondary,
-                fontWeight: MyntFonts.medium),
+          // Authenticator Key Label + inline Regenerate action
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                'Authenticator Key',
+                style: MyntWebTextStyles.bodySmall(context,
+                    darkColor: MyntColors.textSecondaryDark,
+                    lightColor: MyntColors.textSecondary,
+                    fontWeight: MyntFonts.medium),
+              ),
+              if (widget.onRegenerate != null)
+                InkWell(
+                  onTap: widget.onRegenerate,
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.refresh,
+                          size: 14,
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.primaryDark,
+                              light: MyntColors.primary),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Regenerate',
+                          style: MyntWebTextStyles.bodySmall(context,
+                              darkColor: MyntColors.primaryDark,
+                              lightColor: MyntColors.primary,
+                              fontWeight: MyntFonts.medium),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 8),
 
