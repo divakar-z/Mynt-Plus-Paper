@@ -249,6 +249,7 @@ class _ModifyPlaceOrderScreenState
   int frezQty = 0;
   int lotSize = 0;
   int multiplayer = 0;
+  bool _isStock = true;
   String price = "0.00";
   String validity = "DAY";
   bool _isMarketOrder = false;
@@ -303,7 +304,7 @@ class _ModifyPlaceOrderScreenState
     return KeyEventResult.handled;
   }
 
-  /// Handles keyboard up/down arrow to increment/decrement qty by 1.
+  /// Handles keyboard up/down arrow to increment/decrement qty by 1 (stocks) or lot size (F&O).
   KeyEventResult _handleQtyArrowKey(KeyEvent event, TextEditingController ctrl) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
 
@@ -311,12 +312,30 @@ class _ModifyPlaceOrderScreenState
     final isDown = event.logicalKey == LogicalKeyboardKey.arrowDown;
     if (!isUp && !isDown) return KeyEventResult.ignored;
 
-    final current = int.tryParse(ctrl.text) ?? 0;
-    int newVal = isUp ? current + 1 : current - 1;
-    if (newVal < 1) newVal = 1;
-    ctrl.text = newVal.toString();
-    ctrl.selection = TextSelection.collapsed(offset: ctrl.text.length);
+    final int step = _isStock ? 1 : (multiplayer > 0 ? multiplayer : 1);
+    final int current = int.tryParse(ctrl.text) ?? 0;
+    final int snapped =
+        current >= step ? ((current / step).floor()) * step : step;
+
     setState(() {
+      if (isUp) {
+        if (ctrl.text.isEmpty) {
+          ctrl.text = step.toString();
+        } else if (current != snapped) {
+          ctrl.text = snapped.toString();
+        } else {
+          ctrl.text = (current + step).toString();
+        }
+      } else {
+        if (current != snapped) {
+          ctrl.text = snapped.toString();
+        } else if (current > step) {
+          ctrl.text = (current - step).toString();
+        } else {
+          ctrl.text = step.toString();
+        }
+      }
+      ctrl.selection = TextSelection.collapsed(offset: ctrl.text.length);
       marginUpdate();
     });
     return KeyEventResult.handled;
@@ -353,6 +372,7 @@ class _ModifyPlaceOrderScreenState
               ? widget.scripInfo.prcqqty
               : widget.orderArg.lotSize)
           .toString());
+      _isStock = widget.scripInfo.exch == "NSE" || widget.scripInfo.exch == "BSE";
       isBuy = widget.modifyOrderArgs.trantype == "B" ? true : false;
       priceCtrl = TextEditingController(text: widget.modifyOrderArgs.prc);
       qtyCtrl = TextEditingController(text: widget.modifyOrderArgs.qty);
@@ -464,9 +484,6 @@ class _ModifyPlaceOrderScreenState
         final theme = ref.read(themeProvider);
         final clientFundDetail = ref.watch(fundProvider).fundDetailModel;
         final trancation = ref.watch(transcationProvider);
-
-        int frezQtyOrderSliceMaxLimit =
-            ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
 
         return GestureDetector(
           onTap: () => FocusScope.of(context).unfocus(),
@@ -853,7 +870,9 @@ class _ModifyPlaceOrderScreenState
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.end,
                                             children: [
-                                              headerTitleText("Qty", theme),
+                                              headerTitleText(
+                                                  widget.scripInfo.exch == "MCX" ? "Lot" : "Qty",
+                                                  theme),
                                               // Text(
                                               //   "Lot: ${widget.scripInfo.ls} ${widget.scripInfo.prcunt ?? ''}  ",
                                               //   style: textStyle(
@@ -893,6 +912,69 @@ class _ModifyPlaceOrderScreenState
                                                 color: theme.isDarkMode
                                                     ? MyntColors.textPrimaryDark
                                                     : MyntColors.textPrimary,
+                                              ),
+                                              leadingWidget: _isStock ? null : GestureDetector(
+                                                onTap: () {
+                                                  setState(() {
+                                                    String input = qtyCtrl.text;
+                                                    int currentValue = int.tryParse(input) ?? 0;
+                                                    int adjustedQty = currentValue >= multiplayer
+                                                        ? ((currentValue / multiplayer).floor()) * multiplayer
+                                                        : multiplayer;
+                                                    if (currentValue != adjustedQty) {
+                                                      qtyCtrl.text = adjustedQty.toString();
+                                                    } else if (input.isNotEmpty && currentValue > multiplayer) {
+                                                      qtyCtrl.text = (currentValue - multiplayer).toString();
+                                                    } else {
+                                                      qtyCtrl.text = "$multiplayer";
+                                                    }
+                                                    qtyCtrl.selection = TextSelection.collapsed(offset: qtyCtrl.text.length);
+                                                    marginUpdate();
+                                                  });
+                                                },
+                                                child: Icon(
+                                                  Icons.remove,
+                                                  size: 18,
+                                                  color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary,
+                                                ),
+                                              ),
+                                              trailingWidget: _isStock ? null : GestureDetector(
+                                                onTap: () {
+                                                  setState(() {
+                                                    String input = qtyCtrl.text;
+                                                    int currentValue = int.tryParse(input) ?? 0;
+                                                    int adjustedQty = currentValue >= multiplayer
+                                                        ? ((currentValue / multiplayer).floor()) * multiplayer
+                                                        : multiplayer;
+                                                    final bool hasNoFreezeLimit = frezQty <= lotSize;
+                                                    final bool isMcx = widget.scripInfo.exch == "MCX";
+                                                    final int capInFieldUnits = hasNoFreezeLimit
+                                                        ? 999999999
+                                                        : (isMcx
+                                                            ? frezQty ~/ lotSize
+                                                            : frezQty);
+                                                    if (currentValue != adjustedQty) {
+                                                      qtyCtrl.text = adjustedQty.toString();
+                                                    } else if (input.isEmpty) {
+                                                      qtyCtrl.text = "$multiplayer";
+                                                    } else if ((currentValue + multiplayer) <= capInFieldUnits) {
+                                                      qtyCtrl.text = (currentValue + multiplayer).toString();
+                                                    } else {
+                                                      ResponsiveSnackBar.showWarning(
+                                                          context,
+                                                          isMcx
+                                                              ? "Maximum Allowed Lots: ${frezQty ~/ lotSize}"
+                                                              : "Maximum Allowed Quantity $frezQty");
+                                                    }
+                                                    qtyCtrl.selection = TextSelection.collapsed(offset: qtyCtrl.text.length);
+                                                    marginUpdate();
+                                                  });
+                                                },
+                                                child: Icon(
+                                                  Icons.add,
+                                                  size: 18,
+                                                  color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary,
+                                                ),
                                               ),
                                               // prefixIcon: InkWell(
                                               //   onTap: () {
@@ -1011,7 +1093,7 @@ class _ModifyPlaceOrderScreenState
                                               //           BoxFit.scaleDown),
                                               // ),
                                               controller: qtyCtrl,
-                                              textAlign: TextAlign.start,
+                                              textAlign: _isStock ? TextAlign.start : TextAlign.center,
                                               onChanged: (value) {
                                                 if (value.isEmpty ||
                                                     value == "0") {
@@ -1026,14 +1108,18 @@ class _ModifyPlaceOrderScreenState
                                                   int number = int.tryParse(
                                                           newValue) ??
                                                       0;
-                                                  if (number >
+                                                  final bool isMcx = widget.scripInfo.exch == "MCX";
+                                                  final int numberInUnits = isMcx ? number * lotSize : number;
+                                                  if (numberInUnits >
                                                       (frezQty == lotSize
                                                           ? 999999
-                                                          : frezQtyOrderSliceMaxLimit *
-                                                              frezQty)) {
+                                                          : frezQty)) {
                                                     ResponsiveSnackBar
-                                                        .showWarning(context,
-                                                            "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                        .showWarning(
+                                                            context,
+                                                            isMcx
+                                                                ? "Maximum Allowed Lots: ${frezQty ~/ lotSize}"
+                                                                : "Maximum Allowed Quantity $frezQty");
                                                   }
                                                   if (newValue != value) {
                                                     qtyCtrl.text = newValue;
@@ -2246,8 +2332,8 @@ class _ModifyPlaceOrderScreenState
                                                                       context,
                                                                       qtyCtrl.text
                                                                               .isEmpty
-                                                                          ? "Quantity can not be empty"
-                                                                          : "Price can not be empty");
+                                                                          ? "${widget.scripInfo.exch == 'MCX' ? 'Lot' : 'Quantity'} cannot be empty"
+                                                                          : "Price cannot be empty");
                                                                 } else if (qtyCtrl.text ==
                                                                         "0" ||
                                                                     priceCtrl.text ==
@@ -2256,8 +2342,8 @@ class _ModifyPlaceOrderScreenState
                                                                       context,
                                                                       qtyCtrl.text ==
                                                                               "0"
-                                                                          ? "Quantity can not be 0"
-                                                                          : "Price can not be 0");
+                                                                          ? "${widget.scripInfo.exch == 'MCX' ? 'Lot' : 'Quantity'} cannot be 0"
+                                                                          : "Price cannot be 0");
                                                                 } else if (_hasValidCircuitBreakerValues &&
                                                                     ((double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) < double.parse("${widget.scripInfo.lc}")) ||
                                                                     (double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) >
@@ -2968,6 +3054,20 @@ class _ModifyPlaceOrderScreenState
       placeorder = false;
       ResponsiveSnackBar.showWarning(
           context, "Quantity should be multiple of lot size $lotSize => $q");
+    }
+    if (placeorder && frezQty > lotSize) {
+      final bool isMcx = widget.scripInfo.exch == "MCX";
+      final int finalUnits = isMcx
+          ? int.parse(qtyCtrl.text) * lotSize
+          : int.parse(qtyCtrl.text);
+      if (finalUnits > frezQty) {
+        placeorder = false;
+        ResponsiveSnackBar.showWarning(
+            context,
+            isMcx
+                ? "Maximum Allowed Lots: ${frezQty ~/ lotSize}"
+                : "Maximum Allowed Quantity $frezQty");
+      }
     }
     if (placeorder) {
       // Get close notifier before async call

@@ -361,15 +361,25 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     return KeyEventResult.handled;
   }
 
-  /// Handles keyboard up/down arrow to increment/decrement qty by 1 (stocks only).
-  KeyEventResult _handleQtyArrowKey(KeyEvent event, TextEditingController ctrl) {
+  /// Handles keyboard up/down arrow on the qty field.
+  /// - Stocks: step by 1.
+  /// - F&O Qty mode (`isLotMode == false`): step by lot size, snap non-multiples.
+  /// - F&O Lot mode (`isLotMode == true`): step by 1 lot.
+  ///
+  /// `isLotMode` differs per call site:
+  ///   - main qty   → `!_isStock && !_isLotToQty`
+  ///   - GTT/OCO qty → `!_isStock && !_isGTTLotToQty`
+  KeyEventResult _handleQtyArrowKey(
+      KeyEvent event, TextEditingController ctrl, bool isLotMode) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
 
     final isUp = event.logicalKey == LogicalKeyboardKey.arrowUp;
     final isDown = event.logicalKey == LogicalKeyboardKey.arrowDown;
     if (!isUp && !isDown) return KeyEventResult.ignored;
 
-    final int step = _isStock ? 1 : (multiplayer > 0 ? multiplayer : 1);
+    final int step = (_isStock || isLotMode)
+        ? 1
+        : (multiplayer > 0 ? multiplayer : 1);
     final int current = int.tryParse(ctrl.text) ?? 0;
     final int snapped =
         current >= step ? ((current / step).floor()) * step : step;
@@ -396,6 +406,18 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       _debouncedMarginUpdate();
     });
     return KeyEventResult.handled;
+  }
+
+  /// Freeze-cap warning text. In Lot mode the cap is shown in lots
+  /// to match the field's display; otherwise the original Qty-mode text.
+  String _freezeCapMessage() {
+    final int frezQtyOrderSliceMaxLimit =
+        ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
+    if (!_isStock && !_isLotToQty && lotSize > 0) {
+      final int maxLots = (frezQtyOrderSliceMaxLimit * frezQty) ~/ lotSize;
+      return "Maximum Allowed Lots: $maxLots";
+    }
+    return "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}";
   }
 
   Map userOrderPreference = {};
@@ -2371,7 +2393,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   ),
                                                   const SizedBox(height: 10),
                                                   Focus(
-                                                    onKeyEvent: (node, event) => _handleQtyArrowKey(event, orderInput.qtyCtrl),
+                                                    onKeyEvent: (node, event) => _handleQtyArrowKey(event, orderInput.qtyCtrl, !_isStock && !_isGTTLotToQty),
                                                     child: SizedBox(
                                                       height: 40,
                                                       child: Semantics(
@@ -3149,7 +3171,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                     ),
                                                     const SizedBox(height: 10),
                                                     Focus(
-                                                      onKeyEvent: (node, event) => _handleQtyArrowKey(event, orderInput.ocoQtyCtrl),
+                                                      onKeyEvent: (node, event) => _handleQtyArrowKey(event, orderInput.ocoQtyCtrl, !_isStock && !_isGTTLotToQty),
                                                       child: SizedBox(
                                                         height: 40,
                                                         width: 200,
@@ -4307,7 +4329,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                       ]),
                                                   const SizedBox(height: 10),
                                                   Focus(
-                                                    onKeyEvent: (node, event) => _handleQtyArrowKey(event, qtyCtrl),
+                                                    onKeyEvent: (node, event) => _handleQtyArrowKey(event, qtyCtrl, !_isStock && !_isLotToQty),
                                                     child: SizedBox(
                                                     height: 40,
                                                     width: 200,
@@ -4396,6 +4418,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               "1";
                                                                         }
                                                                       }
+                                                                      qtyCtrl.selection = TextSelection.collapsed(offset: qtyCtrl.text.length);
                                                                       _debouncedMarginUpdate();
                                                                     });
                                                                   },
@@ -4479,9 +4502,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         } else {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
-                                                                              "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                              _freezeCapMessage());
                                                                         }
                                                                       }
+                                                                      qtyCtrl.selection = TextSelection.collapsed(offset: qtyCtrl.text.length);
                                                                       _debouncedMarginUpdate();
                                                                     });
                                                                   },
@@ -4550,12 +4574,16 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   hasNoFreezeLimit =
                                                                   frezQty <=
                                                                       lotSize;
+                                                              final int valueInUnits =
+                                                                  (!_isStock && !_isLotToQty)
+                                                                      ? number * lotSize
+                                                                      : number;
                                                               if (!hasNoFreezeLimit &&
-                                                                  number >
+                                                                  valueInUnits >
                                                                       frezQtyOrderSliceMaxLimit *
                                                                           frezQty) {
                                                                 _showDebouncedWarning(
-                                                                    "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                    _freezeCapMessage());
                                                               } else {
                                                                 _cancelPendingWarning();
                                                               }
@@ -6378,9 +6406,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         ? (_isQtyToAmount
                                                                             ? "Amount"
                                                                             : "Quantity")
-                                                                        : (_isLotToQty
-                                                                            ? "Quantity"
-                                                                            : "Lot");
+                                                                        : widget.scripInfo.exch == "MCX"
+                                                                            ? "Lot"
+                                                                            : (_isLotToQty
+                                                                                ? "Quantity"
+                                                                                : "Lot");
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
                                                                         getFinalQuantity(qtyCtrl.text).isEmpty
@@ -6393,9 +6423,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         ? (_isQtyToAmount
                                                                             ? "Amount"
                                                                             : "Quantity")
-                                                                        : (_isLotToQty
-                                                                            ? "Quantity"
-                                                                            : "Lot");
+                                                                        : widget.scripInfo.exch == "MCX"
+                                                                            ? "Lot"
+                                                                            : (_isLotToQty
+                                                                                ? "Quantity"
+                                                                                : "Lot");
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
                                                                         getFinalQuantity(qtyCtrl.text) == "0"
@@ -6409,7 +6441,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               frezQty) {
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
-                                                                        "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                        _freezeCapMessage());
                                                                   } else if ((priceType == "Limit" || priceType == "SL Limit") &&
                                                                       _hasValidCircuitBreakerValues &&
                                                                       ((SafeParse.toDouble(ordPrice) < SafeParse.toDouble(widget.scripInfo.lc)) ||
