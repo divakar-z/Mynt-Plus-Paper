@@ -49,9 +49,11 @@ class _CorporateActionsScreenWebState
   static const List<String> _headers = [
     'Company',
     'Exchange',
+    'Opens On',
     'Closes On',
     'Type',
     'Action',
+    'Status',
   ];
 
   @override
@@ -60,11 +62,17 @@ class _CorporateActionsScreenWebState
     _verticalScrollController = ScrollController();
     _horizontalScrollController = ScrollController();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       final lp = ref.read(ledgerProvider);
-      if (lp.cpactiondata == null && !lp.cpactionloader) {
-        lp.fetchcpactiondata(context);
-      }
+      // Always re-fetch on screen open — don't trust cached state. Riverpod's
+      // ChangeNotifierProvider survives logout/login, so without this a new
+      // user could see the previous user's holdings / corp-action data.
+      // Sequential awaits (holdings first → then corp-action) also avoid the
+      // parallel-fetch race where hodlingshavecheckfunction reads a still-
+      // null _holdingsAllData and stamps every row as "Not Eligible".
+      
+      await lp.fetchholdingsData(lp.today, context);
+      await lp.fetchcpactiondata(context);
     });
   }
 
@@ -150,9 +158,13 @@ class _CorporateActionsScreenWebState
                 .compareTo(_displayExchange(b.exchange));
             break;
           case 2:
-            cmp = (a.biddingEndDate ?? '').compareTo(b.biddingEndDate ?? '');
+            cmp = (a.biddingStartDate ?? '')
+                .compareTo(b.biddingStartDate ?? '');
             break;
           case 3:
+            cmp = (a.biddingEndDate ?? '').compareTo(b.biddingEndDate ?? '');
+            break;
+          case 4:
             cmp = _typeLabel(a.issueType).compareTo(_typeLabel(b.issueType));
             break;
         }
@@ -312,11 +324,67 @@ class _CorporateActionsScreenWebState
     return Align(
       alignment: Alignment.centerLeft,
       child: hasBidQty
-          ? Tooltip(
-              message: '${item.bidqty} qty bid',
-              child: button,
-            )
+          ? Tooltip(message: '${item.bidqty} qty bid', child: button)
           : button,
+    );
+  }
+
+  /// Renders the latest order status as a pill (or `—` if no order yet).
+  /// Same shape/size as the type badge so the table stays visually uniform.
+  Widget _statusCell(BuildContext context, CorporateAction item) {
+    final status = (item.orderstatus ?? '').trim();
+    final isPending = status == 'pending';
+    final isRejected = status == 'Rejected';
+
+    if (!isPending && !isRejected) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          '—',
+          style: MyntWebTextStyles.tableCell(
+            context,
+            darkColor: MyntColors.textSecondaryDark,
+            lightColor: MyntColors.textSecondary,
+          ),
+        ),
+      );
+    }
+
+    final color = isPending
+        ? resolveThemeColor(context,
+            dark: MyntColors.warningDark, light: MyntColors.warning)
+        : resolveThemeColor(context,
+            dark: MyntColors.lossDark, light: MyntColors.loss);
+
+    final label = isPending ? 'Pending' : 'Rejected';
+    final reason = (item.rejectionreason ?? '').trim();
+    final tooltipMsg = isRejected
+        ? (reason.isEmpty
+            ? 'Order was rejected by the exchange'
+            : 'Rejected: $reason')
+        : 'Order is pending';
+
+    final badge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label.toUpperCase(),
+        style: MyntWebTextStyles.para(
+          context,
+          color: color,
+          fontWeight: MyntFonts.medium,
+        ),
+        overflow: TextOverflow.ellipsis,
+        softWrap: false,
+      ),
+    );
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Tooltip(message: tooltipMsg, child: badge),
     );
   }
 
@@ -324,7 +392,6 @@ class _CorporateActionsScreenWebState
       LDProvider lp, bool isPending) async {
     final isOFS = _typeLabel(item.issueType) == 'OFS';
 
-   
     // Mobile parity: pending → cancel dialog directly.
     // For new orders: only OFS or eligible CA users can place an order.
     if (!isPending && !isOFS && item.eligibleornot != 'yes') {
@@ -711,10 +778,16 @@ class _CorporateActionsScreenWebState
           const double exchMin = 100;
           const double dateMin = 120;
           const double typeMin = 120;
-          const double actionMin = 140;
+          const double actionMin = 100;
+          const double statusMin = 120;
 
-          final totalMin =
-              companyMin + exchMin + dateMin + typeMin + actionMin;
+          final totalMin = companyMin +
+              exchMin +
+              dateMin + // Opens On
+              dateMin + // Closes On
+              typeMin +
+              actionMin +
+              statusMin;
           final extra =
               (constraints.maxWidth - totalMin).clamp(0.0, double.infinity);
 
@@ -722,7 +795,7 @@ class _CorporateActionsScreenWebState
           // then distribute the remainder equally across the other columns.
           final companyExtra =
               extra.clamp(0.0, companyPreferred - companyMin);
-          final perOther = ((extra - companyExtra) / 4)
+          final perOther = ((extra - companyExtra) / 6)
               .clamp(0.0, double.infinity);
 
           final companyW = companyMin + companyExtra;
@@ -730,13 +803,16 @@ class _CorporateActionsScreenWebState
           final dateW = dateMin + perOther;
           final typeW = typeMin + perOther;
           final actionW = actionMin + perOther;
+          final statusW = statusMin + perOther;
 
           final columnWidths = <int, shadcn.TableSize>{
             0: shadcn.FixedTableSize(companyW),
             1: shadcn.FixedTableSize(exchW),
-            2: shadcn.FixedTableSize(dateW),
-            3: shadcn.FixedTableSize(typeW),
-            4: shadcn.FixedTableSize(actionW),
+            2: shadcn.FixedTableSize(dateW), // Opens On
+            3: shadcn.FixedTableSize(dateW), // Closes On
+            4: shadcn.FixedTableSize(typeW),
+            5: shadcn.FixedTableSize(actionW),
+            6: shadcn.FixedTableSize(statusW),
           };
 
           return Column(
@@ -751,7 +827,9 @@ class _CorporateActionsScreenWebState
                       _headerCell(context, _headers[1], 1),
                       _headerCell(context, _headers[2], 2),
                       _headerCell(context, _headers[3], 3),
-                      _headerCell(context, _headers[4], 4, sortable: false),
+                      _headerCell(context, _headers[4], 4),
+                      _headerCell(context, _headers[5], 5, sortable: false),
+                      _headerCell(context, _headers[6], 6, sortable: false),
                     ],
                   ),
                 ],
@@ -817,6 +895,18 @@ class _CorporateActionsScreenWebState
               _bodyCell(
                 context,
                 Text(
+                  item.biddingStartDate?.isNotEmpty == true
+                      ? item.biddingStartDate!
+                      : '-',
+                  style: _bodyStyle(context,
+                      color: resolveThemeColor(context,
+                          dark: MyntColors.textSecondaryDark,
+                          light: MyntColors.textSecondary)),
+                ),
+              ),
+              _bodyCell(
+                context,
+                Text(
                   item.biddingEndDate?.isNotEmpty == true
                       ? item.biddingEndDate!
                       : '-',
@@ -828,6 +918,7 @@ class _CorporateActionsScreenWebState
               ),
               _bodyCell(context, _typeBadge(context, item.issueType)),
               _bodyCell(context, _orderActionCell(context, item, lp)),
+              _bodyCell(context, _statusCell(context, item)),
             ],
           ),
         ],
