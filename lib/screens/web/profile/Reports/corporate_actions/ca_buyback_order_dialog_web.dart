@@ -526,7 +526,14 @@ class _CABuybackOrderDialogWebState
               lightColor: MyntColors.textPrimary,
             ),
           ),
-          if (lp.captionforofs.isNotEmpty &&
+          // Only surface true balance/limit errors here. The provider also
+          // sets "Required amount for bid…" and "Enter bid quantity and
+          // price" as captions, but those are redundant — the big ₹ amount
+          // above already communicates the bid value, and field-level errors
+          // already cover invalid qty/price. Painting either of those in red
+          // is just noise.
+          if ((lp.captionforofs.contains('Insufficient') ||
+                  lp.captionforofs.contains('exceeds')) &&
               lp.requiredamountforofs.isNotEmpty &&
               lp.requiredamountforofs != '0') ...[
             const SizedBox(height: 4),
