@@ -728,13 +728,19 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     for (var holding in holdings) {
       if (holding.exchTsym != null && holding.exchTsym!.isNotEmpty) {
         final exchTsym = holding.exchTsym![0];
-        final pnl = double.tryParse(exchTsym.profitNloss ?? '0') ?? 0.0;
-        final rpnl = double.tryParse(holding.rpnl ?? '0') ?? 0.0;
+        // profitNloss is set by PortfolioProvider._updateDerivedValues as
+        // (currentValue - invested) + rpnl, so it already contains the
+        // realized component. Fall back to rpnl only when profitNloss
+        // hasn't been written yet (pre-first-WS-tick window).
+        final pnlStr = exchTsym.profitNloss;
+        final pnl = pnlStr != null
+            ? (double.tryParse(pnlStr) ?? 0.0)
+            : (double.tryParse(holding.rpnl ?? '0') ?? 0.0);
         final oneDayChgVal = double.tryParse(exchTsym.oneDayChg ?? '0') ?? 0.0;
         final investedVal = double.tryParse(holding.invested ?? '0') ?? 0.0;
         final currentVal = double.tryParse(holding.currentValue ?? '0') ?? 0.0;
 
-        totalPnlHolding += pnl + rpnl;
+        totalPnlHolding += pnl;
         oneDayChng += oneDayChgVal;
         invest += investedVal;
         totalCurrentVal += currentVal;

@@ -305,9 +305,6 @@ class FundProvider extends DefaultChangeNotifier {
   Future fetchFunds(BuildContext context) async {
     try {
       _fundDetailModel = await api.getFunds();
-      // TEMP: force non-zero Day Cash for testing the duplicate-rows fix.
-      // Remove before commit.
-      _fundDetailModel?.daycash = "-100.00";
 
       if (_fundDetailModel!.emsg == "Session Expired :  Invalid Session Key") {
         ref.read(authProvider).ifSessionExpired(context);

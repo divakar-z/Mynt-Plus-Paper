@@ -25,9 +25,14 @@ class CPActionModule {
 class CorporateAction {
   String? asbanonasba;
   String? orderstatus;
+  String? rejectionreason;
   String? eligibleornot;
   String? bidqty;
   String? approvedqty;
+  // Raw Noren `npoadqty` for the matching holding — drives Gate 2's e-DIS
+  // check (same condition as the Holdings tab's e-DIS button: if this is
+  // not literal "null", the user has shares needing e-DIS attention).
+  String? npoadqty;
   String? appno;
   String? orderprice;
   String? havingqty;

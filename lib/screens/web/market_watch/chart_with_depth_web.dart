@@ -1125,9 +1125,17 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
           });
         },
         onChartRequested: () {
-          if (_tabController != null && _tabController!.index != 1) {
-            _tabController!.animateTo(1);
-          }
+          // Defer one frame: a strike change can trigger _setupTabControllerIfNeeded
+          // to dispose and recreate _tabController (e.g. underlying with fundamentals
+          // -> option without fundamentals: 4 tabs -> 3 tabs). Switching synchronously
+          // would target the old controller and the recreated one would land back on
+          // its initialIndex.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_tabController != null && _tabController!.index != 1) {
+              _tabController!.animateTo(1);
+            }
+          });
         },
       );
     }
