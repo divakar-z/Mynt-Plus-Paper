@@ -176,6 +176,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     setState(() {
       _startDate = DateTime(startYear, 4, 1);
       _endDate = DateTime(startYear + 1, 3, 31);
+      _leftMonth = DateTime(startYear, 4);
+      _rightMonth = DateTime(startYear + 1, 3);
       _showDatePickerPopup = false;
       _expandedDates.clear();
     });
@@ -238,11 +240,13 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
         child: Column(
           children: [
             _buildHeader(context, theme, ledgerprovider),
+            _buildSegmentTabs(context, ledgerprovider),
+            const SizedBox(height: 12),
             Expanded(
               child: Stack(
                 children: [
                   isLoading
-                      ? Center(child: MyntLoader.simple())
+                      ? Center(child: MyntLoader.branded())
                       : ledgerprovider.calenderpnlAllData == null
                           ? const Center(
                             child: NoDataFound(secondaryEnabled: false))
@@ -407,9 +411,6 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Segment tabs
-          _buildSegmentTabs(context, ledgerprovider),
-          const SizedBox(height: 12),
           // Summary cards + share card
           _buildSummaryCards(context, data, netValue, ledgerprovider),
           const SizedBox(height: 16),
@@ -1596,6 +1597,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     final now = DateTime.now();
     final currentFYStart = now.month < 4 ? now.year - 1 : now.year;
 
+    // Active FY window — restricts which months/days are reachable
+    final fyStart = _getFinancialYearStart(_startDate);
+    final fyEnd = _getFinancialYearEnd(_startDate);
+    final fyStartMonth = DateTime(fyStart.year, fyStart.month);
+    final fyEndMonth = DateTime(fyEnd.year, fyEnd.month);
+
     return Positioned(
       top: 0,
       left: 0,
@@ -1626,19 +1633,24 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                       textColor,
                       secondaryTextColor,
                       onPrev: () {
+                        final newLeft = DateTime(
+                            _leftMonth.year, _leftMonth.month - 1);
+                        if (newLeft.isBefore(fyStartMonth)) return;
                         setState(() {
-                          _leftMonth = DateTime(
-                              _leftMonth.year, _leftMonth.month - 1);
+                          _leftMonth = newLeft;
                           _rightMonth = DateTime(
                               _leftMonth.year, _leftMonth.month + 1);
                         });
                       },
                       onNext: () {
+                        final newLeft = DateTime(
+                            _leftMonth.year, _leftMonth.month + 1);
+                        final newRight = DateTime(
+                            newLeft.year, newLeft.month + 1);
+                        if (newRight.isAfter(fyEndMonth)) return;
                         setState(() {
-                          _leftMonth = DateTime(
-                              _leftMonth.year, _leftMonth.month + 1);
-                          _rightMonth = DateTime(
-                              _leftMonth.year, _leftMonth.month + 1);
+                          _leftMonth = newLeft;
+                          _rightMonth = newRight;
                         });
                       },
                     ),
@@ -1650,17 +1662,22 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                       textColor,
                       secondaryTextColor,
                       onPrev: () {
+                        final newRight = DateTime(
+                            _rightMonth.year, _rightMonth.month - 1);
+                        final newLeft = DateTime(
+                            newRight.year, newRight.month - 1);
+                        if (newLeft.isBefore(fyStartMonth)) return;
                         setState(() {
-                          _rightMonth = DateTime(
-                              _rightMonth.year, _rightMonth.month - 1);
-                          _leftMonth = DateTime(
-                              _rightMonth.year, _rightMonth.month - 1);
+                          _rightMonth = newRight;
+                          _leftMonth = newLeft;
                         });
                       },
                       onNext: () {
+                        final newRight = DateTime(
+                            _rightMonth.year, _rightMonth.month + 1);
+                        if (newRight.isAfter(fyEndMonth)) return;
                         setState(() {
-                          _rightMonth = DateTime(
-                              _rightMonth.year, _rightMonth.month + 1);
+                          _rightMonth = newRight;
                           _leftMonth = DateTime(
                               _rightMonth.year, _rightMonth.month - 1);
                         });
@@ -1675,12 +1692,22 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                   runSpacing: 8,
                   children: [
                     _buildPresetChip(
-                        'Current FY', () => _applyFYPreset(currentFYStart)),
+                      'Current FY',
+                      () => _applyFYPreset(currentFYStart),
+                      isActive: fyStart.year == currentFYStart,
+                    ),
                     _buildPresetChip(
-                        'Last FY', () => _applyFYPreset(currentFYStart - 1)),
+                      'Last FY',
+                      () => _applyFYPreset(currentFYStart - 1),
+                      isActive: fyStart.year == currentFYStart - 1,
+                    ),
                     // Year presets going back
                     for (int y = currentFYStart - 2; y >= currentFYStart - 4; y--)
-                      _buildPresetChip('$y', () => _applyFYPreset(y)),
+                      _buildPresetChip(
+                        '$y',
+                        () => _applyFYPreset(y),
+                        isActive: fyStart.year == y,
+                      ),
                   ],
                 ),
                 if (_dateValidationMsg.isNotEmpty) ...[
@@ -1700,7 +1727,15 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
-  Widget _buildPresetChip(String label, VoidCallback onTap) {
+  Widget _buildPresetChip(String label, VoidCallback onTap,
+      {bool isActive = false}) {
+    final primaryColor = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final borderColor = isActive
+        ? primaryColor
+        : resolveThemeColor(context,
+            dark: MyntColors.cardBorderDark,
+            light: MyntColors.cardBorder);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
@@ -1708,18 +1743,18 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: resolveThemeColor(context,
-                dark: MyntColors.cardBorderDark,
-                light: MyntColors.cardBorder),
-          ),
+          color: isActive ? primaryColor.withValues(alpha: 0.1) : null,
+          border: Border.all(color: borderColor),
         ),
         child: Text(
           label,
           style: MyntWebTextStyles.para(context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textPrimary,
-              fontWeight: FontWeight.w500),
+              darkColor: isActive
+                  ? MyntColors.primaryDark
+                  : MyntColors.textPrimaryDark,
+              lightColor:
+                  isActive ? MyntColors.primary : MyntColors.textPrimary,
+              fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -1739,6 +1774,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     final firstWeekday = DateTime(month.year, month.month, 1).weekday % 7;
     final today = DateTime.now();
     final dayHeaders = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    final fyStart = _getFinancialYearStart(_startDate);
+    final fyEnd = _getFinancialYearEnd(_startDate);
 
     return SizedBox(
       width: 260,
@@ -1810,6 +1847,9 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                     date.month == today.month &&
                     date.day == today.day;
                 final isFuture = date.isAfter(today);
+                final isOutsideFY =
+                    date.isBefore(fyStart) || date.isAfter(fyEnd);
+                final isDisabled = isFuture || isOutsideFY;
                 final isStart = _tempStartDate != null &&
                     _isSameDay(date, _tempStartDate!);
                 final isEnd = _tempEndDate != null &&
@@ -1831,13 +1871,13 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                   bgColor = primaryColor.withValues(alpha: 0.1);
                 }
 
-                if (isFuture) {
+                if (isDisabled) {
                   dayTextColor =
                       secondaryTextColor.withValues(alpha: 0.4);
                 }
 
                 return GestureDetector(
-                  onTap: isFuture ? null : () => _onDateTap(date),
+                  onTap: isDisabled ? null : () => _onDateTap(date),
                   child: Container(
                     width: 34,
                     height: 34,

@@ -1704,9 +1704,17 @@ changeHoldingsTabIndex(int index) {
                   mktProt: '',
                   channel: defaultTargetPlatform == TargetPlatform.android
                       ? '${ref.read(authProvider).deviceInfo["brand"]}'
-                      : "${ref.read(authProvider).deviceInfo["model"]}");
-              _placeOrderModel = await api.getPlaceOrder(
-                  placeOrderInput, ref.read(orderProvider).ip);
+                      : "${ref.read(authProvider).deviceInfo["model"]}",
+                      frzqty: ((int.parse(element.frzqty.toString()) /
+                              int.parse(element.ls.toString()))
+                          .floor() *
+                      int.parse(element.ls.toString())));
+               await fetchExitPosition(context, placeOrderInput, true, true);
+                      
+              // _placeOrderModel = await api.getPlaceOrder(
+              //     placeOrderInput, ref.read(orderProvider).ip);
+
+              
 
               if (_placeOrderModel!.emsg ==
                       "Session Expired :  Invalid Session Key" &&
