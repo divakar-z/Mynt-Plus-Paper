@@ -245,6 +245,41 @@ class WebAuthApi {
     );
   }
 
+  /// Invalidate QR Session API
+  ///
+  /// Tells the backend to mark the given QR session UUID as abandoned so
+  /// that a subsequent mobile-side confirmation for the same UUID is
+  /// rejected. Called whenever the user moves away from an active QR
+  /// session — clicks Scan QR again (new UUID), clicks Reload icon, or
+  /// the app boots and finds a stale UUID left over from a previous
+  /// session (e.g., browser crash where beforeunload didn't fire).
+  ///
+  /// Best-effort: failures are swallowed silently because the next entry
+  /// (or backend's own session timeout) will eventually clean up.
+  static Future<void> invalidateQrSession({
+    required String uniqueId,
+  }) async {
+    try {
+      // Backend expects only { unique_id } in the body.
+      // Response shape: { "detail": "QR invalid" } on success.
+      // Endpoint URL is repointed to the local dev server during integration
+      // testing — update to prod URL before release.
+      final uri = Uri.parse('https://ws.mynt.in/login/QRInvalidate');
+
+      final data = {
+        'unique_id': uniqueId,
+      };
+
+      await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+    } catch (e) {
+      // Swallow — invalidate is best-effort, retried on next entry.
+    }
+  }
+
   /// QR Login API - For QR code based login
   static Future<MobileOtpModel?> qrLogin({
     required String uniqueId,
