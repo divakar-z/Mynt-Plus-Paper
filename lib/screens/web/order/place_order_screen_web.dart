@@ -408,8 +408,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     return KeyEventResult.handled;
   }
 
-  /// Freeze-cap warning text. In Lot mode the cap is shown in lots
-  /// to match the field's display; otherwise the original Qty-mode text.
+  /// Freeze-cap warning text for regular place order (slicing allowed).
+  /// In Lot mode the cap is shown in lots to match the field's display.
   String _freezeCapMessage() {
     final int frezQtyOrderSliceMaxLimit =
         ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
@@ -418,6 +418,38 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       return "Maximum Allowed Lots: $maxLots";
     }
     return "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}";
+  }
+
+  /// Freeze-cap warning text for GTT (no slicing — cap = single freeze).
+  /// Note: for MCX, `frezQty` is stored in LOTS (see initState formula);
+  /// for everything else it's in UNITS. The message branches reflect that.
+  String _gttFreezeCapMessage() {
+    if (widget.scripInfo.exch == "MCX") {
+      return "Maximum Allowed Lots: $frezQty";
+    }
+    if (!_isStock && !_isGTTLotToQty && lotSize > 0) {
+      return "Maximum Allowed Lots: ${frezQty ~/ lotSize}";
+    }
+    return "Maximum Allowed Quantity $frezQty";
+  }
+
+  /// GTT freeze cap converted to API units. Returns -1 when the scrip has
+  /// no real freeze limit (so callers can skip the check).
+  int _gttCapInUnits() {
+    if (widget.scripInfo.exch == "MCX") {
+      if (frezQty <= 1) return -1; // MCX frezQty is lots; <=1 means no real cap
+      return frezQty * lotSize;
+    }
+    if (frezQty <= lotSize) return -1;
+    return frezQty;
+  }
+
+  /// Whether the given GTT field value (after MCX lots→units conversion via
+  /// getGTTFinalQuantity) exceeds the freeze cap.
+  bool _gttExceedsCap(String value) {
+    final int cap = _gttCapInUnits();
+    if (cap <= 0) return false;
+    return SafeParse.toInt(getGTTFinalQuantity(value).trim()) > cap;
   }
 
   Map userOrderPreference = {};
@@ -2340,26 +2372,35 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         if (_isStock) {
                                                           _isQtyToAmount = !_isQtyToAmount;
                                                           if (_isQtyToAmount) {
-                                                            // Seed with live LTP for Amount mode
+                                                            // Seed both fields with live LTP for Amount mode
                                                             double seedLtp = SafeParse.toDouble(widget.orderArg.ltp);
                                                             final wsD = ref.read(websocketProvider).socketDatas[widget.scripInfo.token];
                                                             if (wsD != null) {
                                                               final wl = SafeParse.toDouble(wsD['lp']);
                                                               if (wl > 0) seedLtp = wl;
                                                             }
-                                                            orderInput.qtyCtrl.text = seedLtp.ceil().toString();
+                                                            final String seedText = seedLtp.ceil().toString();
+                                                            orderInput.qtyCtrl.text = seedText;
+                                                            orderInput.ocoQtyCtrl.text = seedText;
                                                           } else {
                                                             orderInput.qtyCtrl.text = "1";
+                                                            orderInput.ocoQtyCtrl.text = "1";
                                                           }
                                                         } else {
                                                           // NFO/BFO: Toggle between Lot and Qty
                                                           _isGTTLotToQty = !_isGTTLotToQty;
                                                           if (_isGTTLotToQty) {
-                                                            int currentLot = int.tryParse(orderInput.qtyCtrl.text) ?? 1;
-                                                            orderInput.qtyCtrl.text = (currentLot * lotSize).toString();
+                                                            // Lot → Qty: multiply both fields by lotSize
+                                                            int currentLotMain = int.tryParse(orderInput.qtyCtrl.text) ?? 1;
+                                                            orderInput.qtyCtrl.text = (currentLotMain * lotSize).toString();
+                                                            int currentLotOco = int.tryParse(orderInput.ocoQtyCtrl.text) ?? 1;
+                                                            orderInput.ocoQtyCtrl.text = (currentLotOco * lotSize).toString();
                                                           } else {
-                                                            int currentQty = int.tryParse(orderInput.qtyCtrl.text) ?? lotSize;
-                                                            orderInput.qtyCtrl.text = ((currentQty / lotSize).round()).toString();
+                                                            // Qty → Lot: divide both fields by lotSize
+                                                            int currentQtyMain = int.tryParse(orderInput.qtyCtrl.text) ?? lotSize;
+                                                            orderInput.qtyCtrl.text = ((currentQtyMain / lotSize).round()).toString();
+                                                            int currentQtyOco = int.tryParse(orderInput.ocoQtyCtrl.text) ?? lotSize;
+                                                            orderInput.ocoQtyCtrl.text = ((currentQtyOco / lotSize).round()).toString();
                                                           }
                                                         }
                                                       });
@@ -2503,7 +2544,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                               if (value.isEmpty || value == "0") {
                                                                 String fieldName = (_isStock)
                                                                   ? (_isQtyToAmount ? 'Amount' : 'Quantity')
-                                                                  : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                  : widget.scripInfo.exch == "MCX"
+                                                                      ? 'Lot'
+                                                                      : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                 _showDebouncedWarning(
                                                                     "$fieldName cannot be ${value == "0" ? '0' : 'empty'}");
                                                               } else {
@@ -3119,25 +3162,35 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                           if (_isStock) {
                                                             _isQtyToAmount = !_isQtyToAmount;
                                                             if (_isQtyToAmount) {
+                                                              // Seed both fields with live LTP for Amount mode
                                                               double seedLtp = SafeParse.toDouble(widget.orderArg.ltp);
                                                               final wsD = ref.read(websocketProvider).socketDatas[widget.scripInfo.token];
                                                               if (wsD != null) {
                                                                 final wl = SafeParse.toDouble(wsD['lp']);
                                                                 if (wl > 0) seedLtp = wl;
                                                               }
-                                                              orderInput.ocoQtyCtrl.text = seedLtp.ceil().toString();
+                                                              final String seedText = seedLtp.ceil().toString();
+                                                              orderInput.qtyCtrl.text = seedText;
+                                                              orderInput.ocoQtyCtrl.text = seedText;
                                                             } else {
+                                                              orderInput.qtyCtrl.text = "1";
                                                               orderInput.ocoQtyCtrl.text = "1";
                                                             }
                                                           } else {
                                                             // NFO/BFO: Toggle between Lot and Qty
                                                             _isGTTLotToQty = !_isGTTLotToQty;
                                                             if (_isGTTLotToQty) {
-                                                              int currentLot = int.tryParse(orderInput.ocoQtyCtrl.text) ?? 1;
-                                                              orderInput.ocoQtyCtrl.text = (currentLot * lotSize).toString();
+                                                              // Lot → Qty: multiply both fields by lotSize
+                                                              int currentLotMain = int.tryParse(orderInput.qtyCtrl.text) ?? 1;
+                                                              orderInput.qtyCtrl.text = (currentLotMain * lotSize).toString();
+                                                              int currentLotOco = int.tryParse(orderInput.ocoQtyCtrl.text) ?? 1;
+                                                              orderInput.ocoQtyCtrl.text = (currentLotOco * lotSize).toString();
                                                             } else {
-                                                              int currentQty = int.tryParse(orderInput.ocoQtyCtrl.text) ?? lotSize;
-                                                              orderInput.ocoQtyCtrl.text = ((currentQty / lotSize).round()).toString();
+                                                              // Qty → Lot: divide both fields by lotSize
+                                                              int currentQtyMain = int.tryParse(orderInput.qtyCtrl.text) ?? lotSize;
+                                                              orderInput.qtyCtrl.text = ((currentQtyMain / lotSize).round()).toString();
+                                                              int currentQtyOco = int.tryParse(orderInput.ocoQtyCtrl.text) ?? lotSize;
+                                                              orderInput.ocoQtyCtrl.text = ((currentQtyOco / lotSize).round()).toString();
                                                             }
                                                           }
                                                         });
@@ -3287,7 +3340,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 if (value.isEmpty || value == "0") {
                                                                   String fieldName = (_isStock)
                                                                     ? (_isQtyToAmount ? 'Amount' : 'Quantity')
-                                                                    : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                    : widget.scripInfo.exch == "MCX"
+                                                                        ? 'Lot'
+                                                                        : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                   _showDebouncedWarning(
                                                                       "OCO $fieldName cannot be ${value == "0" ? '0' : 'empty'}");
                                                                 } else {
@@ -6006,6 +6061,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             : "Quantity cannot be 0");
                                                                     return;
                                                                   }
+                                                                  // Freeze qty cap guard — GTT has no slicing, so block any qty
+                                                                  // whose final units exceed single freeze qty.
+                                                                  if (_gttExceedsCap(orderInput.qtyCtrl.text)) {
+                                                                    ResponsiveSnackBar.showWarning(
+                                                                        context, _gttFreezeCapMessage());
+                                                                    return;
+                                                                  }
                                                                   if (orderInput.disableGTTCond) {
                                                                     final computedOcoQty = SafeParse.toDouble(
                                                                         getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
@@ -6016,6 +6078,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           _isStock && _isQtyToAmount
                                                                               ? "Minimum Allowed Amount should be greater than ${widget.orderArg.ltp}"
                                                                               : "Quantity cannot be 0");
+                                                                      return;
+                                                                    }
+                                                                    // OCO leg freeze qty cap guard (no slicing in GTT)
+                                                                    if (_gttExceedsCap(orderInput.ocoQtyCtrl.text)) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context, _gttFreezeCapMessage());
                                                                       return;
                                                                     }
                                                                   }
@@ -6137,16 +6205,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .qtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be empty");
                                                                       } else if (SafeParse.toDouble(orderInput.qtyCtrl.text) <=
                                                                           0) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be 0");
+                                                                      } else if (_gttExceedsCap(orderInput.qtyCtrl.text)) {
+                                                                        ResponsiveSnackBar.showWarning(
+                                                                            context,
+                                                                            _gttFreezeCapMessage());
                                                                       } else if (orderInput
                                                                           .priceCtrl
                                                                           .text
@@ -6178,7 +6250,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .ocoQtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be empty");
@@ -6186,10 +6258,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               .ocoQtyCtrl
                                                                               .text) <=
                                                                           0) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be 0");
+                                                                      } else if (_gttExceedsCap(orderInput.ocoQtyCtrl.text)) {
+                                                                        ResponsiveSnackBar.showWarning(
+                                                                            context,
+                                                                            _gttFreezeCapMessage());
                                                                       } else if (orderInput
                                                                           .ocoPriceCtrl
                                                                           .text
@@ -6306,16 +6382,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .qtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be empty");
                                                                       } else if (SafeParse.toDouble(orderInput.qtyCtrl.text) <=
                                                                           0) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be 0");
+                                                                      } else if (_gttExceedsCap(orderInput.qtyCtrl.text)) {
+                                                                        ResponsiveSnackBar.showWarning(
+                                                                            context,
+                                                                            _gttFreezeCapMessage());
                                                                       } else if (orderInput
                                                                           .priceCtrl
                                                                           .text
@@ -6346,7 +6426,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .ocoQtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be empty");
@@ -6354,10 +6434,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               .ocoQtyCtrl
                                                                               .text) <=
                                                                           0) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be 0");
+                                                                      } else if (_gttExceedsCap(orderInput.ocoQtyCtrl.text)) {
+                                                                        ResponsiveSnackBar.showWarning(
+                                                                            context,
+                                                                            _gttFreezeCapMessage());
                                                                       } else if (orderInput
                                                                           .ocoPriceCtrl
                                                                           .text

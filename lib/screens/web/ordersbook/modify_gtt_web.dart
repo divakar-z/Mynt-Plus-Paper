@@ -145,6 +145,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
   String product = "I";
   int lotSize = 0;
   int multiplayer = 0;
+  int frezQty = 0;
   String price = "0.00";
   bool _GTTPriceTypeIsMarket = false;
   bool _GTTOCOPriceTypeIsMarket = false;
@@ -167,6 +168,25 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
       return (lotCount * lotSize).toString();
     }
     return value;
+  }
+
+  /// Returns true if the field value (after MCX lots→units conversion) exceeds
+  /// the freeze qty cap. GTT has no slicing, so cap = single frezQty.
+  bool _exceedsFreezeCap(String value) {
+    if (frezQty <= lotSize) return false; // no real freeze limit for this scrip
+    final int parsed = int.tryParse(value) ?? 0;
+    final int finalUnits =
+        widget.gttOrderBook.exch == "MCX" ? parsed * lotSize : parsed;
+    return finalUnits > frezQty;
+  }
+
+  /// Freeze-cap warning text. MCX shows lots to match field display;
+  /// everything else shows qty (since modify GTT field stores units).
+  String _gttFreezeCapMessage() {
+    if (widget.gttOrderBook.exch == "MCX" && lotSize > 0) {
+      return "Maximum Allowed Lots: ${frezQty ~/ lotSize}";
+    }
+    return "Maximum Allowed Quantity $frezQty";
   }
 
   bool get _isStockExch =>
@@ -204,7 +224,12 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
       } else if (current != snapped) {
         ctrl.text = snapped.toString();
       } else {
-        ctrl.text = (current + step).toString();
+        final String nextValue = (current + step).toString();
+        if (_exceedsFreezeCap(nextValue)) {
+          showResponsiveWarningMessage(context, _gttFreezeCapMessage());
+        } else {
+          ctrl.text = nextValue;
+        }
       }
     });
   }
@@ -267,6 +292,9 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
               ? widget.scripInfo.prcqqty
               : widget.gttOrderBook.ls)
           .toString());
+
+      final int sfq = int.tryParse(widget.scripInfo.frzqty?.toString() ?? '1') ?? 1;
+      frezQty = sfq > 1 ? (sfq / lotSize).floor() * lotSize : lotSize;
 
       product = "I";
       
@@ -616,7 +644,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                 );
               }
             },
-            placeholder: "${widget.gttOrderBook.ltp}",
+            placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
           placeholderStyle: WebTextStyles.formInput(
                                 isDarkTheme: theme.isDarkMode,
                                 color: theme.isDarkMode
@@ -651,7 +679,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                "Qty",
+                widget.scripInfo.exch == "MCX" ? "Lot" : "Qty",
                 style: WebTextStyles.formLabel(
                   isDarkTheme: theme.isDarkMode,
                   color: theme.isDarkMode ? MyntColors.textPrimaryDark : MyntColors.textPrimary,
@@ -710,6 +738,10 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                         orderInput.qtyCtrl.selection = TextSelection.fromPosition(
                           TextPosition(offset: newValue.length),
                         );
+                      }
+                      if (_exceedsFreezeCap(newValue)) {
+                        showResponsiveWarningMessage(
+                            context, _gttFreezeCapMessage());
                       }
                     }
                   },
@@ -861,7 +893,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                 );
               }
             },
-            placeholder: "${widget.gttOrderBook.ltp}",
+            placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
            placeholderStyle: WebTextStyles.formInput(
                                 isDarkTheme: theme.isDarkMode,
                                 color: theme.isDarkMode
@@ -896,7 +928,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                "Qty",
+                widget.scripInfo.exch == "MCX" ? "Lot" : "Qty",
                 style: WebTextStyles.formLabel(
                   isDarkTheme: theme.isDarkMode,
                   color: theme.isDarkMode ? MyntColors.textPrimaryDark : MyntColors.textPrimary,
@@ -955,6 +987,10 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                         orderInput.ocoQtyCtrl.selection = TextSelection.fromPosition(
                           TextPosition(offset: newValue.length),
                         );
+                      }
+                      if (_exceedsFreezeCap(newValue)) {
+                        showResponsiveWarningMessage(
+                            context, _gttFreezeCapMessage());
                       }
                     }
                   },
@@ -1129,6 +1165,19 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                     ref.read(orderProvider).loading
                     ? null
                     : () async {
+                        // Freeze qty cap guard — GTT has no slicing, so block any
+                        // qty whose final units exceed single freeze qty (frezQty).
+                        if (_exceedsFreezeCap(orderInput.qtyCtrl.text)) {
+                          showResponsiveWarningMessage(
+                              context, _gttFreezeCapMessage());
+                          return;
+                        }
+                        if (orderInput.disableGTTCond &&
+                            _exceedsFreezeCap(orderInput.ocoQtyCtrl.text)) {
+                          showResponsiveWarningMessage(
+                              context, _gttFreezeCapMessage());
+                          return;
+                        }
                         if (orderInput.disableGTTCond) {
                           if ((orderInput.val1Ctrl.text.isNotEmpty &&
                                   orderInput.val2Ctrl.text.isNotEmpty &&
