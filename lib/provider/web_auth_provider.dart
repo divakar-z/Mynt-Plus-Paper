@@ -551,9 +551,25 @@ class WebAuthProvider extends ChangeNotifier {
     // Stop any existing poll
     stopQrLogin();
 
+    // Invalidate any previously stored UUID before generating a new one.
+    // Tells the backend to mark the old QR session as abandoned so a
+    // mobile-side confirmation of it gets rejected — closes the race
+    // where mobile holds an unconfirmed scan and the user re-enters or
+    // refreshes the QR screen on web.
+    final oldUuid = pref.pendingQrUuid;
+    if (oldUuid != null && oldUuid.isNotEmpty) {
+      // Fire-and-forget — don't block the new QR fetch.
+      WebAuthApi.invalidateQrSession(uniqueId: oldUuid);
+    }
+
     // Fresh UUID per entry so each visit shows a newly generated QR and the
     // poll endpoint tracks a distinct session (no stale state across re-entries).
     _deviceUuid = uuid.v4();
+
+    // Persist the new UUID so subsequent triggers (in-app reload, browser
+    // refresh via beforeunload, crash recovery on next app boot) can find
+    // it and invalidate it server-side.
+    pref.setPendingQrUuid(_deviceUuid);
 
     // Construct QR Image URL
     // URL: {BASE_URL}/get_login_qr?unique_id={UUID}&source=WEB
@@ -570,6 +586,21 @@ class WebAuthProvider extends ChangeNotifier {
         }
       });
     });
+  }
+
+  /// Defensive cleanup for stale QR sessions left over from previous app
+  /// runs — e.g., browser crash, OS kill, or any path where the normal
+  /// beforeunload-based invalidate didn't fire. Called once when the
+  /// login screen mounts; safe to invoke even when no stale UUID exists.
+  void cleanupStaleQrSession() {
+    final staleUuid = pref.pendingQrUuid;
+    if (staleUuid != null && staleUuid.isNotEmpty) {
+      WebAuthApi.invalidateQrSession(uniqueId: staleUuid);
+      // Note: do NOT clear localStorage here. If user immediately enters
+      // QR again, startQrLogin will harmlessly attempt to invalidate the
+      // same UUID (idempotent on backend) and then overwrite with a new
+      // one. The clear happens only on browser refresh via beforeunload.
+    }
   }
   
   /// Stop QR Login Process

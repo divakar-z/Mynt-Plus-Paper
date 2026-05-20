@@ -884,7 +884,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Choose your Password',
+            'Change Your Password',
             style: MyntWebTextStyles.title(context,
                 fontWeight: MyntFonts.semiBold,
                 darkColor: MyntColors.textPrimaryDark,
