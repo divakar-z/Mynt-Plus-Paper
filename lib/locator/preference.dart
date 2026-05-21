@@ -14,6 +14,20 @@ class Preferences {
   Future clearClientSession() async {
     await _prefInstance?.remove(_clientSession);
   }
+
+  // QR session invalidation — stores the device UUID of the currently active
+  // QR login session so we can tell the backend to invalidate it when the
+  // user refreshes the browser, closes the tab, or re-enters the QR screen
+  // (which generates a new UUID). Prevents the race where mobile confirms
+  // an orphaned QR session.
+  Future setPendingQrUuid(String uuid) async =>
+      await _prefInstance?.setString(_pendingQrUuid, uuid);
+
+  String? get pendingQrUuid => _prefInstance?.getString(_pendingQrUuid);
+
+  Future clearPendingQrUuid() async =>
+      await _prefInstance?.remove(_pendingQrUuid);
+
   // setters
 
   Future setTheme(bool theme) async {
@@ -540,6 +554,9 @@ const String _deviceName = 'deviceName';
 const String _imei = 'imei';
 
 const String _ismobileLogin = 'ismobileLogin';
+
+// QR session invalidation key — see setPendingQrUuid above.
+const String _pendingQrUuid = 'pendingQrUuid';
 
 const String _hideLoginOptBtn = 'hideLoginOptBtn';
 

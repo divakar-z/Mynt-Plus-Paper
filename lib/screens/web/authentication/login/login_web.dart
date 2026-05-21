@@ -27,6 +27,16 @@ import '../../../../utils/no_emoji_inputformatter.dart';
 import '../../../../utils/responsive_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:html' as html;
+import 'dart:js_interop';
+
+// JS interop binding to window.fetch — used by the beforeunload handler to
+// fire a keepalive POST that survives page unload (replacement for the older
+// sendBeacon approach, which forced credentials mode 'include' and tripped
+// the backend's wildcard CORS config).
+@JS('fetch')
+external JSPromise<JSAny?> _jsFetch(JSString input, JSObject init);
 
 
 class LoginScreenWeb extends ConsumerStatefulWidget {
@@ -72,6 +82,13 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   // field doesn't carry a permanent error after the user stops trying.
   bool _showNewPwdMaxLengthError = false;
   Timer? _newPwdMaxLengthHideTimer;
+
+  // Browser unload subscription — fires invalidate-QR + clears the pending
+  // UUID from localStorage when the user refreshes the page or closes the
+  // tab while a QR session is active. Uses sendBeacon for delivery
+  // reliability since regular http.post calls often get killed mid-flight
+  // when the page unloads.
+  StreamSubscription<html.Event>? _qrBeforeUnloadSub;
 
   void startTimer() {
     _timer?.cancel();
@@ -127,12 +144,49 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
       Preferences().setLogout(false);
     }
 
+    // Browser-refresh / tab-close handler — invalidates any pending QR
+    // session UUID on the backend via sendBeacon (the only reliable way
+    // to fire a network call as the page unloads) and then clears the
+    // localStorage entry so the next page load starts fresh.
+    _qrBeforeUnloadSub = html.window.onBeforeUnload.listen((event) {
+      final pendingUuid = Preferences().pendingQrUuid;
+      if (pendingUuid != null && pendingUuid.isNotEmpty) {
+        // Backend expects only { unique_id } in the body — no source/imei.
+        // Response is { "detail": "QR invalid" } but Beacon is fire-and-forget,
+        // we don't read it.
+        final body = jsonEncode({
+          'unique_id': pendingUuid,
+        });
+        // fetch + keepalive replaces sendBeacon. keepalive: true lets the
+        // request survive page unload (same property sendBeacon gave us).
+        // credentials: 'omit' sidesteps the backend's wildcard+credentials
+        // CORS combo — without credentials the browser stops enforcing the
+        // "Allow-Origin must not be *" rule, so the existing live CORS
+        // config works as-is.
+        final init = <String, Object>{
+          'method': 'POST',
+          'body': body,
+          'headers': <String, String>{'Content-Type': 'application/json'},
+          'keepalive': true,
+          'credentials': 'omit',
+          'mode': 'cors',
+        }.jsify() as JSObject;
+        _jsFetch('https://ws.mynt.in/login/QRInvalidate'.toJS, init);
+        Preferences().clearPendingQrUuid();
+      }
+    });
+
     // Defer context-dependent operations to avoid holding context reference
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (mounted) {
         ref.read(versionProvider).checkVersion(context);
         ref.read(authProvider).setChangetotp(true);
         ref.read(webAuthProvider).init(); // Initialize web auth provider
+
+        // Defensive cleanup for any stale QR UUID left in localStorage
+        // from a previous session that ended without beforeunload firing
+        // (e.g., browser crash). Safe no-op when nothing is pending.
+        ref.read(webAuthProvider).cleanupStaleQrSession();
 
         // Set up QR login success listener
         _setupQrLoginListener();
@@ -175,6 +229,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     _timer?.cancel();
     _qrCountdownTimer?.cancel();
     _newPwdMaxLengthHideTimer?.cancel();
+    _qrBeforeUnloadSub?.cancel();
     super.dispose();
   }
 
@@ -824,7 +879,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                   pref.clientMob?.isNotEmpty == true)))
                           Text(
                             _showChangePassword
-                                ? "Choose your Password"
+                                ? "Change Your Password"
                                 : _showForgotPassword
                                     ? "Forgot Password"
                                     : _showOtpScreen
@@ -837,7 +892,8 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                             style: webText(
                               context,
                               size: MediaQuery.of(context).size.width < 600 ? 18 : 22,
-                              weight: FontWeight.w900,
+                             
+                              weight: FontWeight.w700,
                               color: resolveThemeColor(context,
                                   dark: MyntColors.textPrimaryDark,
                                   light: MyntColors.textPrimary),
@@ -1222,7 +1278,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                    decoration: InputDecoration(
                                      filled: false,
                                      labelText: webAuth.topflow
-                                         ? "Enter 4-digit OTP sent to mobile/email to set up TOTP"
+                                         ? "Enter the 4-digit OTP to complete TOTP setup"
                                          : "Enter ${webAuth.isTotp ? '6' : '4'} digit ${webAuth.isTotp ? 'TOTP' : 'OTP'}",
                                      floatingLabelBehavior: FloatingLabelBehavior.auto,
                                      labelStyle: MyntWebTextStyles.body(
