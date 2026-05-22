@@ -344,6 +344,81 @@ class WebAuthApi {
     }
     return null;
   }
+
+  /// Forgot Password — Send OTP
+  ///
+  /// First half of the new OTP-gated forgot-password flow. Backend sends a
+  /// 4-digit OTP to the user's registered mobile/email for the given
+  /// identifier. Frontend should then show the OTP-entry screen and call
+  /// [forgetPasswordOtpVerify] once the user types the OTP.
+  ///
+  /// Known responses:
+  /// - { "msg": "otp sended" } — success
+  /// - { "msg": "No data found" } — identifier doesn't exist
+  /// - { "emsg": "Your mobile registered in multiple accounts, Please login
+  ///     with client ID", "stat": "Not_Ok" } — ambiguous mobile
+  /// - { "emsg": "Invalid field", "stat": "Not_Ok" } — bad field name
+  static Future<Map<String, dynamic>?> forgetPasswordOtpSend({
+    required String mobileOrClientId,
+  }) async {
+    try {
+      final uri = Uri.parse('$_loginBaseUrl/ForgetPasswordOtpSend');
+      final data = {
+        'field': _getInputType(mobileOrClientId),
+        'value': mobileOrClientId.toUpperCase(),
+      };
+      final res = await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Caller handles user-facing error toast.
+    }
+    return null;
+  }
+
+  /// Forgot Password — Verify OTP
+  ///
+  /// Second half of the new OTP-gated forgot-password flow. Backend
+  /// validates the OTP and, on success, internally runs the old
+  /// ForgetPassword behavior (generates and sends the temp password to the
+  /// user's registered mobile/email). Frontend then jumps straight to the
+  /// Change Password screen — no separate ForgetPassword call needed.
+  ///
+  /// Known error responses:
+  /// - { "emsg": "clientid not found" } — identifier mismatch
+  /// - { "emsg": "Invalid field", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP expired, Please request a new one", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP already used", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP not valid" }
+  static Future<Map<String, dynamic>?> forgetPasswordOtpVerify({
+    required String mobileOrClientId,
+    required String otp,
+  }) async {
+    try {
+      final uri = Uri.parse('$_loginBaseUrl/ForgetPasswordOtpVerify');
+      final data = {
+        'field': _getInputType(mobileOrClientId),
+        'value': mobileOrClientId.toUpperCase(),
+        'otp': otp,
+      };
+      final res = await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Caller handles user-facing error toast.
+    }
+    return null;
+  }
   /// Create Webhook - Registers a webhook for the given symbol
   static Future<Map<String, dynamic>?> createWebhook({
     required String clientId,
