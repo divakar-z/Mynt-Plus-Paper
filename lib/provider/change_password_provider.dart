@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import '../api/core/api_export.dart';
+import '../api/web_auth_api.dart';
 import '../locator/constant.dart';
 import '../locator/locator.dart';
 import '../locator/preference.dart';
@@ -29,6 +30,10 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
   final TextEditingController newPassword = TextEditingController();
   final TextEditingController forGetloginMethCtrl = TextEditingController();
 
+  // 4-digit OTP entered by user during the OTP-gated forgot-password flow.
+  // Backend sends the OTP after a successful /ForgetPasswordOtpSend call.
+  final TextEditingController forgotOtpController = TextEditingController();
+
   final TextEditingController userIdController = TextEditingController();
 
   bool get isMobileForgetpass => _isMobileForgetpass;
@@ -47,7 +52,8 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
   String? userIdChangepassError,
       oldPasswordError,
       newPasswordError,
-      forgetpassError;
+      forgetpassError,
+      forgotOtpError;
 
   ForgetPasswordModel? _forgetPasswordModel;
   ForgetPasswordModel? get changePass => _forgetPasswordModel;
@@ -60,6 +66,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
     oldPassword.clear();
     newPassword.clear();
     forGetloginMethCtrl.clear();
+    forgotOtpController.clear();
     notifyListeners();
   }
 
@@ -69,6 +76,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
     oldPasswordError = null;
     newPasswordError = null;
     forgetpassError = null;
+    forgotOtpError = null;
     notifyListeners();
   }
 
@@ -291,6 +299,136 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
       toggleLoadingOn(false);
     }
   }
+// OTP-gated forgot-password flow — Step 1: send OTP.
+//
+// Called when the user clicks Reset on the Forgot Password screen with a
+// valid identifier. Replaces the legacy [fetchForgetPassword] direct
+// password-generation path with a verification-first step: backend now
+// only sends the temp password AFTER the OTP is verified
+// (see [submitForgetPasswordOtpVerify]).
+//
+// Returns true on success (UI should switch to OTP screen). On any error
+// it shows a toast and returns false.
+  Future<bool> submitForgetPasswordOtpSend(BuildContext context) async {
+    if (!validateForgetpassWord()) {
+      notifyListeners();
+      return false;
+    }
+    try {
+      toggleLoadingOn(true);
+      final res = await WebAuthApi.forgetPasswordOtpSend(
+        mobileOrClientId: forGetloginMethCtrl.text.trim(),
+      );
+
+      if (res == null) {
+        if (context.mounted) {
+          ResponsiveSnackBar.showError(
+              context, 'Failed to send OTP. Please try again.');
+        }
+        return false;
+      }
+
+      // Success — backend confirms OTP dispatched.
+      if (res['msg'] == 'otp sended') {
+        if (context.mounted) {
+          ResponsiveSnackBar.showSuccess(
+              context, 'OTP sent to your registered mobile/email');
+        }
+        return true;
+      }
+
+      // Known error shapes. "No data found" → unknown identifier;
+      // multi-account / Invalid field surface their emsg directly.
+      final emsg = res['emsg']?.toString();
+      final msg = res['msg']?.toString();
+      final errorText = emsg ?? (msg == 'No data found'
+          ? 'No account found with this Mobile / Client ID'
+          : 'Failed to send OTP. Please try again.');
+      if (context.mounted) {
+        ResponsiveSnackBar.showError(context, errorText);
+      }
+      return false;
+    } catch (_) {
+      if (context.mounted) {
+        ResponsiveSnackBar.showError(
+            context, 'An error occurred. Please try again.');
+      }
+      return false;
+    } finally {
+      toggleLoadingOn(false);
+    }
+  }
+
+// OTP-gated forgot-password flow — Step 2: verify OTP.
+//
+// Called when the user submits the 4-digit OTP. On verify success the
+// backend has already generated and dispatched the temp password to the
+// user's registered mobile/email — frontend just switches to the Change
+// Password screen, no separate ForgetPassword call needed.
+//
+// Returns true on verify success so the screen can advance. Errors are
+// surfaced as toasts ("Invalid OTP, Please Try again", etc).
+  Future<bool> submitForgetPasswordOtpVerify(BuildContext context) async {
+    final otp = forgotOtpController.text.trim();
+    if (otp.length != 4) {
+      forgotOtpError = 'Please enter the 4-digit OTP';
+      notifyListeners();
+      return false;
+    }
+    try {
+      toggleLoadingOn(true);
+      final res = await WebAuthApi.forgetPasswordOtpVerify(
+        mobileOrClientId: forGetloginMethCtrl.text.trim(),
+        otp: otp,
+      );
+
+      if (res == null) {
+        if (context.mounted) {
+          ResponsiveSnackBar.showError(
+              context, 'OTP verification failed. Please try again.');
+        }
+        return false;
+      }
+
+      final emsg = res['emsg']?.toString();
+      // Success path: backend uses absence of emsg / explicit ok stat. Accept
+      // either { stat: "Ok" } or no emsg as success signal.
+      if (res['stat'] == 'Ok' || (emsg == null || emsg.isEmpty)) {
+        ConstantName.sessCheck = true;
+        // Pre-populate userIdController so the Change Password screen can
+        // submit the password change against this client ID.
+        if (res['clientid'] != null) {
+          userIdController.text = res['clientid'].toString();
+        } else {
+          // Fallback — uppercase the input we already have.
+          userIdController.text =
+              forGetloginMethCtrl.text.trim().toUpperCase();
+        }
+        if (context.mounted) {
+          ResponsiveSnackBar.showSuccess(context,
+              'Generated Password has been sent to Your Mobile Number and Email');
+        }
+        return true;
+      }
+
+      // Known error responses — surface emsg directly so wording matches
+      // backend (and we don't have to re-map every variant).
+      forgotOtpError = emsg;
+      if (context.mounted) {
+        ResponsiveSnackBar.showError(context, emsg);
+      }
+      return false;
+    } catch (_) {
+      if (context.mounted) {
+        ResponsiveSnackBar.showError(
+            context, 'An error occurred. Please try again.');
+      }
+      return false;
+    } finally {
+      toggleLoadingOn(false);
+    }
+  }
+
 // Call this method while clicking if the Change pass validation process is successful.
 
   submitChangePass(BuildContext context) {

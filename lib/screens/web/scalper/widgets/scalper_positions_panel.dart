@@ -3401,6 +3401,41 @@ class _ScalperGttDialogState extends ConsumerState<_ScalperGttDialog> {
                           color: secondaryColor.withValues(alpha: 0.8),
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      // GTT note
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: accentColor.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: accentColor.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: RichText(
+                          text: TextSpan(
+                            style: MyntWebTextStyles.caption(
+                              context,
+                              color: secondaryColor,
+                            ),
+                            children: [
+                              TextSpan(
+                                text: 'Note: ',
+                                style: MyntWebTextStyles.caption(
+                                  context,
+                                  fontWeight: MyntFonts.semiBold,
+                                  color: textColor,
+                                ),
+                              ),
+                              TextSpan(
+                                text: _isStoploss
+                                    ? 'Stoploss is placed as a GTT order. Remember to cancel it if you exit the position manually.'
+                                    : 'Trigger is placed as a GTT order. Remember to cancel it if you exit the position manually.',
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 20),
                       // Submit button
                       SizedBox(
