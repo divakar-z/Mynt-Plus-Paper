@@ -711,7 +711,8 @@ changeHoldingsTabIndex(int index) {
                     max(int.parse("${element.dpQty ?? 0}"),
                             int.parse("${element.npoadqty ?? 0}")) +
                         int.parse("${element.holdqty ?? 0}") +
-                        int.parse("${element.btstqty ?? 0}")) -
+                        int.parse("${element.btstqty ?? 0}")  +
+                        int.parse("${element.npoadt1qty ?? 0}")) -
                 int.parse("${element.trdqty ?? 0}");
             element.currentQty = qty;
             // FIX: Update holdQty without wiping existing socket data
@@ -729,7 +730,7 @@ changeHoldingsTabIndex(int index) {
                 "${element.upldprc == "0.00" ? element.exchTsym![0].close ?? 0.0 : element.upldprc ?? 0.00}");
 
             element.avgPrc = "$avgCost";
-            element.invested = ((qty + int.parse(element.npoadt1qty ?? "0")) * avgCost).toStringAsFixed(2);
+            element.invested = (qty * avgCost).toStringAsFixed(2);
 
             invest += double.parse("${element.invested}");
             if (element.npoadqty.toString() != "null" ||
