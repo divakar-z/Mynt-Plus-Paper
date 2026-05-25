@@ -977,12 +977,12 @@ class _PdfDownloadScreenWebState extends ConsumerState<PdfDownloadScreenWeb> {
 
     EdgeInsets cellPadding;
     if (isFirstColumn) {
-      cellPadding = const EdgeInsets.fromLTRB(16, 8, 12, 8);
+      cellPadding = const EdgeInsets.fromLTRB(16, 12, 8, 12);
     } else if (isLastColumn) {
-      cellPadding = const EdgeInsets.fromLTRB(12, 12, 16, 12);
+      cellPadding = const EdgeInsets.fromLTRB(8, 12, 16, 12);
     } else {
       cellPadding =
-          const EdgeInsets.symmetric(horizontal: 12, vertical: 12);
+          const EdgeInsets.symmetric(horizontal: 6, vertical: 12);
     }
 
     return shadcn.TableCell(
@@ -1012,7 +1012,8 @@ class _PdfDownloadScreenWebState extends ConsumerState<PdfDownloadScreenWeb> {
                       light: MyntColors.primary,
                     ).withValues(alpha: 0.08)
                   : null,
-              alignment: alignRight ? Alignment.topRight : null,
+              alignment:
+                  alignRight ? Alignment.centerRight : Alignment.centerLeft,
               child: child,
             );
           },
