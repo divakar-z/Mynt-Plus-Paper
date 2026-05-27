@@ -932,7 +932,7 @@ class WebSocketProvider extends ChangeNotifier {
     // PERFORMANCE FIX: Increased throttle from 330ms to 500ms for web performance
     // This reduces updates from 3/sec to 2/sec, lowering CPU usage by ~33%
     // For web apps with many widgets, less frequent updates = smoother experience
-    final throttleDuration = kIsWeb ? const Duration(milliseconds: 500) : const Duration(milliseconds: 300);
+    final throttleDuration =  const Duration(milliseconds: 300) ;
     _throttleTimer = Timer(throttleDuration, () {
       if (_hasPendingUpdates) {
         _hasPendingUpdates = false;

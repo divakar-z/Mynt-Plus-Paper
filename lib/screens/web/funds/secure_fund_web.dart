@@ -561,6 +561,29 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
           theme,
         ),
 
+        // // Collateral Cash
+        // _buildInfoRow(
+        //   "Collateral Cash",
+        //   getFormatter(
+        //     value: _safeParseDouble(
+        //         "${funds.fundDetailModel?.brkcollamt ?? 0.00}"),
+        //     v4d: false,
+        //     noDecimal: false,
+        //   ),
+        //   theme,
+        // ),
+
+        // Peak Margin
+        _buildInfoRow(
+          "Peak Margin",
+          getFormatter(
+            value: _safeParseDouble("${funds.fundDetailModel?.peakMar ?? 0.00}"),
+            v4d: false,
+            noDecimal: false,
+          ),
+          theme,
+        ),
+
         // Collateral Additional (conditional)
         // if (funds.fundDetailModel?.brkcollamt != null &&
         //     funds.fundDetailModel?.brkcollamt != 0.00)
