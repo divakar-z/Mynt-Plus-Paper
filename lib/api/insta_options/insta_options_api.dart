@@ -3,7 +3,10 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:mynt_plus/api/insta_options/insta_options_config.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/models/insta_options/chain_row.dart';
+import 'package:mynt_plus/models/insta_options/expiries_response.dart';
 import 'package:mynt_plus/models/insta_options/health_status.dart';
+import 'package:mynt_plus/models/insta_options/symbols_response.dart';
 
 /// Typed exception for OI Data backend failures.
 class InstaOptionsApiException implements Exception {
@@ -26,26 +29,83 @@ class InstaOptionsApiException implements Exception {
 
 /// HTTP client for the OI Data analytics backend.
 ///
-/// Phase 1 ships a minimal surface (`getHealth()`) so the shell can render a
-/// backend-reachability indicator. Later phases (Option Chain, etc.) extend
-/// this class with the remaining endpoints in INSTAOPTIONS_FEATURE_README.md §8.
+/// One method per endpoint in INSTAOPTIONS_FEATURE_README.md §8. Phase 2 adds
+/// `getSymbols` / `getExpiries` / `getSpot` / `getAnalyticsChain`. Remaining
+/// endpoints land in later phases as their screens need them.
 class InstaOptionsApi {
   final InstaOptionsConfig _config = locator<InstaOptionsConfig>();
   final http.Client _http;
 
-  static const Duration _timeout = Duration(seconds: 5);
+  static const Duration _timeout = Duration(seconds: 10);
 
   InstaOptionsApi({http.Client? client}) : _http = client ?? http.Client();
 
+  // -------- §8.24 GET /health --------
   Future<InstaOptionsHealth> getHealth() async {
-    final base = await _config.httpBaseUrl();
-    final uri = Uri.parse('$base/health');
-    final res = await _http.get(uri).timeout(_timeout);
-    final body = _decode(res);
-    return InstaOptionsHealth.fromJson(body);
+    final body = await _get(path: '/health');
+    return InstaOptionsHealth.fromJson(body as Map<String, dynamic>);
   }
 
-  Map<String, dynamic> _decode(http.Response res) {
+  // -------- §8.1 GET /symbols --------
+  Future<SymbolsResponse> getSymbols({required String exchange}) async {
+    final body = await _get(path: '/symbols', query: {'exchange': exchange});
+    return SymbolsResponse.fromJson(body as Map<String, dynamic>);
+  }
+
+  // -------- §8.2 GET /expiries --------
+  Future<ExpiriesResponse> getExpiries({
+    required String exchange,
+    required String symbol,
+  }) async {
+    final body = await _get(
+      path: '/expiries',
+      query: {'exchange': exchange, 'symbol': symbol},
+    );
+    return ExpiriesResponse.fromJson(body as Map<String, dynamic>);
+  }
+
+  // -------- §8.3 GET /spot --------
+  Future<double> getSpot({
+    required String exchange,
+    required String symbol,
+  }) async {
+    final body = await _get(
+      path: '/spot',
+      query: {'exchange': exchange, 'symbol': symbol},
+    );
+    final map = body as Map<String, dynamic>;
+    return (map['spot'] as num?)?.toDouble() ?? 0;
+  }
+
+  // -------- §8.17 GET /analytics/chain --------
+  Future<List<ChainRow>> getAnalyticsChain({
+    required String exchange,
+    required String symbol,
+    required String expiry,
+  }) async {
+    final body = await _get(
+      path: '/analytics/chain',
+      query: {'exchange': exchange, 'symbol': symbol, 'expiry': expiry},
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => ChainRow.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  // -------- internal helpers --------
+
+  Future<dynamic> _get({
+    required String path,
+    Map<String, String>? query,
+  }) async {
+    final base = await _config.httpBaseUrl();
+    final uri = Uri.parse('$base$path').replace(queryParameters: query);
+    final res = await _http.get(uri).timeout(_timeout);
+    return _decode(res);
+  }
+
+  dynamic _decode(http.Response res) {
     if (res.statusCode >= 400) {
       try {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -65,7 +125,7 @@ class InstaOptionsApi {
       }
     }
     try {
-      return jsonDecode(res.body) as Map<String, dynamic>;
+      return jsonDecode(res.body);
     } on FormatException {
       throw InstaOptionsApiException(
         code: 'INTERNAL',

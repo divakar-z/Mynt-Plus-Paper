@@ -1,6 +1,6 @@
 # InstaOptions Analytics — Build Handoff
 
-Last updated: 2026-05-28 (Phase 1 verified)
+Last updated: 2026-05-28 (Phase 2 verified)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Plan: `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md`
 
@@ -18,8 +18,8 @@ This file is the single source of truth for cross-session progress on the InstaO
 | # | Phase | Status | Commit | QA evidence | Notes |
 |---|---|---|---|---|---|
 | 0 | Rewrite README + create this file | ✅ verified | fd6e6e21 | `.claude/insta-options-qa/phase-0/qa-report.md` (local, gitignored) | QA PASS on all 6 criteria. |
-| 1 | Plumbing — config, API, models, theme, route, shell, menu | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-1/` (local, gitignored) | QA PASS on all 10 criteria via Playwright MCP. Real `/health` call succeeded against `192.168.5.61:8000` and returned live data (NFO 11369 tokens). WS client intentionally **deferred to Phase 2** (only `getHealth()` exercised in Phase 1; full WS multiplexer + `chain_delta`/`iv_update`/`oi_bucket_close` arrives with Option Chain). Fixture mode + `assets/insta_options_fixtures/` also deferred — backend turned out to be reachable, so QA didn't need fixtures. |
-| 2 | Option Chain (sub-screen 3) | ☐ todo | — | — | — |
+| 1 | Plumbing — config, API, models, theme, route, shell, menu | ✅ verified | 206a9480 | `.claude/insta-options-qa/phase-1/` | QA PASS on all 10 criteria via Playwright MCP. Real `/health` call succeeded against `192.168.5.61:8000`. WS, fixtures, top-nav entry, URL sticking deferred. |
+| 2 | Option Chain (sub-screen 3) | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-2/` | QA PASS on 12/16 criteria — Spot/FUT/ATM detection, /analytics/chain rendering, Greeks toggle, OI bar cells, ATM highlight, live Symbol/Expiry dropdowns. **Deferred to polish:** sticky ATM scroll, Change-ref dropdown, WS streaming (`chain_delta`/`iv_update`), automated bottom-sheet click (code wired, manual verify recommended). |
 | 3 | OI Buildup (sub-screen 8) | ☐ todo | — | — | — |
 | 4 | OI Statistics + PCR (sub-screens 4 + 6) | ☐ todo | — | — | — |
 | 5 | Per-Strike Options Chart (sub-screen 7) | ☐ todo | — | — | — |
