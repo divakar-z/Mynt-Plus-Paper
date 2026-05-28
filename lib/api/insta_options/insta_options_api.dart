@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:mynt_plus/api/insta_options/insta_options_config.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/models/insta_options/buildup_row.dart';
 import 'package:mynt_plus/models/insta_options/chain_row.dart';
 import 'package:mynt_plus/models/insta_options/expiries_response.dart';
 import 'package:mynt_plus/models/insta_options/health_status.dart';
@@ -90,6 +91,22 @@ class InstaOptionsApi {
     final list = body as List<dynamic>;
     return list
         .map((e) => ChainRow.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  // -------- §8.12 GET /oi/buildup --------
+  Future<List<BuildupRow>> getBuildup({
+    required String exchange,
+    required String symbol,
+    required String expiry,
+  }) async {
+    final body = await _get(
+      path: '/oi/buildup',
+      query: {'exchange': exchange, 'symbol': symbol, 'expiry': expiry},
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => BuildupRow.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
   }
 

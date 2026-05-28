@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/buildup_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/chain_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/markets_placeholder_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/basket_chip.dart';
@@ -68,11 +69,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
           icon: Icons.candlestick_chart,
         );
       case InstaSubScreen.buildup:
-        return const InstaPlaceholderScreen(
-          title: 'OI Buildup',
-          phaseLabel: 'Phase 3',
-          icon: Icons.layers,
-        );
+        return const BuildupScreen();
       case InstaSubScreen.findStrategy:
         return const InstaPlaceholderScreen(
           title: 'Find Strategy',
