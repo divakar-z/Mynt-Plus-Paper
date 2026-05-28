@@ -52,6 +52,7 @@ class FundDetailModel {
   String? utilizedMrgn;
   String? pendordval;
   String? collateral;
+  String? cashcoll;
   String? cobomargin;
   String? deliverySellBenefit;
 
@@ -109,6 +110,7 @@ class FundDetailModel {
       this.pendordval,
       this.scripbskmar,
       this.collateral,
+      this.cashcoll,
       this.cobomargin,
       this.deliverySellBenefit});
 
@@ -165,6 +167,7 @@ class FundDetailModel {
     utilizedMrgn = json['utilizedMrgn'];
     pendordval = json['pendordval'];
     collateral = json['collateral'];
+    cashcoll = json['cash_coll'];
     cobomargin = json['marprt'];
     deliverySellBenefit = json['csc'];
   }
@@ -223,6 +226,7 @@ class FundDetailModel {
     data['utilizedMrgn'] = utilizedMrgn;
     data['pendordval'] = pendordval;
     data['collateral'] = collateral;
+    data['cash_coll'] = cashcoll;
     data['marprt'] = cobomargin;
     data['csc'] = deliverySellBenefit;
     return data;
