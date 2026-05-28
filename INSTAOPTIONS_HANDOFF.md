@@ -1,6 +1,6 @@
 # InstaOptions Analytics — Build Handoff
 
-Last updated: 2026-05-28
+Last updated: 2026-05-28 (Phase 1 verified)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Plan: `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md`
 
@@ -17,8 +17,8 @@ This file is the single source of truth for cross-session progress on the InstaO
 
 | # | Phase | Status | Commit | QA evidence | Notes |
 |---|---|---|---|---|---|
-| 0 | Rewrite README + create this file | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-0/qa-report.md` (local, gitignored) | QA verdict PASS on all 6 criteria; no blocking edits |
-| 1 | Plumbing — config, API, WS, models, theme, route, shell, menu | ☐ todo | — | — | — |
+| 0 | Rewrite README + create this file | ✅ verified | fd6e6e21 | `.claude/insta-options-qa/phase-0/qa-report.md` (local, gitignored) | QA PASS on all 6 criteria. |
+| 1 | Plumbing — config, API, models, theme, route, shell, menu | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-1/` (local, gitignored) | QA PASS on all 10 criteria via Playwright MCP. Real `/health` call succeeded against `192.168.5.61:8000` and returned live data (NFO 11369 tokens). WS client intentionally **deferred to Phase 2** (only `getHealth()` exercised in Phase 1; full WS multiplexer + `chain_delta`/`iv_update`/`oi_bucket_close` arrives with Option Chain). Fixture mode + `assets/insta_options_fixtures/` also deferred — backend turned out to be reachable, so QA didn't need fixtures. |
 | 2 | Option Chain (sub-screen 3) | ☐ todo | — | — | — |
 | 3 | OI Buildup (sub-screen 8) | ☐ todo | — | — | — |
 | 4 | OI Statistics + PCR (sub-screens 4 + 6) | ☐ todo | — | — | — |
@@ -43,6 +43,10 @@ This file is the single source of truth for cross-session progress on the InstaO
 - [ ] Confirm production OI Data backend URL (currently dev IP `192.168.5.61:8000`).
 - [ ] Add CI workflow for golden tests once Phase 10 lands.
 - [ ] Decide whether to add per-sub-screen deep-link query params (e.g. `?screen=chain&symbol=NIFTY&expiry=30-JUN-2026`) — currently sub-screen state is in-memory only.
+- [ ] After Phase 1: URL doesn't stay at `/insta-options` — `CustomizableSplitHomeScreen` rewrites to `/` after mount. Direct-URL navigation works for first mount; the URL just doesn't reflect the InstaOptions panel afterward. Polish in Phase 10.
+- [ ] After Phase 1: Top-nav (wide-viewport ≥ 1200 px) entry for "InstaOptions Analytics" not yet added — only the hamburger nav drawer (narrow-viewport) entry is wired. Wide-viewport top-nav entry in Phase 10.
+- [ ] After Phase 1: Dark theme not exercised in automated QA — manual verification needed using the host's theme toggle. (Light theme verified.)
+- [ ] Phase 1 deferred: WS client (`InstaOptionsWsClient`) + fixture mode + remaining 23 API endpoints — all land with Phase 2 (Option Chain).
 
 ## How to resume
 

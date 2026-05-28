@@ -46,4 +46,4 @@ app.*.map.json
 /.claude
 /NUL
 /firebase.json
-.firebaserc
+.firebaserc.playwright-mcp/

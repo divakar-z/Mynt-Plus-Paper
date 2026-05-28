@@ -33,6 +33,7 @@ import 'package:mynt_plus/screens/web/profile/nominee_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/form_download_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/profile_details_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/profile_section_screen_web.dart';
+import 'package:mynt_plus/screens/web/insta_options/insta_options_shell.dart';
 import 'package:mynt_plus/screens/web/strategy_builder/strategy_builder_screen.dart';
 import 'package:mynt_plus/screens/web/webhook/webhook_tradingview_screen.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
@@ -175,6 +176,7 @@ enum ScreenTypeParam {
   saveBasketStrategy,
   profileDetails,
   caBuyback,
+  instaOptions,
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -715,6 +717,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenTypeParam.caBuyback:
         _handleCABuybackTap();
+        break;
+      case ScreenTypeParam.instaOptions:
+        _handleInstaOptionsTap();
         break;
       case ScreenTypeParam.dashboard:
       case ScreenTypeParam.watchlist:
@@ -1498,6 +1503,10 @@ class _CustomizableSplitHomeScreenState
             shadcn.closeDrawer(drawerContext);
             _handleStrategyBuilderTap();
           },
+          onInstaOptionsTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleInstaOptionsTap();
+          },
           onThemeToggle: () {
             shadcn.closeDrawer(drawerContext);
             ref.read(themeProvider.notifier).toggleTheme(
@@ -2120,6 +2129,10 @@ class _CustomizableSplitHomeScreenState
   void _handleStrategyBuilderTap() {
     // Show Strategy Builder in panel instead of navigating to separate route
     _replaceScreenInPanel(ScreenType.strategyBuilder);
+  }
+
+  void _handleInstaOptionsTap() {
+    _replaceScreenInPanel(ScreenType.instaOptions);
   }
 
   void _handleWebHookTap() {
@@ -2869,6 +2882,8 @@ class _CustomizableSplitHomeScreenState
         return FormDownloadScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: _goBackInRightPanel);
+      case ScreenType.instaOptions:
+        return const InstaOptionsShell();
       // caEvent and cpAction removed
     }
   }
@@ -2980,6 +2995,8 @@ class _CustomizableSplitHomeScreenState
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.instaOptions:
+        return 'InstaOptions Analytics';
       // caEvent and cpAction removed
     }
   }
@@ -3091,6 +3108,8 @@ class _CustomizableSplitHomeScreenState
         return Icons.download;
       case ScreenType.closureDetails:
         return Icons.cancel;
+      case ScreenType.instaOptions:
+        return Icons.candlestick_chart;
       // caEvent and cpAction removed
     }
   }
@@ -3534,6 +3553,8 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.formDownload:
         break;
       case ScreenType.closureDetails:
+        break;
+      case ScreenType.instaOptions:
         break;
       // caEvent and cpAction removed
     }
@@ -5578,6 +5599,7 @@ enum ScreenType {
   nomineeDetails,
   formDownload,
   closureDetails,
+  instaOptions,
 }
 
 // Hoverable navigation item widget

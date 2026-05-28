@@ -26,6 +26,7 @@ class NavigationDrawerWeb extends StatelessWidget {
   final VoidCallback? onOptionFlashTap;
   final VoidCallback? onScalperTap;
   final VoidCallback? onStrategyBuilderTap;
+  final VoidCallback? onInstaOptionsTap;
   final VoidCallback? onClose;
 
   // Control which items to show - if null, show all items
@@ -41,6 +42,7 @@ class NavigationDrawerWeb extends StatelessWidget {
   final bool? showOptionFlash;
   final bool? showScalper;
   final bool? showStrategyBuilder;
+  final bool? showInstaOptions;
 
   const NavigationDrawerWeb({
     super.key,
@@ -62,6 +64,7 @@ class NavigationDrawerWeb extends StatelessWidget {
     this.onOptionFlashTap,
     this.onScalperTap,
     this.onStrategyBuilderTap,
+    this.onInstaOptionsTap,
     this.onClose,
     this.showHome,
     this.showPositions,
@@ -75,6 +78,7 @@ class NavigationDrawerWeb extends StatelessWidget {
     this.showOptionFlash,
     this.showScalper,
     this.showStrategyBuilder,
+    this.showInstaOptions,
   });
 
   /// Display name: use userName if available, fallback to clientId
@@ -222,6 +226,15 @@ class NavigationDrawerWeb extends StatelessWidget {
                       screenName: 'strategyBuilder',
                       badge: 'NEW',
                       onTap: onStrategyBuilderTap!,
+                    ),
+                  if ((showInstaOptions ?? (onInstaOptionsTap != null)) && onInstaOptionsTap != null)
+                    _buildDrawerItemWithBadge(
+                      context: context,
+                      title: 'InstaOptions Analytics',
+                      icon: Icons.candlestick_chart,
+                      screenName: 'instaOptions',
+                      badge: 'NEW',
+                      onTap: onInstaOptionsTap!,
                     ),
 
                   // INVEST section - show if any INVEST item is visible

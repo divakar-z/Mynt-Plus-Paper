@@ -40,6 +40,7 @@ class WebRoutes {
   static const String myAccount = '/my-account';
   static const String portfolioAnalysis = '/portfolio-analysis';
   static const String strategyBuilder = '/strategy-builder';
+  static const String instaOptions = '/insta-options';
   static const String scalper = '/scalper';
   static const String tradingViewWebHook = '/tradingview-webhook';
   static const String basketDashboard = '/basket-dashboard';
@@ -183,6 +184,14 @@ void initializeWebRouter() {
         path: WebRoutes.strategyBuilder,
         builder: (context, state) => const CustomizableSplitHomeScreen(
           initialRightPanel: ScreenTypeParam.strategyBuilder,
+        ),
+      ),
+
+      // InstaOptions Analytics — 9 read-only OI/analytics sub-screens in one right panel
+      GoRoute(
+        path: WebRoutes.instaOptions,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.instaOptions,
         ),
       ),
 
