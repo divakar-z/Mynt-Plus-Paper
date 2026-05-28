@@ -541,8 +541,8 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         _buildInfoRow(
           "Collateral Equity",
           getFormatter(
-            value: _safeParseDouble(
-                "${funds.pledgeAndUnpledgeModel?.noncashEquivalent ?? 0.00}"),
+            value:(_safeParseDouble("${funds.fundDetailModel?.collateral ?? 0.00}") +  _safeParseDouble(
+                "${funds.fundDetailModel?.brkcollamt ?? 0.00}")) - _safeParseDouble("${funds.fundDetailModel?.cashcoll ?? 0.00}"),
             v4d: false,
             noDecimal: false,
           ),
@@ -554,7 +554,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
           "Collateral Liquid",
           getFormatter(
             value: _safeParseDouble(
-                "${funds.pledgeAndUnpledgeModel?.cashEquivalent ?? 0.00}"),
+                "${funds.fundDetailModel?.cashcoll ?? 0.00}"),
             v4d: false,
             noDecimal: false,
           ),
@@ -562,8 +562,9 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         ),
 
         // // Collateral Cash
+        // if(funds.fundDetailModel?.brkcollamt != "0.00" && funds.fundDetailModel?.brkcollamt != null)...[
         // _buildInfoRow(
-        //   "Collateral Cash",
+        //   "Collateral MF",
         //   getFormatter(
         //     value: _safeParseDouble(
         //         "${funds.fundDetailModel?.brkcollamt ?? 0.00}"),
@@ -572,6 +573,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         //   ),
         //   theme,
         // ),
+        // ],
 
         // Peak Margin
         _buildInfoRow(
