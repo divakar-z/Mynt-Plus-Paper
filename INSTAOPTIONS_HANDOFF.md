@@ -1,6 +1,6 @@
 # InstaOptions Analytics — Build Handoff
 
-Last updated: 2026-05-28 (Phase 3 verified)
+Last updated: 2026-05-29 (Phase 4 verified)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Plan: `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md`
 
@@ -21,7 +21,7 @@ This file is the single source of truth for cross-session progress on the InstaO
 | 1 | Plumbing — config, API, models, theme, route, shell, menu | ✅ verified | 206a9480 | `.claude/insta-options-qa/phase-1/` | QA PASS on all 10 criteria via Playwright MCP. Real `/health` call succeeded against `192.168.5.61:8000`. WS, fixtures, top-nav entry, URL sticking deferred. |
 | 2 | Option Chain (sub-screen 3) | ✅ verified | eb614a78 | `.claude/insta-options-qa/phase-2/` | QA PASS on 12/16 criteria. Sticky ATM, Change-ref, WS, automated bottom-sheet click deferred. |
 | 3 | OI Buildup (sub-screen 8) | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-3/` | QA PASS on all 10 criteria. SegmentedButton filter (All/CE/PE/FUT), sort dropdown (\|ΔOI\| desc / Strike asc), DataTable2 with BuildupPill rendering server's classification verbatim. Deferred: row tap → Per-Strike (Phase 5 dependency), right-click bottom-sheet (manual verify), WS LTP/OI live updates. |
-| 4 | OI Statistics + PCR (sub-screens 4 + 6) | ☐ todo | — | — | — |
+| 4 | OI Statistics + PCR (sub-screens 4 + 6) | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-4/` | QA PASS on 8/8 testable criteria via Playwright MCP. OI Stats: CustomPainter cumulative panel (stacked CE/PE + ΔOI tint overlay) + fl_chart per-strike bars (CE up / PE down) + ATM dashed line + 3 KpiCards. PCR Ratio: fl_chart LineChart with PCR (zone-coloured) + scaled spot overlay + dashed 0.7/1.0 reference lines + 3 KpiCards. Both screens own start/stop polling timers (4s for OI Stats, 60s for PCR) tied to mount/unmount. Deferred: live render-path acceptance (backend `/symbols` timing out same as Phase 2/3), BrushChart zoom selector, PCR crosshair tap-drag, WS deltas. |
 | 5 | Per-Strike Options Chart (sub-screen 7) | ☐ todo | — | — | — |
 | 6 | Trending OI (sub-screen 5) | ☐ todo | — | — | — |
 | 7 | Markets Dashboard (sub-screen 1) | ☐ todo | — | — | — |
@@ -47,6 +47,9 @@ This file is the single source of truth for cross-session progress on the InstaO
 - [ ] After Phase 1: Top-nav (wide-viewport ≥ 1200 px) entry for "InstaOptions Analytics" not yet added — only the hamburger nav drawer (narrow-viewport) entry is wired. Wide-viewport top-nav entry in Phase 10.
 - [ ] After Phase 1: Dark theme not exercised in automated QA — manual verification needed using the host's theme toggle. (Light theme verified.)
 - [ ] Phase 1 deferred: WS client (`InstaOptionsWsClient`) + fixture mode + remaining 23 API endpoints — all land with Phase 2 (Option Chain).
+- [ ] Phase 4 deferred: BrushChart zoom selector under the OI Stats per-strike bar chart (README §10.4) — non-trivial fl_chart custom widget, Phase 10 polish.
+- [ ] Phase 4 deferred: PCR crosshair tap-and-drag tooltip with 50 ms latency (README §10.6 acceptance #2) — current implementation has hover tooltip only; Phase 10 polish.
+- [ ] Phase 4 deferred: Live render-path acceptance for OI Stats / PCR — backend `/symbols` keeps timing out, blocking automated QA of populated cumulative panel + KpiCards + chart series. Re-run QA when backend `/symbols` reliability improves or fixtures land.
 
 ## How to resume
 

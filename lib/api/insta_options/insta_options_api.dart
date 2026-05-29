@@ -7,6 +7,8 @@ import 'package:mynt_plus/models/insta_options/buildup_row.dart';
 import 'package:mynt_plus/models/insta_options/chain_row.dart';
 import 'package:mynt_plus/models/insta_options/expiries_response.dart';
 import 'package:mynt_plus/models/insta_options/health_status.dart';
+import 'package:mynt_plus/models/insta_options/oi_aggregate.dart';
+import 'package:mynt_plus/models/insta_options/pcr_point.dart';
 import 'package:mynt_plus/models/insta_options/symbols_response.dart';
 
 /// Typed exception for OI Data backend failures.
@@ -91,6 +93,41 @@ class InstaOptionsApi {
     final list = body as List<dynamic>;
     return list
         .map((e) => ChainRow.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  // -------- §8.10 GET /oi/aggregate --------
+  Future<OiAggregate> getOiAggregate({
+    required String exchange,
+    required String symbol,
+    required String expiry,
+  }) async {
+    final body = await _get(
+      path: '/oi/aggregate',
+      query: {'exchange': exchange, 'symbol': symbol, 'expiry': expiry},
+    );
+    return OiAggregate.fromJson(body as Map<String, dynamic>);
+  }
+
+  // -------- §8.11 GET /oi/pcr/timeseries --------
+  Future<List<PcrPoint>> getPcrTimeseries({
+    required String exchange,
+    required String symbol,
+    required String expiry,
+    String? date,
+  }) async {
+    final body = await _get(
+      path: '/oi/pcr/timeseries',
+      query: {
+        'exchange': exchange,
+        'symbol': symbol,
+        'expiry': expiry,
+        if (date != null) 'date': date,
+      },
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => PcrPoint.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
   }
 

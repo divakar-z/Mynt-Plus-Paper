@@ -4,6 +4,8 @@ import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/buildup_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/chain_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/markets_placeholder_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/oi_stats_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/pcr_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/basket_chip.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/placeholder_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/side_rail.dart';
@@ -45,11 +47,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
       case InstaSubScreen.chain:
         return const ChainScreen();
       case InstaSubScreen.oiStats:
-        return const InstaPlaceholderScreen(
-          title: 'OI Statistics',
-          phaseLabel: 'Phase 4',
-          icon: Icons.bar_chart,
-        );
+        return const OiStatsScreen();
       case InstaSubScreen.trending:
         return const InstaPlaceholderScreen(
           title: 'Trending OI',
@@ -57,11 +55,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
           icon: Icons.trending_up,
         );
       case InstaSubScreen.pcr:
-        return const InstaPlaceholderScreen(
-          title: 'PCR Ratio',
-          phaseLabel: 'Phase 4',
-          icon: Icons.show_chart,
-        );
+        return const PcrScreen();
       case InstaSubScreen.strike:
         return const InstaPlaceholderScreen(
           title: 'Per-Strike Options Chart',
