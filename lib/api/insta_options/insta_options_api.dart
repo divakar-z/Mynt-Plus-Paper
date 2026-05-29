@@ -157,6 +157,7 @@ class InstaOptionsApi {
     required String optionType,
     double? strike,
     String? date,
+    int? bucketMinutes,
   }) async {
     final body = await _get(
       path: '/oi/timeseries',
@@ -168,6 +169,7 @@ class InstaOptionsApi {
         if (strike != null && optionType != 'FUT')
           'strike': strike.toStringAsFixed(0),
         if (date != null) 'date': date,
+        if (bucketMinutes != null) 'bucket_minutes': bucketMinutes.toString(),
       },
     );
     final list = body as List<dynamic>;
@@ -195,6 +197,7 @@ class InstaOptionsApi {
     required String symbol,
     required String expiry,
     String? date,
+    int? bucketMinutes,
   }) async {
     final body = await _get(
       path: '/oi/pcr/timeseries',
@@ -203,6 +206,7 @@ class InstaOptionsApi {
         'symbol': symbol,
         'expiry': expiry,
         if (date != null) 'date': date,
+        if (bucketMinutes != null) 'bucket_minutes': bucketMinutes.toString(),
       },
     );
     final list = body as List<dynamic>;

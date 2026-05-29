@@ -8,10 +8,11 @@ import 'package:mynt_plus/models/insta_options/buildup_symbol.dart';
 import 'package:mynt_plus/models/insta_options/market_snapshot.dart';
 import 'package:mynt_plus/models/insta_options/spot_timeseries_point.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/insta_options/insta_market_hours.dart';
 import 'package:mynt_plus/provider/insta_options/insta_options_selection_provider.dart';
 
 final instaOptionsMarketsProvider =
-    ChangeNotifierProvider((ref) => InstaOptionsMarketsProvider(ref));
+    ChangeNotifierProvider.autoDispose((ref) => InstaOptionsMarketsProvider(ref));
 
 /// Powers the Markets Dashboard (README §10.1).
 ///
@@ -71,8 +72,12 @@ class InstaOptionsMarketsProvider extends DefaultChangeNotifier {
     _active = true;
     _fetch();
     _loadSparklines();
-    final interval = _pollInterval();
-    _timer = Timer.periodic(interval, (_) => _fetch());
+    if (InstaMarketHours.isOpen()) {
+      _timer = Timer.periodic(
+        InstaMarketHours.tickIntervalInsideHours,
+        (_) => _fetch(),
+      );
+    }
   }
 
   void stop() {
@@ -132,12 +137,4 @@ class InstaOptionsMarketsProvider extends DefaultChangeNotifier {
     }
   }
 
-  /// 4 s during IST market hours (Mon–Fri 09:15–15:30), 30 s otherwise.
-  Duration _pollInterval() {
-    final ist = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
-    final isWeekday = ist.weekday >= DateTime.monday && ist.weekday <= DateTime.friday;
-    final minutes = ist.hour * 60 + ist.minute;
-    final open = isWeekday && minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
-    return open ? const Duration(seconds: 4) : const Duration(seconds: 30);
-  }
 }

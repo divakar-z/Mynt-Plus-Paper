@@ -6,21 +6,24 @@ import 'package:mynt_plus/api/insta_options/insta_options_api.dart';
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/insta_options/oi_timeseries_point.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/insta_options/insta_market_hours.dart';
 import 'package:mynt_plus/provider/insta_options/insta_options_selection_provider.dart';
 
 final instaOptionsStrikeProvider =
-    ChangeNotifierProvider((ref) => InstaOptionsStrikeProvider(ref));
+    ChangeNotifierProvider.autoDispose((ref) => InstaOptionsStrikeProvider(ref));
 
 /// Powers the Per-Strike Options Chart screen (README §10.7).
 ///
-/// Holds CE + PE 1-min timeseries for a single strike. Polls every 60s while
-/// the screen is mounted via [start] / [stop]; strike selection is owned by
-/// the screen itself (mount-time default = ATM) and pushed in via [setStrike].
+/// Holds CE + PE 1-min timeseries for a single strike. Ticks at
+/// [InstaMarketHours.tickIntervalInsideHours] during the IST session, makes
+/// a single mount fetch (no timer) outside market hours. Strike selection is
+/// owned by the screen itself (mount-time default = ATM) and pushed in via
+/// [setStrike].
 class InstaOptionsStrikeProvider extends DefaultChangeNotifier {
-  static const Duration _interval = Duration(seconds: 60);
-
   final InstaOptionsApi _api = locator<InstaOptionsApi>();
   final Ref ref;
+
+  static const List<int> bucketMinutesOptions = [1, 3, 5, 15];
 
   double? _strike;
   List<OiTimeseriesPoint> _ce = const [];
@@ -28,6 +31,19 @@ class InstaOptionsStrikeProvider extends DefaultChangeNotifier {
   String? _error;
   Timer? _timer;
   bool _active = false;
+  int _bucketMinutes = 1;
+
+  int get bucketMinutes => _bucketMinutes;
+
+  void setBucketMinutes(int v) {
+    if (_bucketMinutes == v) return;
+    if (!bucketMinutesOptions.contains(v)) return;
+    _bucketMinutes = v;
+    _ce = const [];
+    _pe = const [];
+    notifyListeners();
+    if (_active) _fetch(force: true);
+  }
 
   InstaOptionsStrikeProvider(this.ref) {
     ref.listen<InstaOptionsSelectionProvider>(
@@ -47,7 +63,12 @@ class InstaOptionsStrikeProvider extends DefaultChangeNotifier {
     if (_active) return;
     _active = true;
     if (_strike != null) _fetch();
-    _timer = Timer.periodic(_interval, (_) => _fetch());
+    if (InstaMarketHours.isOpen()) {
+      _timer = Timer.periodic(
+        InstaMarketHours.tickIntervalInsideHours,
+        (_) => _fetch(),
+      );
+    }
   }
 
   void stop() {
@@ -89,6 +110,7 @@ class InstaOptionsStrikeProvider extends DefaultChangeNotifier {
           expiry: sel.expiry,
           optionType: 'CE',
           strike: k,
+          bucketMinutes: _bucketMinutes,
         ),
         _api.getOiTimeseries(
           exchange: sel.exchange,
@@ -96,6 +118,7 @@ class InstaOptionsStrikeProvider extends DefaultChangeNotifier {
           expiry: sel.expiry,
           optionType: 'PE',
           strike: k,
+          bucketMinutes: _bucketMinutes,
         ),
       ]);
       _ce = results[0];

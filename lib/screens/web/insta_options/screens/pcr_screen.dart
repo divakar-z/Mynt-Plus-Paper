@@ -7,6 +7,7 @@ import 'package:mynt_plus/provider/insta_options/insta_options_selection_provide
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/bucket_minutes_selector.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/kpi_card.dart';
 
 /// PCR Ratio screen (README §10.6). Chain-level PCR over time + spot overlay.
@@ -74,8 +75,9 @@ class _PcrScreenState extends ConsumerState<PcrScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          _ControlsBar(pcr: pcr, tokens: tokens),
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
             child: _KpiRow(pcr: pcr),
           ),
           Expanded(
@@ -91,6 +93,36 @@ class _PcrScreenState extends ConsumerState<PcrScreen> {
                 child: _PcrChart(tokens: tokens, points: pcr.points),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ControlsBar extends StatelessWidget {
+  final InstaOptionsPcrProvider pcr;
+  final InstaOptionsTokens tokens;
+
+  const _ControlsBar({required this.pcr, required this.tokens});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      child: Row(
+        children: [
+          BucketMinutesSelector(
+            value: pcr.bucketMinutes,
+            options: InstaOptionsPcrProvider.bucketMinutesOptions,
+            onChanged: pcr.setBucketMinutes,
+            tokens: tokens,
+          ),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: pcr.loading ? null : pcr.refresh,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Refresh'),
           ),
         ],
       ),

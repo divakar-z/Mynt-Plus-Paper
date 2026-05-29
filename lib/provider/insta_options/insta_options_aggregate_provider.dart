@@ -7,19 +7,19 @@ import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/insta_options/chain_row.dart';
 import 'package:mynt_plus/models/insta_options/oi_aggregate.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/insta_options/insta_market_hours.dart';
 import 'package:mynt_plus/provider/insta_options/insta_options_selection_provider.dart';
 
 final instaOptionsAggregateProvider =
-    ChangeNotifierProvider((ref) => InstaOptionsAggregateProvider(ref));
+    ChangeNotifierProvider.autoDispose((ref) => InstaOptionsAggregateProvider(ref));
 
 /// Powers the OI Statistics screen (README §10.4).
 ///
 /// Owns `/oi/aggregate` (cumulative panel + KPIs) and `/analytics/chain` +
-/// `/spot` (per-strike bars + ATM marker). REST-only; refreshes every 4s while
-/// the screen is mounted via [start] / [stop].
+/// `/spot` (per-strike bars + ATM marker). REST-only; ticks at
+/// [InstaMarketHours.tickIntervalInsideHours] during the IST session, and
+/// makes a single mount fetch (no timer) outside market hours.
 class InstaOptionsAggregateProvider extends DefaultChangeNotifier {
-  static const Duration _interval = Duration(seconds: 4);
-
   final InstaOptionsApi _api = locator<InstaOptionsApi>();
   final Ref ref;
 
@@ -66,7 +66,12 @@ class InstaOptionsAggregateProvider extends DefaultChangeNotifier {
     if (_active) return;
     _active = true;
     _fetch();
-    _timer = Timer.periodic(_interval, (_) => _fetch());
+    if (InstaMarketHours.isOpen()) {
+      _timer = Timer.periodic(
+        InstaMarketHours.tickIntervalInsideHours,
+        (_) => _fetch(),
+      );
+    }
   }
 
   void stop() {

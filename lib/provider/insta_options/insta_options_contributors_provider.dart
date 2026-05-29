@@ -5,9 +5,10 @@ import 'package:mynt_plus/api/insta_options/insta_options_api.dart';
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/insta_options/contributor_row.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/insta_options/insta_market_hours.dart';
 
 final instaOptionsContributorsProvider =
-    ChangeNotifierProvider((ref) => InstaOptionsContributorsProvider());
+    ChangeNotifierProvider.autoDispose((ref) => InstaOptionsContributorsProvider());
 
 /// Powers the Index Contributors screen (README §10.2).
 ///
@@ -52,7 +53,12 @@ class InstaOptionsContributorsProvider extends DefaultChangeNotifier {
     if (_active) return;
     _active = true;
     _fetch();
-    _timer = Timer.periodic(_pollInterval(), (_) => _fetch());
+    if (InstaMarketHours.isOpen()) {
+      _timer = Timer.periodic(
+        InstaMarketHours.tickIntervalInsideHours,
+        (_) => _fetch(),
+      );
+    }
   }
 
   void stop() {
@@ -85,11 +91,4 @@ class InstaOptionsContributorsProvider extends DefaultChangeNotifier {
     }
   }
 
-  Duration _pollInterval() {
-    final ist = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
-    final isWeekday = ist.weekday >= DateTime.monday && ist.weekday <= DateTime.friday;
-    final minutes = ist.hour * 60 + ist.minute;
-    final open = isWeekday && minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
-    return open ? const Duration(seconds: 4) : const Duration(seconds: 30);
-  }
 }

@@ -9,6 +9,7 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/bs_badges.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/bucket_minutes_selector.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dual_axis_line_chart.dart';
 
 /// Per-Strike Options Chart (README §10.7).
@@ -93,9 +94,13 @@ class _PerStrikeScreenState extends ConsumerState<PerStrikeScreen> {
             strike: strike,
             strikes: chain.strikes,
             stepFromAtm: stepFromAtm,
+            bucketMinutes: strikeP.bucketMinutes,
             onChange: (s) => ref
                 .read(instaOptionsStrikeProvider)
                 .setStrike(s),
+            onBucketChange: (m) => ref
+                .read(instaOptionsStrikeProvider)
+                .setBucketMinutes(m),
           ),
           Expanded(
             child: Padding(
@@ -168,14 +173,18 @@ class _Header extends StatelessWidget {
   final double strike;
   final List<double> strikes;
   final int? stepFromAtm;
+  final int bucketMinutes;
   final ValueChanged<double> onChange;
+  final ValueChanged<int> onBucketChange;
 
   const _Header({
     required this.tokens,
     required this.strike,
     required this.strikes,
     required this.stepFromAtm,
+    required this.bucketMinutes,
     required this.onChange,
+    required this.onBucketChange,
   });
 
   @override
@@ -204,6 +213,13 @@ class _Header extends StatelessWidget {
               ),
             ),
           const Spacer(),
+          BucketMinutesSelector(
+            value: bucketMinutes,
+            options: InstaOptionsStrikeProvider.bucketMinutesOptions,
+            onChanged: onBucketChange,
+            tokens: tokens,
+          ),
+          const SizedBox(width: 16),
           SizedBox(
             width: 140,
             child: DropdownButtonHideUnderline(
