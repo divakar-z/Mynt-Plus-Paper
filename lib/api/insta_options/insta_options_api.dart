@@ -6,6 +6,7 @@ import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/insta_options/buildup_row.dart';
 import 'package:mynt_plus/models/insta_options/buildup_symbol.dart';
 import 'package:mynt_plus/models/insta_options/chain_row.dart';
+import 'package:mynt_plus/models/insta_options/contributor_row.dart';
 import 'package:mynt_plus/models/insta_options/expiries_response.dart';
 import 'package:mynt_plus/models/insta_options/health_status.dart';
 import 'package:mynt_plus/models/insta_options/market_snapshot.dart';
@@ -120,6 +121,15 @@ class InstaOptionsApi {
   Future<MarketSnapshot> getMarketSnapshot() async {
     final body = await _get(path: '/market/snapshot');
     return MarketSnapshot.fromJson(body as Map<String, dynamic>);
+  }
+
+  // -------- §8.16 GET /contributors/{index} --------
+  Future<List<ContributorRow>> getContributors({required String index}) async {
+    final body = await _get(path: '/contributors/$index');
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => ContributorRow.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
   }
 
   // -------- §8.17 GET /analytics/chain --------
