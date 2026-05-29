@@ -125,6 +125,43 @@ This boundary keeps the analytics surface fully usable today while the hand-off 
 
 ---
 
+## 3.1 Mynt-Plus-Web reuse contract
+
+Added 2026-05-29 after the OptionZ audit (see `.claude/insta-options-qa/data-audit.md`). InstaOptions Analytics integrates with — and must NOT duplicate — the following existing Mynt-Plus-Web surfaces:
+
+| Surface | Path | How InstaOptions uses it |
+|---|---|---|
+| `StrategyBuilderProvider.addToBasket(OptionValues option, String buySell, BuildContext ctx)` | [lib/provider/strategy_builder_provider.dart:1161](lib/provider/strategy_builder_provider.dart#L1161) | Phase ι: route all InstaOptions B/S badges and `ChainLegBottomSheet` BUY/SELL buttons here. Replaces `InstaOptionsBasketProvider`. |
+| `StrategyBuilderProvider.setActivePredefinedStrategy(PredefinedStrategy strategy, BuildContext ctx)` | [lib/provider/strategy_builder_provider.dart:1043](lib/provider/strategy_builder_provider.dart#L1043) | Phase ι: route Find Strategy cart-icon taps here. Loads all legs as a multi-leg strategy. |
+| `OptionValues` model | [lib/models/marketwatch_model/opt_chain_model.dart](lib/models/marketwatch_model/opt_chain_model.dart) | Adapter target. Phase ι creates `widgets/chain_row_to_option_values.dart` that maps `ChainRow` → `OptionValues`. |
+| `OrderProvider.slicePlaceOrder(BuildContext ctx, PlaceOrderInput input)` | [lib/provider/order_provider.dart](lib/provider/order_provider.dart) | Future "direct order" phase (post-κ). Routes to `OrderConfirmationScreenWeb`. |
+| `ResponsiveSnackBar.showSuccess(BuildContext ctx, String msg)` | [lib/utils/responsive_snackbar.dart:202](lib/utils/responsive_snackbar.dart#L202) | All InstaOptions success toasts. Replaces raw `ScaffoldMessenger.showSnackBar` calls. Standard message format: `"Added BUY/SELL {tradingSymbol} to strategy"`. |
+| `strategy_builder_screen.dart` | [lib/screens/web/strategy_builder/strategy_builder_screen.dart](lib/screens/web/strategy_builder/strategy_builder_screen.dart) | The "inspect / open in builder" navigation target from Find Strategy result cards. |
+| `MyntColors`, `MyntWebTextStyles` | [lib/res/](lib/res/) | Already wired via `InstaOptionsTokens`. No new tokens; no parallel palette. |
+| `DataTable2` (data_table_2 package) | various Phase 2-3 screens | Reuse for new screens (Markets Dashboard buildup quadrants, Index Contributors, Find Strategy leg sub-tables). |
+| Existing nav routes for Orders, Settings, etc. | [lib/routes/](lib/routes/) | Future top-nav (Phase κ) pushes existing Mynt routes for Orders / Holdings. |
+
+**Adapter requirements for `ChainRow → OptionValues` (Phase ι)**:
+- `exch = 'NFO'`
+- `token = row.token.toString()`
+- `tsym = row.tradingSymbol`
+- `optt = row.optionType` (`CE` / `PE` / `XX`)
+- `lp = row.ltp.toStringAsFixed(2)` (no commas; the existing parser strips them but cleaner without)
+- `ls = lotSize.toString()` — pulled from `/reference/lot_size` (§8.21), cached on the chain provider
+- `strprc = row.strike.toStringAsFixed(0)`
+- `expDate = expiryDisplayString` (`DD-MMM-YYYY`, e.g. `30-JUN-2026`)
+- `symbol = row.symbol`
+
+`StrategyBuilderProvider.addToBasket(...)` is defensive about types (handles missing commas, falls back to `1` for lot size) — see [strategy_builder_provider.dart:1163-1167](lib/provider/strategy_builder_provider.dart#L1163-L1167).
+
+**Files to delete in Phase ι** when the rewire ships:
+- `lib/provider/insta_options/insta_options_basket_provider.dart`
+- `lib/models/insta_options/basket_leg.dart`
+- `lib/screens/web/insta_options/widgets/basket_chip.dart`
+- The `BasketChip()` invocation in `lib/screens/web/insta_options/insta_options_shell.dart`
+
+---
+
 ## 4. Folder layout
 
 ```
@@ -1444,6 +1481,12 @@ Bucket icon and colour:
 2. Tapping HDFCBANK in Long Buildup switches the side-rail to Chain and sets `selectionProvider.symbol = 'HDFCBANK'`.
 3. With market closed, shows the "all neutral" empty state while the index summary table still populates.
 
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/01-markets-dashboard.png`):
+- Index ticker tiles (name, LTP, change%): `/market/snapshot.indices[]` (§8.15) ✅
+- Sparkline per index: `/spot/timeseries?symbol=<index>` (§8.4) ✅
+- 2×2 buildup quadrant rows (Symbol, Prev Close, LTP, ChangePct, New OI, Old OI, OI Change, OI ChangePct): `/buildup/symbols.{long_buildup, short_buildup, short_covering, long_unwinding}[].{symbol, prev_close, ltp, change_pct, new_oi, old_oi, oi_change, oi_change_pct}` (§8.13) ✅
+- All covered. No backend tickets blocking. See `.claude/insta-options-qa/data-audit.md`.
+
 ---
 
 ### 10.2 Index Contributors
@@ -1516,6 +1559,12 @@ Sort by `|Total Pts|` descending.
 1. Sum of all `index_points` equals the index's total point change within ±0.5 points.
 2. Sector aggregation total per sector equals the sum of its stock rows within ±0.1 points.
 3. Switching index tabs preserves the Stock/Sector toggle.
+
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/07-index-contributors.png`):
+- Per-constituent row (Stock, Sector, LTP, ChangePct, Weight, Divisor, IndexPoints): `/contributors/{index}.{stock, sector, ltp, change_pct, weight, divisor, index_points}` (§8.16) ✅
+- Stock/Sector toggle: UI mode. In Sector mode, client-side group-by on `sector` field 🟡 (trivial transform, not a workaround).
+- Header sort arrows: UI sort over already-returned columns 🟡.
+- All covered. No backend tickets blocking.
 
 ---
 
@@ -1616,6 +1665,19 @@ Row height 32 (dense). Header height 40 with `para()`. Vertical divider 1px `tok
 4. OI bar widths recompute when chain max OI changes (animate 200 ms).
 5. Right-clicking an ATM CE cell shows the bottom sheet; tapping BUY enqueues a leg; BasketChip updates count and shows the "coming soon" toast on tap.
 
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/02-option-chain.png`):
+- Symbol + spot header: `/spot.spot` (§8.3) + change% from `/market/snapshot.indices[]` (§8.15) ✅
+- Expiry selector: `/expiries` (§8.2) ✅
+- Change reference dropdown drives: `/oi/change.start_offset` / `last_minutes` (§8.6) ✅
+- FUTURE LTP + change%: `/oi/chain` (§8.5) first row + `prev_close` (Ticket 1 pending) 🔶
+- CE/PE columns (Δ, OI, IV, LTP, Strike): `/analytics/chain.{delta, oi, iv, ltp, strike}` (§8.17) ✅
+- CE/PE OI Change column: `/oi/change.records[].oi_change` (§8.6) ✅
+- **CE/PE LTP %Change column: BLOCKED on Ticket 1 — needs `prev_close` on `/analytics/chain` rows** 🔶
+- Per-strike PCR column: 🟡 computed `pe.oi / max(ce.oi, 1)`
+- ATM row highlight + ±N strikes band: 🟡 computed `argmin(|strike - spot|)`
+- "View Mode" / "Absolute Mode" toggles: UI state
+- See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for Ticket 1 details.
+
 ---
 
 ### 10.4 OI Statistics
@@ -1688,6 +1750,16 @@ A smaller `BarChart` with reduced detail (rods 2px wide, no tooltips), with a dr
 1. Sum of per-strike CE OI matches `aggregate.total_ce_oi` within 0.1% once `ready: true`.
 2. Spot vertical line is accurate to ± 0.5 strike spacing.
 3. Brush window dragging updates the main chart x range within 50 ms.
+
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/03-oi-statistics.png`):
+- Cumulative CE/PE OI + ΔCE/ΔPE OI overlay: `/oi/aggregate.{total_ce_oi, total_pe_oi, total_ce_oi_change, total_pe_oi_change}` (§8.10) ✅
+- Per-strike CE/PE OI: `/oi/multistrike.{ce_oi, pe_oi}` (§8.7) OR `/analytics/chain.oi` filtered by `option_type` (§8.17) ✅
+- Per-strike ΔCE/ΔPE OI overlay: `/oi/change.records[].oi_change` (§8.6) ✅
+- ATM dashed vertical line + label: 🟡 computed from `/spot.spot` + chain strikes
+- "Oi change" toggle: UI state
+- KpiCard row (Total CE OI · Total PE OI · PCR): Mynt-original addition. Computed from `/oi/aggregate` (covered above). Not in OptionZ.
+- Brush range x-axis slider: Phase κ polish; not yet wired.
+- All covered. No backend tickets blocking.
 
 ---
 
@@ -1795,6 +1867,12 @@ Sorted descending by time. Row height 32. Header 40.
 3. Bucket table is sorted descending by time.
 4. Hovering an x position cross-highlights the matching row within 100 ms.
 
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/04-trending-oi.png`):
+- Sentiment line, Spot overlay, Cumulative CE/PE OI lines, per-bucket table fields (Time, LTP, LTP%, ΔCall OI, ΔPut OI, Diff in OI, Direction of Spot, Direction of OI, PCR): **BLOCKED on Ticket 3** — needs new `GET /oi/trending` endpoint returning `{time, sentiment, cum_ce_oi, cum_pe_oi, delta_ce_oi, delta_pe_oi, pcr, ltp, ltp_pct, dir_spot, dir_oi}` per bucket 🔶
+- Selected strikes chip list: UI state (user-picked via modal)
+- Entire screen blocks on Ticket 3. See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md).
+- **Override of previous spec**: the README originally specified a client-side sentiment formula computed over `/oi/multistrike/timeseries`. Per the 2026-05-29 no-frontend-workarounds rule, that compute moves to the backend. The formula moves to `backend-tickets.md` Ticket 3 — server returns `sentiment` directly.
+
 ---
 
 ### 10.6 PCR Ratio
@@ -1856,6 +1934,15 @@ Sorted descending by time. Row height 32. Header 40.
 2. Crosshair tooltip shows three values within 50 ms of touch.
 3. Pinch zoom maintains aspect ratio of axis ranges.
 
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/05-pcr-ratio.png`):
+- PCR series, Spot series, bucket times: `/oi/pcr/timeseries[].{pcr, spot, time}` (§8.11) ✅
+- **Time bucket selector (1/3/5/15 min): BLOCKED on Ticket 2** — needs `bucket_minutes` query param on `/oi/pcr/timeseries` 🔶
+- KpiCards (Current PCR / Day High / Day Low): Mynt-original addition. Computed from the PCR series above (trivial max/min). Not in OptionZ.
+- Zone-coloured PCR line (>1 green, <0.7 red): Mynt-original. Trivial threshold on already-returned `pcr`. Not in OptionZ.
+- Dashed reference lines at 1.0 and 0.7: Mynt-original. No data needed. Not in OptionZ.
+- Bottom pagination 1|2|3|4|5 (OptionZ-specific): ❓ meaning unclear; investigate in Phase κ.
+- See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for Ticket 2 details.
+
 ---
 
 ### 10.7 Per-Strike Options Chart
@@ -1913,7 +2000,8 @@ A single LineChart with two `LineChartBarData` series:
 - Call OI line: `tokens.profit`, width 2
 - Put OI line: `tokens.loss`, width 2
 - Single y-axis with shared scale
-- Vertical "writer accumulation" annotation: if for a contiguous span ≥ 3 buckets the OI rises while LTP falls (or vice versa), draw a faint vertical band `tokens.warning @ 15%` across that span
+
+> **2026-05-29 — Writer-accumulation vertical bands dropped from scope.** Original spec called for a contiguous-span (≥ 3 buckets) detection of OI-up-while-LTP-down (and reverse) drawn as faint warning-tinted vertical bands. OptionZ's reference (`optionz-reference/06-options-chart.png`) does not show this; computing it would require non-trivial client-side work over raw `/oi/timeseries` data (a workaround forbidden by the no-frontend-workarounds rule). Removed.
 
 **Data inputs**
 
@@ -1938,9 +2026,18 @@ A single LineChart with two `LineChartBarData` series:
 **Acceptance**
 
 1. LTP and OI series readable on independent scales (one does not dwarf the other).
-2. Writer-accumulation bands appear only when the 3-bucket rule fires.
+2. ~~Writer-accumulation bands appear only when the 3-bucket rule fires.~~ Dropped 2026-05-29.
 3. Strike dropdown reloads the three charts within 1 s.
 4. Tapping B enqueues a BUY leg; BasketChip count increments; toast appears.
+
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/06-options-chart.png`):
+- Strike Price selector: chain strikes from `/analytics/chain` (§8.17) ✅
+- **Time bucket selector (1/3/5/15 min): BLOCKED on Ticket 2** — needs `bucket_minutes` query param on `/oi/timeseries` 🔶
+- Call/Put OI Analysis CE and PE LTP + OI timeseries: `/oi/timeseries?option_type={CE|PE}&strike=K` (§8.9) returning `{close, oi}` per bucket ✅
+- Call vs Put OI bottom chart: same two `/oi/timeseries` calls ✅
+- B/S badges: UI; basket integration via `InstaOptionsBasketProvider` v1, routed to `StrategyBuilderProvider.addToBasket(...)` in Phase ι (see §3.1 Reuse Contract)
+- Writer-accumulation bands: ✘ dropped from scope.
+- Bottom pagination 1|2|3|4|5 (OptionZ-specific): ❓ investigate in Phase κ.
 
 ---
 
@@ -2010,6 +2107,12 @@ A single LineChart with two `LineChartBarData` series:
 1. BuildupPill matches the backend's `buildup` value exactly (no client reclassification).
 2. Filter toggle and sort persist across side-rail navigation (in-memory provider state, not URL in v1).
 3. ΔOI cell respects the buildup colour rules.
+
+**Data points** (audited 2026-05-29):
+- Per-contract rows (token, strike, option_type, trading_symbol, open_price, close_price, price_change, open_oi, close_oi, oi_change, buildup): `/oi/buildup` (§8.12) ✅
+- Buildup classification pill: `/oi/buildup.buildup` (server-side; do NOT reclassify) ✅
+- ATM-distance ordering: 🟡 computed from `/spot.spot` + chain strikes
+- All covered. This screen is per-contract within one chain. The per-symbol buildup (Long Buildup / Short Buildup / Short Covering / Long Unwinding quadrants in OptionZ's Markets Dashboard) is a separate screen wired in Phase ε using `/buildup/symbols` (§8.13).
 
 ---
 
@@ -2088,6 +2191,17 @@ Legs table (compact DataTable2, row height 30):
 2. Direction `Positive` returns only Bullish-templated strategies (server filters).
 3. "Add to basket" replaces existing queued legs and updates BasketChip count.
 4. Breakeven copy-to-clipboard works and toasts within 200 ms.
+
+**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/08-find-strategy.png`):
+- Filter chips (Positive/Negative/Neutral): POST `/strategy/scan.direction` (§8.20) ✅
+- %/₹ toggle: POST `/strategy/scan.min_reward_type` ✅
+- Min reward input: POST `/strategy/scan.min_reward` ✅
+- Result card header (template_name, max_pl, max_loss, breakeven[]): `/strategy/scan[].{template_name, max_pl, max_loss, breakeven}` ✅
+- Leg row (Script, Lot, LTP, OI, B/S badge): `/strategy/scan[].legs[].{trading_symbol, lot, ltp, oi, side}` ✅
+- "Direction" column (numbers like 0.00, 100.00, 200.00 visible in OptionZ): ❓ meaning unclear; inspect live response at Phase θ. Hypothesis: distance `strike - breakeven` or strike offset from ATM.
+- Cart icon: pushes legs into `StrategyBuilderProvider.setActivePredefinedStrategy(...)` (Phase ι).
+- Inspect / magnify icon: navigation to `strategy_builder_screen.dart` (Phase ι).
+- All core data covered. One ❓ ambiguity to resolve in Phase θ.
 
 ---
 
