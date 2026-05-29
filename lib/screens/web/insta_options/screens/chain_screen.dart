@@ -261,9 +261,9 @@ class _ChainTable extends StatelessWidget {
         if (showGreeks) _centerCell(_greekText(context, ce?.delta)),
         _oiCell(context, ce, isCallSide: true),
         if (showGreeks) _centerCell(_ivText(context, ce?.iv, ce?.ivSolverOk)),
-        _centerCell(_priceText(context, ce?.ltp)),
+        _centerCell(_priceText(context, ce)),
         _strikeCell(context, strike, isAtm),
-        _centerCell(_priceText(context, pe?.ltp)),
+        _centerCell(_priceText(context, pe)),
         if (showGreeks) _centerCell(_ivText(context, pe?.iv, pe?.ivSolverOk)),
         _oiCell(context, pe, isCallSide: false),
         if (showGreeks) _centerCell(_greekText(context, pe?.delta)),
@@ -312,14 +312,32 @@ class _ChainTable extends StatelessWidget {
     );
   }
 
-  Widget _priceText(BuildContext context, double? ltp) => Text(
-        InstaOptionsFormat.price(ltp),
-        style: MyntWebTextStyles.price(
-          context,
-          color: tokens.textPrimary,
-          fontWeight: FontWeight.w600,
+  Widget _priceText(BuildContext context, ChainRow? row) {
+    final ltpLine = Text(
+      InstaOptionsFormat.price(row?.ltp),
+      style: MyntWebTextStyles.price(
+        context,
+        color: tokens.textPrimary,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    final pct = row?.ltpChangePct;
+    if (pct == null) return ltpLine;
+    final color = pct == 0
+        ? tokens.textSecondary
+        : (pct > 0 ? tokens.profit : tokens.loss);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        ltpLine,
+        Text(
+          InstaOptionsFormat.changePct(pct),
+          style: MyntWebTextStyles.caption(context, color: color),
         ),
-      );
+      ],
+    );
+  }
 
   Widget _greekText(BuildContext context, double? value) => Text(
         InstaOptionsFormat.greek(value),
