@@ -18,6 +18,8 @@ Each ticket below lists the affected endpoint, the missing field/param/endpoint,
 
 ## Ticket 1: Add `prev_close` to /analytics/chain rows
 
+**Status**: ✅ **Resolved 2026-05-29** — verified live: CE + PE rows now include `prev_close`; FUT row is correctly excluded (consistent with the FUT-row-has-no-Greeks pattern). Phase γ unblocked.
+
 **Priority**: High (Option Chain screen blocks)
 **Endpoint**: `GET /analytics/chain` (README §8.17)
 **Frontend phase blocked**: γ — Option Chain LTP %Change column.
@@ -67,6 +69,8 @@ Hide the % change suffix. LTP column shows just the LTP value (current behavior 
 
 ## Ticket 2: Add `bucket_minutes` query param to timeseries endpoints
 
+**Status**: ✅ **Resolved 2026-05-29** — verified live: `/oi/pcr/timeseries` accepts `bucket_minutes=1|5|15` without error and windows accordingly (e.g. `bm=15` returns the 15:30 close bucket; default returns the underlying tick at 10:00). Underlying PCR series is sparse today but the param plumbs through. Phase δ unblocked.
+
 **Priority**: Medium (PCR Ratio + Options Chart per-strike Time selector blocks)
 **Endpoints**:
 - `GET /oi/pcr/timeseries` (README §8.11)
@@ -98,6 +102,8 @@ Show the dropdown disabled with a "Coming soon" tooltip. Phase δ doesn't commit
 ---
 
 ## Ticket 3: New endpoint `/oi/trending`
+
+**Status**: ✅ **Resolved 2026-05-29** — verified live: endpoint returns the contracted per-bucket records `{time, sentiment, cum_ce_oi, cum_pe_oi, delta_ce_oi, delta_pe_oi, pcr, ltp, ltp_pct, dir_spot, dir_oi}`. Sentiment values like `0.9692`, `-1.0`, `0.849` showing real classification. `ltp` is currently `0.0` due to the Ticket 4 cascade — Trending OI's spot overlay will populate once Ticket 4's snapshot/contributors gap is closed. Phase η unblocked.
 
 **Priority**: Medium (Trending OI screen blocks entirely)
 **Endpoint**: NEW
@@ -176,6 +182,8 @@ Phase η pauses entirely. The Trending OI sub-screen shows a "Coming soon — ba
 
 ## Ticket 4: Populate prior-bar reference fields on snapshot / contributors / buildup
 
+**Status**: ⚠ **Partially resolved 2026-05-29** — `/oi/buildup` per-contract fix landed: `open_oi`, `close_oi`, `price_change` are now populated and the classification distribution is real (Long Buildup 38, Short Buildup 22, Short Covering 71, Long Unwinding 19, Neutral 320 on 470 NIFTY 02-JUN-2026 contracts). The OI Buildup screen (Phase 3) will start showing real pills automatically. **Still outstanding**: (a) `/market/snapshot.indices[].{today_open, yesterday_close, change_pct}` still zero → Markets Dashboard tiles still render `0.00%`; (b) `/market/snapshot.advances/declines/unchanged` still 0/0/146 → snapshot-level KPIs blank; (c) `/contributors/{index}.{change_pct, index_points}` still zero on all 50 NIFTY constituents → Index Contributors `Change %` + `Index Pts` columns still blank; (d) `/buildup/symbols` still returns all four bucket arrays empty → Markets Dashboard 2×2 grid still empty. Phase ε + ζ visible data remain blocked on the remainder.
+
 **Priority**: High (Markets Dashboard + Index Contributors visibly broken; OI Buildup classifications collapse to Neutral)
 **Endpoints**:
 - `GET /market/snapshot` (README §8.15) — `indices[]` and `per_index[].stocks[]`
@@ -218,12 +226,12 @@ None — per `feedback_no_frontend_workarounds`, no client-side synthesis from `
 
 ## Ticket dependencies → phase blocking
 
-| Backend ticket | Frontend phase blocked | If ticket slips |
+| Backend ticket | Frontend phase blocked | Status (2026-05-29) |
 |---|---|---|
-| 1 (`prev_close` on `/analytics/chain`) | γ — Option Chain LTP%Change | Hide column; ship rest of chain screen |
-| 2 (`bucket_minutes` on timeseries) | δ — PCR + Options Chart Time selector | Show selector disabled with "Coming soon" tooltip |
-| 3 (new `/oi/trending`) | η — Trending OI screen | Phase η pauses; ship Phases ε, ζ, θ first |
-| 4 (prior-bar reference fields) | ε / ζ data visibility | Phases ε + ζ ship with current empty/zero render |
+| 1 (`prev_close` on `/analytics/chain`) | γ — Option Chain LTP%Change | ✅ Resolved — Phase γ ready to ship |
+| 2 (`bucket_minutes` on timeseries) | δ — PCR + Options Chart Time selector | ✅ Resolved — Phase δ ready to ship |
+| 3 (new `/oi/trending`) | η — Trending OI screen | ✅ Resolved — Phase η ready to ship (Trending OI's spot overlay will follow Ticket 4 closure) |
+| 4 (prior-bar reference fields) | ε / ζ data visibility | ⚠ Partial — `/oi/buildup` fixed; snapshot + contributors + `/buildup/symbols` still pending |
 
 ## Out of scope for this batch (not tickets, just notes)
 
