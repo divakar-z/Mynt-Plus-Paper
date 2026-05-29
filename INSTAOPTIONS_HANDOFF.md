@@ -2,8 +2,8 @@
 
 Last updated: 2026-05-29 (Phase β — Per-Strike finalized + writer bands dropped)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
-Audit: `.claude/insta-options-qa/data-audit.md` (OptionZ vs our backend)
-Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) (also mirrored at `.claude/insta-options-qa/backend-tickets.md` for local audit)
+Audit: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) (OptionZ vs our backend; mirrored at `.claude/insta-options-qa/data-audit.md` for local working copy)
+Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) (also mirrored at `.claude/insta-options-qa/backend-tickets.md`)
 Plan (original): `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md`
 Plan (post-audit): `~/.claude/plans/now-you-have-complete-purring-turtle.md`
 

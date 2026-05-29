@@ -129,7 +129,7 @@ This boundary keeps the analytics surface fully usable today while the hand-off 
 
 ## 3.1 Mynt-Plus-Web reuse contract
 
-Added 2026-05-29 after the OptionZ audit (see `.claude/insta-options-qa/data-audit.md`). InstaOptions Analytics integrates with — and must NOT duplicate — the following existing Mynt-Plus-Web surfaces:
+Added 2026-05-29 after the OptionZ audit (see [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md)). InstaOptions Analytics integrates with — and must NOT duplicate — the following existing Mynt-Plus-Web surfaces:
 
 | Surface | Path | How InstaOptions uses it |
 |---|---|---|
@@ -1485,11 +1485,16 @@ Bucket icon and colour:
 2. Tapping HDFCBANK in Long Buildup switches the side-rail to Chain and sets `selectionProvider.symbol = 'HDFCBANK'`.
 3. With market closed, shows the "all neutral" empty state while the index summary table still populates.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/01-markets-dashboard.png`):
+**Data points** (audited 2026-05-29):
 - Index ticker tiles (name, LTP, change%): `/market/snapshot.indices[]` (§8.15) ✅
 - Sparkline per index: `/spot/timeseries?symbol=<index>` (§8.4) ✅
 - 2×2 buildup quadrant rows (Symbol, Prev Close, LTP, ChangePct, New OI, Old OI, OI Change, OI ChangePct): `/buildup/symbols.{long_buildup, short_buildup, short_covering, long_unwinding}[].{symbol, prev_close, ltp, change_pct, new_oi, old_oi, oi_change, oi_change_pct}` (§8.13) ✅
-- All covered. No backend tickets blocking. See `.claude/insta-options-qa/data-audit.md`.
+
+**See also**:
+- Reference screenshot: `01-markets-dashboard.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 01
+- Backend tickets: none blocking
+- **Flow**: `InstaOptionsApi.getMarketSnapshot() + .getBuildupSymbols()` → `InstaOptionsMarketsProvider` → `MarketsDashboardScreen` (Phase ε)
 
 ---
 
@@ -1564,11 +1569,16 @@ Sort by `|Total Pts|` descending.
 2. Sector aggregation total per sector equals the sum of its stock rows within ±0.1 points.
 3. Switching index tabs preserves the Stock/Sector toggle.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/07-index-contributors.png`):
+**Data points** (audited 2026-05-29):
 - Per-constituent row (Stock, Sector, LTP, ChangePct, Weight, Divisor, IndexPoints): `/contributors/{index}.{stock, sector, ltp, change_pct, weight, divisor, index_points}` (§8.16) ✅
 - Stock/Sector toggle: UI mode. In Sector mode, client-side group-by on `sector` field 🟡 (trivial transform, not a workaround).
 - Header sort arrows: UI sort over already-returned columns 🟡.
-- All covered. No backend tickets blocking.
+
+**See also**:
+- Reference screenshot: `07-index-contributors.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 07
+- Backend tickets: none blocking
+- **Flow**: `InstaOptionsApi.getContributors(index)` → `InstaOptionsContributorsProvider` → `IndexContributorsScreen` (Phase ζ)
 
 ---
 
@@ -1669,7 +1679,7 @@ Row height 32 (dense). Header height 40 with `para()`. Vertical divider 1px `tok
 4. OI bar widths recompute when chain max OI changes (animate 200 ms).
 5. Right-clicking an ATM CE cell shows the bottom sheet; tapping BUY enqueues a leg; BasketChip updates count and shows the "coming soon" toast on tap.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/02-option-chain.png`):
+**Data points** (audited 2026-05-29):
 - Symbol + spot header: `/spot.spot` (§8.3) + change% from `/market/snapshot.indices[]` (§8.15) ✅
 - Expiry selector: `/expiries` (§8.2) ✅
 - Change reference dropdown drives: `/oi/change.start_offset` / `last_minutes` (§8.6) ✅
@@ -1680,7 +1690,12 @@ Row height 32 (dense). Header height 40 with `para()`. Vertical divider 1px `tok
 - Per-strike PCR column: 🟡 computed `pe.oi / max(ce.oi, 1)`
 - ATM row highlight + ±N strikes band: 🟡 computed `argmin(|strike - spot|)`
 - "View Mode" / "Absolute Mode" toggles: UI state
-- See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for Ticket 1 details.
+
+**See also**:
+- Reference screenshot: `02-option-chain.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 02
+- Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) → Ticket 1 (Phase γ blocked)
+- **Flow**: `InstaOptionsApi.getAnalyticsChain() + .getSpot() + .getOiChange()` → `InstaOptionsChainProvider` → `ChainScreen` (Phase 2, already shipped; Phase γ adds LTP %Change column)
 
 ---
 
@@ -1755,15 +1770,20 @@ A smaller `BarChart` with reduced detail (rods 2px wide, no tooltips), with a dr
 2. Spot vertical line is accurate to ± 0.5 strike spacing.
 3. Brush window dragging updates the main chart x range within 50 ms.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/03-oi-statistics.png`):
+**Data points** (audited 2026-05-29):
 - Cumulative CE/PE OI + ΔCE/ΔPE OI overlay: `/oi/aggregate.{total_ce_oi, total_pe_oi, total_ce_oi_change, total_pe_oi_change}` (§8.10) ✅
 - Per-strike CE/PE OI: `/oi/multistrike.{ce_oi, pe_oi}` (§8.7) OR `/analytics/chain.oi` filtered by `option_type` (§8.17) ✅
 - Per-strike ΔCE/ΔPE OI overlay: `/oi/change.records[].oi_change` (§8.6) ✅
 - ATM dashed vertical line + label: 🟡 computed from `/spot.spot` + chain strikes
-- "Oi change" toggle: UI state
+- "Oi change" toggle: UI state (currently inert post-Phase-β — see HANDOFF follow-ups)
 - KpiCard row (Total CE OI · Total PE OI · PCR): Mynt-original addition. Computed from `/oi/aggregate` (covered above). Not in OptionZ.
 - Brush range x-axis slider: Phase κ polish; not yet wired.
-- All covered. No backend tickets blocking.
+
+**See also**:
+- Reference screenshot: `03-oi-statistics.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 03
+- Backend tickets: none blocking
+- **Flow**: `InstaOptionsApi.getOiAggregate() + .getAnalyticsChain() + .getSpot()` → `InstaOptionsAggregateProvider` (4s poll, mount-tied) → `OiStatsScreen` (Phase 4, already shipped)
 
 ---
 
@@ -1871,11 +1891,16 @@ Sorted descending by time. Row height 32. Header 40.
 3. Bucket table is sorted descending by time.
 4. Hovering an x position cross-highlights the matching row within 100 ms.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/04-trending-oi.png`):
+**Data points** (audited 2026-05-29):
 - Sentiment line, Spot overlay, Cumulative CE/PE OI lines, per-bucket table fields (Time, LTP, LTP%, ΔCall OI, ΔPut OI, Diff in OI, Direction of Spot, Direction of OI, PCR): **BLOCKED on Ticket 3** — needs new `GET /oi/trending` endpoint returning `{time, sentiment, cum_ce_oi, cum_pe_oi, delta_ce_oi, delta_pe_oi, pcr, ltp, ltp_pct, dir_spot, dir_oi}` per bucket 🔶
 - Selected strikes chip list: UI state (user-picked via modal)
-- Entire screen blocks on Ticket 3. See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md).
-- **Override of previous spec**: the README originally specified a client-side sentiment formula computed over `/oi/multistrike/timeseries`. Per the 2026-05-29 no-frontend-workarounds rule, that compute moves to the backend. The formula moves to `backend-tickets.md` Ticket 3 — server returns `sentiment` directly.
+- **Override of previous spec**: the README originally specified a client-side sentiment formula computed over `/oi/multistrike/timeseries`. Per the 2026-05-29 no-frontend-workarounds rule, that compute moves to the backend. The formula moves to Ticket 3 — server returns `sentiment` directly.
+
+**See also**:
+- Reference screenshot: `04-trending-oi.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 04
+- Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) → Ticket 3 (Phase η blocked entirely)
+- **Flow** (post-Ticket-3): `InstaOptionsApi.getTrending(strikes, types, bucketMinutes)` → `InstaOptionsTrendingProvider` → `TrendingOiScreen` (Phase η)
 
 ---
 
@@ -1938,14 +1963,19 @@ Sorted descending by time. Row height 32. Header 40.
 2. Crosshair tooltip shows three values within 50 ms of touch.
 3. Pinch zoom maintains aspect ratio of axis ranges.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/05-pcr-ratio.png`):
+**Data points** (audited 2026-05-29):
 - PCR series, Spot series, bucket times: `/oi/pcr/timeseries[].{pcr, spot, time}` (§8.11) ✅
 - **Time bucket selector (1/3/5/15 min): BLOCKED on Ticket 2** — needs `bucket_minutes` query param on `/oi/pcr/timeseries` 🔶
 - KpiCards (Current PCR / Day High / Day Low): Mynt-original addition. Computed from the PCR series above (trivial max/min). Not in OptionZ.
 - Zone-coloured PCR line (>1 green, <0.7 red): Mynt-original. Trivial threshold on already-returned `pcr`. Not in OptionZ.
 - Dashed reference lines at 1.0 and 0.7: Mynt-original. No data needed. Not in OptionZ.
 - Bottom pagination 1|2|3|4|5 (OptionZ-specific): ❓ meaning unclear; investigate in Phase κ.
-- See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for Ticket 2 details.
+
+**See also**:
+- Reference screenshot: `05-pcr-ratio.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 05
+- Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) → Ticket 2 (Phase δ blocks the bucket selector; chart core is already shipped in Phase 4)
+- **Flow**: `InstaOptionsApi.getPcrTimeseries()` → `InstaOptionsPcrProvider` (60s poll, mount-tied) → `PcrScreen` (Phase 4, already shipped)
 
 ---
 
@@ -2034,14 +2064,20 @@ A single LineChart with two `LineChartBarData` series:
 3. Strike dropdown reloads the three charts within 1 s.
 4. Tapping B enqueues a BUY leg; BasketChip count increments; toast appears.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/06-options-chart.png`):
+**Data points** (audited 2026-05-29):
 - Strike Price selector: chain strikes from `/analytics/chain` (§8.17) ✅
 - **Time bucket selector (1/3/5/15 min): BLOCKED on Ticket 2** — needs `bucket_minutes` query param on `/oi/timeseries` 🔶
 - Call/Put OI Analysis CE and PE LTP + OI timeseries: `/oi/timeseries?option_type={CE|PE}&strike=K` (§8.9) returning `{close, oi}` per bucket ✅
 - Call vs Put OI bottom chart: same two `/oi/timeseries` calls ✅
 - B/S badges: UI; basket integration via `InstaOptionsBasketProvider` v1, routed to `StrategyBuilderProvider.addToBasket(...)` in Phase ι (see §3.1 Reuse Contract)
-- Writer-accumulation bands: ✘ dropped from scope.
+- Writer-accumulation bands: ✘ dropped from scope (Phase β).
 - Bottom pagination 1|2|3|4|5 (OptionZ-specific): ❓ investigate in Phase κ.
+
+**See also**:
+- Reference screenshot: `06-options-chart.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 06
+- Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) → Ticket 2 (Phase δ blocks the bucket selector; chart core shipped Phase β)
+- **Flow**: `InstaOptionsApi.getOiTimeseries(option_type, strike)` × 2 (CE + PE) → `InstaOptionsStrikeProvider` (60s poll, mount-tied) → `PerStrikeScreen` (Phase β, already shipped)
 
 ---
 
@@ -2117,6 +2153,12 @@ A single LineChart with two `LineChartBarData` series:
 - Buildup classification pill: `/oi/buildup.buildup` (server-side; do NOT reclassify) ✅
 - ATM-distance ordering: 🟡 computed from `/spot.spot` + chain strikes
 - All covered. This screen is per-contract within one chain. The per-symbol buildup (Long Buildup / Short Buildup / Short Covering / Long Unwinding quadrants in OptionZ's Markets Dashboard) is a separate screen wired in Phase ε using `/buildup/symbols` (§8.13).
+
+**See also**:
+- Reference screenshot: OptionZ does not have a dedicated per-contract Buildup screen — this is a Mynt-original sub-screen; OptionZ shows only the per-symbol quadrants on its Markets Dashboard (see `01-markets-dashboard.png`)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Cross-screen surfaces + Screen 01 (for the per-symbol view)
+- Backend tickets: none blocking
+- **Flow**: `InstaOptionsApi.getBuildup(symbol, expiry)` → `InstaOptionsBuildupProvider` → `BuildupScreen` (Phase 3, already shipped)
 
 ---
 
@@ -2196,7 +2238,7 @@ Legs table (compact DataTable2, row height 30):
 3. "Add to basket" replaces existing queued legs and updates BasketChip count.
 4. Breakeven copy-to-clipboard works and toasts within 200 ms.
 
-**Data points** (audited 2026-05-29, matches OptionZ `optionz-reference/08-find-strategy.png`):
+**Data points** (audited 2026-05-29):
 - Filter chips (Positive/Negative/Neutral): POST `/strategy/scan.direction` (§8.20) ✅
 - %/₹ toggle: POST `/strategy/scan.min_reward_type` ✅
 - Min reward input: POST `/strategy/scan.min_reward` ✅
@@ -2205,7 +2247,12 @@ Legs table (compact DataTable2, row height 30):
 - "Direction" column (numbers like 0.00, 100.00, 200.00 visible in OptionZ): ❓ meaning unclear; inspect live response at Phase θ. Hypothesis: distance `strike - breakeven` or strike offset from ATM.
 - Cart icon: pushes legs into `StrategyBuilderProvider.setActivePredefinedStrategy(...)` (Phase ι).
 - Inspect / magnify icon: navigation to `strategy_builder_screen.dart` (Phase ι).
-- All core data covered. One ❓ ambiguity to resolve in Phase θ.
+
+**See also**:
+- Reference screenshot: `08-find-strategy.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
+- Audit row: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) → Screen 08
+- Backend tickets: none blocking the screen build (one ❓ to resolve at build time — "Direction" column meaning from live response)
+- **Flow**: `InstaOptionsApi.scanStrategies(direction, minReward, type)` → `InstaOptionsStrategyScanProvider` (on-demand) → `FindStrategyScreen` (Phase θ)
 
 ---
 
