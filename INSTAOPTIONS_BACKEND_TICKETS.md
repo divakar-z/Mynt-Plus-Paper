@@ -174,6 +174,48 @@ Phase η pauses entirely. The Trending OI sub-screen shows a "Coming soon — ba
 
 ---
 
+## Ticket 4: Populate prior-bar reference fields on snapshot / contributors / buildup
+
+**Priority**: High (Markets Dashboard + Index Contributors visibly broken; OI Buildup classifications collapse to Neutral)
+**Endpoints**:
+- `GET /market/snapshot` (README §8.15) — `indices[]` and `per_index[].stocks[]`
+- `GET /contributors/{index}` (README §8.16)
+- `GET /oi/buildup` (README §8.12)
+- `GET /buildup/symbols` (README §8.13) — downstream of `/oi/buildup`
+**Discovered**: 2026-05-29 during Phase ε live QA.
+**Frontend phases impacted**: ε (Markets Dashboard data), ζ (Index Contributors), partial visibility on OI Buildup classifications.
+
+### Observed (2026-05-29 15:46 IST, against `192.168.5.61:8000`)
+
+`/health` reports `ws_connected: true`, but `analytics.last_run_ts = 15:29:59 IST` — analytics last ran *at market close* and hasn't refreshed since. The raw tick feed (`/spot/timeseries`) is healthy (real 1-min OHLC bars showing NIFTY dropped ~1.36% intraday). The aggregation/reference layer is the problem.
+
+| Endpoint | Working | Broken (zero on a live trading day) |
+|---|---|---|
+| `/market/snapshot.indices[*]` | `ltp` | `today_open`, `yesterday_close`, `change_pct` |
+| `/market/snapshot.per_index[*].stocks[*]` | `ltp` | `today_open`, `yesterday_close`, `gap_pct`, `change_pct` |
+| `/market/snapshot` top-level | — | `advances`, `declines` (both 0) |
+| `/contributors/{index}` | `ltp`, `sector`, `weight`, `divisor` | `change_pct`, `index_points` |
+| `/oi/buildup` per-contract | `open_price`, `close_price`, `trading_symbol`, `strike` | `price_change`, `open_oi`, `close_oi`, `oi_change` → every row classified `Neutral` |
+| `/buildup/symbols` | 200; structure correct | all four bucket arrays empty (Neutral cascade from `/oi/buildup`) |
+
+### Why
+Without these fields populated, Markets Dashboard tiles show `0.00%` change despite real intraday moves, the 2×2 buildup grid is fully empty, Index Contributors will show 0 points everywhere, and Advances/Declines are stuck at 0.
+
+### Proposed fix (backend)
+1. After each session close, persist the close snapshot per token; expose as `yesterday_close` / `prev_close` on next session.
+2. On first tick of the session per symbol, capture `today_open`.
+3. Recompute `change_pct = (ltp - yesterday_close) / yesterday_close * 100` per tick or per analytics-job.
+4. Capture `open_oi` (start-of-bucket OI) and `close_oi` (end-of-bucket OI) on the OI snapshot task — currently both are 0 on `/oi/buildup`.
+5. Once 1–4 land, `/buildup/symbols` self-populates (it's a roll-up of non-Neutral `/oi/buildup` rows).
+
+### What the frontend will do after delivery
+Nothing — Phase ε already renders these fields verbatim. Tiles will color change% green/red, quadrants will populate with real symbols, Phase ζ will surface real `index_points`.
+
+### Frontend fallback if not delivered
+None — per `feedback_no_frontend_workarounds`, no client-side synthesis from `/spot/timeseries`. Dashboard ships with the current empty/zero state; spec-defined empty messages already render.
+
+---
+
 ## Ticket dependencies → phase blocking
 
 | Backend ticket | Frontend phase blocked | If ticket slips |
@@ -181,6 +223,7 @@ Phase η pauses entirely. The Trending OI sub-screen shows a "Coming soon — ba
 | 1 (`prev_close` on `/analytics/chain`) | γ — Option Chain LTP%Change | Hide column; ship rest of chain screen |
 | 2 (`bucket_minutes` on timeseries) | δ — PCR + Options Chart Time selector | Show selector disabled with "Coming soon" tooltip |
 | 3 (new `/oi/trending`) | η — Trending OI screen | Phase η pauses; ship Phases ε, ζ, θ first |
+| 4 (prior-bar reference fields) | ε / ζ data visibility | Phases ε + ζ ship with current empty/zero render |
 
 ## Out of scope for this batch (not tickets, just notes)
 

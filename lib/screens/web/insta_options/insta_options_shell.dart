@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/buildup_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/chain_screen.dart';
-import 'package:mynt_plus/screens/web/insta_options/screens/markets_placeholder_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/markets_dashboard_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/oi_stats_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/pcr_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/per_strike_screen.dart';
@@ -38,7 +38,9 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
   Widget _buildActiveSubScreen() {
     switch (_active) {
       case InstaSubScreen.markets:
-        return const MarketsPlaceholderScreen();
+        return MarketsDashboardScreen(
+          onOpenChain: () => _onSelect(InstaSubScreen.chain),
+        );
       case InstaSubScreen.contributors:
         return const InstaPlaceholderScreen(
           title: 'Index Contributors',

@@ -4,12 +4,15 @@ import 'package:http/http.dart' as http;
 import 'package:mynt_plus/api/insta_options/insta_options_config.dart';
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/insta_options/buildup_row.dart';
+import 'package:mynt_plus/models/insta_options/buildup_symbol.dart';
 import 'package:mynt_plus/models/insta_options/chain_row.dart';
 import 'package:mynt_plus/models/insta_options/expiries_response.dart';
 import 'package:mynt_plus/models/insta_options/health_status.dart';
+import 'package:mynt_plus/models/insta_options/market_snapshot.dart';
 import 'package:mynt_plus/models/insta_options/oi_aggregate.dart';
 import 'package:mynt_plus/models/insta_options/oi_timeseries_point.dart';
 import 'package:mynt_plus/models/insta_options/pcr_point.dart';
+import 'package:mynt_plus/models/insta_options/spot_timeseries_point.dart';
 import 'package:mynt_plus/models/insta_options/symbols_response.dart';
 
 /// Typed exception for OI Data backend failures.
@@ -79,6 +82,44 @@ class InstaOptionsApi {
     );
     final map = body as Map<String, dynamic>;
     return (map['spot'] as num?)?.toDouble() ?? 0;
+  }
+
+  // -------- §8.4 GET /spot/timeseries --------
+  Future<List<SpotTimeseriesPoint>> getSpotTimeseries({
+    required String exchange,
+    required String symbol,
+    String? date,
+  }) async {
+    final body = await _get(
+      path: '/spot/timeseries',
+      query: {
+        'exchange': exchange,
+        'symbol': symbol,
+        if (date != null) 'date': date,
+      },
+    );
+    final map = body as Map<String, dynamic>;
+    final bars = map['bars'] as List<dynamic>? ?? const [];
+    return bars
+        .map((e) => SpotTimeseriesPoint.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  // -------- §8.13 GET /buildup/symbols --------
+  Future<BuildupSymbolsResponse> getBuildupSymbols({
+    required String exchange,
+  }) async {
+    final body = await _get(
+      path: '/buildup/symbols',
+      query: {'exchange': exchange},
+    );
+    return BuildupSymbolsResponse.fromJson(body as Map<String, dynamic>);
+  }
+
+  // -------- §8.15 GET /market/snapshot --------
+  Future<MarketSnapshot> getMarketSnapshot() async {
+    final body = await _get(path: '/market/snapshot');
+    return MarketSnapshot.fromJson(body as Map<String, dynamic>);
   }
 
   // -------- §8.17 GET /analytics/chain --------
