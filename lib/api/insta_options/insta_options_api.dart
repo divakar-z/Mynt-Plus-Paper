@@ -8,6 +8,7 @@ import 'package:mynt_plus/models/insta_options/chain_row.dart';
 import 'package:mynt_plus/models/insta_options/expiries_response.dart';
 import 'package:mynt_plus/models/insta_options/health_status.dart';
 import 'package:mynt_plus/models/insta_options/oi_aggregate.dart';
+import 'package:mynt_plus/models/insta_options/oi_timeseries_point.dart';
 import 'package:mynt_plus/models/insta_options/pcr_point.dart';
 import 'package:mynt_plus/models/insta_options/symbols_response.dart';
 
@@ -93,6 +94,33 @@ class InstaOptionsApi {
     final list = body as List<dynamic>;
     return list
         .map((e) => ChainRow.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  // -------- §8.9 GET /oi/timeseries --------
+  Future<List<OiTimeseriesPoint>> getOiTimeseries({
+    required String exchange,
+    required String symbol,
+    required String expiry,
+    required String optionType,
+    double? strike,
+    String? date,
+  }) async {
+    final body = await _get(
+      path: '/oi/timeseries',
+      query: {
+        'exchange': exchange,
+        'symbol': symbol,
+        'expiry': expiry,
+        'option_type': optionType,
+        if (strike != null && optionType != 'FUT')
+          'strike': strike.toStringAsFixed(0),
+        if (date != null) 'date': date,
+      },
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => OiTimeseriesPoint.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
   }
 

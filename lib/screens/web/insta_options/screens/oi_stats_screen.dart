@@ -94,7 +94,6 @@ class _OiStatsScreenState extends ConsumerState<OiStatsScreen> {
                       tokens: tokens,
                       strikes: agg.perStrike,
                       spot: agg.spot,
-                      showChangeOverlay: _showChangeOverlay,
                     ),
                   ),
                 ],
@@ -425,13 +424,11 @@ class _PerStrikeBars extends StatelessWidget {
   final InstaOptionsTokens tokens;
   final List<({double strike, int ceOi, int peOi})> strikes;
   final double spot;
-  final bool showChangeOverlay;
 
   const _PerStrikeBars({
     required this.tokens,
     required this.strikes,
     required this.spot,
-    required this.showChangeOverlay,
   });
 
   @override
@@ -631,14 +628,6 @@ class _PerStrikeBars extends StatelessWidget {
             ),
           ),
         ),
-        if (showChangeOverlay)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              'ΔOI overlay enabled — live deltas land with the WS rollout.',
-              style: MyntWebTextStyles.caption(context, color: tokens.textMuted),
-            ),
-          ),
       ],
     );
   }

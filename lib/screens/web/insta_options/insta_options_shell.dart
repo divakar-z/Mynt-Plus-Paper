@@ -6,6 +6,7 @@ import 'package:mynt_plus/screens/web/insta_options/screens/chain_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/markets_placeholder_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/oi_stats_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/pcr_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/per_strike_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/basket_chip.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/placeholder_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/side_rail.dart';
@@ -57,11 +58,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
       case InstaSubScreen.pcr:
         return const PcrScreen();
       case InstaSubScreen.strike:
-        return const InstaPlaceholderScreen(
-          title: 'Per-Strike Options Chart',
-          phaseLabel: 'Phase 5',
-          icon: Icons.candlestick_chart,
-        );
+        return const PerStrikeScreen();
       case InstaSubScreen.buildup:
         return const BuildupScreen();
       case InstaSubScreen.findStrategy:
