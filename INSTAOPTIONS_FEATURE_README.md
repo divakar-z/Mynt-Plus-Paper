@@ -106,6 +106,8 @@ Each sub-screen has a top **SymbolExpiryBar** widget (section 9.1). The bar read
 
 ## 3. Deferred — order placement integration
 
+> **Update 2026-05-29**: this section is superseded by §3.1 (Mynt-Plus-Web reuse contract) below. The post-OptionZ-audit plan schedules order placement as **Phase ι** — wiring B/S taps + Find Strategy cart icon into the existing `StrategyBuilderProvider.addToBasket(...)` / `setActivePredefinedStrategy(...)` rather than a parallel hand-off mechanism. The text below is retained for historical context.
+
 The original spec defined an `/strategy-builder?legs=...` hand-off. **That is not built in v1.** When InstaOptions is ready for order placement, a follow-up sprint will:
 
 1. Decide how legs flow from InstaOptions to the existing [StrategyBuilderProvider](lib/provider/strategy_builder_provider.dart). Options under consideration:
@@ -118,7 +120,7 @@ The original spec defined an `/strategy-builder?legs=...` hand-off. **That is no
 **Until that sprint lands:**
 - All "add leg" actions only mutate `InstaOptionsBasketProvider` (in-memory list).
 - The floating chip renders the count but tap is a no-op or a toast.
-- BUY/SELL buttons in the bottom sheet are visually present but tap shows `"Order placement coming in a future release."` via the project's existing snack-bar helper in [lib/sharedWidget/snack_bar.dart](lib/sharedWidget/snack_bar.dart).
+- BUY/SELL buttons in the bottom sheet are visually present and tap calls `ResponsiveSnackBar.showSuccess(ctx, "Added BUY/SELL {tradingSymbol} to strategy")` from [lib/utils/responsive_snackbar.dart](lib/utils/responsive_snackbar.dart) (Phase β). The leg is added to the local `InstaOptionsBasketProvider` for visual feedback; Phase ι rewires this to call `StrategyBuilderProvider.addToBasket(...)` directly. See §3.1.
 - The Find-Strategy "Add to basket" button replaces the in-memory basket with the strategy's legs and shows the same toast.
 
 This boundary keeps the analytics surface fully usable today while the hand-off contract is being designed.
@@ -282,6 +284,8 @@ Persisted to `Preferences` under the key `instaoptions:selection`. Read on first
 
 ### 5.2 Basket (in-memory only)
 
+> **Update 2026-05-29**: `InstaOptionsBasketProvider` + `BasketLeg` are scheduled for deletion in **Phase ι**. The replacement is to route all B/S taps and Find Strategy cart icons directly into the existing `StrategyBuilderProvider` via the `ChainRow → OptionValues` adapter documented in §3.1. Phases ε-θ ship with the legacy in-memory basket so they're unblocked; Phase ι removes the duplicate cleanly once it lands. The shape below is what's still on the working tree pre-Phase ι.
+
 ```dart
 class BasketLeg {
   final String side;            // 'B' | 'S'
@@ -294,7 +298,7 @@ class BasketLeg {
 }
 ```
 
-Methods: `add(leg)`, `removeAt(i)`, `clear()`, getter `queuedLegs`. **No `toUrl()` and no `navigateToStrategyBuilder()` until the deferred sprint in section 3.**
+Methods: `add(leg)`, `removeAt(i)`, `clear()`, getter `queuedLegs`. **Pre-Phase-ι**: B/S taps add a `BasketLeg` here + `ResponsiveSnackBar.showSuccess(ctx, "Added BUY/SELL {tradingSymbol} to strategy")`. **Post-Phase-ι**: B/S taps construct an `OptionValues` via the §3.1 adapter and call `StrategyBuilderProvider.addToBasket(...)` directly.
 
 ### 5.3 Streaming
 
@@ -2260,7 +2264,22 @@ Tests live in `test/insta_options/`. Run via `flutter test test/insta_options/`.
 
 ## 14. Build order (phases)
 
-This matches the phase ordering in the implementation plan at `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md`. Each phase ends with a dedicated QA sub-agent (Chrome DevTools MCP) and a git commit.
+> **Update 2026-05-29**: The original Phase 0-11 sequence below ran through Phase 4 (committed). After the OptionZ audit on 2026-05-29, Phases 5-11 were **superseded** by a renumbered α-κ sequence that adds the backend-tickets gate, drops the writer-accumulation bands, and unblocks the previously-deferred order-placement integration. The live phase table is in [INSTAOPTIONS_HANDOFF.md](INSTAOPTIONS_HANDOFF.md) — start there. The original sequence is retained below for historical context.
+>
+> **Phase ↔ HANDOFF mapping** (after the audit):
+> - Original Phase 5 (Per-Strike Chart) → **Phase β** ✅ (commit 97fd8825); writer-accumulation bands dropped
+> - Original Phase 6 (Trending OI) → **Phase η** ⚠️ blocked on backend Ticket 3
+> - Original Phase 7 (Markets Dashboard) → **Phase ε** ☐ todo
+> - Original Phase 8 (Index Contributors) → **Phase ζ** ☐ todo
+> - Original Phase 9 (Find Strategy) → **Phase θ** ☐ todo
+> - Original Phase 10 (Polish) → **Phase κ** ☐ todo
+> - Original Phase 11 (Open follow-ups housekeeping) → folded into HANDOFF.md sections
+> - **NEW Phase α** ✅ (commit d3128f05): backend tickets doc + reuse contract + data points + this update
+> - **NEW Phase γ** ⚠️ blocked: Option Chain LTP%Change column on backend Ticket 1
+> - **NEW Phase δ** ⚠️ blocked: PCR + Per-Strike time-bucket selector on backend Ticket 2
+> - **NEW Phase ι** ☐ todo (optional): basket rewire to existing `StrategyBuilderProvider`
+
+This matches the phase ordering in the implementation plan at `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md` (original) and `~/.claude/plans/now-you-have-complete-purring-turtle.md` (post-audit). Each phase ends with `flutter analyze` clean + a git commit. **Playwright MCP QA only on explicit user request**, per the `feedback_no_auto_dev_qa` memory.
 
 | Phase | Scope | What works at the end |
 |---|---|---|
@@ -2269,15 +2288,13 @@ This matches the phase ordering in the implementation plan at `~/.claude/plans/i
 | 2 | Option Chain (screen 3) | SymbolExpiryBar, OIBarCell, ChainLegBottomSheet; chain repo + chain provider; ATM sticky row; WS deltas wired; basket enqueue + toast |
 | 3 | OI Buildup (screen 8) | BuildupPill, filter/sort persistence, row-tap → strike screen; right-click bottom sheet reused |
 | 4 | OI Statistics + PCR (screens 4 + 6) | fl_chart BarChart with above/below x-axis, BrushChart, KpiCards, dual-axis PCR LineChart |
-| 5 | Per-Strike Chart (screen 7) | DualAxisLineChart, B/S badges, writer-accumulation band |
-| 6 | Trending OI (screen 5) | StrikePicker, sentiment chart, cumulative chart, bucket table; WS `oi_bucket_close` wired |
-| 7 | Markets Dashboard (screen 1) | 4 bucket cards, advances/declines KPIs, index summary table |
-| 8 | Index Contributors (screen 2) | TabBar of indices, Stock / Sector toggle, mini-chart popover |
-| 9 | Find Strategy (screen 9) | filter card, StrategyCard, scan results, breakeven clipboard |
-| 10 | Polish | accessibility pass, dark/light goldens, error/empty/stale state polish, performance profiling, Lighthouse audit |
-| 11 | Open follow-ups | Document order-placement wiring requirements (deferred) in `INSTAOPTIONS_HANDOFF.md` |
-
-Per-phase QA is run via a dedicated sub-agent driving Chrome DevTools MCP (`navigate_page`, `take_snapshot`, `take_screenshot`, `list_console_messages`, `list_network_requests`, `resize_page`). QA evidence is saved to `.claude/insta-options-qa/phase-N/`. Each phase commits to git only after QA reports PASS.
+| ~~5~~ → β | Per-Strike Chart (screen 7) | DualAxisLineChart, B/S badges. Writer-accumulation band ✘ dropped. |
+| ~~6~~ → η | Trending OI (screen 5) | StrikePicker, sentiment chart, cumulative chart, bucket table. ⚠️ blocked on backend Ticket 3. |
+| ~~7~~ → ε | Markets Dashboard (screen 1) | 4 bucket cards, advances/declines KPIs, index summary table |
+| ~~8~~ → ζ | Index Contributors (screen 2) | TabBar of indices, Stock / Sector toggle, mini-chart popover |
+| ~~9~~ → θ | Find Strategy (screen 9) | filter card, StrategyCard, scan results, breakeven clipboard |
+| ~~10~~ → κ | Polish | accessibility pass, dark/light goldens, error/empty/stale state polish, performance profiling, Lighthouse audit |
+| ~~11~~ → HANDOFF | Open follow-ups | Tracked in HANDOFF.md's Open follow-ups section directly |
 
 ---
 
@@ -2312,9 +2329,11 @@ If all 15 steps pass, the build is done.
 - Error envelope `{ error: { code, message, detail } }` is structured everywhere. Surface `code` + `message` in `ErrorBanner`.
 - Number formatting goes through `RupeeFormat` + the thin wrappers in `insta_options_format.dart`. No raw `toString` on numbers in widgets.
 - Time formatting uses `DateFormat.Hm()` for display and the existing helpers in [lib/sharedWidget/functions.dart](lib/sharedWidget/functions.dart) for parsing.
-- The basket lives in `instaOptionsBasketProvider`. It is in-memory only. **No hand-off to `/strategy-builder` in v1.** Tap shows a "coming soon" toast.
+- **Toasts use `ResponsiveSnackBar.showSuccess` / `.showError`** from [lib/utils/responsive_snackbar.dart](lib/utils/responsive_snackbar.dart). Never raw `ScaffoldMessenger.showSnackBar`.
+- The basket lives in `instaOptionsBasketProvider` (pre-Phase-ι) and gets rewired into the existing `StrategyBuilderProvider.addToBasket(...)` in Phase ι. See §3.1 reuse contract.
+- **No frontend workarounds for missing backend data** — gaps go to backend tickets ([INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md)). Trivial single-line transforms on already-returned fields are OK (per-strike PCR, ATM marker, sector group-by, sign indicators).
 - Theme tokens come from `InstaOptionsTokens.of(context)` which resolves to `MyntColors` light/dark. **No hex literals in widget files.**
 - Typography uses `MyntWebTextStyles.*` (Geist). No `Inter`, no `Roboto Mono`.
 - Tables use `data_table_2`. Charts use `fl_chart` (fallback `syncfusion_flutter_charts` only when needed).
-- Phase order in section 14. Don't skip. Each phase ends with QA + commit.
-- Per-phase QA evidence in `.claude/insta-options-qa/phase-N/`. Handoff state in [INSTAOPTIONS_HANDOFF.md](INSTAOPTIONS_HANDOFF.md).
+- **Live phase order is in [INSTAOPTIONS_HANDOFF.md](INSTAOPTIONS_HANDOFF.md)** (post-audit α-κ sequence). §14 below has the original 0-11 sequence + mapping for historical context.
+- Per-phase QA evidence in `.claude/insta-options-qa/phase-N/` only when run manually. **No automated Playwright QA** per the `feedback_no_auto_dev_qa` memory; user requests when they want it.

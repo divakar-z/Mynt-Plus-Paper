@@ -1,6 +1,6 @@
 # InstaOptions Analytics — Build Handoff
 
-Last updated: 2026-05-29 (Phase α — backend audit + spec updates)
+Last updated: 2026-05-29 (Phase β — Per-Strike finalized + writer bands dropped)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Audit: `.claude/insta-options-qa/data-audit.md` (OptionZ vs our backend)
 Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) (also mirrored at `.claude/insta-options-qa/backend-tickets.md` for local audit)
@@ -23,8 +23,8 @@ This file is the single source of truth for cross-session progress on the InstaO
 | 0 | Rewrite README + create this file | ✅ verified | fd6e6e21 | `.claude/insta-options-qa/phase-0/qa-report.md` (local, gitignored) | QA PASS on all 6 criteria. |
 | 1 | Plumbing — config, API, models, theme, route, shell, menu | ✅ verified | 206a9480 | `.claude/insta-options-qa/phase-1/` | QA PASS on all 10 criteria via Playwright MCP. Real `/health` call succeeded against `192.168.5.61:8000`. WS, fixtures, top-nav entry, URL sticking deferred. |
 | 2 | Option Chain (sub-screen 3) | ✅ verified | eb614a78 | `.claude/insta-options-qa/phase-2/` | QA PASS on 12/16 criteria. Sticky ATM, Change-ref, WS, automated bottom-sheet click deferred. |
-| 3 | OI Buildup (sub-screen 8) | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-3/` | QA PASS on all 10 criteria. SegmentedButton filter (All/CE/PE/FUT), sort dropdown (\|ΔOI\| desc / Strike asc), DataTable2 with BuildupPill rendering server's classification verbatim. Deferred: row tap → Per-Strike (Phase 5 dependency), right-click bottom-sheet (manual verify), WS LTP/OI live updates. |
-| 4 | OI Statistics + PCR (sub-screens 4 + 6) | ✅ verified | (this commit) | `.claude/insta-options-qa/phase-4/` | QA PASS on 8/8 testable criteria via Playwright MCP. OI Stats: CustomPainter cumulative panel (stacked CE/PE + ΔOI tint overlay) + fl_chart per-strike bars (CE up / PE down) + ATM dashed line + 3 KpiCards. PCR Ratio: fl_chart LineChart with PCR (zone-coloured) + scaled spot overlay + dashed 0.7/1.0 reference lines + 3 KpiCards. Both screens own start/stop polling timers (4s for OI Stats, 60s for PCR) tied to mount/unmount. Deferred: live render-path acceptance (backend `/symbols` timing out same as Phase 2/3), BrushChart zoom selector, PCR crosshair tap-drag, WS deltas. |
+| 3 | OI Buildup (sub-screen 8) | ✅ verified | 4ff9285c | `.claude/insta-options-qa/phase-3/` | QA PASS on all 10 criteria. SegmentedButton filter (All/CE/PE/FUT), sort dropdown (\|ΔOI\| desc / Strike asc), DataTable2 with BuildupPill rendering server's classification verbatim. Deferred: row tap → Per-Strike (Phase 5 dependency), right-click bottom-sheet (manual verify), WS LTP/OI live updates. |
+| 4 | OI Statistics + PCR (sub-screens 4 + 6) | ✅ verified | 700f64a4 | `.claude/insta-options-qa/phase-4/` | QA PASS on 8/8 testable criteria via Playwright MCP. OI Stats: CustomPainter cumulative panel (stacked CE/PE + ΔOI tint overlay) + fl_chart per-strike bars (CE up / PE down) + ATM dashed line + 3 KpiCards. PCR Ratio: fl_chart LineChart with PCR (zone-coloured) + scaled spot overlay + dashed 0.7/1.0 reference lines + 3 KpiCards. Both screens own start/stop polling timers (4s for OI Stats, 60s for PCR) tied to mount/unmount. Deferred: live render-path acceptance (backend `/symbols` timing out same as Phase 2/3), BrushChart zoom selector, PCR crosshair tap-drag, WS deltas. |
 
 ---
 
@@ -43,7 +43,7 @@ After Phase 4, we opened the live OptionZ app at https://zebu.instaoptions.trade
 | # | Phase | Status | Commit | QA evidence | Notes |
 |---|---|---|---|---|---|
 | α | Docs: backend tickets + audit + README §3.1 Reuse Contract + README §10.x Data points + HANDOFF | ✅ verified | d3128f05 | n/a (docs) | [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) at repo root; `.claude/insta-options-qa/{backend-tickets.md, data-audit.md}` local mirrors; README §3.1 + §10.1-§10.9 Data points; §10.7 writer-bands removed; HANDOFF divider added. |
-| β | Per-Strike Options Chart finalized: drop writer bands, switch to `ResponsiveSnackBar`, prune dead caption + param | ✅ verified | (this commit) | n/a (Phase 5 code commits + dead-code cleanup) | Removed `_detectWriterAccumulation` + `_WriterBand` + `extraLinesData` bands from `per_strike_screen.dart`. `bs_badges.dart` now uses `ResponsiveSnackBar.showSuccess` with message "Added BUY/SELL {tradingSymbol} to strategy". Removed dead "ΔOI overlay enabled" caption + unused `showChangeOverlay` param plumbed through `_PerStrikeBars` in `oi_stats_screen.dart`. `flutter analyze` clean on insta_options paths. |
+| β | Per-Strike Options Chart finalized: drop writer bands, switch to `ResponsiveSnackBar`, prune dead caption + param | ✅ verified | 97fd8825 | n/a (Phase 5 code commits + dead-code cleanup) | Removed `_detectWriterAccumulation` + `_WriterBand` + `extraLinesData` bands from `per_strike_screen.dart`. `bs_badges.dart` now uses `ResponsiveSnackBar.showSuccess` with message "Added BUY/SELL {tradingSymbol} to strategy". Removed dead "ΔOI overlay enabled" caption + unused `showChangeOverlay` param plumbed through `_PerStrikeBars` in `oi_stats_screen.dart`. `flutter analyze` clean on insta_options paths. |
 | γ | Option Chain: add LTP %Change column | ⚠️ blocked | — | — | Blocked on Ticket 1 (`prev_close` on `/analytics/chain`). |
 | δ | PCR Ratio + Per-Strike: Time bucket selector (1/3/5/15 min) | ⚠️ blocked | — | — | Blocked on Ticket 2 (`bucket_minutes` query param). |
 | ε | Markets Dashboard (index ticker tiles + 2×2 buildup quadrants) | ☐ todo | — | — | Replaces `markets_placeholder_screen.dart`. Uses `/market/snapshot` + `/buildup/symbols`. New screen + tile + quadrant widgets + provider + models. |
@@ -65,17 +65,19 @@ After Phase 4, we opened the live OptionZ app at https://zebu.instaoptions.trade
 
 ## Open follow-ups (collected during the build)
 
-- [ ] Wire order placement on `BasketChip` / B / S badges / Find-Strategy "Add to basket" (deferred — see README §3). Needs a decision on how legs flow to the existing `StrategyBuilderProvider`.
+> Order-placement integration (was a follow-up before 2026-05-29) is now scheduled as **Phase ι** in the phase table above. Remove from this list once Phase ι lands.
+
 - [ ] Confirm production OI Data backend URL (currently dev IP `192.168.5.61:8000`).
-- [ ] Add CI workflow for golden tests once Phase 10 lands.
-- [ ] Decide whether to add per-sub-screen deep-link query params (e.g. `?screen=chain&symbol=NIFTY&expiry=30-JUN-2026`) — currently sub-screen state is in-memory only.
-- [ ] After Phase 1: URL doesn't stay at `/insta-options` — `CustomizableSplitHomeScreen` rewrites to `/` after mount. Direct-URL navigation works for first mount; the URL just doesn't reflect the InstaOptions panel afterward. Polish in Phase 10.
-- [ ] After Phase 1: Top-nav (wide-viewport ≥ 1200 px) entry for "InstaOptions Analytics" not yet added — only the hamburger nav drawer (narrow-viewport) entry is wired. Wide-viewport top-nav entry in Phase 10.
-- [ ] After Phase 1: Dark theme not exercised in automated QA — manual verification needed using the host's theme toggle. (Light theme verified.)
-- [ ] Phase 1 deferred: WS client (`InstaOptionsWsClient`) + fixture mode + remaining 23 API endpoints — all land with Phase 2 (Option Chain).
-- [ ] Phase 4 deferred: BrushChart zoom selector under the OI Stats per-strike bar chart (README §10.4) — non-trivial fl_chart custom widget, Phase 10 polish.
-- [ ] Phase 4 deferred: PCR crosshair tap-and-drag tooltip with 50 ms latency (README §10.6 acceptance #2) — current implementation has hover tooltip only; Phase 10 polish.
+- [ ] Add CI workflow for golden tests once **Phase κ** lands.
+- [ ] Decide whether to add per-sub-screen deep-link query params (e.g. `?screen=chain&symbol=NIFTY&expiry=30-JUN-2026`) — currently sub-screen state is in-memory only. **Phase κ**.
+- [ ] After Phase 1: URL doesn't stay at `/insta-options` — `CustomizableSplitHomeScreen` rewrites to `/` after mount. Direct-URL navigation works for first mount; the URL just doesn't reflect the InstaOptions panel afterward. **Phase κ**.
+- [ ] After Phase 1: Top-nav (wide-viewport ≥ 1200 px) entry for "InstaOptions Analytics" not yet added — only the hamburger nav drawer (narrow-viewport) entry is wired. Wide-viewport top-nav entry in **Phase κ**.
+- [ ] After Phase 1: Dark theme not exercised in automated QA — manual verification needed using the host's theme toggle. (Light theme verified.) **Phase κ**.
+- [ ] Phase 1 deferred: WS client (`InstaOptionsWsClient`) + fixture mode + remaining 23 API endpoints — partially landed alongside Phases 2-β; remaining WS topics (`chain_delta`, `iv_update`, `oi_bucket_close`) deferred to a dedicated streaming phase post-κ.
+- [ ] Phase 4 deferred: BrushChart zoom selector under the OI Stats per-strike bar chart (README §10.4) — non-trivial fl_chart custom widget, **Phase κ** polish.
+- [ ] Phase 4 deferred: PCR crosshair tap-and-drag tooltip with 50 ms latency (README §10.6 acceptance #2) — current implementation has hover tooltip only; **Phase κ** polish.
 - [ ] Phase 4 deferred: Live render-path acceptance for OI Stats / PCR — backend `/symbols` keeps timing out, blocking automated QA of populated cumulative panel + KpiCards + chart series. Re-run QA when backend `/symbols` reliability improves or fixtures land.
+- [ ] Phase α / β legacy: `oi_stats_screen.dart`'s "Oi change" toggle is wired in the header but no longer drives any visible behavior (the per-strike chart was never extended with ΔOI bar overlays; the cumulative panel always shows ΔOI tints regardless). Either wire the toggle to gate the cumulative-panel tints, or hide the toggle. **Phase ε or κ**.
 
 ### Backend tickets pending (added 2026-05-29)
 
@@ -93,7 +95,8 @@ See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for full 
 ## How to resume
 
 1. Read this file top-to-bottom.
-2. Find the first row with status ☐ or ⏳.
-3. Open [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md) section that maps to that phase (see the build-order table in README §14).
-4. Pick up from the phase's "Implementation steps" in the plan at `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md`.
-5. Each phase ends with: QA via a Chrome DevTools MCP sub-agent → save screenshots to `.claude/insta-options-qa/phase-N/` → `flutter analyze` clean → git commit with `instaoptions(phase-N): …` (no Co-Authored-By) → update this file in the same commit.
+2. Find the first row with status ☐ or ⏳ in the **Phase status (post-audit)** table (Phases α-κ supersede the original Phases 0-11 sequence).
+3. Open [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md) — see §3.1 Reuse Contract for surfaces to integrate with, and the corresponding §10.x sub-screen for visual + data spec.
+4. Pick up from the phase's bullet list in the post-audit plan at `~/.claude/plans/now-you-have-complete-purring-turtle.md`. The original plan at `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md` is retained for historical reference (its Phase 5-11 sequence is superseded).
+5. Each phase ends with: `flutter analyze` clean on insta_options paths → git commit with `instaoptions(phase-X): …` (no Co-Authored-By, per `feedback_no_coauthor` memory) → update this file's phase row in the same commit. **Playwright MCP QA only on explicit user request** (per `feedback_no_auto_dev_qa` memory) — not part of the default phase loop.
+6. If the next phase is blocked on a backend ticket (γ, δ, η), check [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for the ticket details + the frontend fallback if the backend slips.
