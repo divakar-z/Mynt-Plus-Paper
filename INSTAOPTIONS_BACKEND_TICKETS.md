@@ -182,7 +182,13 @@ Phase η pauses entirely. The Trending OI sub-screen shows a "Coming soon — ba
 
 ## Ticket 4: Populate prior-bar reference fields on snapshot / contributors / buildup
 
-**Status**: ⚠ **Partially resolved 2026-05-29** — `/oi/buildup` per-contract fix landed: `open_oi`, `close_oi`, `price_change` are now populated and the classification distribution is real (Long Buildup 38, Short Buildup 22, Short Covering 71, Long Unwinding 19, Neutral 320 on 470 NIFTY 02-JUN-2026 contracts). The OI Buildup screen (Phase 3) will start showing real pills automatically. **Still outstanding**: (a) `/market/snapshot.indices[].{today_open, yesterday_close, change_pct}` still zero → Markets Dashboard tiles still render `0.00%`; (b) `/market/snapshot.advances/declines/unchanged` still 0/0/146 → snapshot-level KPIs blank; (c) `/contributors/{index}.{change_pct, index_points}` still zero on all 50 NIFTY constituents → Index Contributors `Change %` + `Index Pts` columns still blank; (d) `/buildup/symbols` still returns all four bucket arrays empty → Markets Dashboard 2×2 grid still empty. Phase ε + ζ visible data remain blocked on the remainder.
+**Status**: ✅ **Mostly resolved 2026-05-29** (re-probed live at 17:21 IST; `analytics.last_run_ts` still reads 15:29:59 IST so the fix likely came from a manual backfill or a distinct rollup job rather than a fresh analytics run). Verified live:
+- ✅ `/oi/buildup` per-contract: `open_oi` / `close_oi` / `price_change` populated. Classification distribution real (Long Buildup 38, Short Buildup 22, Short Covering 71, Long Unwinding 19, Neutral 320 on 470 NIFTY 02-JUN-2026 contracts). OI Buildup screen (Phase 3) shows real pills.
+- ✅ `/market/snapshot.indices[]`: `today_open` / `yesterday_close` / `change_pct` populated (NIFTY -1.50%, BANKNIFTY -1.12%, FINNIFTY -1.55%, MIDCPNIFTY -1.57%, NIFTYNXT50 -1.23%, SENSEX -1.44%, BANKEX -1.08%). Markets Dashboard tiles render real coloured change% + downsloping sparklines.
+- ✅ `/market/snapshot` advances / declines / unchanged: real counts (19 / 124 / 3 today).
+- ✅ `/market/snapshot.per_index[].stocks[]`: `today_open` / `yesterday_close` / `gap_pct` / `change_pct` populated (HDFCBANK -1.86%, RELIANCE -2.17%, ICICIBANK -1.28% etc.).
+- ✅ `/contributors/{index}.{change_pct, index_points}`: 48 of 50 NIFTY constituents non-zero (top contributors MARUTI -0.33, ULTRACEMCO -0.21, RELIANCE -0.20 index points). Index Contributors screen `Change %` + `Index Pts` columns now populate. Phase ζ visible data unblocked.
+- ⚠ **Still outstanding**: `/buildup/symbols` (NFO and BFO) still returns all four bucket arrays empty even though per-contract `/oi/buildup` already classifies symbols into Long Buildup / Short Buildup / Short Covering / Long Unwinding. This is a per-symbol futures roll-up bug, *distinct* from the field-population issue resolved above. Phase ε Markets Dashboard 2×2 quadrant grid remains empty until this is fixed.
 
 **Priority**: High (Markets Dashboard + Index Contributors visibly broken; OI Buildup classifications collapse to Neutral)
 **Endpoints**:
@@ -231,7 +237,7 @@ None — per `feedback_no_frontend_workarounds`, no client-side synthesis from `
 | 1 (`prev_close` on `/analytics/chain`) | γ — Option Chain LTP%Change | ✅ Resolved — Phase γ ready to ship |
 | 2 (`bucket_minutes` on timeseries) | δ — PCR + Options Chart Time selector | ✅ Resolved — Phase δ ready to ship |
 | 3 (new `/oi/trending`) | η — Trending OI screen | ✅ Resolved — Phase η ready to ship (Trending OI's spot overlay will follow Ticket 4 closure) |
-| 4 (prior-bar reference fields) | ε / ζ data visibility | ⚠ Partial — `/oi/buildup` fixed; snapshot + contributors + `/buildup/symbols` still pending |
+| 4 (prior-bar reference fields) | ε / ζ data visibility | ✅ Mostly resolved — `/oi/buildup` + `/market/snapshot` (indices + per_index + a/d/u) + `/contributors/{index}` all populated; only `/buildup/symbols` roll-up remains empty |
 
 ## Out of scope for this batch (not tickets, just notes)
 
