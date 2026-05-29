@@ -16,6 +16,7 @@ import 'package:mynt_plus/models/insta_options/pcr_point.dart';
 import 'package:mynt_plus/models/insta_options/spot_timeseries_point.dart';
 import 'package:mynt_plus/models/insta_options/strategy_scan_result.dart';
 import 'package:mynt_plus/models/insta_options/symbols_response.dart';
+import 'package:mynt_plus/models/insta_options/trending_bucket.dart';
 
 /// Typed exception for OI Data backend failures.
 class InstaOptionsApiException implements Exception {
@@ -228,6 +229,32 @@ class InstaOptionsApi {
     final list = body as List<dynamic>;
     return list
         .map((e) => BuildupRow.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  // -------- GET /oi/trending (Ticket 3, README §10.5) --------
+  Future<List<TrendingBucket>> getTrending({
+    required String exchange,
+    required String symbol,
+    required String expiry,
+    required List<double> strikes,
+    required List<String> types,
+    int bucketMinutes = 3,
+  }) async {
+    final body = await _get(
+      path: '/oi/trending',
+      query: {
+        'exchange': exchange,
+        'symbol': symbol,
+        'expiry': expiry,
+        'strikes': strikes.map((s) => s.toStringAsFixed(1)).join(','),
+        'types': types.join(','),
+        'bucket_minutes': bucketMinutes.toString(),
+      },
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => TrendingBucket.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
   }
 

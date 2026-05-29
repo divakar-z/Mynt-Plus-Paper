@@ -9,8 +9,8 @@ import 'package:mynt_plus/screens/web/insta_options/screens/markets_dashboard_sc
 import 'package:mynt_plus/screens/web/insta_options/screens/oi_stats_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/pcr_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/per_strike_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/trending_oi_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/basket_chip.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/placeholder_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/side_rail.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/streaming_dot.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/symbol_expiry_bar.dart';
@@ -50,11 +50,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
       case InstaSubScreen.oiStats:
         return const OiStatsScreen();
       case InstaSubScreen.trending:
-        return const InstaPlaceholderScreen(
-          title: 'Trending OI',
-          phaseLabel: 'Phase 6',
-          icon: Icons.trending_up,
-        );
+        return const TrendingOiScreen();
       case InstaSubScreen.pcr:
         return const PcrScreen();
       case InstaSubScreen.strike:
