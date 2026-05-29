@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/buildup_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/chain_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/find_strategy_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/index_contributors_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/markets_dashboard_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/oi_stats_screen.dart';
@@ -61,11 +62,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
       case InstaSubScreen.buildup:
         return const BuildupScreen();
       case InstaSubScreen.findStrategy:
-        return const InstaPlaceholderScreen(
-          title: 'Find Strategy',
-          phaseLabel: 'Phase 9',
-          icon: Icons.search,
-        );
+        return const FindStrategyScreen();
     }
   }
 

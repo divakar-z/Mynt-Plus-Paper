@@ -14,6 +14,7 @@ import 'package:mynt_plus/models/insta_options/oi_aggregate.dart';
 import 'package:mynt_plus/models/insta_options/oi_timeseries_point.dart';
 import 'package:mynt_plus/models/insta_options/pcr_point.dart';
 import 'package:mynt_plus/models/insta_options/spot_timeseries_point.dart';
+import 'package:mynt_plus/models/insta_options/strategy_scan_result.dart';
 import 'package:mynt_plus/models/insta_options/symbols_response.dart';
 
 /// Typed exception for OI Data backend failures.
@@ -226,6 +227,32 @@ class InstaOptionsApi {
         .toList(growable: false);
   }
 
+  // -------- §8.20 POST /strategy/scan --------
+  Future<List<StrategyScanResult>> scanStrategies({
+    required String exchange,
+    required String symbol,
+    required String expiry,
+    required StrategyDirection direction,
+    required double minReward,
+    required StrategyMinRewardType minRewardType,
+  }) async {
+    final body = await _post(
+      path: '/strategy/scan',
+      body: {
+        'exchange': exchange,
+        'symbol': symbol,
+        'expiry': expiry,
+        'direction': direction.wire,
+        'min_reward': minReward,
+        'min_reward_type': minRewardType.wire,
+      },
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => StrategyScanResult.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
   // -------- internal helpers --------
 
   Future<dynamic> _get({
@@ -235,6 +262,22 @@ class InstaOptionsApi {
     final base = await _config.httpBaseUrl();
     final uri = Uri.parse('$base$path').replace(queryParameters: query);
     final res = await _http.get(uri).timeout(_timeout);
+    return _decode(res);
+  }
+
+  Future<dynamic> _post({
+    required String path,
+    required Map<String, dynamic> body,
+  }) async {
+    final base = await _config.httpBaseUrl();
+    final uri = Uri.parse('$base$path');
+    final res = await _http
+        .post(
+          uri,
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode(body),
+        )
+        .timeout(_timeout);
     return _decode(res);
   }
 
