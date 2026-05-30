@@ -197,6 +197,21 @@ Report format:
 
 **Pass rule**: every Verified + zero Failed. Cannot-verify items become HANDOFF caveats; don't block commit.
 
+## Per-section artefact folder
+
+Every section writes its working artefacts (live captures, in-progress screenshots, QA outputs) under one folder, kept out of git by `/.claude` in `.gitignore`:
+
+```
+.claude/insta-options-qa/<section-name>/
+├── optionz/        OptionZ live captures + a11y snapshots taken during analysis
+├── iteration/      During-build screenshots, scroll/layout debug, visual iterations
+└── qa/             QA subagent's final screenshots
+```
+
+The archived PLAN itself still goes to `.claude/insta-options-qa/plans/<section-name>.md` per the section lifecycle. Do NOT dump screenshots into the repo root.
+
+When briefing the QA subagent (Phase 5), instruct it to save screenshots to `.claude/insta-options-qa/<section-name>/qa/` directly — not the repo root.
+
 ## Commit format
 
 `instaoptions(<section-name>): <one-line summary>`

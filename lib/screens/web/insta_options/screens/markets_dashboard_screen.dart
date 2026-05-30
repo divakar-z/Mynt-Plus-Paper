@@ -7,8 +7,10 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/buildup_quadrant.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/index_ticker_tile.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/open_market_card.dart';
 
-/// Markets Dashboard (README §10.1). 4 index ticker tiles + 2×2 buildup grid.
+/// Markets Dashboard (README §10.1). 6 index ticker tiles (horizontal scroll
+/// fallback) + 2×2 buildup quadrant grid + Open Market card.
 class MarketsDashboardScreen extends ConsumerStatefulWidget {
   final VoidCallback onOpenChain;
 
@@ -67,60 +69,92 @@ class _MarketsDashboardScreenState
 
     return Container(
       color: tokens.bgPrimary,
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
         children: [
           _TickerRow(markets: markets),
           const SizedBox(height: 16),
-          Expanded(
+          SizedBox(
+            height: 560,
             child: _BuildupGrid(markets: markets, onRowTap: _openChain),
           ),
+          const SizedBox(height: 16),
+          const OpenMarketCard(),
         ],
       ),
     );
   }
 }
 
-class _TickerRow extends StatelessWidget {
+class _TickerRow extends StatefulWidget {
   final InstaOptionsMarketsProvider markets;
 
   const _TickerRow({required this.markets});
 
   @override
+  State<_TickerRow> createState() => _TickerRowState();
+}
+
+class _TickerRowState extends State<_TickerRow> {
+  final ScrollController _hScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _hScroll.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const minTileWidth = 200.0;
+        const minTileWidth = 220.0;
         const gap = 12.0;
         final indices = InstaOptionsMarketsProvider.tileIndices;
-        final fits = constraints.maxWidth >=
-            indices.length * minTileWidth + (indices.length - 1) * gap;
+        final tileCount = indices.length;
+        final naturalRowWidth =
+            tileCount * minTileWidth + (tileCount - 1) * gap;
+        final fits = constraints.maxWidth >= naturalRowWidth;
 
-        final tiles = indices
-            .map((name) => IndexTickerTile(
-                  indexName: name,
-                  quote: markets.quoteFor(name),
-                  bars: markets.sparklineFor(name),
-                ))
-            .toList(growable: false);
+        Widget tile(String name) => IndexTickerTile(
+              indexName: name,
+              quote: widget.markets.quoteFor(name),
+              bars: widget.markets.sparklineFor(name),
+            );
 
         if (fits) {
-          return Row(
-            children: [
-              for (var i = 0; i < tiles.length; i++) ...[
-                if (i > 0) const SizedBox(width: gap),
-                Expanded(child: tiles[i]),
+          return SizedBox(
+            height: 110,
+            child: Row(
+              children: [
+                for (var i = 0; i < tileCount; i++) ...[
+                  if (i > 0) const SizedBox(width: gap),
+                  Expanded(child: tile(indices[i])),
+                ],
               ],
-            ],
+            ),
           );
         }
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: tiles
-              .map((t) => SizedBox(width: minTileWidth, child: t))
-              .toList(growable: false),
+
+        return SizedBox(
+          height: 118,
+          child: Scrollbar(
+            controller: _hScroll,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              controller: _hScroll,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  for (var i = 0; i < tileCount; i++) ...[
+                    if (i > 0) const SizedBox(width: gap),
+                    SizedBox(width: minTileWidth, child: tile(indices[i])),
+                  ],
+                ],
+              ),
+            ),
+          ),
         );
       },
     );
@@ -148,6 +182,7 @@ class _BuildupGrid extends StatelessWidget {
             : 320.0;
         return GridView.builder(
           padding: EdgeInsets.zero,
+          physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: cols,
             crossAxisSpacing: gap,

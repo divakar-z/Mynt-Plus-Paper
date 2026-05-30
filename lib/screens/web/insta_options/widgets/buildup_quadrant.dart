@@ -176,9 +176,9 @@ class _Table extends StatelessWidget {
     return DataTable2(
       columnSpacing: 6,
       horizontalMargin: 12,
-      dataRowHeight: 36,
+      dataRowHeight: 56,
       headingRowHeight: 36,
-      minWidth: 340,
+      minWidth: 440,
       headingTextStyle: MyntWebTextStyles.para(
         context,
         color: tokens.textSecondary,
@@ -189,11 +189,15 @@ class _Table extends StatelessWidget {
           MyntWebTextStyles.tableCell(context, color: tokens.textPrimary),
       dividerThickness: 0.5,
       columns: const [
-        DataColumn2(label: Text('Symbol'), size: ColumnSize.L),
-        DataColumn2(label: Text('LTP'), fixedWidth: 60, numeric: true),
-        DataColumn2(label: Text('Chg %'), fixedWidth: 60, numeric: true),
-        DataColumn2(label: Text('ΔOI'), fixedWidth: 70, numeric: true),
-        DataColumn2(label: Text('ΔOI %'), fixedWidth: 60, numeric: true),
+        DataColumn2(label: Text('Name'), size: ColumnSize.M),
+        DataColumn2(
+          label: Text('Prev Close / LTP (Chg%)'),
+          size: ColumnSize.L,
+          numeric: true,
+        ),
+        DataColumn2(label: Text('New OI'), fixedWidth: 70, numeric: true),
+        DataColumn2(label: Text('Old OI'), fixedWidth: 70, numeric: true),
+        DataColumn2(label: Text('OI (Chg%)'), fixedWidth: 90, numeric: true),
       ],
       rows: rows.map((r) => _row(context, r)).toList(growable: false),
     );
@@ -206,6 +210,10 @@ class _Table extends StatelessWidget {
     final oiCol = r.oiChange == 0
         ? tokens.textSecondary
         : (r.oiChange > 0 ? tokens.profit : tokens.loss);
+    final muted = MyntWebTextStyles.caption(context, color: tokens.textMuted);
+    final tableCell =
+        MyntWebTextStyles.tableCell(context, color: tokens.textPrimary);
+
     return DataRow2(
       onTap: () => onRowTap(r),
       cells: [
@@ -220,25 +228,38 @@ class _Table extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        DataCell(Text(InstaOptionsFormat.price(r.ltp))),
         DataCell(
-          Text(
-            InstaOptionsFormat.changePct(r.changePct),
-            style: MyntWebTextStyles.tableCell(context, color: priceCol),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(InstaOptionsFormat.price(r.prevClose), style: muted),
+              Text(
+                '${InstaOptionsFormat.price(r.ltp)} '
+                '(${InstaOptionsFormat.changePct(r.changePct)})',
+                style: MyntWebTextStyles.tableCell(context, color: priceCol),
+              ),
+            ],
           ),
         ),
+        DataCell(Text(InstaOptionsFormat.oi(r.newOi), style: tableCell)),
+        DataCell(Text(InstaOptionsFormat.oi(r.oldOi), style: tableCell)),
         DataCell(
-          Text(
-            r.oiChange == 0
-                ? '0'
-                : '${r.oiChange > 0 ? '+' : '-'}${InstaOptionsFormat.oi(r.oiChange.abs())}',
-            style: MyntWebTextStyles.tableCell(context, color: oiCol),
-          ),
-        ),
-        DataCell(
-          Text(
-            InstaOptionsFormat.changePct(r.oiChangePct),
-            style: MyntWebTextStyles.tableCell(context, color: oiCol),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                InstaOptionsFormat.oi(r.newOi),
+                style: MyntWebTextStyles.tableCell(context, color: oiCol),
+              ),
+              Text(
+                '(${InstaOptionsFormat.changePct(r.oiChangePct)})',
+                style: muted,
+              ),
+            ],
           ),
         ),
       ],

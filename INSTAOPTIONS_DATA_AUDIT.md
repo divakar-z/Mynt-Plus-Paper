@@ -15,17 +15,25 @@
 
 ## Screen 01 — Markets Dashboard
 
-Reference: `optionz-reference/01-markets-dashboard.png`
+Reference: `optionz-reference/01-markets-dashboard.png`. Re-audited 2026-05-30
+against live OptionZ Markets section — the original audit missed the entire
+Open Market section; it is captured below.
 
 | Data point | Source | Status |
 |---|---|---|
-| Index ticker cards (NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY): name, LTP, change% | `/market/snapshot.indices[]` (§8.15) | ✅ |
+| Index ticker tiles (NIFTY / BANKNIFTY / FINNIFTY / MIDCPNIFTY / SENSEX / BANKEX): name, LTP, change% | `/market/snapshot.indices[]` (§8.15) | ✅ |
 | Sparkline mini-chart per index | `/spot/timeseries?symbol=<index>` (§8.4) | ✅ (one call per index) |
-| "Option Chain" / "Combined Chain" buttons per tile | UI navigation | — |
+| "Option Chain" / "Combined Chain" tile buttons | UI navigation (intentionally not replicated — Mynt design idiom uses side-rail) | ✘ dropped |
 | 2×2 buildup quadrants | `/buildup/symbols` (§8.13) | ✅ |
-| Per-row columns: Name, Prev Close, LTP/Change%, New OI, Old OI, OI Change% | `/buildup/symbols.{quadrant}[].{symbol, prev_close, ltp, change_pct, new_oi, old_oi, oi_change, oi_change_pct}` | ✅ |
+| Per-bucket row columns: Name, Prev Close, LTP / Change%, New OI, Old OI, OI / OI Change% | `/buildup/symbols.{quadrant}[].{symbol, prev_close, ltp, change_pct, new_oi, old_oi, oi_change, oi_change_pct}` | ✅ |
+| Open Market header KPI: Advances / Declines counts | `/market/snapshot.{advances, declines}` (§8.15) | ✅ |
+| Open Market symbol filter tabs (ALL + per-index) | `Object.keys(/market/snapshot.per_index)` (§8.15) | ✅ (backend-driven) |
+| Open Market Advanced/Declined direction toggle | UI state | — |
+| Open Market Stocks table rows (Name, Today Open, Yesterday Close, Gap %, Change %, LTP) | `/market/snapshot.per_index.<KEY>.stocks[].{name, today_open, yesterday_close, gap_pct, change_pct, ltp}` (§8.15) | ✅ |
+| Open Market Index table rows (Name, Today Open, Yesterday Close, Change %, LTP) | `/market/snapshot.indices[].{name, today_open, yesterday_close, change_pct, ltp}` (§8.15) | ✅ |
+| Bottom pagination `1\|2\|3\|4\|5` | Meaning unknown — open investigation in HANDOFF | ❓ |
 
-**Verdict: 100% covered.**
+**Verdict: 100% of data points covered. Pagination semantics still TBD.**
 
 ---
 

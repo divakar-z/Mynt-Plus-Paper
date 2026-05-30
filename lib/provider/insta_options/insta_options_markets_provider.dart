@@ -27,6 +27,8 @@ class InstaOptionsMarketsProvider extends DefaultChangeNotifier {
     'BANKNIFTY',
     'FINNIFTY',
     'MIDCPNIFTY',
+    'SENSEX',
+    'BANKEX',
   ];
 
   final InstaOptionsApi _api = locator<InstaOptionsApi>();
@@ -56,6 +58,24 @@ class InstaOptionsMarketsProvider extends DefaultChangeNotifier {
   BuildupSymbolsResponse get buildup => _buildup;
   String? get error => _error;
   DateTime? get lastUpdated => _lastUpdated;
+
+  int get advances => _snapshot.advances;
+  int get declines => _snapshot.declines;
+
+  /// All per-index keys present in the latest `/market/snapshot` payload —
+  /// drives the Open Market symbol filter tabs alongside `ALL`.
+  List<String> get stockFilterKeys => _snapshot.perIndex.keys.toList();
+
+  /// Stocks list for the Open Market table. `null` or `'ALL'` flattens across
+  /// every `per_index` bucket; otherwise returns that bucket's stocks.
+  List<StockGapRow> stocksFor(String? filter) {
+    if (filter == null || filter == 'ALL') {
+      return _snapshot.perIndex.values
+          .expand((rows) => rows)
+          .toList(growable: false);
+    }
+    return _snapshot.perIndex[filter] ?? const <StockGapRow>[];
+  }
 
   List<SpotTimeseriesPoint> sparklineFor(String index) =>
       _sparklines[index] ?? const <SpotTimeseriesPoint>[];

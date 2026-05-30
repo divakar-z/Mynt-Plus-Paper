@@ -1405,46 +1405,56 @@ Each subsection contains: side-rail key, purpose, layout, widget tree, data inpu
 
 **Purpose**: at-a-glance market state across all F&O symbols.
 
-**Visual layout** (1920×1080 reference; reflows to 1280 wide)
+**Visual layout** (1920×1080 reference; matches OptionZ live, audited 2026-05-30)
 
 ```
 +----------------------------------------------------------------------------+
-| SymbolExpiryBar (Symbol/Expiry disabled and dimmed; Exchange active)        |
-+----------------------------------------------------------------------------+
-| Page header: "Markets Dashboard" (MyntWebTextStyles.hero)                   |
-| Sub-text "Updated HH:mm IST" (MyntWebTextStyles.caption)                    |
+| Row 1 — 6 index ticker tiles, single row                                    |
+|   NIFTY · BANKNIFTY · FINNIFTY · MIDCPNIFTY · SENSEX · BANKEX               |
+|   Each tile ≥ 220 px wide; if all six don't fit, the row gains a            |
+|   horizontal scrollbar (no wrap to a second row).                           |
 +-------------------------+-------------------------+------------------------+
-| Long Buildup            | Short Buildup           | (12px gap)             |
+| Long Buildup            | Short Buildup           | (12 px gap)            |
 | (bucket table)          | (bucket table)          |                        |
-| 360 wide each, 320 tall |                         |                        |
 +-------------------------+-------------------------+------------------------+
 | Short Covering          | Long Unwinding          |                        |
 | (bucket table)          | (bucket table)          |                        |
 +-------------------------+-------------------------+------------------------+
-| KPIs row (advances, declines, unchanged) — KpiCard ×3                       |
-+----------------------------------------------------------------------------+
-| Index Summary table (NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY/NIFTYNXT50/        |
-| SENSEX/BANKEX) — 5-column DataTable2, full width                            |
+| Open Market card (full width)                                               |
+|   Header row: "Open Market" + KPI pills {Advances} green / {Declines} red   |
+|   Controls row: SegmentedButton[ ALL | <per-index keys> ] + Switch          |
+|                 (Advanced ↔ Declined)                                       |
+|   Body: 50/50 split                                                         |
+|     Left  — "Stocks" table (filtered by symbol tab + direction)             |
+|     Right — "Index"  table (filtered by direction only)                     |
 +----------------------------------------------------------------------------+
 ```
+
+The page is vertically scrollable when content exceeds the viewport. No
+SymbolExpiryBar (the Markets Dashboard doesn't consume Symbol/Expiry; the
+parent shell suppresses the bar on this screen). No standalone page header
+row — the side-rail already conveys the active section.
 
 **Bucket table widget** (one of four)
 
 ```
 Card (color tokens.bgSecondary, border, radius 8, padding 0):
   Header row (height 40, padding-h 16, background tokens.bgTertiary):
-    Icon (24×24, coloured by bucket),  Text(bucket name, MyntWebTextStyles.head)
-  DataTable2:
+    Icon (24×24, coloured by bucket), Text(bucket name, MyntWebTextStyles.head),
+    spacer, row count caption.
+  DataTable2 (rowHeight 56, headingRowHeight 36, minWidth 440):
     columns: [
-      "Symbol"        (text, weight 600, 80 wide),
-      "LTP"           (numeric, 70 wide),
-      "Chg %"         (numeric, color-coded, 70 wide),
-      "OI"            (numeric, formatOi, 60 wide),
-      "ΔOI %"         (numeric, color-coded, 60 wide),
-      "→"             (IconButton "Open chain", 32 wide)
+      "Name"                       (text, weight 600, M size),
+      "Prev Close / LTP (Chg%)"    (stacked cell, L size, numeric):
+                                     line 1 — Prev Close (muted)
+                                     line 2 — "{LTP} ({Change%})" (tone-coloured)
+      "New OI"                     (numeric, formatOi, 70 wide),
+      "Old OI"                     (numeric, formatOi, 70 wide),
+      "OI (Chg%)"                  (stacked cell, 90 wide, numeric):
+                                     line 1 — current OI (tone-coloured)
+                                     line 2 — "({OI Change%})" (muted)
     ]
-    row height 36, alternating bg tokens.bgSecondary / (tokens.bgPrimary @ 30% mix)
-    show top 8; "View all" link at bottom if >8 items
+    Row tap → switch side-rail to Option Chain with row's symbol selected.
 ```
 
 Bucket icon and colour:
@@ -1463,32 +1473,81 @@ Bucket icon and colour:
 - Sort each bucket by `|oi_change|` descending
 - Compute `Chg %` from `(ltp - prev_close) / prev_close * 100` (the response also provides `change_pct`; use it directly when present)
 
+**Open Market card** (full-width row below the buildup grid)
+
+```
+Card (color tokens.bgSecondary, border, radius 8):
+  Header (padding 16/12, bgTertiary):
+    "Open Market" (MyntWebTextStyles.head), spacer,
+    KPI pill "{advances} Advances" (profit-toned),
+    KPI pill "{declines} Declines" (loss-toned)
+  Controls row (padding 12):
+    SegmentedButton<String> over [ 'ALL', ...provider.stockFilterKeys ]
+      (filter keys come from /market/snapshot.per_index map — backend-driven,
+      not a fixed list).
+    Right side: Switch labelled Advanced ↔ Declined.
+  Body (height ~360, 50/50 split):
+    Left  — "Stocks" card, DataTable2:
+      [ Name (M) · Today Open (90) · Yest. Close (90) · Gap / Chg %
+        (90, stacked: gap% muted on top, change% toned below) · LTP (80) ]
+      Rows = provider.stocksFor(filter) filtered by direction toggle,
+      sorted by |change_pct| desc.
+    Right — "Index" card, DataTable2:
+      [ Name (M) · Today Open · Yest. Close · Chg % · LTP ]
+      Rows = /market/snapshot.indices[] filtered by direction toggle only
+      (symbol filter does NOT apply to the Index table — matches OptionZ).
+```
+
+**Data inputs**
+
+- `GET /buildup/symbols?exchange=<active>` (section 8.13)
+- `GET /market/snapshot` (section 8.15) — supplies tile quotes, advances /
+  declines, the `indices[]` table, and `per_index.<KEY>.stocks[]` for the
+  Open Market Stocks table.
+- `GET /spot/timeseries?symbol=<index>` (section 8.4) — one call per tile for
+  the sparkline.
+
+**Frontend derivations**
+
+- Sort each bucket by `|oi_change|` descending.
+- Open Market stocks/index rows sorted by `|change_pct|` descending within the
+  active direction filter.
+- ALL filter = flatten union across every `per_index.<KEY>.stocks` bucket.
+
 **Interactions**
 
-- Tap a row → switch side-rail to `chain` with the row's symbol + nearest expiry pre-selected (no URL change; selection provider mutated)
-- Tap "View all" → expand the bucket card to show full list (max height 480, scrollable inside)
-- Tap the row's "→" icon → same as row tap
+- Tap a bucket row → switch side-rail to `chain` with that row's symbol selected (no URL change; selection provider mutated).
+- Toggle Open Market symbol tab → re-filter the Stocks table; Index table unchanged.
+- Toggle Open Market Advanced/Declined → both tables re-filter by `change_pct` sign.
 
 **States**
 
-- Loading: card body shows a skeleton (4 lines, 16 tall each, gap 12)
-- Empty (all four buckets empty) → centred message "All symbols neutral right now. Live updates resume during market hours."
-- Error → inline ErrorBanner inside the card
+- Loading: full-page centred `CircularProgressIndicator` until the first `/market/snapshot` lands.
+- Fatal error (no indices AND all buckets empty AND error set): full-page `_ErrorState` with retry.
+- Per-bucket empty: centred caption "No symbols in this bucket right now."
+- Per-Open-Market-table empty: "No advancers right now." / "No decliners right now." depending on toggle.
 
-**Refresh**: every 4 s while market open; once per 30 s outside hours.
+**Refresh**: every 4 s while market open; one-shot on mount outside hours (per `InstaMarketHours.isOpen()`; the provider is `autoDispose` and tears down the timer when the user navigates away).
 
 **Order placement**: none in v1 (deferred per section 3).
 
 **Acceptance**
 
-1. Four bucket cards render within 1.5 s of page load.
-2. Tapping HDFCBANK in Long Buildup switches the side-rail to Chain and sets `selectionProvider.symbol = 'HDFCBANK'`.
-3. With market closed, shows the "all neutral" empty state while the index summary table still populates.
+1. Six tile row renders within 1.5 s of page load (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX, BANKEX).
+2. At viewports too narrow for six tiles, the tile row shows a horizontal scrollbar; tiles never wrap to a second row.
+3. Each bucket table renders the 5-column stacked layout described above.
+4. Tapping HDFCBANK in Long Buildup switches the side-rail to Chain and sets `selectionProvider.symbol = 'HDFCBANK'`.
+5. Open Market header pills equal `/market/snapshot.advances` / `.declines` verbatim.
+6. Open Market symbol tabs match `['ALL'] + Object.keys(per_index)` from the live payload.
+7. Switching the Advanced/Declined toggle re-filters both Open Market tables in one frame.
 
-**Data points** (audited 2026-05-29):
+**Data points** (audited 2026-05-30, against live OptionZ Markets):
 - Index ticker tiles (name, LTP, change%): `/market/snapshot.indices[]` (§8.15) ✅
 - Sparkline per index: `/spot/timeseries?symbol=<index>` (§8.4) ✅
 - 2×2 buildup quadrant rows (Symbol, Prev Close, LTP, ChangePct, New OI, Old OI, OI Change, OI ChangePct): `/buildup/symbols.{long_buildup, short_buildup, short_covering, long_unwinding}[].{symbol, prev_close, ltp, change_pct, new_oi, old_oi, oi_change, oi_change_pct}` (§8.13) ✅
+- Open Market header counters: `/market/snapshot.{advances, declines}` (§8.15) ✅
+- Open Market Stocks rows (Name, Today Open, Yesterday Close, Gap %, Change %, LTP): `/market/snapshot.per_index.<KEY>.stocks[].{name, today_open, yesterday_close, gap_pct, change_pct, ltp}` (§8.15) ✅
+- Open Market Index rows (Name, Today Open, Yesterday Close, Change %, LTP): `/market/snapshot.indices[].{name, today_open, yesterday_close, change_pct, ltp}` (§8.15) ✅
 
 **See also**:
 - Reference screenshot: `01-markets-dashboard.png` (in `.claude/insta-options-qa/optionz-reference/` — local-only, gitignored)
