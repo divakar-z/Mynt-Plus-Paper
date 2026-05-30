@@ -12,7 +12,6 @@ import 'package:mynt_plus/screens/web/insta_options/screens/per_strike_screen.da
 import 'package:mynt_plus/screens/web/insta_options/screens/trending_oi_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/basket_chip.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/side_rail.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/streaming_dot.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/symbol_expiry_bar.dart';
 
 /// Root widget for the InstaOptions Analytics module. Lives inside
@@ -62,11 +61,13 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
     }
   }
 
+  bool get _showSymbolExpiryBar =>
+      _active != InstaSubScreen.markets &&
+      _active != InstaSubScreen.contributors;
+
   @override
   Widget build(BuildContext context) {
     final tokens = InstaOptionsTokens.of(context);
-    final markets = _active == InstaSubScreen.markets;
-    final contributors = _active == InstaSubScreen.contributors;
     return Container(
       color: tokens.bgPrimary,
       child: Stack(
@@ -78,13 +79,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
               Expanded(
                 child: Column(
                   children: [
-                    SymbolExpiryBar(
-                      streamingStatus: StreamingStatus.disconnected,
-                      streamingTooltip:
-                          'OI Data WebSocket not connected yet — Phase 2',
-                      disableSymbol: markets || contributors,
-                      disableExpiry: markets || contributors,
-                    ),
+                    if (_showSymbolExpiryBar) const SymbolExpiryBar(),
                     Expanded(child: _buildActiveSubScreen()),
                   ],
                 ),

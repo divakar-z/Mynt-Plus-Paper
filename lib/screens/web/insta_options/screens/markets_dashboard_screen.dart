@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 import 'package:mynt_plus/models/insta_options/buildup_symbol.dart';
 import 'package:mynt_plus/provider/insta_options/insta_options_markets_provider.dart';
 import 'package:mynt_plus/provider/insta_options/insta_options_selection_provider.dart';
@@ -72,8 +71,6 @@ class _MarketsDashboardScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _Header(markets: markets, tokens: tokens),
-          const SizedBox(height: 16),
           _TickerRow(markets: markets),
           const SizedBox(height: 16),
           Expanded(
@@ -81,45 +78,6 @@ class _MarketsDashboardScreenState
           ),
         ],
       ),
-    );
-  }
-}
-
-class _Header extends StatelessWidget {
-  final InstaOptionsMarketsProvider markets;
-  final InstaOptionsTokens tokens;
-
-  const _Header({required this.markets, required this.tokens});
-
-  @override
-  Widget build(BuildContext context) {
-    final ts = markets.lastUpdated;
-    final stamp = ts == null ? '—' : DateFormat.Hm().format(ts);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Text(
-          'Markets Dashboard',
-          style: MyntWebTextStyles.hero(context, color: tokens.textPrimary),
-        ),
-        const SizedBox(width: 12),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: Text(
-            'Updated $stamp IST',
-            style: MyntWebTextStyles.caption(
-              context,
-              color: tokens.textSecondary,
-            ),
-          ),
-        ),
-        const Spacer(),
-        TextButton.icon(
-          onPressed: markets.loading ? null : markets.refresh,
-          icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Refresh'),
-        ),
-      ],
     );
   }
 }

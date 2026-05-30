@@ -4,27 +4,13 @@ import 'package:mynt_plus/provider/insta_options/insta_options_reference_provide
 import 'package:mynt_plus/provider/insta_options/insta_options_selection_provider.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/streaming_dot.dart';
 
-/// Top bar with live Exchange / Symbol / Expiry dropdowns + connection indicator.
+/// Top bar with live Exchange / Symbol / Expiry dropdowns.
 ///
 /// Reads `/symbols` and `/expiries` via `InstaOptionsReferenceProvider`. When a
 /// user picks a new symbol, expiry resets to the nearest expiry of that symbol.
 class SymbolExpiryBar extends ConsumerStatefulWidget {
-  final StreamingStatus streamingStatus;
-  final String? streamingTooltip;
-  final bool disableSymbol;
-  final bool disableExpiry;
-  final VoidCallback? onRefresh;
-
-  const SymbolExpiryBar({
-    super.key,
-    this.streamingStatus = StreamingStatus.disconnected,
-    this.streamingTooltip,
-    this.disableSymbol = false,
-    this.disableExpiry = false,
-    this.onRefresh,
-  });
+  const SymbolExpiryBar({super.key});
 
   @override
   ConsumerState<SymbolExpiryBar> createState() => _SymbolExpiryBarState();
@@ -128,7 +114,7 @@ class _SymbolExpiryBarState extends ConsumerState<SymbolExpiryBar> {
             value: sel.symbol.isEmpty ? null : sel.symbol,
             items: symbols ?? const [],
             display: (s) => s,
-            disabled: widget.disableSymbol || symbols == null,
+            disabled: symbols == null,
             placeholder: symbols == null ? 'Loading…' : 'Pick',
             onChanged: _onSymbolChanged,
           ),
@@ -140,24 +126,11 @@ class _SymbolExpiryBarState extends ConsumerState<SymbolExpiryBar> {
             value: sel.expiry.isEmpty ? null : sel.expiry,
             items: expiries ?? const [],
             display: (e) => e,
-            disabled: widget.disableExpiry || expiries == null,
+            disabled: expiries == null,
             placeholder: expiries == null ? 'Loading…' : 'Pick',
             onChanged: _onExpiryChanged,
           ),
           const Spacer(),
-          StreamingDot(
-            status: widget.streamingStatus,
-            tooltip: widget.streamingTooltip,
-          ),
-          const SizedBox(width: 12),
-          IconButton(
-            onPressed: widget.onRefresh,
-            icon: const Icon(Icons.refresh, size: 20),
-            color: tokens.textSecondary,
-            tooltip: 'Refresh',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-          ),
         ],
       ),
     );
