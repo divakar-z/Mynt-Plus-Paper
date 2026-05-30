@@ -1750,7 +1750,7 @@ class _CustomizableSplitHomeScreenState
                 const SizedBox(width: 12),
                 _buildNavItem('StrBuilder', isDarkMode, ScreenType.strategyBuilder,
                     () => _handleStrategyBuilderTap()),
-             
+
 
                 const Spacer(),
 
@@ -2384,6 +2384,38 @@ class _CustomizableSplitHomeScreenState
                               const SizedBox(width: 14),
                               Text(
                                 'Strategy Builder',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // InstaOptions Analytics
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleInstaOptionsTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.activity,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'InstaOptions Analytics',
                                 style: MyntWebTextStyles.body(
                                   context,
                                   fontWeight: MyntFonts.medium,
