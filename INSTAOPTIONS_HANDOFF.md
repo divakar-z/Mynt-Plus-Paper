@@ -1,5 +1,7 @@
 # InstaOptions Analytics — Build Handoff
 
+> **Read this first**: [INSTAOPTIONS_FLOW.md](INSTAOPTIONS_FLOW.md) — workflow playbook + 9-section catalog. Then check [INSTAOPTIONS_PLAN.md](INSTAOPTIONS_PLAN.md) for the active section. This HANDOFF is the cross-session status tracker.
+
 Last updated: 2026-05-29 (Phase β — Per-Strike finalized + writer bands dropped)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Audit: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) (OptionZ vs our backend; mirrored at `.claude/insta-options-qa/data-audit.md` for local working copy)
@@ -69,7 +71,6 @@ After Phase 4, we opened the live OptionZ app at https://zebu.instaoptions.trade
 
 - [ ] Confirm production OI Data backend URL (currently dev IP `192.168.5.61:8000`).
 - [ ] Add CI workflow for golden tests once **Phase κ** lands.
-- [ ] Decide whether to add per-sub-screen deep-link query params (e.g. `?screen=chain&symbol=NIFTY&expiry=30-JUN-2026`) — currently sub-screen state is in-memory only. **Phase κ**.
 - [ ] After Phase 1: URL doesn't stay at `/insta-options` — `CustomizableSplitHomeScreen` rewrites to `/` after mount. Direct-URL navigation works for first mount; the URL just doesn't reflect the InstaOptions panel afterward. **Phase κ**.
 - [ ] After Phase 1: Top-nav (wide-viewport ≥ 1200 px) entry for "InstaOptions Analytics" not yet added — only the hamburger nav drawer (narrow-viewport) entry is wired. Wide-viewport top-nav entry in **Phase κ**.
 - [ ] After Phase 1: Dark theme not exercised in automated QA — manual verification needed using the host's theme toggle. (Light theme verified.) **Phase κ**.
@@ -78,9 +79,9 @@ After Phase 4, we opened the live OptionZ app at https://zebu.instaoptions.trade
 - [ ] Phase 4 deferred: PCR crosshair tap-and-drag tooltip with 50 ms latency (README §10.6 acceptance #2) — current implementation has hover tooltip only; **Phase κ** polish.
 - [ ] Phase 4 deferred: Live render-path acceptance for OI Stats / PCR — backend `/symbols` keeps timing out, blocking automated QA of populated cumulative panel + KpiCards + chart series. Re-run QA when backend `/symbols` reliability improves or fixtures land.
 - [ ] Phase α / β legacy: `oi_stats_screen.dart`'s "Oi change" toggle is wired in the header but no longer drives any visible behavior (the per-strike chart was never extended with ΔOI bar overlays; the cumulative panel always shows ΔOI tints regardless). Either wire the toggle to gate the cumulative-panel tints, or hide the toggle. **Phase ε or κ**.
-- [ ] Phase ζ deferred: tap-stock popover (480×320) with mini intraday chart sourced from `/spot/timeseries?symbol=<stock>` (README §10.2 Interactions). Phase ζ ships sort + Stock/Sector + tabs without it. **Phase κ** polish.
 - [ ] Phase θ deferred: "Inspect" icon (Icons.fullscreen) per result card — expand to show payoff math (Max Profit, Max Loss, Breakevens, premium estimate). Spec calls it optional in v1. **Phase κ**.
-- [ ] Phase θ deferred: Breakeven number click-to-copy + "Copied" toast. **Phase κ**.
+- [ ] Phase η deferred: hover cross-highlight across the two charts + tap-row-to-seek-charts in the bucket table (§10.5 acceptance #4). Non-trivial fl_chart interaction. **Phase κ**.
+- [ ] Phase η caveat: today's earlier `/oi/trending` buckets still read `ltp=0` (Ticket 4 spillover — spot fix only filled forward from rollout time). New trading sessions should render `LTP` for every row in the bucket table. No frontend change needed.
 - [x] ~~Phase ε / ζ to investigate: timer leak across sub-screens~~ ✅ **Resolved 2026-05-29 (commit ca0bfce7, bundled with Phase δ)** — all five polling providers (Markets, Contributors, Aggregate, PCR, Strike) converted to `ChangeNotifierProvider.autoDispose` + gated on shared `InstaMarketHours.isOpen()` helper. Result: zero background polling outside market hours; per-screen one-shot fetch on mount with the user's Refresh button as the manual trigger. Verified via Playwright network audit (Markets → PCR → Per-Strike navigation produced 13 total backend calls vs 100+ before the fix). During market hours, each provider polls at `InstaMarketHours.tickIntervalInsideHours = 4 s` per spec, and only the *currently mounted* screen's provider stays alive (autoDispose tears the others down).
 
 ### Backend tickets pending (added 2026-05-29)
@@ -89,7 +90,7 @@ See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for full 
 
 - [x] ~~**Ticket 1**: Add `prev_close` field to each row of `GET /analytics/chain`.~~ ✅ **Resolved 2026-05-29** — CE/PE rows populated; FUT row correctly excluded. Phase γ unblocked.
 - [x] ~~**Ticket 2**: Add `bucket_minutes` query param (1/3/5/15) to `GET /oi/pcr/timeseries` AND `GET /oi/timeseries`.~~ ✅ **Resolved 2026-05-29** — param accepted on both endpoints (verified `bm=1/5/15` window correctly). Phase δ unblocked.
-- [x] ~~**Ticket 3**: New endpoint `GET /oi/trending` returning per-bucket `{time, sentiment, cum_ce_oi, cum_pe_oi, delta_ce_oi, delta_pe_oi, pcr, ltp, ltp_pct, dir_spot, dir_oi}`.~~ ✅ **Resolved 2026-05-29** — endpoint live, real per-bucket records returned. Phase η unblocked. (Spot overlay's `ltp` will follow once Ticket 4 closes.)
+- [x] ~~**Ticket 3**: New endpoint `GET /oi/trending` returning per-bucket `{time, sentiment, cum_ce_oi, cum_pe_oi, delta_ce_oi, delta_pe_oi, pcr, ltp, ltp_pct, dir_spot, dir_oi}`.~~ ✅ **Resolved 2026-05-29** — endpoint live, real per-bucket records returned. **Phase η shipped (commit `a3453a52`).** Lingering Ticket 4 spillover: today's earlier buckets still read `ltp=0`; new trading sessions will populate `ltp` for every bucket.
 - [~] **Ticket 4** (added 2026-05-29 during Phase ε live QA): Populate `today_open` / `yesterday_close` / `change_pct` on `/market/snapshot.indices[]` + `.per_index[].stocks[]` + `/contributors/{index}`; populate `open_oi` / `close_oi` / `price_change` on `/oi/buildup`. ✅ **Mostly resolved 2026-05-29** — `/oi/buildup` per-contract fix landed (real Long/Short/etc. classifications on OI Buildup screen). `/market/snapshot.indices[]` + `.per_index[].stocks[]` + advances/declines/unchanged + `/contributors/{index}.{change_pct, index_points}` all now populated; Phase ε tiles and Phase ζ %change/Pts columns surface real values automatically. **Still outstanding**: `/buildup/symbols` (NFO and BFO) returns empty bucket arrays despite per-contract `/oi/buildup` having non-Neutral classifications — per-symbol futures roll-up bug, distinct from the field-population issue. Phase ε 2×2 quadrant grid stays empty until this lands.
 
 ### Open investigations (added 2026-05-29)
