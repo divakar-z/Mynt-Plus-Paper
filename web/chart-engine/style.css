@@ -1,0 +1,838 @@
+/* Chart Engine — theme-aware. Mirror of web/footprint-chart/style.css. */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Regular.ttf') format('truetype');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Medium.ttf') format('truetype');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-SemiBold.ttf') format('truetype');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Bold.ttf') format('truetype');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+:root {
+  --bg: #0B0F14;
+  --text: #D1D5DB;
+  --text-soft: #9CA3AF;
+  --text-mute: #6B7280;
+  --grid-soft: #111827;
+  --grid-strong: #1F2937;
+  --overlay-bg: rgba(11,15,20,0.94);
+  --card-bg: #111827;
+  --card-border: #1F2937;
+  --accent: #3B82F6;
+}
+html.light {
+  --bg: #FFFFFF;
+  --text: #0F172A;
+  --text-soft: #475569;
+  --text-mute: #64748B;
+  --grid-soft: #F1F5F9;
+  --grid-strong: #CBD5E1;
+  --overlay-bg: rgba(248,250,252,0.94);
+  --card-bg: #F1F5F9;
+  --card-border: #E2E8F0;
+  --accent: #2563EB;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+}
+
+/* `100vh` inside a Flutter Web iframe occasionally reports the parent window's
+   viewport rather than the iframe's own — using `100%` of html/body keeps the
+   root pinned to the iframe element's actual height. */
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────────
+   Lives at the top of the iframe (above #layout). Hosts the HTML/JS
+   controls that are migrating piece-by-piece out of Flutter. Starts
+   nearly empty — controls are appended by topbar.js (and per-control
+   modules) only when their feature flag is on. Hidden entirely when
+   empty so the chart owns the full height in pre-migration mode. */
+#top-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  min-height: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--card-border);
+  overflow: visible;
+}
+#top-bar:empty {
+  display: none;
+  border-bottom: 0;
+}
+#top-bar:not(:empty) {
+  height: 40px;
+}
+
+.tb-chip {
+  height: 24px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-soft);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+}
+/* `cursor: crosshair` on .pane bleeds into the popover when the popover
+   visually overlays the chart canvas. Force the default arrow on the
+   popover surface and a pointer on every interactive child so the user
+   sees the right affordance no matter where they hover. */
+#top-bar, #top-bar * { cursor: default; }
+#top-bar button { cursor: pointer; }
+.tb-popover, .tb-popover * { cursor: default; }
+.tb-popover button,
+.tb-popover .tb-list-row,
+.tb-popover .tb-layout-tile { cursor: pointer; }
+.tb-chip:hover {
+  color: var(--text);
+  border-color: var(--text-mute);
+}
+.tb-chip:active { transform: translateY(0.5px); }
+.tb-chip:disabled { opacity: 0.6; cursor: default; }
+
+/* INSTANT badge. Default state is a subtle "off" chip; when on, fills with
+   amber to match the existing Flutter widget's color so the migration is
+   visually transparent. */
+.tb-instant { letter-spacing: 0.06em; }
+.tb-instant-icon { font-size: 12px; line-height: 1; }
+.tb-instant--on {
+  background: #F59E0B;
+  border-color: #F59E0B;
+  color: #FFFFFF;
+}
+.tb-instant--on:hover {
+  background: #D97706;
+  border-color: #D97706;
+  color: #FFFFFF;
+}
+
+/* Layout picker — icon-only chip with the current layout glyph. The glyph
+   is canvas-painted so it matches the Flutter implementation pixel-for-pixel. */
+.tb-layout {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.tb-layout canvas { display: block; }
+
+/* Snap chip — text + camera icon. */
+.tb-snap svg { display: inline-block; }
+
+/* Popover — anchored absolutely. Used by Layout picker, will be used by
+   Timeframe / Style / Settings / Order Defaults next. Z-index sits above
+   the chart canvas (which has no z-index of its own). */
+.tb-popover {
+  position: absolute;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  z-index: 1000;
+  padding: 8px 6px;
+}
+html.light .tb-popover {
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+.tb-layout-popover { width: 280px; }
+.tb-layout-row {
+  display: flex;
+  align-items: center;
+  padding: 4px;
+}
+.tb-layout-row-label {
+  width: 16px;
+  font-size: 11px;
+  color: var(--text-mute);
+  text-align: center;
+}
+.tb-layout-row-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 4px;
+  flex: 1;
+}
+.tb-layout-tile {
+  width: 36px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+  padding: 2px;
+}
+.tb-layout-tile:hover {
+  background: var(--grid-soft);
+}
+.tb-layout-tile--on {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Timeframe + Style buttons — same chip shape, chevron on the right. */
+.tb-timeframe { gap: 4px; }
+.tb-timeframe-label { font-weight: 700; letter-spacing: 0.02em; }
+.tb-chevron { opacity: 0.6; margin-left: 2px; }
+.tb-style { gap: 4px; }
+
+/* Vertical list popover — used by Timeframe, Style, and any future
+   "list of options" control. */
+.tb-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+}
+.tb-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.tb-list-row:hover { background: var(--grid-soft); }
+.tb-list-row--on { color: var(--accent); font-weight: 600; }
+.tb-list-row-check {
+  font-size: 11px;
+  margin-left: 12px;
+  color: var(--accent);
+  min-width: 10px;
+  text-align: right;
+}
+.tb-list-row-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 10px;
+  color: var(--text-soft);
+}
+.tb-list-row--on .tb-list-row-icon { color: var(--accent); }
+.tb-list-row-label { flex: 1; }
+
+/* Cursor mode button — icon only with chevron, like Style. */
+.tb-cursor { gap: 4px; padding: 0 8px; }
+.tb-cursor-icon { display: inline-flex; align-items: center; color: inherit; }
+
+/* Draw button — when a tool is active, the button fills with accent and
+   the label switches to "Drawing: <name>". Same visual contract as the
+   Flutter widget so the migration is transparent. */
+.tb-draw { gap: 6px; }
+.tb-draw-label { font-weight: 600; letter-spacing: 0.02em; }
+.tb-draw--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+}
+.tb-draw--on:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  filter: brightness(0.92);
+}
+
+/* Refined popover surface — used by Draw (and forthcoming Settings /
+   Order Defaults) for the "title + section label + rows + divider + bar"
+   shape. */
+.tb-popover-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  padding: 10px 14px 2px;
+}
+.tb-popover-subtitle {
+  font-size: 11px;
+  color: var(--text-mute);
+  padding: 0 14px 10px;
+}
+.tb-popover-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  padding: 6px 14px 4px;
+}
+.tb-popover-divider {
+  height: 1px;
+  background: var(--card-border);
+  margin: 8px 0;
+}
+
+/* Draw popover specifics — width matches the Flutter dialog. */
+.tb-draw-popover { width: 280px; }
+
+.tb-draw-actions {
+  display: flex;
+  gap: 8px;
+  padding: 4px 12px 12px;
+}
+.tb-draw-action {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+.tb-draw-action:hover { background: var(--grid-strong); }
+.tb-draw-action-icon { font-size: 14px; line-height: 1; }
+.tb-draw-action-label { font-size: 10px; font-weight: 600; }
+.tb-draw-action--danger { color: #EF4444; }
+.tb-draw-action--danger:hover { color: #DC2626; }
+
+/* Indicators (fx) button + popover. */
+.tb-fx { padding: 0 10px; }
+.tb-fx-icon {
+  font-style: italic;
+  font-weight: 600;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 13px;
+  letter-spacing: -0.02em;
+}
+.tb-fx-popover { width: 440px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column; }
+.tb-fx-popover-content { display: flex; flex-direction: column; min-height: 0; }
+
+/* Search input — clean, dark-friendly, no native shadow. */
+.tb-fx-search-wrap { padding: 0 16px 10px; }
+.tb-fx-search {
+  width: 100%;
+  height: 32px;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 80ms ease;
+}
+.tb-fx-search:focus { border-color: var(--accent); }
+.tb-fx-search::placeholder { color: var(--text-mute); }
+
+/* Category chips row. */
+.tb-fx-categories {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+.tb-fx-cat-chip {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-soft);
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+}
+.tb-fx-cat-chip:hover { color: var(--accent); border-color: var(--accent); }
+.tb-fx-cat-chip--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  font-weight: 700;
+}
+
+/* Active indicators list. */
+.tb-fx-active-wrap { display: flex; flex-direction: column; }
+.tb-fx-active {
+  max-height: 180px;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
+.tb-fx-active-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 20px 6px 16px;
+  gap: 10px;
+}
+.tb-fx-active-row:hover { background: var(--grid-soft); }
+.tb-fx-swatch {
+  width: 12px; height: 12px;
+  border-radius: 3px;
+  flex: 0 0 12px;
+}
+.tb-fx-active-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tb-fx-active-period {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-mute);
+}
+.tb-fx-remove {
+  margin-left: auto;
+  width: 24px; height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #EF4444;
+  border-radius: 4px;
+}
+.tb-fx-remove:hover { background: rgba(239, 68, 68, 0.12); }
+
+/* Catalog list — scrollable. */
+.tb-fx-catalog {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+.tb-fx-catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 16px 8px 20px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+}
+.tb-fx-catalog-row:hover { background: var(--grid-soft); }
+.tb-fx-catalog-text { flex: 1; min-width: 0; }
+.tb-fx-catalog-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.tb-fx-catalog-full {
+  font-size: 10.5px;
+  color: var(--text-mute);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-fx-catalog-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 11px;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tb-fx-catalog-row:hover .tb-fx-catalog-add {
+  background: var(--accent);
+  color: #FFFFFF;
+}
+.tb-fx-empty {
+  font-size: 11px;
+  color: var(--text-mute);
+  padding: 8px 20px 20px;
+}
+
+/* ── Shared form controls (Order Defaults, future Settings popover) ─── */
+
+/* Tabs strip at the top of a multi-tab popover. */
+.tb-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px 8px;
+  border-bottom: 1px solid var(--card-border);
+  margin-bottom: 6px;
+}
+.tb-tab {
+  position: relative;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: -1px;       /* sit on top of the bottom border */
+}
+.tb-tab:hover { color: var(--text-soft); }
+.tb-tab--on {
+  color: var(--accent);
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent);
+}
+
+/* Row: label + description on left, control on right. */
+.tb-form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+}
+.tb-form-row + .tb-form-row {
+  border-top: 1px solid var(--card-border);
+}
+.tb-form-row-text { flex: 1; min-width: 0; }
+.tb-form-row-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tb-form-row-desc {
+  font-size: 10.5px;
+  color: var(--text-mute);
+  margin-top: 2px;
+}
+.tb-form-row-ctl { flex: 0 0 auto; }
+
+/* Switch — 32×18 pill toggle, accent when on. */
+.tb-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  background: var(--grid-strong);
+  border: none;
+  border-radius: 9px;
+  padding: 0;
+  transition: background 120ms ease;
+}
+.tb-switch-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 14px; height: 14px;
+  background: #FFFFFF;
+  border-radius: 50%;
+  transition: left 120ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.tb-switch--on { background: var(--accent); }
+.tb-switch--on .tb-switch-thumb { left: 16px; }
+
+/* Segmented — pill group of mutually-exclusive options. */
+.tb-segmented {
+  display: inline-flex;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tb-segmented-opt {
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+.tb-segmented-opt:hover { color: var(--text); }
+.tb-segmented-opt--on {
+  background: var(--accent);
+  color: #FFFFFF;
+}
+
+/* Number stepper — minus / input / plus. */
+.tb-stepper {
+  display: inline-flex;
+  align-items: center;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tb-stepper-btn {
+  width: 24px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tb-stepper-btn:hover { color: var(--accent); }
+.tb-stepper-input {
+  width: 56px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  outline: none;
+}
+.tb-stepper-input:focus { color: var(--accent); }
+
+/* Order Defaults popover specifics. */
+.tb-od-popover { width: 420px; max-height: 80vh; overflow: hidden;
+  display: flex; flex-direction: column; }
+.tb-od-popover-content { display: flex; flex-direction: column; min-height: 0; }
+.tb-od-body {
+  overflow-y: auto;
+  max-height: 60vh;
+  padding-bottom: 8px;
+}
+
+/* Settings popover specifics. */
+.tb-settings-popover { width: 380px; max-height: 80vh; overflow: hidden;
+  display: flex; flex-direction: column; }
+.tb-settings-popover-content { display: flex; flex-direction: column; min-height: 0; }
+.tb-settings-body {
+  overflow-y: auto;
+  max-height: 60vh;
+  padding-bottom: 8px;
+}
+.tb-settings-body .tb-popover-section-label {
+  margin-top: 6px;
+}
+
+/* Color picker — colored square with built-in native picker, plus a reset
+   button. Native input is hidden behind the swatch but still receives the
+   click. */
+.tb-color { display: inline-flex; align-items: center; gap: 6px; }
+.tb-color-swatch {
+  position: relative;
+  width: 28px;
+  height: 22px;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  background: transparent;
+  overflow: hidden;
+}
+.tb-color-swatch--empty {
+  background: repeating-linear-gradient(
+      45deg,
+      var(--grid-soft) 0 4px,
+      var(--grid-strong) 4px 8px);
+  border-style: dashed;
+}
+.tb-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.tb-color-reset {
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-mute);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tb-color-reset:hover { color: var(--accent); border-color: var(--card-border); }
+
+/* Symbol typeahead — input field + result popover. */
+.tb-sym-wrap {
+  display: flex;
+  align-items: center;
+}
+.tb-sym-input {
+  width: 220px;
+  height: 28px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  outline: none;
+  transition: border-color 80ms ease;
+}
+.tb-sym-input::placeholder {
+  color: var(--text-mute);
+  font-weight: 400;
+}
+.tb-sym-input:focus {
+  border-color: var(--accent);
+}
+
+.tb-sym-popover {
+  min-width: 220px;
+  max-width: 360px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.tb-sym-state {
+  padding: 12px 14px;
+  font-size: 11px;
+  color: var(--text-mute);
+}
+.tb-sym-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+.tb-sym-row:hover,
+.tb-sym-row--on { background: var(--grid-soft); }
+.tb-sym-row-main { min-width: 0; flex: 1; }
+.tb-sym-row-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-sym-row-meta {
+  font-size: 10px;
+  color: var(--text-mute);
+  margin-top: 2px;
+}
+
+/* Layout grid — `gap` + tinted background creates a visible divider line
+   between panes; splitters sit on top of the gap for drag-to-resize.
+   `min-height: 0` is mandatory inside a flex parent so the grid does not
+   inflate to its panes' natural content height. */
+#layout {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  gap: 2px;
+  background: var(--card-border);
+  position: relative;
+  overflow: hidden;
+}
+
+/* CSS grid items default to `min-content` minimum size on the grid axis.
+   Without explicit `min-height: 0` + `min-width: 0`, a chart pane whose
+   canvas reports a large intrinsic size forces the grid track to expand
+   past `1fr`, pushing other panes off-screen. */
+.pane {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  cursor: crosshair;
+  outline: none;
+  background: var(--bg);
+  min-height: 0;
+  min-width: 0;
+}
+/* Border drawn on top of the canvas via pseudo-element so it doesn't get
+   buried under the canvas's opaque background. Default is a hairline; the
+   .active state replaces it with a 2px accent stroke. */
+.pane::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid transparent;
+  pointer-events: none;
+  z-index: 5;
+}
+.pane.active::after {
+  border: 2px solid var(--accent);
+}
+.pane.dragging { cursor: grabbing; }
+.pane.zoom-y { cursor: ns-resize; }
+.pane.zoom-x { cursor: ew-resize; }
+.pane canvas { display: block; width: 100%; height: 100%; }
+
+/* Splitters — absolutely positioned overlays on top of the grid gaps. The
+   hit area is wider than the visible gap (8px each) so they're easy to
+   grab; hover/drag tints them with the accent colour. */
+.splitter {
+  position: absolute;
+  background: transparent;
+  z-index: 20;
+  user-select: none;
+}
+.splitter.col { cursor: col-resize; }
+.splitter.row { cursor: row-resize; }
+.splitter:hover, .splitter.dragging {
+  background: var(--accent);
+}
+
+#overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg);
+  pointer-events: none;
+  z-index: 10;
+}
+#overlay[hidden] { display: none; }
+.overlay-card {
+  padding: 14px 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  text-align: center;
+  max-width: 460px;
+}
+#overlay-title { font-size: 13px; font-weight: 600; color: var(--text); }
+#overlay-detail { margin-top: 4px; font-size: 11px; }
+.muted { color: var(--text-mute); }

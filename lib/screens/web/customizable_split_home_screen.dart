@@ -112,6 +112,7 @@ import 'home/widgets/app_bar/profile_dropdown.dart';
 import 'home/widgets/app_bar/navigation_drawer_web.dart';
 import '../../../res/responsive_extensions.dart';
 import 'scalper/scalper_screen_web.dart';
+import 'chart_engine/widgets/workspace/chart_workspace_screen.dart';
 import 'collection_basket/basketlist_dashboard_web.dart';
 import 'collection_basket/create_baskerscreen_web.dart' as basket_create;
 import 'collection_basket/collection_basket_builder.dart';
@@ -175,6 +176,7 @@ enum ScreenTypeParam {
   saveBasketStrategy,
   profileDetails,
   caBuyback,
+  charts,
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -219,6 +221,7 @@ class _CustomizableSplitHomeScreenState
   bool _isInitialLoad = true; // Track if this is the initial load
   int _holdingsInitialTabIndex = 0; // Track initial tab for holdings screen
   bool _isScalperMode = false; // When true, hides watchlist and shows scalper full-width
+  bool _isChartsMode = false; // When true, hides watchlist body and shows chart workspace full-width with slim index strip on left
 
   // Scaffold key for drawer control
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -432,6 +435,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "charts") {
+            _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
             _handleWebHookTap();
           } else if (routeName == "mutualFund") {
@@ -507,6 +512,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "charts") {
+            _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
             _handleWebHookTap();
           } else if (routeName == "mutualFund") {
@@ -661,6 +668,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenTypeParam.scalper:
         _handleScalperTap();
+        break;
+      case ScreenTypeParam.charts:
+        _handleChartsTap();
         break;
       case ScreenTypeParam.myAccount:
         _navigateToScreen(ScreenType.myAccount);
@@ -1194,6 +1204,35 @@ class _CustomizableSplitHomeScreenState
       );
     }
 
+    // Charts mode: full-width chart workspace. Top app bar carries an indices strip
+    // alongside the live-P&L ticker so we recover the watchlist column's space.
+    // ChartWorkspaceScreen hosts its own right-tray (Watchlist/Positions/Holdings/Orders/DOM).
+    if (_isChartsMode) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          Container(
+            color: resolveThemeColor(context,
+                dark: MyntColors.backgroundColorDark,
+                light: MyntColors.backgroundColor),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 320,
+                  child: _buildWatchlistIndexSlots(theme.isDarkMode),
+                ),
+                Container(
+                    width: 1,
+                    color: shadcn.Theme.of(context).colorScheme.border),
+                const Expanded(child: PortfolioTickerStrip()),
+              ],
+            ),
+          ),
+          const Expanded(child: ChartWorkspaceScreen()),
+        ],
+      );
+    }
+
     // Calculate watchlist width (25% of screen)
     final screenWidth = MediaQuery.of(context).size.width;
     const double watchlistRatio = 0.25;
@@ -1416,6 +1455,7 @@ class _CustomizableSplitHomeScreenState
     bool? showOptionZ,
     bool? showOptionFlash,
     bool? showScalper,
+    bool? showCharts,
   }) {
     final theme = ref.read(themeProvider);
     final userProfile = ref.read(userProfileProvider);
@@ -1494,6 +1534,10 @@ class _CustomizableSplitHomeScreenState
             shadcn.closeDrawer(drawerContext);
             _handleScalperTap();
           },
+          onChartsTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleChartsTap();
+          },
           onStrategyBuilderTap: () {
             shadcn.closeDrawer(drawerContext);
             _handleStrategyBuilderTap();
@@ -1519,6 +1563,7 @@ class _CustomizableSplitHomeScreenState
           showOptionZ: showOptionZ,
           showOptionFlash: showOptionFlash,
           showScalper: showScalper,
+          showCharts: showCharts,
         ),
         );
       },
@@ -1608,6 +1653,7 @@ class _CustomizableSplitHomeScreenState
                           showOptionZ: !showAllLeftNav, // Options dropdown hidden with left nav
                           showOptionFlash: !showAllLeftNav,
                           showScalper: !showAllLeftNav,
+                          showCharts: !showAllLeftNav,
                         );
                       }
                     },
@@ -2135,6 +2181,11 @@ class _CustomizableSplitHomeScreenState
     WebNavigationHelper.updateUrl(WebRoutes.scalper);
   }
 
+  void _handleChartsTap() {
+    setState(() => _isChartsMode = true);
+    WebNavigationHelper.updateUrl(WebRoutes.charts);
+  }
+
   // Build navigation screens for app bar
   Widget _buildNavigationScreens(bool isDarkMode) {
     return Row(
@@ -2181,9 +2232,12 @@ class _CustomizableSplitHomeScreenState
       title: title,
       isActive: isActive,
       onTap: () {
-        // Exit scalper mode when navigating to another screen
-        if (_isScalperMode) {
-          setState(() => _isScalperMode = false);
+        // Exit scalper / charts mode when navigating to another screen
+        if (_isScalperMode || _isChartsMode) {
+          setState(() {
+            _isScalperMode = false;
+            _isChartsMode = false;
+          });
         }
         onTap();
       },
@@ -2214,7 +2268,7 @@ class _CustomizableSplitHomeScreenState
       VoidCallback onTap) {
     // Check if this screen is currently active in any panel
     bool isActive = false;
-    if (!_isScalperMode) {
+    if (!_isScalperMode && !_isChartsMode) {
       for (int i = 0; i < _panels.length; i++) {
         final panel = _panels[i];
         if (panel.screenType == screenType ||
@@ -2426,6 +2480,38 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
+                      // Charts
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleChartsTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.chartLine,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Charts',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                       ),
@@ -2498,10 +2584,17 @@ class _CustomizableSplitHomeScreenState
 
   // Navigate to a specific screen type in the main panel
   void _navigateToScreen(ScreenType screenType) {
-    // Exit scalper mode when navigating to any other screen — otherwise the
-    // scalper full-width view stays rendered regardless of panel state.
+    // Exit scalper / charts mode when navigating to any other screen — otherwise
+    // the full-width view stays rendered regardless of panel state.
     if (_isScalperMode && screenType != ScreenType.scalper) {
       _isScalperMode = false;
+    }
+    if (_isChartsMode && screenType != ScreenType.charts) {
+      _isChartsMode = false;
+    }
+    if (screenType == ScreenType.charts) {
+      setState(() => _isChartsMode = true);
+      return;
     }
 
     // Find the active panel (not watchlist) and switch to the new screen
@@ -2795,6 +2888,8 @@ class _CustomizableSplitHomeScreenState
         return const StrategyBuilderPanelWeb();
       case ScreenType.scalper:
         return const ScalperScreenWeb(embedded: true);
+      case ScreenType.charts:
+        return const ChartWorkspaceScreen();
       case ScreenType.tradingViewWebHook:
         return const WebHookTradingViewScreen();
       case ScreenType.basketDashboard:
@@ -2936,6 +3031,8 @@ class _CustomizableSplitHomeScreenState
         return 'Strategy Builder';
       case ScreenType.scalper:
         return 'Scalper';
+      case ScreenType.charts:
+        return 'Charts';
       case ScreenType.tradingViewWebHook:
         return 'WebHook';
       case ScreenType.basketDashboard:
@@ -3047,6 +3144,8 @@ class _CustomizableSplitHomeScreenState
         return Icons.architecture;
       case ScreenType.scalper:
         return Icons.speed;
+      case ScreenType.charts:
+        return Icons.show_chart;
       case ScreenType.tradingViewWebHook:
         return Icons.webhook;
       case ScreenType.basketDashboard:
@@ -3499,6 +3598,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenType.scalper:
         setState(() => _isScalperMode = true);
+        break;
+      case ScreenType.charts:
+        setState(() => _isChartsMode = true);
         break;
       case ScreenType.refer:
         break;
@@ -4291,9 +4393,12 @@ class _CustomizableSplitHomeScreenState
   }
 
   void _replaceScreenInPanel(ScreenType screenType) {
-    // Exit scalper mode when switching to any other screen
+    // Exit scalper / charts mode when switching to any other screen
     if (_isScalperMode && screenType != ScreenType.scalper) {
       _isScalperMode = false;
+    }
+    if (_isChartsMode && screenType != ScreenType.charts) {
+      _isChartsMode = false;
     }
 
     int targetPanelIndex = -1;
@@ -4397,6 +4502,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenType.strategyBuilder:
         urlPath = WebRoutes.strategyBuilder;
+        break;
+      case ScreenType.charts:
+        urlPath = WebRoutes.charts;
         break;
       case ScreenType.tradingViewWebHook:
         urlPath = WebRoutes.tradingViewWebHook;
@@ -4616,6 +4724,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case WebRoutes.scalper: // '/scalper'
         _handleScalperTap();
+        break;
+      case WebRoutes.charts: // '/charts'
+        _handleChartsTap();
         break;
       case WebRoutes.myAccount: // '/my-account'
         _navigateToScreen(ScreenType.myAccount);
@@ -5553,6 +5664,7 @@ enum ScreenType {
   portfolioAnalysis,
   strategyBuilder,
   scalper,
+  charts,
   tradingViewWebHook,
   basketDashboard,
   createBasketStrategy,

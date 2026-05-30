@@ -33,6 +33,22 @@ class Preferences {
     await _prefInstance!.setString(_userAppTheme, theme);
   }
 
+  Future setChartEngineSession(String json) async {
+    await _prefInstance!.setString(_chartEngineSession, json);
+  }
+
+  String? getChartEngineSession() =>
+      _prefInstance?.getString(_chartEngineSession);
+
+  // Generic accessors used by chart-engine modules that own their own keys
+  // (e.g. chartEngineOrderDefaultsV1). Avoid adding bespoke wrappers per key
+  // when the data shape is opaque JSON owned by the calling notifier.
+  SharedPreferences? get sharedPreferences => _prefInstance;
+
+  Future<void> setString(String key, String value) async {
+    await _prefInstance!.setString(key, value);
+  }
+
   Future setDeviceName(String deviceName) async {
     await _prefInstance!.setString(_deviceName, deviceName);
   }
@@ -652,3 +668,6 @@ const String _scalperDefaultSymbol = "scalperDefaultSymbol";
 const String _scalperMktProtEnabled = "scalperMktProtEnabled";
 const String _scalperMktProtPoints = "scalperMktProtPoints";
 const String _scalperPosFilter = "scalperPosFilter";
+
+//// CHART ENGINE SESSION
+const String _chartEngineSession = 'chartEngineSessionV1';

@@ -48,4 +48,5 @@ enum ScreenType {
   nomineeDetails,
   formDownload,
   closureDetails,
+  charts,
 }

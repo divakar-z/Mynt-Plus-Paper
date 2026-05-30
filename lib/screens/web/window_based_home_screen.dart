@@ -472,6 +472,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return const SizedBox.shrink(); // Strategy Builder opens as separate route
       case ScreenType.scalper:
         return const ScalperScreenWeb(embedded: true);
+      case ScreenType.charts:
+        return const SizedBox.shrink();
       case ScreenType.tradingViewWebHook:
         return const WebHookTradingViewScreen();
       case ScreenType.basketDashboard:
@@ -582,6 +584,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Strategy Builder';
       case ScreenType.scalper:
         return 'Scalper';
+      case ScreenType.charts:
+        return 'Charts';
       case ScreenType.tradingViewWebHook:
         return 'WebHook';
       case ScreenType.basketDashboard:

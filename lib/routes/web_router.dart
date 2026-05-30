@@ -41,6 +41,7 @@ class WebRoutes {
   static const String portfolioAnalysis = '/portfolio-analysis';
   static const String strategyBuilder = '/strategy-builder';
   static const String scalper = '/scalper';
+  static const String charts = '/charts';
   static const String tradingViewWebHook = '/tradingview-webhook';
   static const String basketDashboard = '/basket-dashboard';
   static const String pledge = '/pledge';
@@ -207,6 +208,13 @@ void initializeWebRouter() {
         path: WebRoutes.scalper,
         builder: (context, state) => const CustomizableSplitHomeScreen(
           initialRightPanel: ScreenTypeParam.scalper,
+        ),
+      ),
+      // Chart Engine — multi-chart application (Phase 1 = single pane)
+      GoRoute(
+        path: WebRoutes.charts,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.charts,
         ),
       ),
       // Pledge & Unpledge — embedded in home layout
