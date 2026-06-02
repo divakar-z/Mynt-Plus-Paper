@@ -411,9 +411,11 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         return true;
       }
 
-      // Known error responses — surface emsg directly so wording matches
-      // backend (and we don't have to re-map every variant).
-      forgotOtpError = emsg;
+      // Known error responses — surface emsg as a toast only, NOT inline.
+      // Inline reds are reserved for client-side validation (e.g., OTP
+      // length check above). Backend errors duplicate badly when shown
+      // both inline and as a toast.
+      forgotOtpError = null;
       if (context.mounted) {
         ResponsiveSnackBar.showError(context, emsg);
       }

@@ -2046,7 +2046,7 @@ class AuthProvider extends DefaultChangeNotifier {
                 // }
                   ref.read(transcationProvider).fetchc(context);
                   ref.read(fundProvider).fetchFunds(context);
-                  ref.read(fundProvider).fetchPledgeDetails();
+                  // ref.read(fundProvider).fetchPledgeDetails();
                 });
                 
                 // Batch 6: Profile and other data (load in background)
