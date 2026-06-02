@@ -228,6 +228,11 @@ String defaultIndicatorColor(String kind) {
     case 'obv':      return '#84CC16';
     case 'cmf':      return '#A855F7';
     case 'wr':       return '#F59E0B';
+    case 'cisd':     return '#22C55E';
+    case 'fvg':      return '#22C55E';
+    case 'ob':       return '#22C55E';
+    case 'liqsweep': return '#22C55E';
+    case 'mss':      return '#22C55E';
   }
   return '#3B82F6';
 }
@@ -257,6 +262,11 @@ int defaultIndicatorPeriod(String kind) {
     case 'obv':      return 0;
     case 'cmf':      return 20;
     case 'wr':       return 14;
+    case 'cisd':     return 0;
+    case 'fvg':      return 0;
+    case 'ob':       return 14;
+    case 'liqsweep': return 0;
+    case 'mss':      return 0;
     default:         return 20;
   }
 }

@@ -409,4 +409,173 @@ const Map<String, IndicatorSchema> _kSchemas = {
       ),
     ],
   ),
+  // ICT/SMC Change in State of Delivery — mode toggle encoded as 0/1 int
+  // because the schema doesn't yet support enum field kinds. 1 = strict
+  // (pivot + body-ratio filter, emits ▲/▼ markers), 0 = permissive (every
+  // CISD drawn as a line). Defaults sourced from EmpArchitect's TradingView
+  // CISD Detector + FibAlgo ICT Displacement (the two most-used community
+  // implementations) — see docs/superpowers/specs/2026-05-30-cisd-indicator-design.md.
+  'cisd': IndicatorSchema(
+    kind: 'cisd',
+    displayName: 'Change in State of Delivery',
+    shortDescription: 'ICT/SMC body-close shift through opposing leg open.',
+    params: [
+      IndicatorParam(
+        key: 'strictMode', label: 'Strict mode',
+        description: '1 = filter by swing pivot + body ratio (markers). '
+                     '0 = mark every state change.',
+        defaultValue: 1, min: 0, max: 1,
+      ),
+      IndicatorParam(
+        key: 'pivotWidth', label: 'Pivot width',
+        description: 'Bars each side of a swing pivot (strict only).',
+        defaultValue: 2, min: 1, max: 10,
+      ),
+      IndicatorParam(
+        key: 'minBodyRatio', label: 'Min body ratio',
+        description: 'Displacement filter: body / (high − low).',
+        defaultValue: 0.65, min: 0.10, max: 0.95, step: 0.05, isInt: false,
+      ),
+      IndicatorParam(
+        key: 'expiryBars', label: 'Level lifetime',
+        description: 'Bars a CISD line lives before auto-expiring.',
+        defaultValue: 50, min: 5, max: 500,
+      ),
+      IndicatorParam(
+        key: 'maxLines', label: 'Max visible lines',
+        description: 'Oldest lines are pruned when this is exceeded.',
+        defaultValue: 10, min: 1, max: 50,
+      ),
+    ],
+  ),
+  // ICT Fair Value Gap — 3-candle imbalance zone. strictMode encoded 0/1
+  // since the schema is numeric-only; 1 requires the middle candle's body
+  // ratio to clear `minBodyRatio` (displacement filter).
+  'fvg': IndicatorSchema(
+    kind: 'fvg',
+    displayName: 'Fair Value Gap',
+    shortDescription: 'ICT 3-candle imbalance zone, fades when mitigated.',
+    params: [
+      IndicatorParam(
+        key: 'strictMode', label: 'Strict mode',
+        description: '1 = require middle-candle body displacement. '
+                     '0 = show every gap.',
+        defaultValue: 0, min: 0, max: 1,
+      ),
+      IndicatorParam(
+        key: 'minBodyRatio', label: 'Min body ratio',
+        description: 'Body / range threshold for the impulse candle (strict only).',
+        defaultValue: 0.50, min: 0.10, max: 0.95, step: 0.05, isInt: false,
+      ),
+      IndicatorParam(
+        key: 'extendBars', label: 'Extend bars',
+        description: 'Bars an unmitigated gap extends forward.',
+        defaultValue: 30, min: 5, max: 200,
+      ),
+      IndicatorParam(
+        key: 'maxBoxes', label: 'Max visible boxes',
+        description: 'Most-recent N gaps drawn; older are pruned.',
+        defaultValue: 20, min: 1, max: 100,
+      ),
+      IndicatorParam(
+        key: 'showMitigated', label: 'Show mitigated',
+        description: '1 = keep filled gaps as faded outlines. 0 = hide.',
+        defaultValue: 1, min: 0, max: 1,
+      ),
+    ],
+  ),
+  // ICT/SMC Order Block — last opposing-color candle before an ATR-scaled
+  // impulse move. `useBodyOnly` encoded 0/1 (1 = box uses open/close body,
+  // 0 = full high/low range).
+  'ob': IndicatorSchema(
+    kind: 'ob',
+    displayName: 'Order Block',
+    shortDescription: 'Last opposing candle before an ATR-scaled impulse.',
+    params: [
+      IndicatorParam(
+        key: 'atrPeriod', label: 'ATR Period',
+        description: 'ATR length used to scale impulse strength.',
+        defaultValue: 14, min: 2, max: 100,
+      ),
+      IndicatorParam(
+        key: 'impulseThreshold', label: 'Impulse threshold',
+        description: 'ATR multiple a candle body must clear to qualify.',
+        defaultValue: 1.5, min: 0.5, max: 5.0, step: 0.1, isInt: false,
+      ),
+      IndicatorParam(
+        key: 'useBodyOnly', label: 'Body only',
+        description: '1 = box spans open/close body. 0 = full high/low.',
+        defaultValue: 1, min: 0, max: 1,
+      ),
+      IndicatorParam(
+        key: 'extendBars', label: 'Extend bars',
+        description: 'Bars an unmitigated OB extends forward.',
+        defaultValue: 100, min: 5, max: 500,
+      ),
+      IndicatorParam(
+        key: 'maxBoxes', label: 'Max visible boxes',
+        description: 'Most-recent N order blocks drawn.',
+        defaultValue: 10, min: 1, max: 50,
+      ),
+      IndicatorParam(
+        key: 'showMitigated', label: 'Show mitigated',
+        description: '1 = keep mitigated OBs as faded outlines. 0 = hide.',
+        defaultValue: 0, min: 0, max: 1,
+      ),
+    ],
+  ),
+  // ICT Liquidity Sweep — wick pierces a prior swing pivot but body
+  // closes back inside. Signals stop-hunt rejection at the level.
+  'liqsweep': IndicatorSchema(
+    kind: 'liqsweep',
+    displayName: 'Liquidity Sweep',
+    shortDescription: 'Wick pierces a swing pivot, body closes back inside.',
+    params: [
+      IndicatorParam(
+        key: 'pivotWidth', label: 'Pivot width',
+        description: 'Bars each side that define a fractal swing pivot.',
+        defaultValue: 2, min: 1, max: 10,
+      ),
+      IndicatorParam(
+        key: 'showSweepLine', label: 'Show sweep line',
+        description: '1 = dashed line from swept pivot to sweep candle.',
+        defaultValue: 1, min: 0, max: 1,
+      ),
+      IndicatorParam(
+        key: 'maxMarkers', label: 'Max markers',
+        description: 'Most-recent N sweeps rendered.',
+        defaultValue: 20, min: 1, max: 100,
+      ),
+    ],
+  ),
+  // ICT/SMC Market Structure — labels BOS (continuation), CHoCH (first
+  // opposite break) and MSS (CHoCH with displacement body) at the candle
+  // that closes through a confirmed swing pivot.
+  'mss': IndicatorSchema(
+    kind: 'mss',
+    displayName: 'Market Structure (BOS/CHoCH/MSS)',
+    shortDescription: 'Structural breaks at swing pivots — BOS / CHoCH / MSS.',
+    params: [
+      IndicatorParam(
+        key: 'pivotWidth', label: 'Pivot width',
+        description: 'Bars each side that define a fractal swing pivot.',
+        defaultValue: 2, min: 1, max: 10,
+      ),
+      IndicatorParam(
+        key: 'minBodyRatio', label: 'MSS body ratio',
+        description: 'Displacement threshold to upgrade CHoCH → MSS.',
+        defaultValue: 0.65, min: 0.10, max: 0.95, step: 0.05, isInt: false,
+      ),
+      IndicatorParam(
+        key: 'maxLabels', label: 'Max labels',
+        description: 'Most-recent N structural labels rendered.',
+        defaultValue: 15, min: 1, max: 100,
+      ),
+      IndicatorParam(
+        key: 'showBreakLine', label: 'Show break line',
+        description: '1 = dashed level line from pivot to break candle.',
+        defaultValue: 1, min: 0, max: 1,
+      ),
+    ],
+  ),
 };

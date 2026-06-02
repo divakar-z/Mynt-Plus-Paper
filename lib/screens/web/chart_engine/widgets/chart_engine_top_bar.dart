@@ -1676,6 +1676,11 @@ class _IndicatorsDialogState extends ConsumerState<_IndicatorsDialog> {
     _IndicatorCatalogEntry('cmf',      'CMF',    'Chaikin Money Flow',              _IndicatorCategory.momentum),
     _IndicatorCatalogEntry('wr',       'WR',     "Williams %R",                     _IndicatorCategory.momentum),
     _IndicatorCatalogEntry('atr',      'ATR',    'Average True Range',              _IndicatorCategory.volatility),
+    _IndicatorCatalogEntry('cisd',     'CISD',   'Change in State of Delivery',     _IndicatorCategory.momentum),
+    _IndicatorCatalogEntry('fvg',      'FVG',    'Fair Value Gap (ICT)',            _IndicatorCategory.momentum),
+    _IndicatorCatalogEntry('ob',       'OB',     'Order Block (ICT/SMC)',           _IndicatorCategory.momentum),
+    _IndicatorCatalogEntry('liqsweep', 'LIQ',    'Liquidity Sweep (ICT)',           _IndicatorCategory.momentum),
+    _IndicatorCatalogEntry('mss',      'MSS',    'Market Structure (BOS/CHoCH/MSS)', _IndicatorCategory.momentum),
   ];
 
   String _defaultColor(String kind) {

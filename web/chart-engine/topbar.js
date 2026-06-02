@@ -1322,6 +1322,11 @@
     { kind: 'cmf',      label: 'CMF',    fullName: 'Chaikin Money Flow',            category: 'momentum' },
     { kind: 'wr',       label: 'WR',     fullName: 'Williams %R',                   category: 'momentum' },
     { kind: 'atr',      label: 'ATR',    fullName: 'Average True Range',            category: 'volatility' },
+    { kind: 'cisd',     label: 'CISD',   fullName: 'Change in State of Delivery',   category: 'momentum' },
+    { kind: 'fvg',      label: 'FVG',    fullName: 'Fair Value Gap (ICT)',          category: 'momentum' },
+    { kind: 'ob',       label: 'OB',     fullName: 'Order Block (ICT/SMC)',         category: 'momentum' },
+    { kind: 'liqsweep', label: 'LIQ',    fullName: 'Liquidity Sweep (ICT)',         category: 'momentum' },
+    { kind: 'mss',      label: 'MSS',    fullName: 'Market Structure (BOS/CHoCH/MSS)', category: 'momentum' },
   ];
   const INDICATOR_CATEGORIES = [
     { value: 'all',        label: 'All' },

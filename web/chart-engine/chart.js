@@ -289,7 +289,8 @@ class Chart {
       '_computeSqueeze', '_computeWaveTrend', '_computeConnorsRSI',
       '_computeMaRibbon', '_computeIchimoku', '_computeVolStop',
       '_computeAO', '_computeMFI', '_computeOBV', '_computeCMF',
-      '_computeWilliamsR',
+      '_computeWilliamsR', '_computeCisd', '_computeFvg', '_computeOb',
+      '_computeLiqSweep', '_computeMss',
     ];
     for (const name of NAMES) {
       const raw = Chart.prototype[name];
@@ -6066,6 +6067,459 @@ class Chart {
     return { stop, dir };
   }
 
+  // ICT/SMC "Change in State of Delivery". A bullish CISD fires when a
+  // bullish candle's body-close pierces the OPENING price of the most
+  // recent bearish "delivery leg" (single bearish candle or consecutive
+  // run of bearish candles). Bearish CISD is the symmetric inverse.
+  // Wicks are explicitly ignored — only candle opens/closes matter
+  // (the canonical doctrinal rule across every ICT-aligned source).
+  //
+  // Returns `{ events: [{i, kind:'bull'|'bear', level, endIdx, isStrict}] }`
+  // where `endIdx` is the bar at which the line ends (invalidation by an
+  // opposite-direction close past the level, or `i + expiryBars` expiry,
+  // whichever is first). Strict mode filters: the opposing leg's first
+  // candle must be at a swing pivot AND the triggering candle's body must
+  // be >= `minBodyRatio` × its range.
+  //
+  // Sourced from a deep-research pass on 2026-05-30 verifying 19/25 claims
+  // — see docs/superpowers/specs/2026-05-30-cisd-indicator-design.md.
+  _computeCisd(ind) {
+    const N = this.candles.length;
+    if (N === 0) return { events: [] };
+    const p = (ind && typeof ind === 'object') ? (ind.params || {}) : {};
+    const strict = (+p.strictMode === 0) ? false : true;
+    const pivotWidth = Math.max(1, (+p.pivotWidth || 2) | 0);
+    const minBodyRatio = +p.minBodyRatio || (strict ? 0.65 : 0.50);
+    const expiryBars = Math.max(1, (+p.expiryBars || 50) | 0);
+
+    // Pre-compute per-candle direction (1=bull, -1=bear, 0=doji or zero-range).
+    const dir = new Array(N);
+    for (let i = 0; i < N; i++) {
+      const c = this.candles[i];
+      const range = c.h - c.l;
+      if (range <= 0 || c.c === c.o) { dir[i] = 0; continue; }
+      dir[i] = c.c > c.o ? 1 : -1;
+    }
+
+    // Single pass: walk candles, accumulate consecutive same-direction legs
+    // (dojis are skipped — they don't break the current leg but don't
+    // extend it either). Maintain the most-recently-COMPLETED opposing leg
+    // for CISD detection; once a CISD fires for a leg, that leg's level is
+    // "consumed" and we wait for a new opposing leg before the next CISD.
+    const events = [];
+    let curLeg = null;             // { startIdx, dir, firstOpen }
+    let lastBearLeg = null;        // most recent completed bear leg (consumable)
+    let lastBullLeg = null;        // most recent completed bull leg (consumable)
+
+    const isSwingLow = (idx) => {
+      // Idx must be a fractal swing low across ±pivotWidth bars. Right-side
+      // confirmation: caller ensures idx + pivotWidth < N.
+      const lo = this.candles[idx].l;
+      for (let k = idx - pivotWidth; k <= idx + pivotWidth; k++) {
+        if (k < 0 || k >= N || k === idx) continue;
+        if (this.candles[k].l <= lo) return false;
+      }
+      return true;
+    };
+    const isSwingHigh = (idx) => {
+      const hi = this.candles[idx].h;
+      for (let k = idx - pivotWidth; k <= idx + pivotWidth; k++) {
+        if (k < 0 || k >= N || k === idx) continue;
+        if (this.candles[k].h >= hi) return false;
+      }
+      return true;
+    };
+
+    for (let i = 0; i < N; i++) {
+      const c = this.candles[i];
+      const d = dir[i];
+      if (d === 0) continue;            // doji / zero-range → skip
+
+      // Leg accumulation: either extend or rotate. When rotating, the
+      // previously-active leg is published as the most-recent completed
+      // leg of its direction.
+      if (curLeg && curLeg.dir === d) {
+        // Same-direction → extend (nothing to do; we only care about
+        // firstOpen + dir which were set when the leg started).
+      } else {
+        if (curLeg) {
+          if (curLeg.dir === 1) lastBullLeg = curLeg;
+          else                  lastBearLeg = curLeg;
+        }
+        curLeg = { startIdx: i, dir: d, firstOpen: c.o, broken: false };
+      }
+
+      // CISD detection — body-close through the most recent opposing leg's
+      // first.open. One event per opposing leg (broken-flag consumes it).
+      const opposing = d === 1 ? lastBearLeg : lastBullLeg;
+      if (!opposing || opposing.broken) continue;
+      const level = opposing.firstOpen;
+      const piercedBull = (d === 1 && c.c > level);
+      const piercedBear = (d === -1 && c.c < level);
+      if (!piercedBull && !piercedBear) continue;
+
+      // Strict-mode filters: swing pivot at opposing leg's first candle +
+      // displacement-grade body on the triggering candle.
+      let isStrict = false;
+      if (strict) {
+        const pivotIdx = opposing.startIdx;
+        // Right-side bars needed to confirm the pivot — if not yet present,
+        // defer (don't emit yet; will re-evaluate on next frame via memo
+        // invalidation when candles.length grows).
+        if (pivotIdx + pivotWidth >= N) continue;
+        const pivotOk = piercedBull ? isSwingLow(pivotIdx) : isSwingHigh(pivotIdx);
+        if (!pivotOk) {
+          // Pivot filter failed — consume the leg anyway so we don't
+          // re-test it on every subsequent same-direction candle.
+          opposing.broken = true;
+          continue;
+        }
+        const range = c.h - c.l;
+        const bodyRatio = range > 0 ? Math.abs(c.c - c.o) / range : 0;
+        if (bodyRatio < minBodyRatio) {
+          opposing.broken = true;
+          continue;
+        }
+        isStrict = true;
+      }
+
+      // Determine when the line ends — first opposite-direction close past
+      // the level, or expiry, whichever is first. Walk forward from i+1.
+      let endIdx = Math.min(i + expiryBars, N - 1);
+      for (let j = i + 1; j <= endIdx; j++) {
+        const cj = this.candles[j];
+        if (piercedBull && cj.c < level) { endIdx = j; break; }
+        if (piercedBear && cj.c > level) { endIdx = j; break; }
+      }
+
+      events.push({
+        i,
+        kind: piercedBull ? 'bull' : 'bear',
+        level,
+        endIdx,
+        isStrict,
+      });
+      opposing.broken = true;          // consume — no further CISD for this leg
+    }
+    return { events };
+  }
+
+  // ICT Fair Value Gap — 3-candle imbalance where candle[i-1] and candle[i+1]
+  // don't overlap, leaving a price void around the middle (impulse) candle.
+  //   Bullish: candle[i-1].h < candle[i+1].l  → gap [c[i-1].h, c[i+1].l]
+  //   Bearish: candle[i-1].l > candle[i+1].h  → gap [c[i+1].h, c[i-1].l]
+  // Mitigation = any subsequent candle's wick enters the gap. Strict mode
+  // additionally requires the impulse candle's body / range >= minBodyRatio.
+  _computeFvg(ind) {
+    const N = this.candles.length;
+    if (N < 3) return { gaps: [] };
+    const p = (ind && typeof ind === 'object') ? (ind.params || {}) : {};
+    const strict = (+p.strictMode === 1);
+    const minBodyRatio = +p.minBodyRatio || 0.50;
+    const extendBars = Math.max(1, (+p.extendBars || 30) | 0);
+
+    const gaps = [];
+    for (let i = 1; i < N - 1; i++) {
+      const prev = this.candles[i - 1];
+      const next = this.candles[i + 1];
+      const mid = this.candles[i];
+      let kind = null;
+      let gapLow = 0;
+      let gapHigh = 0;
+      if (prev.h < next.l) {
+        kind = 'bull';
+        gapLow = prev.h;
+        gapHigh = next.l;
+      } else if (prev.l > next.h) {
+        kind = 'bear';
+        gapLow = next.h;
+        gapHigh = prev.l;
+      } else {
+        continue;
+      }
+      if (strict) {
+        const range = mid.h - mid.l;
+        const bodyRatio = range > 0 ? Math.abs(mid.c - mid.o) / range : 0;
+        if (bodyRatio < minBodyRatio) continue;
+      }
+      // Find mitigation — first candle after i+1 whose wick enters [gapLow,gapHigh].
+      // Bullish gap is filled from above (a low touches/crosses gapHigh down to gapLow);
+      // bearish from below (a high touches/crosses gapLow up to gapHigh). We treat
+      // any wick intrusion as mitigation per the spec.
+      let mitigatedAt = -1;
+      const scanEnd = Math.min(N - 1, i + 1 + extendBars);
+      for (let k = i + 2; k <= scanEnd; k++) {
+        const ck = this.candles[k];
+        if (kind === 'bull') {
+          if (ck.l <= gapHigh) { mitigatedAt = k; break; }
+        } else {
+          if (ck.h >= gapLow) { mitigatedAt = k; break; }
+        }
+      }
+      const endIdx = mitigatedAt >= 0 ? mitigatedAt : scanEnd;
+      gaps.push({
+        startIdx: i + 1,
+        endIdx,
+        kind,
+        gapLow,
+        gapHigh,
+        mitigated: mitigatedAt >= 0,
+      });
+    }
+    return { gaps };
+  }
+
+  // ICT/SMC Order Block — last opposing candle before an ATR-scaled impulse.
+  // Walk forward; when candle i is a bullish impulse (close>open AND
+  // abs(c-o)/ATR >= threshold), the OB is the most recent bearish candle
+  // immediately preceding it (and vice-versa for bearish impulse). The
+  // bearish/bullish RUN before the impulse is collapsed into one OB
+  // (matches Lux/Inner-Circle implementations: the entire opposing leg's
+  // extremes form the zone, not just the single touching bar).
+  _computeOb(ind) {
+    const N = this.candles.length;
+    if (N < 3) return { blocks: [] };
+    const p = (ind && typeof ind === 'object') ? (ind.params || {}) : {};
+    const atrPeriod = Math.max(2, (+p.atrPeriod || 14) | 0);
+    const threshold = +p.impulseThreshold || 1.5;
+    const useBodyOnly = (+p.useBodyOnly === 0) ? false : true;
+    const extendBars = Math.max(1, (+p.extendBars || 100) | 0);
+
+    const atr = this._computeATR(atrPeriod);
+    const blocks = [];
+    for (let i = 1; i < N; i++) {
+      const c = this.candles[i];
+      const a = atr[i];
+      if (a == null || a <= 0) continue;
+      const body = Math.abs(c.c - c.o);
+      if (body / a < threshold) continue;
+      const impulseDir = c.c > c.o ? 1 : (c.c < c.o ? -1 : 0);
+      if (impulseDir === 0) continue;
+      // Walk back over the immediately-preceding opposing-direction run.
+      const opposingDir = -impulseDir;
+      let runStart = -1;
+      let runEnd = -1;
+      for (let k = i - 1; k >= 0; k--) {
+        const ck = this.candles[k];
+        const dk = ck.c > ck.o ? 1 : (ck.c < ck.o ? -1 : 0);
+        if (dk === opposingDir) {
+          if (runEnd < 0) runEnd = k;
+          runStart = k;
+          continue;
+        }
+        if (runEnd >= 0) break;        // run ended — stop scanning
+        if (dk === 0) continue;         // skip dojis if no run yet
+        break;                           // hit same-direction without finding a run
+      }
+      if (runStart < 0) continue;
+      // Compute OB extremes across the run.
+      let zoneHigh = -Infinity;
+      let zoneLow = Infinity;
+      for (let k = runStart; k <= runEnd; k++) {
+        const ck = this.candles[k];
+        if (useBodyOnly) {
+          zoneHigh = Math.max(zoneHigh, ck.o, ck.c);
+          zoneLow = Math.min(zoneLow, ck.o, ck.c);
+        } else {
+          zoneHigh = Math.max(zoneHigh, ck.h);
+          zoneLow = Math.min(zoneLow, ck.l);
+        }
+      }
+      // De-duplicate: if the previous OB shares the same run-end, skip
+      // (chained impulses pointing at the same opposing leg shouldn't
+      // emit multiple boxes).
+      if (blocks.length > 0 && blocks[blocks.length - 1].sourceIdx === runEnd) {
+        continue;
+      }
+      // Mitigation — for a bullish OB (zone below impulse), price re-enters
+      // when a later candle's low crosses BELOW zoneHigh. Symmetric inverse
+      // for bearish OBs.
+      const kind = impulseDir === 1 ? 'bull' : 'bear';
+      let mitigatedAt = -1;
+      const scanEnd = Math.min(N - 1, i + extendBars);
+      for (let k = i + 1; k <= scanEnd; k++) {
+        const ck = this.candles[k];
+        if (kind === 'bull') {
+          if (ck.l <= zoneHigh) { mitigatedAt = k; break; }
+        } else {
+          if (ck.h >= zoneLow) { mitigatedAt = k; break; }
+        }
+      }
+      const endIdx = mitigatedAt >= 0 ? mitigatedAt : scanEnd;
+      blocks.push({
+        sourceIdx: runEnd,
+        impulseIdx: i,
+        endIdx,
+        kind,
+        zoneHigh,
+        zoneLow,
+        mitigated: mitigatedAt >= 0,
+      });
+    }
+    return { blocks };
+  }
+
+  // ICT Liquidity Sweep — a candle whose wick pierces a prior swing high/low
+  // but whose close stays inside the swept level. Pivots are right-confirmed
+  // fractals (need `pivotWidth` bars on the right before they're known); the
+  // sweep itself happens any time after pivot confirmation. A pivot is
+  // consumed by the first sweep so it doesn't keep emitting markers.
+  _computeLiqSweep(ind) {
+    const N = this.candles.length;
+    if (N < 3) return { sweeps: [] };
+    const p = (ind && typeof ind === 'object') ? (ind.params || {}) : {};
+    const pivotWidth = Math.max(1, (+p.pivotWidth || 2) | 0);
+
+    const isSwingHigh = (idx) => {
+      const hi = this.candles[idx].h;
+      for (let k = idx - pivotWidth; k <= idx + pivotWidth; k++) {
+        if (k < 0 || k >= N || k === idx) continue;
+        if (this.candles[k].h >= hi) return false;
+      }
+      return true;
+    };
+    const isSwingLow = (idx) => {
+      const lo = this.candles[idx].l;
+      for (let k = idx - pivotWidth; k <= idx + pivotWidth; k++) {
+        if (k < 0 || k >= N || k === idx) continue;
+        if (this.candles[k].l <= lo) return false;
+      }
+      return true;
+    };
+
+    const sweeps = [];
+    const activeHighs = [];       // pivots awaiting a sweep; consumed once swept
+    const activeLows = [];
+    for (let i = 0; i < N; i++) {
+      // Confirm pivots whose right side just completed.
+      const confirmAt = i - pivotWidth;
+      if (confirmAt >= pivotWidth) {
+        if (isSwingHigh(confirmAt)) {
+          activeHighs.push({ idx: confirmAt, level: this.candles[confirmAt].h });
+        }
+        if (isSwingLow(confirmAt)) {
+          activeLows.push({ idx: confirmAt, level: this.candles[confirmAt].l });
+        }
+      }
+      const c = this.candles[i];
+      for (let k = activeHighs.length - 1; k >= 0; k--) {
+        const pv = activeHighs[k];
+        if (pv.idx >= i) continue;
+        if (c.h > pv.level && c.c < pv.level) {
+          sweeps.push({
+            i, kind: 'bear', pivotIdx: pv.idx, level: pv.level,
+          });
+          activeHighs.splice(k, 1);
+        }
+      }
+      for (let k = activeLows.length - 1; k >= 0; k--) {
+        const pv = activeLows[k];
+        if (pv.idx >= i) continue;
+        if (c.l < pv.level && c.c > pv.level) {
+          sweeps.push({
+            i, kind: 'bull', pivotIdx: pv.idx, level: pv.level,
+          });
+          activeLows.splice(k, 1);
+        }
+      }
+    }
+    return { sweeps };
+  }
+
+  // ICT/SMC Market Structure — emit BOS / CHoCH / MSS labels when a candle
+  // closes through the most-recent unbroken swing pivot. Current trend is
+  // tracked across the pass: a same-direction break is BOS (continuation),
+  // an opposite-direction break is CHoCH (and upgrades to MSS if the break
+  // candle's body ratio clears `minBodyRatio`). A break also flips the
+  // tracked trend so the NEXT opposite break is again a CHoCH/MSS.
+  _computeMss(ind) {
+    const N = this.candles.length;
+    if (N < 5) return { events: [] };
+    const p = (ind && typeof ind === 'object') ? (ind.params || {}) : {};
+    const pivotWidth = Math.max(1, (+p.pivotWidth || 2) | 0);
+    const minBodyRatio = +p.minBodyRatio || 0.65;
+
+    const isSwingHigh = (idx) => {
+      const hi = this.candles[idx].h;
+      for (let k = idx - pivotWidth; k <= idx + pivotWidth; k++) {
+        if (k < 0 || k >= N || k === idx) continue;
+        if (this.candles[k].h >= hi) return false;
+      }
+      return true;
+    };
+    const isSwingLow = (idx) => {
+      const lo = this.candles[idx].l;
+      for (let k = idx - pivotWidth; k <= idx + pivotWidth; k++) {
+        if (k < 0 || k >= N || k === idx) continue;
+        if (this.candles[k].l <= lo) return false;
+      }
+      return true;
+    };
+
+    const events = [];
+    const activeHighs = [];       // unbroken swing-high pivots
+    const activeLows = [];
+    let trend = 0;                // 1=bull, -1=bear, 0=undetermined
+    for (let i = 0; i < N; i++) {
+      const confirmAt = i - pivotWidth;
+      if (confirmAt >= pivotWidth) {
+        if (isSwingHigh(confirmAt)) {
+          activeHighs.push({ idx: confirmAt, level: this.candles[confirmAt].h });
+        }
+        if (isSwingLow(confirmAt)) {
+          activeLows.push({ idx: confirmAt, level: this.candles[confirmAt].l });
+        }
+      }
+      const c = this.candles[i];
+      const range = c.h - c.l;
+      const bodyRatio = range > 0 ? Math.abs(c.c - c.o) / range : 0;
+
+      // Bullish break — close above the most-recent unbroken swing high.
+      // Walk newest-first; consume only the first one broken (pivots older
+      // than the broken one stay active for chained breaks on later bars).
+      for (let k = activeHighs.length - 1; k >= 0; k--) {
+        const pv = activeHighs[k];
+        if (pv.idx >= i) continue;
+        if (c.c <= pv.level) continue;
+        let label;
+        if (trend === 1) {
+          label = 'BOS';
+        } else if (trend === -1) {
+          label = bodyRatio >= minBodyRatio ? 'MSS' : 'CHoCH';
+        } else {
+          label = 'BOS';            // first-ever break — treat as continuation
+        }
+        events.push({
+          i, kind: 'bull', label, pivotIdx: pv.idx, level: pv.level,
+        });
+        activeHighs.splice(k, 1);
+        trend = 1;
+        break;
+      }
+      // Bearish break — close below most-recent unbroken swing low.
+      for (let k = activeLows.length - 1; k >= 0; k--) {
+        const pv = activeLows[k];
+        if (pv.idx >= i) continue;
+        if (c.c >= pv.level) continue;
+        let label;
+        if (trend === -1) {
+          label = 'BOS';
+        } else if (trend === 1) {
+          label = bodyRatio >= minBodyRatio ? 'MSS' : 'CHoCH';
+        } else {
+          label = 'BOS';
+        }
+        events.push({
+          i, kind: 'bear', label, pivotIdx: pv.idx, level: pv.level,
+        });
+        activeLows.splice(k, 1);
+        trend = -1;
+        break;
+      }
+    }
+    return { events };
+  }
+
   // ----- Phase 8 — Renderers ----------------------------------------------
   // SMA / EMA draw as a single line on the candle pane. Each indicator gets
   // a small label chip at the latest data point so multiple SMAs at different
@@ -6327,6 +6781,274 @@ class Chart {
         this.ctx.stroke();
         this.ctx.setLineDash([]);
         this.ctx.restore();
+      }
+
+      // CISD — body-close break of opposing delivery leg's first.open.
+      // Per event we draw: (1) a colored horizontal line at the break
+      // level spanning [event.i .. event.endIdx], and (2) in strict mode
+      // a filled triangle marker at the triggering candle (▲ below for
+      // bullish, ▼ above for bearish). Max-lines pruning keeps the most
+      // recent N visible (older events dropped from render, kept in the
+      // compute output so memoization stays stable across frames).
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'cisd') continue;
+        const { events } = this._computeCisd(ind);
+        if (!events || events.length === 0) continue;
+        const p = (ind.params || {});
+        const maxLines = Math.max(1, (+p.maxLines || 10) | 0);
+        const bullColor = ind.color || '#22C55E';
+        const bearColor = '#EF4444';
+        const lineW = (ind.thickness && ind.thickness > 1) ? ind.thickness : 1.5;
+        const visible = events.slice(-maxLines);
+        for (const ev of visible) {
+          const color = ev.kind === 'bull' ? bullColor : bearColor;
+          const x1 = this._candleXCenter(ev.i, plot);
+          const x2 = this._candleXCenter(ev.endIdx, plot);
+          const y = priceToY(ev.level);
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = lineW;
+          ctx.beginPath();
+          ctx.moveTo(x1, y);
+          ctx.lineTo(x2, y);
+          ctx.stroke();
+          // Strict-mode marker — small filled triangle at the event candle.
+          // Bullish ▲ sits below the candle's low; bearish ▼ above the high.
+          if (ev.isStrict) {
+            const evC = this.candles[ev.i];
+            const size = 5;
+            const cx = this._candleXCenter(ev.i, plot);
+            const lowY = priceToY(evC.l);
+            const highY = priceToY(evC.h);
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            if (ev.kind === 'bull') {
+              const ty = lowY + 8;
+              ctx.moveTo(cx, ty);
+              ctx.lineTo(cx - size, ty + size * 1.5);
+              ctx.lineTo(cx + size, ty + size * 1.5);
+            } else {
+              const ty = highY - 8;
+              ctx.moveTo(cx, ty);
+              ctx.lineTo(cx - size, ty - size * 1.5);
+              ctx.lineTo(cx + size, ty - size * 1.5);
+            }
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+      }
+
+      // FVG — translucent rect for each gap, faded outline if mitigated.
+      // Box spans candle (startIdx) → mitigation candle (or extendBars cap).
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'fvg') continue;
+        const { gaps } = this._computeFvg(ind);
+        if (!gaps || gaps.length === 0) continue;
+        const p = (ind.params || {});
+        const maxBoxes = Math.max(1, (+p.maxBoxes || 20) | 0);
+        const showMitigated = (+p.showMitigated === 0) ? false : true;
+        const bullColor = ind.color || '#22C55E';
+        const bearColor = '#EF4444';
+        const visible = gaps.slice(-maxBoxes);
+        for (const g of visible) {
+          if (g.mitigated && !showMitigated) continue;
+          const color = g.kind === 'bull' ? bullColor : bearColor;
+          const x1 = this._candleXCenter(g.startIdx, plot);
+          const x2 = this._candleXCenter(g.endIdx, plot);
+          const yHi = priceToY(g.gapHigh);
+          const yLo = priceToY(g.gapLow);
+          const top = Math.min(yHi, yLo);
+          const bot = Math.max(yHi, yLo);
+          const left = Math.min(x1, x2);
+          const width = Math.max(1, Math.abs(x2 - x1));
+          const height = Math.max(1, bot - top);
+          ctx.save();
+          if (g.mitigated) {
+            ctx.fillStyle = _hexToRgba(color, 0.05);
+            ctx.fillRect(left, top, width, height);
+            ctx.strokeStyle = _hexToRgba(color, 0.35);
+            ctx.lineWidth = 1;
+            // Mitigated: only draw the boundary line (gap edge that price
+            // closed through first — bullish=top, bearish=bottom).
+            ctx.beginPath();
+            const edgeY = g.kind === 'bull' ? top : bot;
+            ctx.moveTo(left, edgeY);
+            ctx.lineTo(left + width, edgeY);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = _hexToRgba(color, 0.15);
+            ctx.fillRect(left, top, width, height);
+            ctx.strokeStyle = _hexToRgba(color, 0.6);
+            ctx.lineWidth = 1;
+            ctx.strokeRect(left + 0.5, top + 0.5, width - 1, height - 1);
+          }
+          ctx.restore();
+        }
+      }
+
+      // Order Blocks — translucent rectangle on the OB zone, "OB" label
+      // near the right edge when the box is wide enough to host text.
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'ob') continue;
+        const { blocks } = this._computeOb(ind);
+        if (!blocks || blocks.length === 0) continue;
+        const p = (ind.params || {});
+        const maxBoxes = Math.max(1, (+p.maxBoxes || 10) | 0);
+        const showMitigated = (+p.showMitigated === 1);
+        const bullColor = ind.color || '#22C55E';
+        const bearColor = '#EF4444';
+        const visible = blocks.slice(-maxBoxes);
+        for (const b of visible) {
+          if (b.mitigated && !showMitigated) continue;
+          const color = b.kind === 'bull' ? bullColor : bearColor;
+          const x1 = this._candleXCenter(b.sourceIdx, plot);
+          const x2 = this._candleXCenter(b.endIdx, plot);
+          const yHi = priceToY(b.zoneHigh);
+          const yLo = priceToY(b.zoneLow);
+          const top = Math.min(yHi, yLo);
+          const bot = Math.max(yHi, yLo);
+          const left = Math.min(x1, x2);
+          const width = Math.max(1, Math.abs(x2 - x1));
+          const height = Math.max(1, bot - top);
+          ctx.save();
+          const fillA = b.mitigated ? 0.05 : 0.15;
+          const strokeA = b.mitigated ? 0.35 : 0.6;
+          ctx.fillStyle = _hexToRgba(color, fillA);
+          ctx.fillRect(left, top, width, height);
+          ctx.strokeStyle = _hexToRgba(color, strokeA);
+          ctx.lineWidth = 1;
+          ctx.strokeRect(left + 0.5, top + 0.5, width - 1, height - 1);
+          if (width > 50 && height >= 14) {
+            ctx.font = '700 10px Geist, sans-serif';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = _hexToRgba(color, 0.9);
+            ctx.fillText('OB', left + width - 4, top + height / 2);
+          }
+          ctx.restore();
+        }
+      }
+
+      // Liquidity Sweep — triangle marker at the sweeping candle pointing
+      // AT the swept pivot. Optional dashed line traces back to the pivot.
+      // Bullish (low pivot swept) → triangle below candle low pointing down;
+      // bearish (high pivot swept) → triangle above candle high pointing up.
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'liqsweep') continue;
+        const { sweeps } = this._computeLiqSweep(ind);
+        if (!sweeps || sweeps.length === 0) continue;
+        const p = (ind.params || {});
+        const maxMarkers = Math.max(1, (+p.maxMarkers || 20) | 0);
+        const showLine = (+p.showSweepLine === 0) ? false : true;
+        const bullColor = ind.color || '#22C55E';
+        const bearColor = '#EF4444';
+        const visible = sweeps.slice(-maxMarkers);
+        for (const sw of visible) {
+          const color = sw.kind === 'bull' ? bullColor : bearColor;
+          const cx = this._candleXCenter(sw.i, plot);
+          const evC = this.candles[sw.i];
+          const lowY = priceToY(evC.l);
+          const highY = priceToY(evC.h);
+          ctx.save();
+          if (showLine) {
+            const px = this._candleXCenter(sw.pivotIdx, plot);
+            const py = priceToY(sw.level);
+            ctx.strokeStyle = _hexToRgba(color, 0.55);
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.lineTo(cx, py);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+          const size = 5;
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          if (sw.kind === 'bull') {
+            const ty = lowY + 8;
+            ctx.moveTo(cx, ty + size * 1.5);
+            ctx.lineTo(cx - size, ty);
+            ctx.lineTo(cx + size, ty);
+          } else {
+            const ty = highY - 8;
+            ctx.moveTo(cx, ty - size * 1.5);
+            ctx.lineTo(cx - size, ty);
+            ctx.lineTo(cx + size, ty);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      // MSS / BOS / CHoCH — small text label at the break candle plus an
+      // optional dashed level line from the broken pivot. MSS additionally
+      // renders a filled triangle marker (high-conviction). Colour reflects
+      // the break direction (green for bullish, red for bearish) which
+      // matches the new prevailing trend.
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'mss') continue;
+        const { events } = this._computeMss(ind);
+        if (!events || events.length === 0) continue;
+        const p = (ind.params || {});
+        const maxLabels = Math.max(1, (+p.maxLabels || 15) | 0);
+        const showLine = (+p.showBreakLine === 0) ? false : true;
+        const bullColor = ind.color || '#22C55E';
+        const bearColor = '#EF4444';
+        const visible = events.slice(-maxLabels);
+        for (const ev of visible) {
+          const color = ev.kind === 'bull' ? bullColor : bearColor;
+          const cx = this._candleXCenter(ev.i, plot);
+          const evC = this.candles[ev.i];
+          const lowY = priceToY(evC.l);
+          const highY = priceToY(evC.h);
+          ctx.save();
+          if (showLine) {
+            const px = this._candleXCenter(ev.pivotIdx, plot);
+            const py = priceToY(ev.level);
+            ctx.strokeStyle = _hexToRgba(color, 0.6);
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.lineTo(cx, py);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+          const isMss = ev.label === 'MSS';
+          const isBull = ev.kind === 'bull';
+          ctx.font = (isMss ? '700 ' : '600 ') + '10px Geist, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = isBull ? 'bottom' : 'top';
+          ctx.fillStyle = color;
+          const textY = isBull ? highY - 14 : lowY + 14;
+          ctx.fillText(ev.label, cx, textY);
+          if (isMss) {
+            const size = 4;
+            const ty = isBull ? highY - 4 : lowY + 4;
+            ctx.beginPath();
+            if (isBull) {
+              ctx.moveTo(cx, ty);
+              ctx.lineTo(cx - size, ty + size * 1.4);
+              ctx.lineTo(cx + size, ty + size * 1.4);
+            } else {
+              ctx.moveTo(cx, ty);
+              ctx.lineTo(cx - size, ty - size * 1.4);
+              ctx.lineTo(cx + size, ty - size * 1.4);
+            }
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.restore();
+        }
       }
 
       ctx.restore();
