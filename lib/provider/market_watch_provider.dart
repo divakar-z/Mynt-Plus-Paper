@@ -4728,19 +4728,19 @@ getOptionawait(String exch, String token) {
         // Close the dialog
         Navigator.of(context).pop();
 
-        // Small delay to ensure dialog pop completes, then add Order Book tab and switch to Alerts
+       
         Future.delayed(const Duration(milliseconds: 200), () {
           if (kIsWeb && WebNavigationHelper.isAvailable) {
-            // Navigate to Order Book in web panel using WebNavigationHelper
+            // Navigate to Order Book in web panel
             WebNavigationHelper.navigateTo("orderBook");
 
-            // Additional delay to ensure Order Book screen loads, then switch to Alerts tab within it
+          
             Future.delayed(const Duration(milliseconds: 300), () {
-              ref.read(orderProvider).changeTabIndex(5, context);
+              ref.read(orderProvider).setSelectedTabSilent(6);
             });
           } else {
             // Fallback for non-web platforms
-            ref.read(orderProvider).changeTabIndex(5, context);
+            ref.read(orderProvider).setSelectedTabSilent(6);
           }
         });
       } else if (_setAlertModel!.stat! == "Not_Ok" &&
