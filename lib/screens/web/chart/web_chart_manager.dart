@@ -300,11 +300,18 @@ class WebChartManager {
             ..style.overflow = 'hidden';
           _containerId = containerId;
 
-          // Give Flutter a frame to mount the div into the DOM, then try to
-          // process any pending chart creation. Same 200 ms delay used by
-          // ScalperChartManager.
+          // After Flutter mounts the new div, handle two cases:
+          //   1. Pending creation queued before container / bridge was ready.
+          //   2. Remount (hot reload, navigation away+back, theme change) —
+          //      singleton state survives but the old container is gone;
+          //      recreate the chart on the new div using the last symbol.
+          // Same pattern as ScalperChartManager.
           Future.delayed(const Duration(milliseconds: 200), () {
-            _processPendingCreation();
+            if (_pendingCreation != null) {
+              _processPendingCreation();
+            } else if (_bridgeLoaded && _currentSymbol != null) {
+              _createChartInternal(_currentSymbol!, _currentDarkMode);
+            }
           });
 
           return div;

@@ -16,9 +16,17 @@
   var charts = {};          // TradingView widget instances by containerId
   var symbolDataCache = {}; // Cache raw API symData (getSymbolinfo + GetSecurityInfo bundle) by tsym
   var symbolInfoMap = {};   // Cache fully-resolved TV symbolInfo by full "EXCH:TSYM" — mirrors window._symbolInfoMap in feedFactory.js
-  var subscriptions = {};   // containerId -> { callback, lastBar, resolution, preVolume, exchange }
+  // containerId -> { main: <sub>, studies: { uid: <sub> } }
+  // <sub> = { callback, lastBar, resolution, subscriberUID, preVolume, exchange, symbolName }
+  // Split so indicator studies on a different resolution (e.g. 52-week H/L
+  // needs weekly bars while the main series is 5m) don't overwrite the main
+  // series subscription — the previous flat-map layout let TV's study
+  // subscribeBars clobber the main slot, after which pushTick bucketed live
+  // ticks to the wrong resolution and the chart looked frozen.
+  var subscriptions = {};
   var desiredSymbols = {};  // containerId -> symbol name (for gating stale getBars/subscribeBars)
   var changeSymbolTimers = {}; // containerId -> debounce timer
+  var lastNotifiedSymbol = {}; // containerId -> last symbol sent to Dart via onChartSymbolChanged (dedup)
 
   // OI overlay marker — a symbol resolved with this suffix returns bars
   // whose `close` is the open-interest value, not price. Used by the OI
@@ -76,6 +84,36 @@
 
   function fetchJson(url) {
     return fetch(url).then(function (r) { return r.json(); }).catch(function () { return null; });
+  }
+
+  // Notify Dart that TradingView's chart symbol changed externally (saved
+  // layout load, TV's header search box, etc.). Dart re-points the WS
+  // owner at the new token so live ticks follow the displayed symbol —
+  // without this the chart shows the new symbol's candles but pushTick
+  // still feeds the previous symbol's ltp, or nothing at all.
+  // Payload exch/Token come from symbolDataCache, which resolveSymbol
+  // populates from /getSymbolinfo and /GetSecurityInfo right before this
+  // fires — by the time TV emits onSymbolChanged the cache is hot.
+  // On web (no flutter_inappwebview), the callHandler check fails silently
+  // and the function becomes a no-op until we wire a web-side bridge.
+  function notifyDartOfSymbolChange(containerId, symbolName) {
+    if (!symbolName) return;
+    if (lastNotifiedSymbol[containerId] === symbolName) return;
+    lastNotifiedSymbol[containerId] = symbolName;
+    var seeded = symbolDataCache[symbolName] || {};
+    var payload = {
+      containerId: containerId,
+      symbol: symbolName,
+      exch: seeded.exch || '',
+      token: seeded.Token || ''
+    };
+    try {
+      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        window.flutter_inappwebview.callHandler('onChartSymbolChanged', payload);
+      }
+    } catch (e) {
+      console.error('notifyDartOfSymbolChange error:', e);
+    }
   }
 
   function setupIndicatorsSync(widget, containerId, user) {
@@ -535,30 +573,81 @@
       },
 
       subscribeBars: function (symbolInfo, resolution, onRealtimeCallback, subscriberUID, onResetCacheNeededCallback) {
-        // Gate: skip if this is a stale callback from a previous setSymbol call
+        // The gate's original job was to filter stale callbacks from a
+        // previous setSymbol call that landed after a second setSymbol
+        // had started. That race is now mostly closed by changeSymbol's
+        // 150ms debounce + delete subscriptions, so the gate's reject
+        // path needs to be conservative: only reject when there's already
+        // a main subscription on a *different* symbol AND TradingView's
+        // active chart doesn't agree the symbol has changed. Otherwise
+        // accept — covers saved-layout load and TV's header search box,
+        // both of which fire subscribeBars for a new symbol BEFORE the
+        // onSymbolChanged event reaches our handler.
         var desired = desiredSymbols[containerId];
-        if (desired && symbolInfo.name !== desired && symbolInfo.ticker !== desired) {
-          console.log('ScalperCharts: Skipping stale subscribeBars for', symbolInfo.name, '- desired:', desired);
-          return;
+        var entry = subscriptions[containerId];
+        var matchesDesired = !desired ||
+            symbolInfo.name === desired || symbolInfo.ticker === desired;
+        if (!matchesDesired) {
+          var currentSym = null;
+          try {
+            var w = charts[containerId];
+            if (w && w.activeChart) currentSym = w.activeChart().symbol();
+          } catch (e) { /* widget mid-init */ }
+          var chartAgrees = currentSym &&
+              (currentSym === symbolInfo.name || currentSym === symbolInfo.ticker);
+          var noMain = !entry || !entry.main;
+          if (noMain || chartAgrees) {
+            console.log('ScalperCharts: Accepting symbol change to', symbolInfo.name,
+                noMain ? '(no main bound)' : '(chart agrees)');
+            desiredSymbols[containerId] = symbolInfo.name;
+            notifyDartOfSymbolChange(containerId, symbolInfo.name);
+          } else {
+            console.log('ScalperCharts: Skipping stale subscribeBars for', symbolInfo.name, '- desired:', desired);
+            return;
+          }
         }
 
-        // Register subscription for this chart container
-        // Dart will push ticks via ScalperCharts.pushTick()
-        subscriptions[containerId] = {
+        var sub = {
           callback: onRealtimeCallback,
           lastBar: lastBarFromHistory,
           resolution: resolution,
           subscriberUID: subscriberUID,
           preVolume: 0,
-          exchange: symbolInfo.exchange || ''
+          exchange: symbolInfo.exchange || '',
+          symbolName: symbolInfo.name
         };
-        console.log('ScalperCharts: subscribeBars -', containerId, 'res:', resolution);
+
+        // Slot the sub as either the main series or a study. We don't have
+        // a reliable signal at this point for which call corresponds to the
+        // chart's primary series (TV doesn't tag it), so we use ordering:
+        // the first subscribeBars after createChart / changeSymbol / a main
+        // unsubscribe is treated as main; later ones (typically studies
+        // on a different resolution, e.g. 52-week H/L on weekly) go into
+        // the studies map. Only the main feeds pushTick, so a weekly study
+        // no longer clobbers the 5m series.
+        if (!entry) {
+          subscriptions[containerId] = { main: sub, studies: {} };
+        } else if (!entry.main) {
+          entry.main = sub;
+        } else {
+          entry.studies = entry.studies || {};
+          entry.studies[subscriberUID] = sub;
+        }
+        console.log('ScalperCharts: subscribeBars -', containerId, 'res:', resolution, 'uid:', subscriberUID);
       },
 
       unsubscribeBars: function (subscriberUID) {
-        if (subscriptions[containerId] && subscriptions[containerId].subscriberUID === subscriberUID) {
+        var entry = subscriptions[containerId];
+        if (!entry) return;
+        if (entry.main && entry.main.subscriberUID === subscriberUID) {
+          entry.main = null;
+          console.log('ScalperCharts: unsubscribeBars (main) -', containerId, subscriberUID);
+        } else if (entry.studies && entry.studies[subscriberUID]) {
+          delete entry.studies[subscriberUID];
+          console.log('ScalperCharts: unsubscribeBars (study) -', containerId, subscriberUID);
+        }
+        if (!entry.main && (!entry.studies || Object.keys(entry.studies).length === 0)) {
           delete subscriptions[containerId];
-          console.log('ScalperCharts: unsubscribeBars -', containerId);
         }
       }
     };
@@ -836,6 +925,25 @@
           }
 
           widget.onChartReady(function () {
+            // Hook TV's symbol-change event so that a saved layout load (or
+            // TV's header search box) updates desiredSymbols and tells Dart
+            // which scrip to subscribe via WS. Fires AFTER setSymbol →
+            // resolveSymbol → getBars → subscribeBars completes, so the
+            // symbolDataCache entry for the new symbol is ready.
+            try {
+              var ch = widget.activeChart();
+              if (ch && ch.onSymbolChanged) {
+                ch.onSymbolChanged().subscribe(null, function () {
+                  try {
+                    var newSym = ch.symbol();
+                    if (!newSym) return;
+                    desiredSymbols[containerId] = newSym;
+                    notifyDartOfSymbolChange(containerId, newSym);
+                  } catch (e) { /* widget mid-tear-down */ }
+                });
+              }
+            } catch (e) { /* onSymbolChanged unavailable in some builds */ }
+
             // Mirrors TVChartContainerMOB.vue:205-211 — changeTheme, then
             // dataReady → chartReset to auto-fit the visible range.
             try { widget.changeTheme(isDark ? 'dark' : 'light'); } catch (e) { }
@@ -900,6 +1008,17 @@
      * This also triggers unsubscribeBars -> subscribeBars cycle.
      */
     changeSymbol: function (containerId, symbol) {
+      // No-op when called with the symbol the chart is already on. Without
+      // this, market_watch_provider.setChartScript can race with the initial
+      // createChart on first open and wipe `subscriptions[containerId]` for
+      // a symbol that TV's `setSymbol` then treats as a no-op — leaving the
+      // chart with no live-tick callback bound (bug #19, surfacing again as
+      // SENSEX freezing on close/reopen).
+      if (desiredSymbols[containerId] === symbol) {
+        console.log('ScalperCharts: changeSymbol skip (same symbol) -', containerId, symbol);
+        return;
+      }
+
       // Track desired symbol — stale getBars/subscribeBars from a previous
       // setSymbol call will check this and skip if it doesn't match.
       desiredSymbols[containerId] = symbol;
@@ -943,8 +1062,9 @@
      * @param {object} tickData - WebSocket data: { lp, v, ltt, e, ... }
      */
     pushTick: function (containerId, tickData) {
-      var sub = subscriptions[containerId];
-      if (!sub || !sub.callback) return;
+      var entry = subscriptions[containerId];
+      if (!entry || !entry.main || !entry.main.callback) return;
+      var sub = entry.main;
 
       var lp = parseFloat(tickData.lp);
       if (isNaN(lp) || lp === 0) return;
@@ -1034,6 +1154,7 @@
         delete indicatorSyncTimers[containerId];
       }
       delete desiredSymbols[containerId];
+      delete lastNotifiedSymbol[containerId];
       var widget = charts[containerId];
       if (widget) {
         try { widget.remove(); } catch (e) { }
