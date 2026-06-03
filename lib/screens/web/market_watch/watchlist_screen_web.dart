@@ -869,7 +869,7 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'Add Symbol',
+                          'Add Stock',
                           style: MyntWebTextStyles.body(context,
                             color: resolveThemeColor(context,
                               dark: MyntColors.textPrimary,
@@ -884,7 +884,7 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
 
               const SizedBox(height: 12),
               Text(
-                'No symbol in this watchlist',
+                'No stocks in the watchlist',
                 style: MyntWebTextStyles.bodyMedium(
                   context,
                   color: resolveThemeColor(

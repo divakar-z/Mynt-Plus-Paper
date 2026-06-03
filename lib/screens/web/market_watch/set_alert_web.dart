@@ -35,6 +35,8 @@ class _SetAlertWebState extends State<SetAlertWeb> {
   String alertTypeVal = "";
   String validityTypeVal = "";
   String errorText = "";
+ 
+  bool _valueTouched = false;
   late GetQuotes depthdata;
 
   @override
@@ -75,7 +77,12 @@ class _SetAlertWebState extends State<SetAlertWeb> {
   validatesetalret(value) {
     try {
       if (value == null || value.isEmpty) {
-        errorText = "* Value is required";
+        // Only surface the empty-field error if the user has actually
+        // interacted with the Value field, or if validation was triggered
+        // by clicking Set Alert (caller flips _valueTouched first). This
+        // prevents a red error from appearing on the untouched Value
+        // field when the user merely flips Above/Below.
+        errorText = _valueTouched ? "Alert Price cannot be empty" : "";
         return;
       }
 
@@ -580,6 +587,11 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                     light: MyntColors.primary,
                                   ),
                                   onChanged: (value) {
+                                    // Any keystroke counts as interaction
+                                    // with the Value field — flips the
+                                    // touched flag so subsequent empty
+                                    // states show the inline error.
+                                    _valueTouched = true;
                                     Future.microtask(() {
                                       if (mounted) {
                                         setState(() {
@@ -661,10 +673,8 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                               const SizedBox(height: 16),
 
                               Builder(builder: (context) {
-                                final bool isDisabled = _handlesetalert ||
-                                    valueCtrl.text.isEmpty ||
-                                    valueCtrl.text == "0" ||
-                                    errorText.isNotEmpty;
+                               
+                                final bool isDisabled = _handlesetalert;
 
                                 return MyntPrimaryButton(
                                   label: 'Set alert',
@@ -680,8 +690,17 @@ class _SetAlertWebState extends State<SetAlertWeb> {
 
                                           if (valueCtrl.text.isEmpty) {
                                             setState(() {
+                                              // Clicking Set Alert counts
+                                              // as interaction — flip the
+                                              // touched flag so subsequent
+                                              // re-validations (e.g. user
+                                              // flipping Above/Below)
+                                              // keep the empty error
+                                              // showing instead of clearing
+                                              // it.
+                                              _valueTouched = true;
                                               errorText =
-                                                  "Value cannot be empty";
+                                                  "Alert Price cannot be empty";
                                               _handlesetalert = false;
                                             });
                                             return;
@@ -689,13 +708,27 @@ class _SetAlertWebState extends State<SetAlertWeb> {
 
                                           if (valueCtrl.text == "0") {
                                             setState(() {
-                                              errorText = "Value cannot be 0";
+                                              _valueTouched = true;
+                                              errorText =
+                                                  "Alert Price cannot be 0";
                                               _handlesetalert = false;
                                             });
                                             return;
                                           }
 
-                                          errorText = "";
+                                          // Re-run validation so the latest
+                                          // LTP-above / LTP-below check is
+                                          // applied at click time. If the
+                                          // entered price is still invalid
+                                          // (e.g. "Above" target already below
+                                          // current LTP), block the submit.
+                                          validatesetalret(valueCtrl.text);
+                                          if (errorText.isNotEmpty) {
+                                            setState(() {
+                                              _handlesetalert = false;
+                                            });
+                                            return;
+                                          }
 
                                           try {
                                             await ref
