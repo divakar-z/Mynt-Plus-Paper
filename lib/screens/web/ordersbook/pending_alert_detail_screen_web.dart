@@ -83,7 +83,9 @@ class _PendingAlertDetailScreenWebState
         String formattedEnteredValue = enteredValue.toStringAsFixed(2);
 
         // Validation based on condition
-        if (widget.alert.aiT == "LTP_A" && enteredValue <= currentLtp) {
+        if (enteredValue == currentLtp) {
+          errorText = "Alert Price cannot be same as LTP";
+        } else if (widget.alert.aiT == "LTP_A" && enteredValue <= currentLtp) {
           errorText =
               "The Current LTP (₹$formattedLtp) is already above ₹$formattedEnteredValue";
         } else if (widget.alert.aiT == "LTP_B" && enteredValue >= currentLtp) {

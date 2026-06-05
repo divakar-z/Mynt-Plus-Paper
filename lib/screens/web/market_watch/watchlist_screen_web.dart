@@ -1321,7 +1321,7 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                                         if (customCount >= 10) {
                                           ResponsiveSnackBar.showWarning(
                                             context,
-                                            "You can create up to 10 watchlists only",
+                                            "Maximum watchlist limit reached, you can create up to 10 watchlist",
                                           );
                                           return;
                                         }
