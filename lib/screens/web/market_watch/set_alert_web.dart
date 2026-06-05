@@ -94,7 +94,9 @@ class _SetAlertWebState extends State<SetAlertWeb> {
         String formattedLtp = currentLtp.toStringAsFixed(2);
         String formattedEnteredValue = enteredValue.toStringAsFixed(2);
 
-        if (alertValue == "Above" && enteredValue <= currentLtp) {
+        if (enteredValue == currentLtp) {
+          errorText = "Alert Price cannot be same as LTP";
+        } else if (alertValue == "Above" && enteredValue <= currentLtp) {
           errorText =
               "The Current LTP (₹$formattedLtp) is already above ₹$formattedEnteredValue";
         } else if (alertValue == "Below" && enteredValue >= currentLtp) {
