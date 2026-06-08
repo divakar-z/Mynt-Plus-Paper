@@ -161,6 +161,15 @@ class OrderProvider extends DefaultChangeNotifier {
   int _selectedTab = 0;
   int get selectedTab => _selectedTab;
 
+
+  void setSelectedTabSilent(int index) {
+    if (_selectedTab == index) return;
+    _selectedTab = index;
+    tabCtrl?.animateTo(index);
+    _updateTabNamesSilent();
+    notifyListeners();
+  }
+
   List<Tab> _orderTabName = [];
   List<Tab> get orderTabName => _orderTabName;
 

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../models/marketwatch_model/alert_model/alert_pending_model.dart';
@@ -12,6 +11,7 @@ import '../../../res/mynt_web_color_styles.dart';
 import '../../../sharedWidget/functions.dart';
 import '../../../sharedWidget/snack_bar.dart';
 import '../../../sharedWidget/common_buttons_web.dart';
+import '../../../sharedWidget/common_text_fields_web.dart';
 import '../../../res/res.dart';
 import '../../../routes/web_router.dart' show webNavigatorKey;
 
@@ -33,6 +33,8 @@ class _PendingAlertDetailScreenWebState
   late FocusNode _valueFocusNode;
   String modifiedValue = "";
   String errorText = "";
+ 
+  bool _valueTouched = false;
   static const int _maxValueLength = 15;
 
   @override
@@ -48,11 +50,21 @@ class _PendingAlertDetailScreenWebState
     });
   }
 
-  // Add validation logic similar to set_alert_screen.dart
+  // Validation logic — mirrors validatesetalret() in set_alert_web.dart so
+  // the Modify Alert dialog has the same checks (empty / zero / LTP
+  // already crossed) and same BRD wording as Set Alert.
   validateAlertValue(String value) {
     try {
       if (value.isEmpty) {
-        errorText = "* Value is required";
+        // Suppress the empty error until the user has actually interacted
+        // — see _valueTouched note above. The button's onPressed flips
+        // the flag if the user clicks with an empty field.
+        errorText = _valueTouched ? "Alert Price cannot be empty" : "";
+        return;
+      }
+
+      if (value == "0") {
+        errorText = "Alert Price cannot be 0";
         return;
       }
 
@@ -71,7 +83,9 @@ class _PendingAlertDetailScreenWebState
         String formattedEnteredValue = enteredValue.toStringAsFixed(2);
 
         // Validation based on condition
-        if (widget.alert.aiT == "LTP_A" && enteredValue <= currentLtp) {
+        if (enteredValue == currentLtp) {
+          errorText = "Alert Price cannot be same as LTP";
+        } else if (widget.alert.aiT == "LTP_A" && enteredValue <= currentLtp) {
           errorText =
               "The Current LTP (₹$formattedLtp) is already above ₹$formattedEnteredValue";
         } else if (widget.alert.aiT == "LTP_B" && enteredValue >= currentLtp) {
@@ -276,12 +290,18 @@ class _PendingAlertDetailScreenWebState
               "Modify Alert",
               true,
               theme,
-              (isModifying ||
-                      isCancelling ||
-                      errorText.isNotEmpty ||
-                      valueCtrl.text.isEmpty)
+             
+              (isModifying || isCancelling)
                   ? null
                   : () async {
+                      // Click counts as interaction — make sure the
+                      // empty-state error can surface if the field is blank.
+                      setState(() {
+                        _valueTouched = true;
+                        validateAlertValue(valueCtrl.text);
+                      });
+                      if (errorText.isNotEmpty) return;
+
                       setState(() {
                         isModifying = true;
                       });
@@ -434,6 +454,57 @@ class _PendingAlertDetailScreenWebState
             formatDateTime(value: "${widget.alert.norentm}"),
             theme,
           ),
+         
+          if ((widget.alert.remarks ?? '').isNotEmpty)
+            _buildRemarksRow(theme, widget.alert.remarks!),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRemarksRow(ThemesProvider theme, String remarks) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: resolveThemeColor(
+              context,
+              dark: MyntColors.dividerDark,
+              light: MyntColors.divider,
+            ),
+            width: 1,
+          ),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            "Remarks",
+            style: MyntWebTextStyles.body(
+              context,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textPrimaryDark,
+                  light: MyntColors.textPrimary),
+              fontWeight: MyntFonts.medium,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              remarks,
+              textAlign: TextAlign.end,
+              style: MyntWebTextStyles.body(
+                context,
+                color: resolveThemeColor(context,
+                    dark: MyntColors.textPrimaryDark,
+                    light: MyntColors.textPrimary),
+                fontWeight: MyntFonts.medium,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -525,10 +596,8 @@ class _PendingAlertDetailScreenWebState
   }
 
   Widget _buildModifyValueField(ThemesProvider theme) {
-    final borderColor = resolveThemeColor(context,
-        dark: MyntColors.dividerDark, light: MyntColors.divider);
-    final focusedBorderColor = resolveThemeColor(context,
-        dark: MyntColors.primary, light: MyntColors.primary);
+    final isPercentAlert =
+        widget.alert.aiT == "CH_PER_A" || widget.alert.aiT == "CH_PER_B";
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -544,82 +613,81 @@ class _PendingAlertDetailScreenWebState
           ),
         ),
         const SizedBox(height: 10),
-        TextField(
-          controller: valueCtrl,
-          focusNode: _valueFocusNode,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          textAlign: TextAlign.start,
-          style: MyntWebTextStyles.tableCell(
-            context,
-            color: resolveThemeColor(context,
-                dark: MyntColors.textPrimaryDark,
-                light: MyntColors.textPrimary),
-          ),
-          inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-          ],
-          onChanged: (value) {
-            // Check if value exceeds max length
-            if (value.length > _maxValueLength) {
-              // Trim to max length
-              final trimmedValue = value.substring(0, _maxValueLength);
-              valueCtrl.text = trimmedValue;
-              valueCtrl.selection = TextSelection.fromPosition(
-                TextPosition(offset: trimmedValue.length),
-              );
-              // Show snackbar for limit exceeded
-              showResponsiveErrorMessage(
-                  context, "Maximum $_maxValueLength characters allowed");
-              return;
-            }
-            if (mounted) {
-              setState(() {
-                validateAlertValue(value);
-              });
-            }
-          },
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: resolveThemeColor(context,
-                dark: MyntColors.searchBgDark, light: MyntColors.searchBg),
-            hintText: "0",
-            hintStyle: MyntWebTextStyles.bodySmall(
+        SizedBox(
+          height: 45,
+          child: MyntTextField(
+            controller: valueCtrl,
+            focusNode: _valueFocusNode,
+            placeholder: '0',
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+            ],
+            textCapitalization: TextCapitalization.none,
+            size: MyntTextFieldSize.medium,
+            // Match Set Alert: rupee SVG for price alerts, percent icon
+            // for percentage-change alerts.
+            leadingIcon: isPercentAlert ? null : assets.ruppeIcon,
+            leadingWidget: isPercentAlert
+                ? Icon(
+                    Icons.percent_outlined,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary),
+                    size: 18,
+                  )
+                : null,
+            textStyle: MyntWebTextStyles.body(
               context,
-              color: resolveThemeColor(context,
-                  dark: MyntColors.textSecondaryDark,
-                  light: MyntColors.textSecondary),
+              fontWeight: MyntFonts.medium,
+              color: resolveThemeColor(
+                context,
+                dark: MyntColors.textPrimaryDark,
+                light: MyntColors.textPrimary,
+              ),
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-            prefixIcon:
-                widget.alert.aiT == "CH_PER_A" || widget.alert.aiT == "CH_PER_B"
-                    ? Icon(
-                        Icons.percent_outlined,
-                        color: resolveThemeColor(context,
-                            dark: MyntColors.textSecondaryDark,
-                            light: MyntColors.textSecondary),
-                        size: 18,
-                      )
-                    : SvgPicture.asset(assets.ruppeIcon,
-                        colorFilter: ColorFilter.mode(
-                          theme.isDarkMode
-                              ? MyntColors.textSecondaryDark
-                              : MyntColors.textSecondary,
-                          BlendMode.srcIn,
-                        ),
-                        fit: BoxFit.scaleDown),
-            enabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: borderColor),
-              borderRadius: BorderRadius.circular(6),
+            placeholderStyle: MyntWebTextStyles.body(
+              context,
+              fontWeight: MyntFonts.medium,
+              color: resolveThemeColor(
+                context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.textSecondary,
+              ),
             ),
-            focusedBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: focusedBorderColor),
-              borderRadius: BorderRadius.circular(6),
+            backgroundColor: resolveThemeColor(
+              context,
+              dark: MyntColors.transparent,
+              light: MyntColors.searchBg,
             ),
-            border: OutlineInputBorder(
-              borderSide: BorderSide(color: borderColor),
-              borderRadius: BorderRadius.circular(6),
+            borderColor: resolveThemeColor(
+              context,
+              dark: MyntColors.primaryDark,
+              light: MyntColors.primary,
             ),
+            onChanged: (value) {
+              // Check if value exceeds max length
+              if (value.length > _maxValueLength) {
+                // Trim to max length
+                final trimmedValue = value.substring(0, _maxValueLength);
+                valueCtrl.text = trimmedValue;
+                valueCtrl.selection = TextSelection.fromPosition(
+                  TextPosition(offset: trimmedValue.length),
+                );
+                // Show snackbar for limit exceeded
+                showResponsiveErrorMessage(
+                    context, "Maximum $_maxValueLength characters allowed");
+                return;
+              }
+              
+              _valueTouched = true;
+              if (mounted) {
+                setState(() {
+                  validateAlertValue(value);
+                });
+              }
+            },
           ),
         ),
         if (errorText.isNotEmpty) ...[

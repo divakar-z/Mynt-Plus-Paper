@@ -9,6 +9,7 @@ import '../../../../provider/transcation_provider.dart';
 import '../../../../sharedWidget/functions.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/no_data_found_web.dart';
+import '../../../../models/ipo_model/ipo_pre_close_model.dart';
 import '../../../../models/ipo_model/ipo_sme_model.dart';
 import '../../../../models/ipo_model/ipo_mainstream_model.dart';
 import 'IPO_order_screen/ipo_order_screen_web.dart';
@@ -30,9 +31,15 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
     final upiProvider = ref.watch(transcationProvider);
     final singlePageData = ipoProvider.iposinglepage?.data;
 
-    String companyName = ipo.name ?? '';
+    final bool isClosed = ipo is Msg;
+
+    String companyName = isClosed
+        ? ((ipo as Msg).companyName ?? ipo.name ?? '')
+        : (ipo.name ?? '');
     String? imageLink;
-    String ipoType = ipo is SMEIPO ? "SME" : "IPO";
+    String ipoType = isClosed
+        ? ((ipo as Msg).ipoType ?? "IPO")
+        : (ipo is SMEIPO ? "SME" : "IPO");
 
     if (singlePageData != null && singlePageData is Map) {
       if (singlePageData['Company Name'] != null) {
@@ -43,8 +50,10 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
       }
     }
 
-    final status = ipostartdate(
-      ipo.biddingStartDate ?? '',
+    final status = isClosed
+        ? "Closed"
+        : ipostartdate(
+          ipo.biddingStartDate ?? '',
       ipo.biddingEndDate ?? '',
     );
     final isOpen = status == "Open";
@@ -108,15 +117,16 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
 
                     const SizedBox(height: 24),
 
-                    // Apply Button
-                    MyntButton(
+                    // Apply Button (hidden for closed IPOs)
+                    if (!isClosed) ...[
+                      MyntButton(
                       label: isPreOpen ? "Pre Apply" : "Apply",
                       onPressed: () =>
                           _handleApply(context, ref, ipoProvider, upiProvider),
                       isFullWidth: true,
                     ),
-
-                    const SizedBox(height: 24),
+                      const SizedBox(height: 24),
+                    ],
 
                     // Details List
                     if (singlePageData != null &&
@@ -125,7 +135,9 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
                       _buildDetailRow(
                           context,
                           "Min amount",
-                          convertCurrencyINRStandard(mininv(
+                          isClosed
+                              ? _closedMinAmount(ipo as Msg)
+                              : convertCurrencyINRStandard(mininv(
                                   double.parse(ipo.minPrice ?? "0").toDouble(),
                                   int.parse(ipo.minBidQuantity ?? "0").toInt())
                               .toInt())),
@@ -134,8 +146,12 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
                           "Lot size",
                           singlePageData['IpoDetails']['LotSize']?.toString() ??
                               "--"),
-                      _buildDetailRow(context, "Price range",
-                          "₹${double.parse(ipo.minPrice ?? "0").toInt()} - ₹${double.parse(ipo.maxPrice ?? "0").toInt()}"),
+                      _buildDetailRow(
+                          context,
+                          "Price range",
+                          isClosed
+                              ? _closedPriceRange(ipo as Msg)
+                              : "₹${double.parse(ipo.minPrice ?? "0").toInt()} - ₹${double.parse(ipo.maxPrice ?? "0").toInt()}"),
                       _buildDetailRow(
                           context,
                           "Date",
@@ -344,6 +360,25 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  String _closedMinAmount(Msg ipo) {
+    final minPrice = ipo.minPrice;
+    final minQty = ipo.minBidQu;
+    if (minPrice == null || minQty == null || minPrice <= 0 || minQty <= 0) {
+      return "--";
+    }
+    return convertCurrencyINRStandard((minPrice * minQty).toInt());
+  }
+
+  String _closedPriceRange(Msg ipo) {
+    final range = ipo.priceRange;
+    if (range == null || range.isEmpty) return "--";
+    final parts = range.split('-').map((s) => s.trim()).toList();
+    if (parts.length == 2) {
+      return "₹${parts[0]} - ₹${parts[1]}";
+    }
+    return "₹$range";
   }
 
   Future<void> _handleApply(BuildContext context, WidgetRef ref,

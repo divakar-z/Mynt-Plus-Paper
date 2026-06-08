@@ -316,8 +316,9 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                 autofocus: true,
                                 inputFormatters: [
                                   UpperCaseTextFormatter(),
-                                  FilteringTextInputFormatter.deny(
-                                      RegExp('[π£•₹€℅™∆√¶/.,]'))
+                              
+                                  FilteringTextInputFormatter.allow(
+                                      RegExp(r'[a-zA-Z0-9& ]')),
                                 ],
                                 // Note: Search is handled by _textController.addListener with debounce
                                 // No onChanged here to avoid duplicate API calls
@@ -452,12 +453,17 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
         child: Padding(
           padding: const EdgeInsets.all(20.0),
           child: NoDataFoundWeb(
-            title: _searchValue.isNotEmpty
-                ? "No Results Found"
-                : "Start Searching",
-            subtitle: _searchValue.isNotEmpty
-                ? "No stocks match your search \"$_searchValue\"."
-                : "Type to search for stocks, indices, or options.",
+            
+            title: _searchValue.length < 3
+                ? "Start Searching"
+                : "No Results Found",
+            subtitle: _searchValue.isEmpty
+                ? "Type to search for stocks, indices, or options."
+                : _searchValue.length < 3
+                    ? "Type at least 3 characters to see results"
+                    : "No stocks match your search \"$_searchValue\".",
+           
+            secondaryEnabled: false,
           ),
         ),
       );
