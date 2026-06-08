@@ -95,10 +95,8 @@ class MyntSearchTextField extends StatelessWidget {
     VoidCallback? onClear,
     Widget? trailingWidget,
   }) {
-    // Smart clear button visibility: visible when text is not empty AND focused, OR when hovered
-    final smartClearVisibility = (shadcn.InputFeatureVisibility.textNotEmpty &
-            shadcn.InputFeatureVisibility.focused) |
-        shadcn.InputFeatureVisibility.hovered;
+    // Smart clear button visibility: visible whenever the field has text.
+    final smartClearVisibility = shadcn.InputFeatureVisibility.textNotEmpty;
 
     return MyntSearchTextField(
       key: key,

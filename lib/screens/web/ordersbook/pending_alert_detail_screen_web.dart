@@ -302,6 +302,18 @@ class _PendingAlertDetailScreenWebState
                       });
                       if (errorText.isNotEmpty) return;
 
+                      // No-op guard: if the user clicked Modify Alert without
+                      // actually changing the value, don't call the broker
+                      // (the API would no-op too) and don't fire the success
+                      // toast — nothing was modified, so claiming a
+                      // successful modify would be misleading. Just close
+                      // the sheet silently.
+                      final originalValue = (widget.alert.d ?? "").trim();
+                      if (modifiedValue.trim() == originalValue) {
+                        if (mounted) shadcn.closeSheet(context);
+                        return;
+                      }
+
                       setState(() {
                         isModifying = true;
                       });
