@@ -28,6 +28,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'locator/locator.dart';
 import 'locator/preference.dart';
+import 'utils/auto_login_handoff.dart';
 import 'provider/thems.dart';
 import 'res/web_resources.dart';
 import 'routes/app_routes.dart';
@@ -293,6 +294,23 @@ void main() async {
     if (!isPublicRoute) NotificationService.initializeNotification(),
     pref.init(),
   ]);
+
+  // Token-based auto-login. Partner portals open the web app with the client id
+  // and Noren session in the URL: https://app.mynt.in/?uid=clientId&token=session.
+  // Stash the values in memory only — SplashScreen validates them and commits a
+  // real session ONLY on success. We deliberately do NOT write them to the
+  // session prefs here: committing before validation would let a wrong/expired
+  // link overwrite (and log out) the user who is already signed in. The router
+  // redirects uid+token URLs through /splash so the validation runs.
+  if (kIsWeb) {
+    final q = Uri.base.queryParameters;
+    final uid = (q['uid'] ?? '').trim();
+    final token = (q['token'] ?? '').trim();
+    if (uid.isNotEmpty && token.isNotEmpty) {
+      AutoLoginHandoff.uid = uid;
+      AutoLoginHandoff.token = token;
+    }
+  }
 
   try {
     _clearBadgeOnStartup();

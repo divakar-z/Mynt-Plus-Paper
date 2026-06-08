@@ -15,6 +15,19 @@ class Preferences {
     await _prefInstance?.remove(_clientSession);
   }
 
+  /// Clears the logged-in user's identity + session keys (the "Client Details"
+  /// group) while leaving device, theme, and filter prefs intact. Used by the
+  /// URL token-based auto-login so a new user can never inherit the previous
+  /// user's session, profile token, or mobile number.
+  Future clearUserSession() async {
+    await _prefInstance?.remove(_clientId);
+    await _prefInstance?.remove(_clientSession);
+    await _prefInstance?.remove(_apiToken);
+    await _prefInstance?.remove(_clientMob);
+    await _prefInstance?.remove(_clientName);
+    await _prefInstance?.remove(_clientList);
+  }
+
   // QR session invalidation — stores the device UUID of the currently active
   // QR login session so we can tell the backend to invalidate it when the
   // user refreshes the browser, closes the tab, or re-enters the QR screen

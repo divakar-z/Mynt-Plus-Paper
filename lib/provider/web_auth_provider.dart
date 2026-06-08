@@ -240,6 +240,46 @@ class WebAuthProvider extends ChangeNotifier {
     return false;
   }
 
+  /// URL token-based auto-login (app.mynt.in/?uid=..&token=..).
+  ///
+  /// Validates (uid, token) against the backend and commits a session ONLY on
+  /// success. Returns true if logged in (navigation to home is triggered).
+  /// Returns false for an invalid/expired token WITHOUT modifying any stored
+  /// pref — so a wrong link can never overwrite or log out the current user.
+  Future<bool> tryUrlAutoLogin(
+      BuildContext context, String uid, String token) async {
+    _setLoading(true);
+    try {
+      final result =
+          await WebAuthApi.validateSession(clientId: uid, apiSession: token);
+
+      if (result != null && result['stat'] == 'Ok') {
+        // Validated — now (and only now) replace any existing session. Start
+        // clean so a new user never inherits the previous user's prefs.
+        await pref.clearUserSession();
+        await pref.setClientId(uid);
+        await pref.setClientSession(token);
+        if (result['uname'] != null) {
+          await pref.setClientName(result['uname']);
+        }
+        await pref.setLogout(false);
+        await pref.setMobileLogin(true);
+
+        if (context.mounted) {
+          await ref.read(authProvider).initialLoadMethods(context, "");
+        }
+        return true;
+      }
+
+      // Invalid/expired link — touch nothing; existing session stays intact.
+      return false;
+    } catch (e) {
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
   /// Web Login - Submit login credentials
   Future<bool> submitWebLogin(BuildContext context) async {
     if (!validateLogin() || !validatePassword()) {
