@@ -1583,6 +1583,8 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
         TextEditingController(text: watchlistName);
     final FocusNode focusNode = FocusNode();
 
+    String? errorText;
+
     // Request focus after dialog animation completes (web autofocus fix)
     // For edit dialog, position cursor at end instead of selecting all text
     Future.delayed(const Duration(milliseconds: 250), () {
@@ -1669,48 +1671,95 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                           ],
                         ),
                       ),
-                      // Content
+                      // Content. Wrapped in StatefulBuilder so the inline
+                      // error state (empty-name validation) can live within
+                      // the dialog without bubbling up to the parent screen.
                       Flexible(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              MyntFormTextField(
-                                controller: controller,
-                                focusNode: focusNode,
-                                placeholder: 'Enter watchlist name',
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.allow(
-                                    RegExp(r'[a-zA-Z0-9 ]'),
+                        child: StatefulBuilder(
+                          builder: (context, setDialogState) {
+                            void clearError() {
+                              if (errorText != null) {
+                                setDialogState(() => errorText = null);
+                              }
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  MyntFormTextField(
+                                    controller: controller,
+                                    focusNode: focusNode,
+                                    placeholder: 'Enter watchlist name',
+                                    inputFormatters: [
+                                      FilteringTextInputFormatter.allow(
+                                        RegExp(r'[a-zA-Z0-9 ]'),
+                                      ),
+                                    ],
+                                    onChanged: (_) => clearError(),
+                                  ),
+                                  if (errorText != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      errorText!,
+                                      style: MyntWebTextStyles.para(
+                                        context,
+                                        color: resolveThemeColor(
+                                          context,
+                                          dark: MyntColors.lossDark,
+                                          light: MyntColors.loss,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 24),
+                                  MyntPrimaryButton(
+                                    size: MyntButtonSize.large,
+                                    label: 'Save',
+                                    isFullWidth: true,
+                                    onPressed: () async {
+                                      final newName = controller.text.trim();
+                                      if (newName.isEmpty) {
+                                        // Client-side validation → inline
+                                        // red error per the established
+                                        // error-display pattern (toasts are
+                                        // reserved for backend errors).
+                                        setDialogState(() {
+                                          errorText =
+                                              'Watchlist name cannot be empty';
+                                        });
+                                        return;
+                                      }
+                                      if (newName != watchlistName) {
+                                        // Capture the screen's context BEFORE popping
+                                        // the dialog. The dialog's `context` becomes
+                                        // stale after pop, and passing it into the
+                                        // async provider call hits the Navigator
+                                        // _debugLocked assertion during finalizeTree.
+                                        final screenContext = this.context;
+                                        Navigator.of(context).pop();
+                                        if (!mounted) return;
+                                        await _handleWatchlistRename(
+                                            watchlistName,
+                                            newName,
+                                            ref,
+                                            screenContext);
+                                      } else {
+                                        // Save clicked without renaming — no
+                                        // API call (nothing changed at the
+                                        // broker). Close the dialog silently;
+                                        // a "renamed successfully" toast would
+                                        // be misleading because nothing was
+                                        // actually renamed.
+                                        Navigator.of(context).pop();
+                                      }
+                                    },
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 24),
-                              MyntPrimaryButton(
-                                size: MyntButtonSize.large,
-                                label: 'Save',
-                                isFullWidth: true,
-                                onPressed: () async {
-                                  final newName = controller.text.trim();
-                                  if (newName.isNotEmpty &&
-                                      newName != watchlistName) {
-                                    // Capture the screen's context BEFORE popping
-                                    // the dialog. The dialog's `context` becomes
-                                    // stale after pop, and passing it into the
-                                    // async provider call hits the Navigator
-                                    // _debugLocked assertion during finalizeTree.
-                                    final screenContext = this.context;
-                                    Navigator.of(context).pop();
-                                    if (!mounted) return;
-                                    await _handleWatchlistRename(watchlistName,
-                                        newName, ref, screenContext);
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
                       ),
                     ],
