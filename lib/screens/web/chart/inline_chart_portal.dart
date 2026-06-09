@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
+import 'package:mynt_plus/provider/websocket_provider.dart';
 import 'package:mynt_plus/screens/web/chart/web_chart_manager.dart';
 
 /// Persistent chart portal widget that renders at root level.
@@ -26,6 +27,9 @@ class _InlineChartPortalState extends ConsumerState<InlineChartPortal> {
     super.initState();
     // Initialize chart manager on startup - registers iframe factory
     webChartManager.initialize();
+    // Bind the shared socket stream so ticks for the charted scrip flow
+    // into the iframe via postMessage (replaces the chart's own WS).
+    webChartManager.bindWebSocket(ref.read(websocketProvider));
   }
 
   // Persistent LayerLink - used when the target's link is not available
