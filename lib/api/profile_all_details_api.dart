@@ -1053,23 +1053,30 @@ mixin ProfileAllDetailsApi on ApiCore {
     int count = 3,
   }) async {
     try {
-      final queryParams = 'mob=$mobile'
+      final isAdd = option == 'add';
+      var queryParams = 'mob=$mobile'
           '&bankName=${Uri.encodeComponent(bankName)}'
           '&ifsc=$ifsc'
-          '&accountNo=$accountNo'
-          '&proff_type=${proffType ?? ""}'
-          '&branch=${Uri.encodeComponent(branch)}'
+          '&accountNo=$accountNo';
+
+      if (isAdd) {
+        queryParams += '&proff_type=${Uri.encodeComponent(proffType ?? "")}';
+      }
+
+      queryParams += '&branch=${Uri.encodeComponent(branch)}'
           '&bank_account_type=${Uri.encodeComponent(bankAccountType)}'
-          '&client_name=${prefs.clientName}'
+          '&client_name=${Uri.encodeComponent(prefs.clientName ?? "")}'
           '&option=$option'
           '&client_id=${prefs.clientId}'
-          '&set_defalut=$setDefault'
+          '&set_defalut=${setDefault.toLowerCase()}'
           '&dp_code=$dpCode'
           '&micr=$micr'
           '&client_email=${Uri.encodeComponent(clientEmail)}'
           '&password_required=${passwordRequired ?? "NO"}'
-          '&password=${password ?? ""}'
-          '&count=$count';
+          '&password=${password ?? ""}';
+      if (isAdd) {
+        queryParams += '&count=$count';
+      }
 
       final uri = Uri.parse("${apiLinks.bankURL}?$queryParams");
       var request = http.MultipartRequest('POST', uri);
@@ -1082,6 +1089,8 @@ mixin ProfileAllDetailsApi on ApiCore {
           proofBytes,
           filename: proofFileName ?? 'proof.pdf',
         ));
+      } else {
+        request.fields['proff'] = '';
       }
 
       var response = await request.send();
@@ -1246,10 +1255,13 @@ mixin ProfileAllDetailsApi on ApiCore {
           }));
 
       final json = jsonDecode(res.body);
-      // print("djsonjson ==> ${json}");
+      final String stat = (json['stat'] ?? '').toString();
+      final String holdings = stat == 'Ok'
+          ? (json['holdings']?.toString() ?? '')
+          : '';
       return {
-        "stat": json['stat'] ?? '',
-        "holdings": json['holdings'] ?? json['data']?['holdings'] ?? [],
+        "stat": stat,
+        "holdings": holdings,
         "raw": json,
       };
     } catch (e) {
@@ -1259,7 +1271,9 @@ mixin ProfileAllDetailsApi on ApiCore {
 
   Future<dynamic> acccloserapi(String dpid, String boid, String filepath,
       String reason, fulldataprf, bankdata,
-      {bool hasHoldings = false}) async {
+      {bool hasHoldings = false,
+      Uint8List? fileBytes,
+      String? fileName}) async {
     List<Map<String, dynamic>> decodedBankData =
         List<Map<String, dynamic>>.from(jsonDecode(bankdata));
 
@@ -1301,7 +1315,13 @@ mixin ProfileAllDetailsApi on ApiCore {
       // request.fields['cmr_file'] = "";
 //  request.files
 //             .add(await http.MultipartFile.fromPath('cmr_file', filepath));
-      if (filepath.isNotEmpty) {
+      if (fileBytes != null && fileBytes.isNotEmpty) {
+        request.files.add(http.MultipartFile.fromBytes(
+          'cmr_file',
+          fileBytes,
+          filename: fileName ?? 'cmr_file.pdf',
+        ));
+      } else if (filepath.isNotEmpty) {
         request.files
             .add(await http.MultipartFile.fromPath('cmr_file', filepath));
       }

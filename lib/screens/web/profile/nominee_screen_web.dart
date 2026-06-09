@@ -7,12 +7,14 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/sharedWidget/snack_bar.dart';
 import 'package:mynt_plus/utils/digio_esign.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NomineeScreenWeb extends ConsumerStatefulWidget {
   final VoidCallback? onBack;
@@ -41,9 +43,14 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   bool _hasExistingNominee = false;
   bool _esignPending = false;
   bool _esignCompleted = false;
+  // True once user has completed Digio e-sign for the current change request;
+  bool _esignRequestInProcess = false;
   String? _fileId;
   String? _esignEmail;
   String? _esignSession;
+
+  String _esignPrefKey() =>
+      'nominee_esigned_${locator<Preferences>().clientId ?? ""}';
 
   // ── Nominee 1 Fields ──
   final _name1 = TextEditingController();
@@ -54,7 +61,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   final _address1 = TextEditingController();
   final _city1 = TextEditingController();
   final _state1 = TextEditingController();
-  final _country1 = TextEditingController(text: 'INDIA');
+  final _country1 = TextEditingController(text: 'India');
   final _pincode1 = TextEditingController();
   final _mobile1 = TextEditingController();
   final _email1 = TextEditingController();
@@ -70,7 +77,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   final _address2 = TextEditingController();
   final _city2 = TextEditingController();
   final _state2 = TextEditingController();
-  final _country2 = TextEditingController(text: 'INDIA');
+  final _country2 = TextEditingController(text: 'India');
   final _pincode2 = TextEditingController();
   final _mobile2 = TextEditingController();
   final _email2 = TextEditingController();
@@ -86,7 +93,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   final _address3 = TextEditingController();
   final _city3 = TextEditingController();
   final _state3 = TextEditingController();
-  final _country3 = TextEditingController(text: 'INDIA');
+  final _country3 = TextEditingController(text: 'India');
   final _pincode3 = TextEditingController();
   final _mobile3 = TextEditingController();
   final _email3 = TextEditingController();
@@ -302,15 +309,22 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     if (!mounted) return;
 
     final statusData = provider.nomineeStatusData;
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    // Restore the "in process" flag persisted at e-sign time.
+    final bool inProcess = prefs.getBool(_esignPrefKey()) ?? false;
+
     if (statusData != null) {
       final appStatus = statusData['app_status']?.toString() ?? '';
       final name1 = statusData['nominee1_name']?.toString() ?? '';
+      final fileId = statusData['file_id']?.toString() ?? '';
 
       setState(() {
         _hasExistingNominee = name1.isNotEmpty;
-        _esignPending = appStatus == 'e-signed pending';
+        _esignPending = appStatus == 'e-signed pending' && !inProcess;
         _esignCompleted = appStatus == 'e-signed completed';
-        _fileId = statusData['file_id']?.toString();
+        _esignRequestInProcess = inProcess;
+        _fileId = fileId.isEmpty ? null : fileId;
         _esignEmail = statusData['client_email']?.toString();
         _esignSession = statusData['session']?.toString();
 
@@ -653,13 +667,15 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     setState(() => _esignLoading = false);
 
     if (result == 'success') {
-      await ref.read(profileAllDetailsProvider).fetchNomineeStatus();
+      // Persist the in-process flag (keyed by clientId) so the banner.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_esignPrefKey(), true);
       await ref.read(profileAllDetailsProvider).fetchClientProfileAllDetails();
+      if (!mounted) return;
+      // Re-load local state from refreshed nom_stat so _hasExistingNominee and
+      // form controllers reflect the just-signed nominee.
+      await _loadNomineeStatus();
       if (mounted) {
-        setState(() {
-          _esignCompleted = true;
-          _esignPending = false;
-        });
         successMessage(context, 'Nominee e-signed successfully');
       }
     }
@@ -893,18 +909,28 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                           const SizedBox(height: 16),
                         ],
 
-                        // ── E-sign pending banner ──
-                        if (_esignPending) ...[
+                        // Esign Pending
+                        if (_esignRequestInProcess) ...[
+                          _buildEsignPendingBanner(primaryColor, errorColor,
+                              inProcess: true),
+                          const SizedBox(height: 24),
+                        ] else if (_esignPending) ...[
                           _buildEsignPendingBanner(primaryColor, errorColor),
                           const SizedBox(height: 24),
                         ],
 
                         // ── Single card for no-nominee state ──
-                        if (!_hasExistingNominee && !_esignPending && !_esignCompleted)
+                        if (!_hasExistingNominee &&
+                            !_esignPending &&
+                            !_esignCompleted &&
+                            !_esignRequestInProcess)
                           _buildNoNomineeCard(textColor, subtitleColor, cardBg, cardBorder, primaryColor, errorColor),
 
                         // ── Nominee form (only show when editing/adding with existing nominee) ──
-                        if (_hasExistingNominee && !_esignCompleted && !_esignPending) ...[
+                        if (_hasExistingNominee &&
+                            !_esignCompleted &&
+                            !_esignPending &&
+                            !_esignRequestInProcess) ...[
                           _buildChoiceSection(primaryColor, textColor, subtitleColor, cardBorder),
                           const SizedBox(height: 16),
                           if (_yesOrNo == 'yes') ...[
@@ -1269,7 +1295,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   //  ESIGN PENDING BANNER
   // ═══════════════════════════════════════════════════════════════════
 
-  Widget _buildEsignPendingBanner(Color primaryColor, Color errorColor) {
+  Widget _buildEsignPendingBanner(Color primaryColor, Color errorColor,
+      {bool inProcess = false}) {
     final warningBg = resolveThemeColor(context,
         dark: const Color(0xFF3D2E00), light: const Color(0xFFFCEFD4));
     final warningText = resolveThemeColor(context,
@@ -1292,7 +1319,9 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Esign Pending - Click here to complete',
+                  inProcess
+                      ? 'Your Nominee Change request is in process.'
+                      : 'Esign Pending - Click here to complete',
                   style: MyntWebTextStyles.bodySmall(context,
                       color: warningText, fontWeight: MyntFonts.medium)
                       .copyWith(decoration: TextDecoration.none),
@@ -1300,51 +1329,54 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              _esignLoading
-                  ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: primaryColor))
-                  : Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: _openDigioEsign,
-                        borderRadius: BorderRadius.circular(6),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 6),
-                          child: Text('Click here E-sign',
-                              style: MyntWebTextStyles.bodySmall(context,
-                                  color: primaryColor,
-                                  fontWeight: MyntFonts.semiBold)
-                                  .copyWith(decoration: TextDecoration.none)),
+          // Action buttons only when e-sign is still pending (not after sign).
+          if (!inProcess) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                _esignLoading
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: primaryColor))
+                    : Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: _openDigioEsign,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            child: Text('Click here E-sign',
+                                style: MyntWebTextStyles.bodySmall(context,
+                                    color: primaryColor,
+                                    fontWeight: MyntFonts.semiBold)
+                                    .copyWith(decoration: TextDecoration.none)),
+                          ),
                         ),
                       ),
+                const SizedBox(width: 4),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _showCancelConfirmation,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      child: Text('Cancel request',
+                          style: MyntWebTextStyles.bodySmall(context,
+                              color: errorColor,
+                              fontWeight: MyntFonts.semiBold)
+                              .copyWith(decoration: TextDecoration.none)),
                     ),
-              const SizedBox(width: 4),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _showCancelConfirmation,
-                  borderRadius: BorderRadius.circular(6),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    child: Text('Cancel request',
-                        style: MyntWebTextStyles.bodySmall(context,
-                            color: errorColor,
-                            fontWeight: MyntFonts.semiBold)
-                            .copyWith(decoration: TextDecoration.none)),
                   ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -1463,6 +1495,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       _hasExistingNominee = false;
       _esignPending = false;
       _esignCompleted = false;
+      _esignRequestInProcess = false;
       _fileId = null;
       _esignEmail = null;
       _esignSession = null;
@@ -1487,9 +1520,9 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         c.clear();
       }
       _percent1.text = '100';
-      _country1.text = 'INDIA';
-      _country2.text = 'INDIA';
-      _country3.text = 'INDIA';
+      _country1.text = 'India';
+      _country2.text = 'India';
+      _country3.text = 'India';
 
       _dob1 = _dob2 = _dob3 = null;
       _relation1 = _relation2 = _relation3 = null;
@@ -1503,15 +1536,30 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
 
   Future<void> _cancelRequest() async {
     try {
-      final provider = ref.read(profileAllDetailsProvider);
       final fileId = _fileId ?? '';
       final api = locator<ApiExporter>();
       final response = await api.cancelPendingStatusApi('nominee', fileId);
       if (mounted) {
         if (response == 'Cancel Success') {
-          _resetToInitialState();
+          // Drop the persisted in-process flag for this client.
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove(_esignPrefKey());
+          final hadExisting = _hasExistingNominee;
+          if (hadExisting) {
+            // Keep existing nominee data
+            setState(() {
+              _esignPending = false;
+              _esignCompleted = false;
+              _esignRequestInProcess = false;
+              _fileId = null;
+            });
+          } else {
+            // No prior nominee — reset form to the "no nominee" empty state.
+            _resetToInitialState();
+          }
           successMessage(context, 'Esign Cancellation Success');
-          provider.fetchNomineeStatus();
+          // _loadNomineeStatus() internally calls provider.fetchNomineeStatus().
+          await _loadNomineeStatus();
         } else {
           warningMessage(context, 'Esign Cancellation Failed');
         }
