@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer';
 import 'dart:js_interop';
 // ignore: avoid_web_libraries_in_flutter
@@ -28,6 +29,14 @@ extension type _ScalperChartsBridge._(JSObject _) implements JSObject {
 
 @JS('ScalperCharts')
 external _ScalperChartsBridge? get _scalperChartsBridge;
+
+/// Dart callback exposed to `chart_init.js` as the global
+/// `window.onChartSymbolChanged`. The bridge calls it when TradingView
+/// changes the chart's symbol on its own (e.g. the user loads a saved chart
+/// layout for a different scrip) — a path that doesn't go through Dart's
+/// [WebChartManager.changeSymbol].
+@JS('onChartSymbolChanged')
+external set _onChartSymbolChangedHook(JSFunction? f);
 
 /// Singleton manager for the web TradingView chart.
 ///
@@ -67,6 +76,7 @@ class WebChartManager {
   bool _isRegistered = false;
   bool _libraryLoaded = false;
   bool _bridgeLoaded = false;
+  bool _symbolHookRegistered = false;
   Completer<void>? _loadingCompleter;
 
   /// Container `<div>` ID assigned by the platform-view factory.
@@ -102,6 +112,9 @@ class WebChartManager {
       _registerDivFactory();
       _isRegistered = true;
     }
+    // Expose the JS->Dart symbol-change hook so saved-layout symbol switches
+    // inside TradingView re-point the live tick stream. Idempotent.
+    _registerSymbolChangeHook();
     // Fire-and-forget the script load — it will complete in the background
     // and process any pending chart creation via [_processPendingCreation].
     loadLibrary();
@@ -158,6 +171,13 @@ class WebChartManager {
         'ltt': (tick['ltt'] ?? '').toString(),
         'e': _currentExch ?? '',
         'token': token,
+        // Today's running OHLC from the broker — EODChartData does NOT
+        // return today's bar (most recent EOD row is the prior trading
+        // day). The JS pushTick uses these to build today's daily candle
+        // from scratch instead of collapsing into a flat single-tick at LP.
+        'o': (tick['o'] ?? '0').toString(),
+        'h': (tick['h'] ?? '0').toString(),
+        'l': (tick['l'] ?? '0').toString(),
       });
     });
   }
@@ -286,6 +306,53 @@ class WebChartManager {
   }
 
   // ── Internals ─────────────────────────────────────────────────────────
+
+  /// Install [_handleChartSymbolChanged] as the global JS callback the chart
+  /// bridge invokes on an in-chart symbol switch. Runs once.
+  void _registerSymbolChangeHook() {
+    if (_symbolHookRegistered) return;
+    _symbolHookRegistered = true;
+    try {
+      _onChartSymbolChangedHook = ((JSString payload) {
+        _handleChartSymbolChanged(payload.toDart);
+      }).toJS;
+    } catch (e) {
+      _symbolHookRegistered = false;
+      log('WebChartManager: failed to register symbol-change hook: $e');
+    }
+  }
+
+  /// Called from `chart_init.js` (web) when TradingView changes the symbol
+  /// outside Dart's control — currently only a saved-layout load (TV's header
+  /// search box is disabled on web). Re-points the shared-socket tick filter
+  /// ([_currentToken]/[_currentExch]/[_currentSymbol]) so live price follows
+  /// the displayed scrip. The echo of a Dart-initiated change is ignored
+  /// (symbol already current).
+  void _handleChartSymbolChanged(String payloadJson) {
+    try {
+      final map = jsonDecode(payloadJson) as Map<String, dynamic>;
+      final symbol = (map['symbol'] as String?)?.trim() ?? '';
+      final exch = (map['exch'] as String?)?.trim() ?? '';
+      final token = (map['token'] as String?)?.trim() ?? '';
+
+      // Echo of a change we initiated via changeSymbol() — already applied.
+      if (symbol.isEmpty || symbol == _currentSymbol) return;
+      // No token means we can't filter the socket stream; skip rather than
+      // forward the previous scrip's ticks under the new symbol.
+      if (token.isEmpty) {
+        log('WebChartManager: external symbol change to $symbol has no token; '
+            'live price will not follow until the scrip is re-selected.');
+        return;
+      }
+
+      _currentSymbol = symbol;
+      if (exch.isNotEmpty) _currentExch = exch;
+      _currentToken = token;
+      log('WebChartManager: external symbol change -> $symbol (token $token)');
+    } catch (e) {
+      log('WebChartManager: onChartSymbolChanged parse error: $e');
+    }
+  }
 
   void _registerDivFactory() {
     try {

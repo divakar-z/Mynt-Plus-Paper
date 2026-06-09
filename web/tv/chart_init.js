@@ -94,8 +94,8 @@
   // Payload exch/Token come from symbolDataCache, which resolveSymbol
   // populates from /getSymbolinfo and /GetSecurityInfo right before this
   // fires — by the time TV emits onSymbolChanged the cache is hot.
-  // On web (no flutter_inappwebview), the callHandler check fails silently
-  // and the function becomes a no-op until we wire a web-side bridge.
+  // Mobile bridges via flutter_inappwebview.callHandler; web (same window,
+  // no flutter_inappwebview) calls the Dart-exposed window.onChartSymbolChanged.
   function notifyDartOfSymbolChange(containerId, symbolName) {
     if (!symbolName) return;
     if (lastNotifiedSymbol[containerId] === symbolName) return;
@@ -109,7 +109,13 @@
     };
     try {
       if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        // Mobile: bridge to Dart through the InAppWebView handler.
         window.flutter_inappwebview.callHandler('onChartSymbolChanged', payload);
+      } else if (typeof window.onChartSymbolChanged === 'function') {
+        // Flutter Web: chart_init.js runs in the SAME window as the Flutter
+        // app (no iframe), so call the Dart-exposed global directly.
+        // WebChartManager re-points its tick stream at the new scrip's token.
+        window.onChartSymbolChanged(JSON.stringify(payload));
       }
     } catch (e) {
       console.error('notifyDartOfSymbolChange error:', e);
@@ -210,7 +216,13 @@
   }
 
   function createDatafeed(user, usession, containerId, sessions) {
-    var lastBarFromHistory = null;
+    // Per-resolution cache of the most recent historical bar. A single
+    // shared variable broke when TV issued back-to-back getBars for two
+    // resolutions (e.g. 1m and 1D on a Daily-view switch): whichever
+    // response landed last won, so the daily subscribeBars could end up
+    // with a 1-minute lastBar, and pushTick then snapped to that minute's
+    // timestamp. Keying by resolution isolates each series.
+    var lastBarByResolution = {};
 
     return {
       onReady: function (callback) {
@@ -500,16 +512,16 @@
         if (resolution === '1D' || resolution === '1W' || resolution === '1M') {
           // Day/weekly/monthly chart
           var index = symData.index || lookupKey;
-          var reqBody = JSON.stringify({ sym: index, from: periodParams.from, to: periodParams.to });
+          var reqBody = 'jData=' + JSON.stringify({ sym: index, from: periodParams.from, to: periodParams.to }) + '&jKey=' + usession;
 
-          fetch('https://go.mynt.in/chartApi/getdata', {
+          fetch('https://go.mynt.in/NorenWClientWeb/EODChartData', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'text/plain' },
             body: reqBody
           })
             .then(function (r) { return r.json(); })
             .then(function (data) {
-              if (!data || data.length === 0) {
+              if (!data || data.stat === 'Not_Ok' || data.length === 0) {
                 onHistoryCallback([], { noData: true });
                 return;
               }
@@ -520,7 +532,7 @@
               if (periodParams.firstDataRequest && bars.length > 0) {
                 var desired = desiredSymbols[containerId];
                 if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
-                  lastBarFromHistory = bars[bars.length - 1];
+                  lastBarByResolution[resolution] = bars[bars.length - 1];
                 } else {
                   console.log('ScalperCharts: Stale getBars (day) for', symbolInfo.name, '- desired:', desired);
                 }
@@ -557,7 +569,7 @@
               if (periodParams.firstDataRequest && bars.length > 0) {
                 var desired = desiredSymbols[containerId];
                 if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
-                  lastBarFromHistory = bars[bars.length - 1];
+                  lastBarByResolution[resolution] = bars[bars.length - 1];
                 } else {
                   console.log('ScalperCharts: Stale getBars (intraday) for', symbolInfo.name, '- desired:', desired);
                 }
@@ -609,7 +621,7 @@
 
         var sub = {
           callback: onRealtimeCallback,
-          lastBar: lastBarFromHistory,
+          lastBar: lastBarByResolution[resolution] || null,
           resolution: resolution,
           subscriberUID: subscriberUID,
           preVolume: 0,
@@ -617,23 +629,46 @@
           symbolName: symbolInfo.name
         };
 
-        // Slot the sub as either the main series or a study. We don't have
-        // a reliable signal at this point for which call corresponds to the
-        // chart's primary series (TV doesn't tag it), so we use ordering:
-        // the first subscribeBars after createChart / changeSymbol / a main
-        // unsubscribe is treated as main; later ones (typically studies
-        // on a different resolution, e.g. 52-week H/L on weekly) go into
-        // the studies map. Only the main feeds pushTick, so a weekly study
-        // no longer clobbers the 5m series.
+        // Slot main vs study by matching the sub's resolution to the
+        // chart's currently displayed resolution. Ordering alone is
+        // unreliable: when the user switches interval (e.g. 5m → D), TV
+        // re-subscribes the OLD resolution first (a background series it
+        // still wants to keep warm) and the NEW visible resolution
+        // second. With the prior first-becomes-main heuristic, the
+        // background 1-min sub got slotted as main and the visible 1D
+        // sub fell into studies — pushTick then fed live ticks to an
+        // invisible series and the daily candle stayed frozen on its
+        // open price until the next chart restart.
+        var chartResolution = null;
+        try {
+          var widgetForRes = charts[containerId];
+          if (widgetForRes && widgetForRes.activeChart) {
+            chartResolution = widgetForRes.activeChart().resolution();
+          }
+        } catch (e) { /* widget mid-init */ }
+        var isMain = !chartResolution || resolution === chartResolution;
+
         if (!entry) {
-          subscriptions[containerId] = { main: sub, studies: {} };
-        } else if (!entry.main) {
+          if (isMain) {
+            subscriptions[containerId] = { main: sub, studies: {} };
+          } else {
+            var initStudies = {};
+            initStudies[subscriberUID] = sub;
+            subscriptions[containerId] = { main: null, studies: initStudies };
+          }
+        } else if (isMain) {
+          // Displaced main (different uid) becomes a study so its eventual
+          // unsubscribeBars still finds and removes it cleanly.
+          if (entry.main && entry.main.subscriberUID !== subscriberUID) {
+            entry.studies = entry.studies || {};
+            entry.studies[entry.main.subscriberUID] = entry.main;
+          }
           entry.main = sub;
         } else {
           entry.studies = entry.studies || {};
           entry.studies[subscriberUID] = sub;
         }
-        console.log('ScalperCharts: subscribeBars -', containerId, 'res:', resolution, 'uid:', subscriberUID);
+        console.log('ScalperCharts: subscribeBars -', containerId, 'res:', resolution, 'uid:', subscriberUID, 'as', isMain ? 'main' : 'study', '(chart res:', chartResolution + ')');
       },
 
       unsubscribeBars: function (subscriberUID) {
@@ -1072,11 +1107,37 @@
       var vol = tickData.v ? parseFloat(tickData.v) : 0;
       var exchange = tickData.e || sub.exchange || '';
 
+      // Today's running OHLC from the broker touchline feed. EODChartData
+      // does NOT return today's bar (confirmed: the most recent EOD row
+      // on web is the previous trading day). For daily mode we synthesise
+      // today's candle from these fields — without them the bar would
+      // collapse to a flat single-tick line at LP and be invisible.
+      var dayOpen = parseFloat(tickData.o);
+      var dayHigh = parseFloat(tickData.h);
+      var dayLow  = parseFloat(tickData.l);
+      var hasDayOhlc = !isNaN(dayOpen) && dayOpen > 0
+                    && !isNaN(dayHigh) && dayHigh > 0
+                    && !isNaN(dayLow)  && dayLow  > 0;
+
       // Parse trade time
       var time = parseLTT(tickData.ltt);
 
-      // Bucket to candle boundary
-      time = bucketTime(time, sub.resolution, exchange);
+      // Bucket to candle boundary. Daily is special-cased: bucketTime
+      // would return wall-clock + 5.5h, which isn't a day boundary —
+      // TV either drops the bar or paints it at the wrong x-position
+      // (no visible candle for "today" even when the legend tracks
+      // live LP). Snap to today's IST-midnight anchor, or reuse the
+      // lastBar.time when it's already today's running bar.
+      var isDaily = (sub.resolution === '1D' || sub.resolution === 'D');
+      if (isDaily) {
+        var istNowMs = Date.now() + 330 * 60000;
+        var todayAnchor = Math.floor(istNowMs / 86400000) * 86400000 - 330 * 60000;
+        time = (sub.lastBar && sub.lastBar.time >= todayAnchor)
+          ? sub.lastBar.time
+          : todayAnchor;
+      } else {
+        time = bucketTime(time, sub.resolution, exchange);
+      }
 
       // Volume delta calculation
       var curVolume = vol;
@@ -1088,30 +1149,36 @@
 
       if (!lastBar) {
         // No history bar yet — initialize from this tick so real-time updates
-        // can start even if getBars failed or returned empty data.
-        bar = {
-          time: time,
-          open: lp,
-          high: lp,
-          low: lp,
-          close: lp,
-          volume: 0
+        // can start even if getBars failed or returned empty data. For daily,
+        // seed full OHLC from the broker's day stats instead of a flat tick.
+        bar = isDaily && hasDayOhlc ? {
+          time: time, open: dayOpen, high: dayHigh, low: dayLow, close: lp, volume: vol
+        } : {
+          time: time, open: lp, high: lp, low: lp, close: lp, volume: 0
         };
         sub.preVolume = curVolume;
       } else if (time > lastBar.time) {
-        // New candle - price crossed into next time bucket
-        bar = {
-          time: time,
-          open: lp,
-          high: lp,
-          low: lp,
-          close: lp,
-          volume: 0
+        // New candle - price crossed into next time bucket. For daily this
+        // is the roll into "today" from yesterday's EOD bar — seed full
+        // OHLC from the broker's day stats instead of a flat single-tick.
+        bar = isDaily && hasDayOhlc ? {
+          time: time, open: dayOpen, high: dayHigh, low: dayLow, close: lp, volume: vol
+        } : {
+          time: time, open: lp, high: lp, low: lp, close: lp, volume: 0
         };
         sub.preVolume = curVolume;
       } else {
-        // Update existing candle
-        bar = {
+        // Update existing candle. For daily, prefer the broker's running
+        // day O/H/L since they're authoritative (TV's local high/low can
+        // miss spikes that occurred before the chart connected).
+        bar = isDaily && hasDayOhlc ? {
+          time: lastBar.time,
+          open:   dayOpen,
+          high:   Math.max(dayHigh, lp),
+          low:    Math.min(dayLow,  lp),
+          close:  lp,
+          volume: vol
+        } : {
           time: lastBar.time,
           open: lastBar.open,
           high: Math.max(lastBar.high, lp),
