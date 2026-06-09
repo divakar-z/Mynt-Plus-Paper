@@ -316,9 +316,12 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                 autofocus: true,
                                 inputFormatters: [
                                   UpperCaseTextFormatter(),
-                              
                                   FilteringTextInputFormatter.allow(
-                                      RegExp(r'[a-zA-Z0-9& ]')),
+                                      RegExp(r'[a-zA-Z0-9& \-]')),
+                                  TextInputFormatter.withFunction((oldValue, newValue) {
+                                    if (newValue.text.startsWith(' ')) return oldValue;
+                                    return newValue;
+                                  }),
                                 ],
                                 // Note: Search is handled by _textController.addListener with debounce
                                 // No onChanged here to avoid duplicate API calls

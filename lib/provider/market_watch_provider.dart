@@ -891,26 +891,28 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     try {
       final depthSymbol = _currentDepthSymbol!;
 
-      // Clear tracking first to prevent race conditions
+      // Clear tracking first so the protective check in WebSubscriptionManager
+      // does not see this symbol as "currentDepthSymbol" and block its own ud.
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
 
-      // Only send unsubscribe if context is available and valid
       if (context != null && context.mounted) {
         try {
-          await ref.read(websocketProvider).establishConnection(
-                channelInput: depthSymbol,
-                task: "ud", // Unsubscribe depth task
+          // Route through WebSubscriptionManager so the ud is skipped when the
+          // symbol is still needed by the watchlist / holdings / positions /
+          // indices / ticker. The watchlist itself subscribes via task "d" —
+          // the same channel as depth — so an unprotected ud would also kill
+          // the watchlist's LTP feed for that scrip.
+          await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
+                tokensToCheck: {depthSymbol},
                 context: context,
+                source: 'depth',
               );
         } catch (e) {
           // If unsubscribe fails, it's okay - we've already cleared tracking
         }
-      } else {
-        // Context not available, but we've cleared tracking
       }
     } catch (e) {
-      // Ensure tracking is cleared even on error
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
     }
@@ -3652,9 +3654,9 @@ getOptionawait(String exch, String token) {
           try {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             if (kIsWeb) {
-              ResponsiveSnackBar.showSuccess(context, "Stock order was changed");
+              ResponsiveSnackBar.showSuccess(context, "Stocks reordered successfully.");
             } else {
-              successMessage(context, "Stock order was changed");
+              successMessage(context, "Stocks reordered successfully.");
             }
           } catch (e) {
             if (e.toString().contains("widget was disposed") ||
@@ -4614,9 +4616,9 @@ getOptionawait(String exch, String token) {
         try {
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
           if (kIsWeb) {
-            ResponsiveSnackBar.showSuccess(context, "Stock order was changed");
+            ResponsiveSnackBar.showSuccess(context, "Stocks reordered successfully.");
           } else {
-            successMessage(context, "Stock order was changed");
+            successMessage(context, "Stocks reordered successfully.");
           }
         } catch (_) {}
       }
@@ -4934,10 +4936,10 @@ getOptionawait(String exch, String token) {
         }
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         } else {
           successMessage(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         }
         notifyListeners();
         return;
@@ -4975,10 +4977,10 @@ getOptionawait(String exch, String token) {
         }
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         } else {
           successMessage(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         }
         notifyListeners();
       } else if (_watchlistRenameModel!.stat == "Not_Ok") {

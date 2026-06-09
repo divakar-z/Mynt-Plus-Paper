@@ -520,32 +520,33 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
       int comparison = 0;
 
       switch (_sortColumnIndex) {
-        case 0: // Time
+        // Column 0 is Select (checkbox) — not sortable.
+        case 1: // Time
           comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
           break;
-        case 1: // Type (BUY/SELL)
+        case 2: // Type (BUY/SELL)
           comparison = (a.trantype ?? '').compareTo(b.trantype ?? '');
           break;
-        case 2: // Instrument
+        case 3: // Instrument
           comparison = (a.tsym ?? '').compareTo(b.tsym ?? '');
           break;
-        case 3: // Product
+        case 4: // Product
           comparison =
               (a.sPrdtAli ?? a.prd ?? '').compareTo(b.sPrdtAli ?? b.prd ?? '');
           break;
-        case 4: // Qty.
+        case 5: // Qty.
           comparison = (int.tryParse(a.qty ?? '0') ?? 0)
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
-        case 5: // LTP
+        case 6: // LTP
           comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
               .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
           break;
-        case 6: // Price
+        case 7: // Price
           comparison = (double.tryParse(a.prc ?? '0') ?? 0)
               .compareTo(double.tryParse(b.prc ?? '0') ?? 0);
           break;
-        case 7: // Status
+        case 8: // Status
           comparison = (CellFormatters.getStatusText(a))
               .compareTo(CellFormatters.getStatusText(b));
           break;

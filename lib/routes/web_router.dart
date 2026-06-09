@@ -71,6 +71,19 @@ void initializeWebRouter() {
     navigatorKey: webNavigatorKey,
     initialLocation: WebRoutes.splash,
     debugLogDiagnostics: kDebugMode,
+    // Token-based auto-login entry. Links of the form
+    //   /?uid=<clientId>&token=<noren-session>
+    // must run through Splash (which validates the session via checkAutoLogin),
+    // not render the home route ('/') directly. main.dart has already persisted
+    // uid/token to prefs by the time this runs; redirecting to /splash also drops
+    // the session token from the browser address bar / history.
+    redirect: (context, state) {
+      final q = state.uri.queryParameters;
+      final hasAutoLogin = (q['uid']?.trim().isNotEmpty ?? false) &&
+          (q['token']?.trim().isNotEmpty ?? false);
+      if (hasAutoLogin) return WebRoutes.splash;
+      return null;
+    },
     routes: [
       // Splash screen - entry point
       GoRoute(
