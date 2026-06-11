@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
-import 'package:mynt_plus/provider/websocket_provider.dart';
 import 'package:mynt_plus/res/web_colors.dart';
 
 import 'web_chart_manager.dart';
@@ -22,9 +21,6 @@ class _WebChartOverlayState extends ConsumerState<WebChartOverlay> {
     super.initState();
     // Initialize the chart manager (registers iframe)
     webChartManager.initialize();
-    // Bind the shared socket stream so ticks for the charted scrip flow
-    // into the iframe via postMessage (replaces the chart's own WS).
-    webChartManager.bindWebSocket(ref.read(websocketProvider));
   }
 
   @override
