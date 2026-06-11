@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
+import '../provider/accessibility_provider.dart';
+
 /// Centralized text styles for Shadcn UI implementation
 /// Uses Geist font family and shadcn theme colors for consistent styling
 ///
@@ -13,8 +15,10 @@ class ShadcnTextStyles {
   // Private constructor to prevent instantiation
   ShadcnTextStyles._();
 
-  /// Font family used across all shadcn text styles
-  static const String fontFamily = 'Geist';
+  /// Font family used across all shadcn text styles. Resolved from the
+  /// accessibility provider so the Dyslexia Support toggle can swap the
+  /// whole UI to OpenDyslexic at runtime.
+  static String get fontFamily => uiFontFamily;
 
   // ============ BASE TEXT STYLES ============
 

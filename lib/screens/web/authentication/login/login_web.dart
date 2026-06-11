@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mynt_plus/sharedWidget/custom_text_form_field.dart';
+import 'package:mynt_plus/sharedWidget/accessibility/accessibility_panel.dart';
 // import 'package:remove_emoji_input_formatter/remove_emoji_input_formatter.dart';
 import '../../../../locator/preference.dart';
+import '../../../../provider/accessibility_provider.dart';
 import '../../../../provider/auth_provider.dart';
 import '../../../../provider/change_password_provider.dart';
 import '../../../../provider/index_list_provider.dart';
@@ -66,6 +68,10 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   Timer? _timer;
   int _start = 89;
   String resendTime = "01.29";
+
+  // Accessibility dropdown anchor + overlay
+  final GlobalKey _a11yAnchorKey = GlobalKey();
+  OverlayEntry? _a11yOverlay;
 
   // QR Countdown Timer — visible on the QR login screen. Independent of the
   // provider's internal poll timer.
@@ -232,10 +238,32 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     focusNode.dispose();
     focusNode1.dispose();
     _timer?.cancel();
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
     _qrCountdownTimer?.cancel();
     _newPwdMaxLengthHideTimer?.cancel();
     _qrBeforeUnloadSub?.cancel();
     super.dispose();
+  }
+
+  void _toggleAccessibilityDropdown(bool isDarkMode) {
+    if (_a11yOverlay != null) {
+      _closeAccessibilityDropdown();
+      return;
+    }
+    if (_a11yAnchorKey.currentContext == null) return;
+    _a11yOverlay = buildAccessibilityOverlay(
+      context: context,
+      anchorKey: _a11yAnchorKey,
+      isDarkMode: isDarkMode,
+      onClose: _closeAccessibilityDropdown,
+    );
+    Overlay.of(context, rootOverlay: true).insert(_a11yOverlay!);
+  }
+
+  void _closeAccessibilityDropdown() {
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
   }
 
   /// Triggered by the New Password field's custom inputFormatter when the
@@ -873,6 +901,23 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                       ),
                       child: Stack(
                         children: [
+                          Positioned(
+                            top: 0,
+                            right: 0,
+                            child: Consumer(
+                              builder: (context, ref, _) {
+                                final a11y = ref.watch(accessibilityProvider);
+                                return A11yIconButton(
+                                  key: const ValueKey('a11y_icon_btn_login'),
+                                  anchorKey: _a11yAnchorKey,
+                                  isDarkMode: isDarkMode(context),
+                                  active: a11y.screenReaderEnabled,
+                                  onTap: () => _toggleAccessibilityDropdown(
+                                      isDarkMode(context)),
+                                );
+                              },
+                            ),
+                          ),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [

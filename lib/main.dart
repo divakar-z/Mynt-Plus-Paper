@@ -14,6 +14,8 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:mynt_plus/firebase_options.dart';
 import 'package:mynt_plus/locator/constant.dart';
 import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/sharedWidget/accessibility/focus_indicator_overlay.dart';
+import 'package:mynt_plus/sharedWidget/accessibility/highlight_links_overlay.dart';
 import 'package:mynt_plus/sharedWidget/chart_overlay_widget.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +30,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'locator/locator.dart';
 import 'locator/preference.dart';
+import 'provider/accessibility_provider.dart';
 import 'utils/auto_login_handoff.dart';
 import 'provider/thems.dart';
 import 'res/web_resources.dart';
@@ -373,24 +376,158 @@ class MyApp extends ConsumerWidget {
           // If shadcn.ThemeData supports textTheme, you can set it here
         ),
         builder: (context, child) {
-          return shadcn.DrawerOverlay(
-            child: Stack(
-              children: [
-                MediaQuery(
-                  data: MediaQuery.of(context).copyWith(
-                    textScaler: const TextScaler.linear(1.0),
-                  ),
-                  child: DefaultTextStyle(
-                    style: TextStyle(
+          return Consumer(
+            builder: (context, consumerRef, _) {
+              final a11y = consumerRef.watch(accessibilityProvider);
+              // MediaQuery must sit ABOVE shadcn.DrawerOverlay so drawers
+              // opened via shadcn.openDrawer() inherit the scaled textScaler.
+              // Previously it was inside DrawerOverlay → sidebar text stayed
+              // at 1.0x while the main content scaled.
+              // Dyslexia mode swaps to a web-safe, more legible font and
+              // boosts letter spacing / line height — applied at the root
+              // DefaultTextStyle so every descendant inherits it.
+              // Dyslexia mode uses the OpenDyslexic asset bundled in pubspec,
+              // falling back to Comic Sans MS and Arial (harmless on CanvasKit
+              // — only OpenDyslexic actually resolves, but the fallbacks keep
+              // the stack intact for any HTML-renderer build).
+              // letterSpacing: 0.02em ≈ 0.32 at base 16px; word spacing defaults to 0.
+              const TextStyle dyslexiaStyle = TextStyle(
+                fontFamily: 'OpenDyslexic',
+                fontFamilyFallback: <String>['Comic Sans MS', 'Arial'],
+                letterSpacing: 0.32,
+                fontFeatures: [FontFeature.proportionalFigures()],
+              );
+
+              final TextStyle baseTextStyle = a11y.dyslexiaSupportEnabled
+                  ? dyslexiaStyle
+                  : const TextStyle(
                       fontFamily: 'Geist',
-                      fontFeatures: const [FontFeature.proportionalFigures()],
-                    ),
-                    child: child!,
+                      fontFeatures: [FontFeature.proportionalFigures()],
+                    );
+
+              Widget content = MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  textScaler: TextScaler.linear(a11y.textScale),
+                ),
+                child: shadcn.DrawerOverlay(
+                  child: Stack(
+                    children: [
+                      DefaultTextStyle(
+                        style: baseTextStyle,
+                        child: child!,
+                      ),
+                      const ChartOverlayWidget(),
+                    ],
                   ),
                 ),
-                const ChartOverlayWidget(),
-              ],
-            ),
+              );
+
+              // Shadcn widgets resolve their font from Theme.typography.sans,
+              // which hardcodes 'GeistSans' and beats DefaultTextStyle. When
+              // dyslexia is on, override that typography so every shadcn Text,
+              // Button, Dialog, etc. picks up the dyslexia-friendly font.
+              if (a11y.dyslexiaSupportEnabled) {
+                final shadcnTheme = shadcn.Theme.of(context);
+                // Reuse the Lexend style loaded by google_fonts — passing it
+                // through shadcn's typography ensures every shadcn Text,
+                // Button, Dialog etc. resolves to the downloaded Lexend font
+                // rather than falling through to Roboto on CanvasKit.
+                content = shadcn.Theme(
+                  data: shadcnTheme.copyWith(
+                    typography: () => shadcnTheme.typography.copyWith(
+                      sans: () => dyslexiaStyle,
+                    ),
+                  ),
+                  child: content,
+                );
+              }
+
+              // Highlight Links: paint a persistent yellow bg + border over
+              // every semantics-declared button/link in the tree so every
+              // tappable surface is visible at a glance (WCAG 1.4.11). The
+              // previous Theme-based approach only coloured hover/focus
+              // states and so appeared to do nothing at rest.
+              content = HighlightLinksOverlay(
+                enabled: a11y.highlightLinksEnabled,
+                child: content,
+              );
+
+              // Focus Indicator: paint a high-contrast ring around the
+              // widget currently holding primary focus so keyboard users can
+              // always see where input will land (WCAG 2.4.7).
+              content = FocusIndicatorOverlay(
+                enabled: a11y.focusIndicatorEnabled,
+                child: content,
+              );
+                if (a11y.grayscaleEnabled) {
+                  content = ColorFiltered(
+                    colorFilter: const ColorFilter.matrix(<double>[
+                      0.2126, 0.7152, 0.0722, 0, 0,
+                      0.2126, 0.7152, 0.0722, 0, 0,
+                      0.2126, 0.7152, 0.0722, 0, 0,
+                      0,      0,      0,      1, 0,
+                    ]),
+                    child: content,
+                  );
+                }
+                if (a11y.invertColoursEnabled) {
+                  content = ColorFiltered(
+                    colorFilter: const ColorFilter.matrix(<double>[
+                      -1,  0,  0, 0, 255,
+                       0, -1,  0, 0, 255,
+                       0,  0, -1, 0, 255,
+                       0,  0,  0, 1,   0,
+                    ]),
+                    child: content,
+                  );
+                }
+                if (a11y.blueLightFilterEnabled) {
+                  // Warm amber tint — dampens blue, nudges red/green.
+                  content = ColorFiltered(
+                    colorFilter: const ColorFilter.matrix(<double>[
+                      1.0, 0,   0,   0, 15,
+                      0,   1.0, 0,   0, 5,
+                      0,   0,   0.7, 0, 0,
+                      0,   0,   0,   1, 0,
+                    ]),
+                    child: content,
+                  );
+                }
+                if (a11y.adhdFocusAssistEnabled) {
+                  // Spotlight: dark overlay across the screen with a soft
+                  // hole around the cursor — narrows visual attention to one
+                  // small area at a time.
+                  content = _AdhdSpotlight(child: content);
+                }
+                if (a11y.smartContrastEnabled) {
+                  // Contrast boost: multiply each channel by 1.3 and
+                  // recenter around mid-grey (128*(1-1.3) = -38.4).
+                  content = ColorFiltered(
+                    colorFilter: const ColorFilter.matrix(<double>[
+                      1.3, 0,   0,   0, -38.4,
+                      0,   1.3, 0,   0, -38.4,
+                      0,   0,   1.3, 0, -38.4,
+                      0,   0,   0,   1,   0,
+                    ]),
+                    child: content,
+                  );
+                }
+                final toneTint = _themeToneTint(a11y.themeTone);
+                if (toneTint != null) {
+                  // Multiply blend lets the tint paint over white/light
+                  // backgrounds while leaving dark text and icons largely
+                  // unchanged — behaves like a background-colour shift
+                  // rather than a full-screen overlay.
+                  content = ColorFiltered(
+                    colorFilter: ColorFilter.mode(
+                      toneTint,
+                      BlendMode.multiply,
+                    ),
+                    child: content,
+                  );
+                }
+              return content;
+            },
           );
         },
       );
@@ -417,6 +554,94 @@ class MyApp extends ConsumerWidget {
       );
     }
   }
+}
+
+/// Soft tint colour for the selected [ThemeTone]. Applied with
+/// [BlendMode.multiply] so it primarily shifts white/light backgrounds and
+/// leaves dark text/icons readable. Returns `null` for no tone.
+Color? _themeToneTint(ThemeTone tone) {
+  switch (tone) {
+    case ThemeTone.none:
+      return null;
+    case ThemeTone.blue:
+      return const Color(0xFFCCE5FF);
+    case ThemeTone.warm:
+      return const Color(0xFFFFF4CC);
+    case ThemeTone.cool:
+      return const Color(0xFFDEF5E4);
+    case ThemeTone.sepia:
+      return const Color(0xFFFFD6D9);
+  }
+}
+
+/// Spotlight overlay for the ADHD Focus Assist toggle. Tracks the cursor via
+/// a translucent [MouseRegion] (so clicks/hover still reach the app below)
+/// and paints a dark veil with a soft circular hole around the pointer.
+class _AdhdSpotlight extends StatefulWidget {
+  const _AdhdSpotlight({required this.child});
+  final Widget child;
+
+  @override
+  State<_AdhdSpotlight> createState() => _AdhdSpotlightState();
+}
+
+class _AdhdSpotlightState extends State<_AdhdSpotlight> {
+  Offset? _pos;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      opaque: false,
+      onHover: (e) {
+        if (_pos != e.position) setState(() => _pos = e.position);
+      },
+      onExit: (_) {
+        if (_pos != null) setState(() => _pos = null);
+      },
+      child: Stack(
+        children: [
+          widget.child,
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                size: Size.infinite,
+                painter: _SpotlightPainter(_pos),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SpotlightPainter extends CustomPainter {
+  _SpotlightPainter(this.pos);
+  final Offset? pos;
+
+  // Curtain mode: solid black veil covers everything ABOVE the cursor with a
+  // hard edge at the cursor line. Everything below stays fully clear so the
+  // user can read down the page line by line.
+  static const double _veilAlpha = 0.55;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final veil = Paint()..color = Colors.black.withValues(alpha: _veilAlpha);
+
+    if (pos == null) {
+      canvas.drawRect(rect, veil);
+      return;
+    }
+
+    final cutoff = pos!.dy.clamp(0.0, size.height);
+    if (cutoff > 0) {
+      canvas.drawRect(Rect.fromLTRB(0, 0, size.width, cutoff), veil);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SpotlightPainter old) => old.pos != pos;
 }
 
 // HttpOverrides implementation moved to `utils/http_overrides.dart` with a web stub
