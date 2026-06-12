@@ -389,6 +389,13 @@ class OrderProvider extends DefaultChangeNotifier {
     // Update tab names without notifying (batched)
     _updateTabNamesSilent();
 
+    // Lazily sort the tab being opened: the fetch only sorts the visible
+    // tab's list (performance), so Open/Executed need their sort applied on
+    // switch or they render in raw API order.
+    if ((index == 0 || index == 1) && _lastOrderSortMethod.isNotEmpty) {
+      _applySortingSilent(_lastOrderSortMethod);
+    }
+
     // Reset search states without triggering notifyListeners
     _showSearchOrder = false;
     _orderSearchItem = [];
@@ -1512,7 +1519,9 @@ class OrderProvider extends DefaultChangeNotifier {
           _openOrder = tempOpen;
           _allOrder = tempAll;
 
-          // Reapply the last sort method without notifying (batched)
+          // Reapply the last sort method without notifying (batched).
+          // Performance: only the visible tab's list is sorted here; the
+          // other tabs are sorted lazily on switch (see changeTabIndex).
           if (_lastOrderSortMethod.isNotEmpty) {
             _applySortingSilent(_lastOrderSortMethod);
           }
@@ -2266,27 +2275,38 @@ class OrderProvider extends DefaultChangeNotifier {
         });
         break;
       case "TIMEASC":
-        listToSort.sort((a, b) {
-          final aDate = DateTime.tryParse(formatToDateTime(a.norentm ?? '')) ??
-              DateTime(1970);
-          final bDate = DateTime.tryParse(formatToDateTime(b.norentm ?? '')) ??
-              DateTime(1970);
-          return aDate.compareTo(bDate);
-        });
-        break;
       case "TIMEDSC":
-        listToSort.sort((a, b) {
-          final aDate = DateTime.tryParse(formatToDateTime(a.norentm ?? '')) ??
-              DateTime(1970);
-          final bDate = DateTime.tryParse(formatToDateTime(b.norentm ?? '')) ??
-              DateTime(1970);
-          return bDate.compareTo(aDate);
-        });
+        // Parse each timestamp ONCE (N parses) instead of inside the
+        // comparator (2 × N·logN parses) — keeps tab switches snappy on
+        // large order books.
+        final bool descending = sorting == "TIMEDSC";
+        final keyed = listToSort
+            .map((o) => MapEntry(_orderTimeSortKey(o.norentm), o))
+            .toList();
+        keyed.sort((a, b) => descending
+            ? b.key.compareTo(a.key)
+            : a.key.compareTo(b.key));
+        for (int i = 0; i < keyed.length; i++) {
+          listToSort[i] = keyed[i].value;
+        }
         break;
       default:
         // No sorting
         break;
     }
+  }
+
+  /// Converts the API's "HH:mm:ss dd-MM-yyyy" order timestamp into a
+  /// sortable DateTime; malformed/empty values sort to the very end.
+  DateTime _orderTimeSortKey(String? value) {
+    if (value == null || value.isEmpty) return DateTime(1970);
+    final parts = value.split(' ');
+    if (parts.length != 2) return DateTime(1970);
+    final dateParts = parts[1].split('-');
+    if (dateParts.length != 3) return DateTime(1970);
+    return DateTime.tryParse(
+            '${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[0]}') ??
+        DateTime(1970);
   }
 
   void _sortTradeBook(String sorting) {
