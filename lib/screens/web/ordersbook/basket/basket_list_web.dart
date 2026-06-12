@@ -1285,13 +1285,15 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     final isFirstColumn = columnIndex == 0;
     final isLastColumn = columnIndex == totalColumns - 1;
 
+    // Vertical padding 6 matches the positions table header — 12 left only
+    // ~16px for the label inside the 40px header row and clipped it.
     EdgeInsets headerPadding;
     if (isFirstColumn) {
-      headerPadding = const EdgeInsets.fromLTRB(16, 12, 4, 12);
+      headerPadding = const EdgeInsets.fromLTRB(16, 6, 4, 6);
     } else if (isLastColumn) {
-      headerPadding = const EdgeInsets.fromLTRB(4, 12, 16, 12);
+      headerPadding = const EdgeInsets.fromLTRB(4, 6, 16, 6);
     } else {
-      headerPadding = const EdgeInsets.symmetric(horizontal: 6, vertical: 12);
+      headerPadding = const EdgeInsets.symmetric(horizontal: 6, vertical: 6);
     }
 
     return shadcn.TableCell(
@@ -1397,7 +1399,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         header == 'Price' ||
         header == 'LTP' ||
         header == 'Status' ||
-        header == 'Product') return true;
+        header == 'Product / Type') return true;
     return false;
   }
 
@@ -1428,29 +1430,33 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         case 1: // Type (Buy/Sell)
           r = cmp<String>(a["trantype"]?.toString(), b["trantype"]?.toString());
           break;
-        case 2: // Order type
-          r = cmp<String>(a['prctype']?.toString(), b['prctype']?.toString());
-          break;
-        case 3: // Product
+        case 2: // Product / Type
           r = cmp<String>(a['prd']?.toString(), b['prd']?.toString());
+          if (r == 0) {
+            r = cmp<String>(
+                a['prctype']?.toString(), b['prctype']?.toString());
+          }
           break;
-        case 4: // Qty.
+        case 3: // Qty.
           final aQty = int.tryParse(a["qty"]?.toString() ?? "0") ?? 0;
           final bQty = int.tryParse(b["qty"]?.toString() ?? "0") ?? 0;
           r = aQty.compareTo(bQty);
           break;
-        case 5: // LTP
+        case 4: // LTP
           // LTP is dynamic, but we can sort by the 'lp' value if present in the raw item data
           final aLtp = parseNum(a["lp"]?.toString());
           final bLtp = parseNum(b["lp"]?.toString());
           r = cmp<num>(aLtp, bLtp);
           break;
-        case 6: // Price
+        case 5: // Price
           final aPrice = parseNum(a["prc"]?.toString());
           final bPrice = parseNum(b["prc"]?.toString());
           r = cmp<num>(aPrice, bPrice);
           break;
-        // Actions (6) is not sortable
+        case 6: // Status
+          r = cmp<String>(
+              a['orderStatus']?.toString(), b['orderStatus']?.toString());
+          break;
       }
       return asc ? r : -r;
     });
@@ -1906,7 +1912,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                         size: 20,
                         color: theme.isDarkMode
                             ? WebDarkColors.iconSecondary
-                            : WebColors.secondary,
+                            : WebColors.iconSecondary,
                       ),
                       splashRadius: 20,
                     ),
@@ -2130,7 +2136,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                 final headers = [
                                   'Instrument ($count / $maxCount)',
                                   'Type',
-                                  'Product',
+                                  'Product / Type',
                                   'Qty.',
                                   'LTP',
                                   'Price',
@@ -2238,16 +2244,13 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                                         if (!context.mounted)
                                                           return;
 
-                                                        final basket = ref
-                                                            .read(orderProvider);
-                                                        basket.bsktScripList[
-                                                                originalIndex]
-                                                            ['index'] = originalIndex;
-                                                        basket.bsktScripList[
-                                                                originalIndex]
-                                                            ['prctyp'] = basket
-                                                                .bsktScripList[
-                                                            originalIndex]['prctype'];
+                                                        // Stamp the row position and price type on the COPY that is
+                                                        // passed to the edit dialog — the dialog's save removes the
+                                                        // row at raw['index'], so it must travel with this map.
+                                                        item['index'] =
+                                                            originalIndex;
+                                                        item['prctyp'] =
+                                                            item['prctype'];
 
                                                         final ltp = item['lp']
                                                                 ?.toString() ??
@@ -2650,7 +2653,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
             ),
           ),
         );
-      case 'Product':
+      case 'Product / Type':
         String product = "CNC";
         switch (item["prd"]) {
           case "I":
@@ -2662,14 +2665,23 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
           case "M":
             product = "NRML";
             break;
+          case "H":
+            product = "CO";
+            break;
+          case "B":
+            product = "BO";
+            break;
         }
+        // Show the stored order price type as-is (LMT / MKT / SL-LMT / SL-MKT)
+        final priceTypeLabel = item["prctype"]?.toString() ?? "LMT";
+        final productType = "$product / $priceTypeLabel";
         return SizedBox.expand(
           child: Align(
             alignment: Alignment.centerRight,
             child: Tooltip(
-              message: product,
+              message: productType,
               child: Text(
-                product,
+                productType,
                 style: MyntWebTextStyles.tableCell(
                   context,
                   fontWeight: MyntFonts.medium,
@@ -2716,20 +2728,97 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         );
       case 'Price':
         final price = item["prc"]?.toString() ?? '0.00';
+        final basketPrcType = item["prctype"]?.toString() ?? 'LMT';
+        final trigger = item["trgprc"]?.toString() ?? '';
+        // height 1.1 keeps the two-line price + trigger within the 40px row
+        final priceStyle = MyntWebTextStyles.tableCell(
+          context,
+          fontWeight: MyntFonts.medium,
+        ).copyWith(height: 1.1, fontFeatures: [FontFeature.tabularFigures()]);
+        final trigColor = resolveThemeColor(context,
+            dark: styles.MyntColors.textSecondaryDark,
+            light: styles.MyntColors.textSecondary);
+        final trigStyle = MyntWebTextStyles.tableCell(
+          context,
+          color: trigColor,
+          darkColor: trigColor,
+          lightColor: trigColor,
+          fontWeight: MyntFonts.medium,
+        ).copyWith(
+            fontSize: 11,
+            height: 1.1,
+            fontFeatures: [FontFeature.tabularFigures()]);
+
+        Widget priceContent;
+        String tooltipText;
+        if (basketPrcType == 'SL-MKT') {
+          // Executes at market once triggered — MKT on top, trigger below
+          tooltipText = 'MKT  Trig. $trigger';
+          priceContent = Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'MKT',
+                style: priceStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                'Trig. $trigger',
+                style: trigStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          );
+        } else if (basketPrcType == 'SL-LMT') {
+          tooltipText = '$price  Trig. $trigger';
+          priceContent = Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                price,
+                style: priceStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                'Trig. $trigger',
+                style: trigStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          );
+        } else if (basketPrcType == 'MKT') {
+          tooltipText = 'MKT';
+          priceContent = Text(
+            tooltipText,
+            style: priceStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          );
+        } else {
+          tooltipText = price;
+          priceContent = Text(
+            price,
+            style: priceStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          );
+        }
         return SizedBox.expand(
           child: Align(
             alignment: Alignment.centerRight,
             child: Tooltip(
-              message: price,
-              child: Text(
-                price,
-                style: MyntWebTextStyles.tableCell(
-                  context,
-                  fontWeight: MyntFonts.medium,
-                ).copyWith(fontFeatures: [FontFeature.tabularFigures()]),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+              message: tooltipText,
+              child: priceContent,
             ),
           ),
         );
@@ -3016,6 +3105,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         "${item['token']}", '${item['exch']}', context, true);
 
     if (!context.mounted) return;
+
+    // Stamp the row position and price type so the edit dialog's save
+    // removes the correct row (raw['index']) instead of falling back to 0.
+    item['index'] = index;
+    item['prctyp'] = item['prctype'];
 
     final ltp = item['lp']?.toString() ?? "0.00";
     final perChange = item['pc']?.toString() ?? "0.00";

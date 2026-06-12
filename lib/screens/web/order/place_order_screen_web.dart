@@ -137,6 +137,40 @@ class PlaceOrderScreenWeb extends ConsumerStatefulWidget {
   /// Static method to show a dialog on top of the place order overlay
   /// This ensures dialogs appear above the draggable order screen
   /// Dialog only closes when user explicitly clicks close (not on outside tap)
+  // Chart-iframe kill switch for overlays created from this static context —
+  // same pattern as the instance methods used by the draggable window.
+  static void _disableChartIframesForOverlay() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement &&
+            iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'none';
+          iframe.style.cursor = 'default';
+        }
+      }
+      html.document.body?.style.cursor = 'default';
+    } catch (e) {
+      // DOM access can fail during teardown — ignore
+    }
+  }
+
+  static void _enableChartIframesForOverlay() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement &&
+            iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'auto';
+          iframe.style.cursor = '';
+        }
+      }
+      html.document.body?.style.cursor = '';
+    } catch (e) {
+      // DOM access can fail during teardown — ignore
+    }
+  }
+
   static void showDialogOverlay({
     required BuildContext context,
     required Widget Function(BuildContext context, VoidCallback closeDialog) builder,
@@ -169,27 +203,43 @@ class PlaceOrderScreenWeb extends ConsumerStatefulWidget {
         // Entry might already be removed
       }
       _currentDialogOverlayEntry = null;
+      ChartIframeGuard.release();
+      _enableChartIframesForOverlay();
     }
 
     dialogOverlayEntry = OverlayEntry(
       builder: (overlayContext) => Material(
         color: Colors.transparent,
-        child: Stack(
-          children: [
-            // Barrier - does not dismiss on tap
-            Positioned.fill(
-              child: Container(color: barrierColor),
+        // Full-screen interceptor: the modal barrier blocks Flutter widgets,
+        // but the chart iframe lives in the browser layer and still receives
+        // mouse events — the interceptor stops the crosshair bleeding through.
+        child: PointerInterceptor(
+          child: MouseRegion(
+            cursor: SystemMouseCursors.basic,
+            // The place-order window's onExit re-enables the iframes when the
+            // mouse travels from the window to this dialog — keep re-disabling
+            // while the modal is up.
+            onHover: (_) => _disableChartIframesForOverlay(),
+            child: Stack(
+              children: [
+                // Barrier - does not dismiss on tap
+                Positioned.fill(
+                  child: Container(color: barrierColor),
+                ),
+                // Dialog content
+                Center(
+                  child: builder(overlayContext, closeDialog),
+                ),
+              ],
             ),
-            // Dialog content
-            Center(
-              child: builder(overlayContext, closeDialog),
-            ),
-          ],
+          ),
         ),
       ),
     );
 
     _currentDialogOverlayEntry = dialogOverlayEntry;
+    ChartIframeGuard.acquire();
+    _disableChartIframesForOverlay();
     overlay.insert(dialogOverlayEntry);
   }
 
