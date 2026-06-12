@@ -296,7 +296,10 @@ class _CorporateActionsScreenWebState
 
   Widget _orderActionCell(
       BuildContext context, CorporateAction item, LDProvider lp) {
-    final isPending = item.orderstatus == 'pending';
+    // Cancellable = order still live at the exchange. Terminal statuses
+    // (completed, rejected, failed, cancel) fall through to a fresh "Order".
+    final statusLower = (item.orderstatus ?? '').trim().toLowerCase();
+    final isPending = statusLower == 'pending' || statusLower == 'success';
 
     final actionColor = isPending
         ? resolveThemeColor(context,
@@ -333,10 +336,8 @@ class _CorporateActionsScreenWebState
   /// Same shape/size as the type badge so the table stays visually uniform.
   Widget _statusCell(BuildContext context, CorporateAction item) {
     final status = (item.orderstatus ?? '').trim();
-    final isPending = status == 'pending';
-    final isRejected = status == 'Rejected';
 
-    if (!isPending && !isRejected) {
+    if (status.isEmpty || status == 'null') {
       return Align(
         alignment: Alignment.centerLeft,
         child: Text(
@@ -350,19 +351,35 @@ class _CorporateActionsScreenWebState
       );
     }
 
-    final color = isPending
-        ? resolveThemeColor(context,
-            dark: MyntColors.warningDark, light: MyntColors.warning)
-        : resolveThemeColor(context,
+    // statuses: Rejected, failed, completed, success, pending, cancel.
+    final lower = status.toLowerCase();
+    final Color color;
+    switch (lower) {
+      case 'success':
+      case 'completed':
+        color = resolveThemeColor(context,
+            dark: MyntColors.profitDark, light: MyntColors.profit);
+        break;
+      case 'pending':
+        color = resolveThemeColor(context,
+            dark: MyntColors.warningDark, light: MyntColors.warning);
+        break;
+      case 'rejected':
+      case 'failed':
+        color = resolveThemeColor(context,
             dark: MyntColors.lossDark, light: MyntColors.loss);
+        break;
+      default:
+        color = resolveThemeColor(context,
+            dark: MyntColors.secondaryDark, light: MyntColors.secondary);
+    }
 
-    final label = isPending ? 'Pending' : 'Rejected';
+    final label = status;
     final reason = (item.rejectionreason ?? '').trim();
-    final tooltipMsg = isRejected
-        ? (reason.isEmpty
-            ? 'Order was rejected by the exchange'
-            : 'Rejected: $reason')
-        : 'Order is pending';
+    final tooltipMsg = (lower == 'rejected' || lower == 'failed') &&
+            reason.isNotEmpty
+        ? '$status: $reason'
+        : status;
 
     final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
