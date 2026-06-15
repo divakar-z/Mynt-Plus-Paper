@@ -1667,8 +1667,14 @@ class Chart {
         e.stopPropagation();
         let msg = null;
         if (hit.kind === 'overlay') {
-          // Phase 9 tp/sl actions removed — buttons hidden in renderer.
-          if (hit.action === 'close') {
+          if (hit.action === 'addOco') {
+            // Attach a target + stop to the position — Flutter opens the
+            // OCO dialog (reviewed, never instant).
+            msg = {
+              type: 'positionOcoRequested',
+              value: { paneId: this.paneId, overlayId: hit.overlayId },
+            };
+          } else if (hit.action === 'close') {
             // Close-box click — fire the existing close-requested message
             // and we're done.
             msg = {
@@ -1688,7 +1694,9 @@ class Chart {
             // click (move<=2px → detail popup).
             const ov = this._overlays.find((o) => o.id === hit.overlayId);
             const isDraggable =
-                ov && (ov.kind === 'limit' || ov.kind === 'sl' || ov.kind === 'sl-l');
+                ov && (ov.kind === 'limit' || ov.kind === 'sl' ||
+                       ov.kind === 'sl-l' || ov.kind === 'ocoTp' ||
+                       ov.kind === 'ocoSl');
             if (isDraggable) {
               this._dragOverlay = {
                 overlayId: hit.overlayId,
@@ -3959,12 +3967,15 @@ class Chart {
       if (pnlText) segs.push(pnlText);
       const labelText = segs.join('   ');
       const labelW = ctx.measureText(labelText).width;
+      // Position chips carry a single "TP/SL" button before the close box
+      // so the user can attach a target + stop to the position straight
+      // from the chart. Clicking it posts positionOcoRequested; Flutter
+      // opens a dialog to set both prices and places them as an OCO order
+      // (one-cancels-other). Only real positions get it.
       const isPosition = ov.kind === 'position';
-      // Phase 9 TP/SL buttons removed for now — the PlaceOrderScreen showed
-      // the wrong side on prefill (BUY where SELL was expected). Helpers
-      // remain in place_order_prefill.dart for re-enable when the screen
-      // side-flip bug is sorted.
-      const chipW = labelW + chipPad * 2 + closeBoxW;
+      const ocoBtnW = 42;
+      const tpSlW = isPosition ? ocoBtnW : 0;
+      const chipW = labelW + chipPad * 2 + tpSlW + closeBoxW;
 
       // Anchor the chip on the RIGHT side of the plot with a 20% gap from
       // the price axis — the line extends the full plot width AND passes
@@ -4015,9 +4026,32 @@ class Chart {
       ctx.lineTo(xCenterX - xSize / 2, chipY + xSize / 2);
       ctx.stroke();
 
-      // Hit-test rects: open = the whole chip excluding the close box;
-      // close = the close box.
-      const openBodyW = chipW - closeBoxW;
+      // Position-only "TP/SL" button, between the label and close box:
+      // [ 65 LONG +1,234 ] | TP/SL | × .
+      if (isPosition) {
+        const ocoLeft = chipLeft + chipW - closeBoxW - ocoBtnW;
+        ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(ocoLeft, chipTop + 3);
+        ctx.lineTo(ocoLeft, chipTop + chipH - 3);
+        ctx.stroke();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '700 9px Geist, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('TP/SL', ocoLeft + ocoBtnW / 2, chipY);
+        // Restore label font/alignment for subsequent overlays in the loop.
+        ctx.font = '700 11px Geist, sans-serif';
+        ctx.textAlign = 'left';
+        this._overlayHits.push({
+          rect: { x: ocoLeft, y: chipTop, w: ocoBtnW, h: chipH },
+          action: 'addOco', overlayId: ov.id,
+        });
+      }
+
+      // Hit-test rects: open = the chip's label area (excludes the SL/TP
+      // buttons + close box); close = the close box.
+      const openBodyW = chipW - closeBoxW - tpSlW;
       this._overlayHits.push({
         rect: { x: chipLeft, y: chipTop, w: openBodyW, h: chipH },
         action: 'open', overlayId: ov.id,
@@ -4939,8 +4973,8 @@ class Chart {
     // Deeper violet so the right-axis price chip's white text stays readable
     // (the previous #A78BFA was too light — text-on-chip contrast washed out).
     if (ov.kind === 'optionStrike') return '#8B5CF6';
-    if (ov.kind === 'tp') return this.palette.bull;
-    if (ov.kind === 'sl' || ov.kind === 'sl-l') return this.palette.short;
+    if (ov.kind === 'tp' || ov.kind === 'ocoTp') return this.palette.bull;
+    if (ov.kind === 'sl' || ov.kind === 'sl-l' || ov.kind === 'ocoSl') return this.palette.short;
     return ov.side === 'buy' ? this.palette.long : this.palette.short;
   }
 
@@ -4953,9 +4987,9 @@ class Chart {
     if (ov.kind === 'position') return [];
     if (ov.kind === 'optionStrike') return [];
     if (ov.kind === 'alert') return [6, 4];
-    if (ov.kind === 'limit' || ov.kind === 'tp') return [6, 4];
+    if (ov.kind === 'limit' || ov.kind === 'tp' || ov.kind === 'ocoTp') return [6, 4];
     if (ov.kind === 'sl-l') return [4, 4];
-    return [2, 3]; // sl
+    return [2, 3]; // sl / ocoSl
   }
 
   _overlayLineWidth(ov) {
@@ -4979,10 +5013,11 @@ class Chart {
   }
 
   _overlayTypeLabel(ov) {
-    if (ov.kind === 'tp') return 'TP';
+    if (ov.kind === 'tp' || ov.kind === 'ocoTp') return 'TP';
     if (ov.kind === 'limit') return 'LMT';
     if (ov.kind === 'sl') return 'SL';
     if (ov.kind === 'sl-l') return 'SL-L';
+    if (ov.kind === 'ocoSl') return 'SL';
     if (ov.kind === 'alert') return ov.side === 'buy' ? '↑ ALERT' : '↓ ALERT';
     return null; // position has no type label
   }

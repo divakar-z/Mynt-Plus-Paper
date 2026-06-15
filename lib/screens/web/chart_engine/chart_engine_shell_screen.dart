@@ -22,10 +22,11 @@ import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/models/marketwatch_model/alert_model/alert_pending_model.dart';
 import 'package:mynt_plus/models/marketwatch_model/scrip_info.dart';
+import 'package:mynt_plus/models/order_book_model/gtt_order_book.dart';
 import 'package:mynt_plus/models/order_book_model/modify_order_model.dart';
 import 'package:mynt_plus/models/order_book_model/order_book_model.dart';
+import 'package:mynt_plus/models/order_book_model/place_gtt_order.dart';
 import 'package:mynt_plus/models/order_book_model/place_order_model.dart';
-import 'package:mynt_plus/models/portfolio_model/position_book_model.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/market_watch_provider.dart';
 import 'package:mynt_plus/provider/order_provider.dart';
@@ -198,6 +199,11 @@ class _ChartEngineShellScreenState
       ws.addListener(_wsListener!);
       _wsStreamSub =
           ws.socketDataStream.listen((_) => _wsForwardCoalesced());
+      // Phase 27 — pull the GTT/OCO book once so placed TP/SL brackets
+      // render on the chart. `initLoad` keeps it from switching the order
+      // window tab or toggling WS subscriptions. The shell already listens
+      // to orderProvider, so the resulting notify re-pushes the overlays.
+      ref.read(orderProvider).fetchGTTOrderBook(context, 'initLoad');
     });
   }
 
@@ -427,18 +433,14 @@ class _ChartEngineShellScreenState
         }
         break;
       }
-      case 'positionTpRequested':
-      case 'positionSlRequested': {
+      case 'positionOcoRequested': {
         final v = msg['value'];
         if (v is Map) {
           final pid = v['paneId'];
           final ovId = v['overlayId'];
           if (pid is String && ovId is String) {
             final idx = int.tryParse(pid);
-            if (idx != null) {
-              _handlePositionTpSlRequested(
-                  idx, ovId, msg['type'] == 'positionTpRequested');
-            }
+            if (idx != null) _handlePositionOcoRequested(idx, ovId);
           }
         }
         break;
@@ -1585,6 +1587,8 @@ class _ChartEngineShellScreenState
     final orders = ref.read(orderProvider).orderBookModel ?? const [];
     final alerts =
         ref.read(marketWatchProvider).alertPendingModel ?? const [];
+    final ocoOrders =
+        ref.read(orderProvider).gttOrderBookModel ?? const [];
     for (var i = 0; i < session.panes.length; i++) {
       final pane = session.panes[i];
       final overlays = overlaysForPane(
@@ -1592,6 +1596,7 @@ class _ChartEngineShellScreenState
         positions: positions,
         orders: orders,
         alerts: alerts,
+        ocoOrders: ocoOrders,
       );
       final json = jsonEncode(overlays);
       if (force || _pushedPaneOverlaysJson[i] != json) {
@@ -1849,6 +1854,9 @@ class _ChartEngineShellScreenState
         kind: kind,
         price: price,
         deviceInfo: deviceInfo,
+        // Honor the user's Product Type default (intraday/delivery/normal)
+        // instead of always firing CNC/NRML.
+        orderDefaults: ref.read(orderDefaultsProvider),
       );
       await ref.read(orderProvider).fetchPlaceOrder(context, input, false);
       return;
@@ -1875,6 +1883,8 @@ class _ChartEngineShellScreenState
       kind: kind,
       price: price,
       realScripInfo: realInfo,
+      // Drives the Bracket-Order pre-fill when the user has auto-SL + TP on.
+      orderDefaults: ref.read(orderDefaultsProvider),
     );
     await ResponsiveNavigation.toPlaceOrderScreen(
         context: context, arguments: args);
@@ -1966,6 +1976,24 @@ class _ChartEngineShellScreenState
     if (paneIndex < 0 || paneIndex >= session.panes.length) return;
     final scrip = session.panes[paneIndex].scrip;
     if (scrip == null) return;
+
+    // OCO bracket legs (ocoTp-<alId> / ocoSl-<alId>) — drag modifies a single
+    // leg via ModifyOCO, replaying the other leg untouched.
+    if (overlayId.startsWith('ocoTp-') || overlayId.startsWith('ocoSl-')) {
+      final isTp = overlayId.startsWith('ocoTp-');
+      final alId = overlayId.substring(isTp ? 'ocoTp-'.length : 'ocoSl-'.length);
+      final gtt = _findOcoByAlId(alId);
+      if (gtt == null) return;
+      // ignore: discarded_futures
+      showOcoLegModifyDialog(
+        context: context,
+        ref: ref,
+        gtt: gtt,
+        isTpLeg: isTp,
+        newPrice: newPrice,
+      );
+      return;
+    }
 
     // Resolve overlayId → underlying OrderBookModel. IDs are prefixed:
     //   ord-<num>   → LMT
@@ -2080,63 +2108,110 @@ class _ChartEngineShellScreenState
     }
   }
 
-  Future<void> _handlePositionTpSlRequested(
-      int paneIndex, String overlayId, bool isTp) async {
+  /// Add a TP + SL exit for an existing POSITION as an OCO (one-cancels-
+  /// other) order: a target LIMIT leg and a stop SL-MKT leg, both on the
+  /// opposite side of the position. The user sets both prices in a dialog
+  /// (pre-filled from the position avg); when one leg fills the broker
+  /// cancels the other.
+  Future<void> _handlePositionOcoRequested(
+      int paneIndex, String overlayId) async {
     final session = ref.read(chartEngineSessionProvider);
     if (paneIndex < 0 || paneIndex >= session.panes.length) return;
     final scrip = session.panes[paneIndex].scrip;
     if (scrip == null) return;
     if (!overlayId.startsWith('pos-')) return;
 
-    // Resolve position from the providers (mirrors
-    // _handleOverlayCloseRequested for positions).
     final positions =
         ref.read(portfolioProvider).postionBookModel ?? const [];
-    PositionBookModel? position;
+    String exch = '';
+    String tsym = '';
+    String prd = '';
+    int netqty = 0;
+    double avg = 0;
     for (final p in positions) {
       if (p.exch == scrip.exch &&
           p.token == scrip.token &&
           (int.tryParse(p.netqty ?? '0') ?? 0) != 0) {
-        position = p;
+        exch = p.exch ?? '';
+        tsym = p.tsym ?? scrip.tsym;
+        prd = p.prd ?? '';
+        netqty = int.tryParse(p.netqty ?? '0') ?? 0;
+        avg = double.tryParse(p.netavgprc ?? '') ?? 0;
         break;
       }
     }
-    if (position == null) return;
+    if (exch.isEmpty || netqty == 0 || avg <= 0) return;
+    final isLong = netqty > 0;
+    final qtyAbs = netqty.abs();
+    final ti = scrip.ti > 0 ? scrip.ti : 0.05;
+    double snap(double v) => (v / ti).round() * ti;
 
-    final qtyInt = int.tryParse(position.netqty ?? '0') ?? 0;
-    if (qtyInt == 0) return;
-    final isLong = qtyInt > 0;
-    final qtyAbs = qtyInt.abs();
-    final avg = double.tryParse(position.netavgprc ?? '') ?? 0;
-    if (avg <= 0) return;
+    // The OCO legs are LTP-triggered GTT conditions, so the broker rejects
+    // ("Invalid Condition") any bracket that doesn't straddle the CURRENT
+    // price. Anchor the prefill to the live LTP (fallback to avg) and the
+    // dialog validates against it — not the entry avg, which for options
+    // can sit far from the live price.
+    double ltp = avg;
+    try {
+      final entry = ref.read(websocketProvider).socketDatas[scrip.token];
+      if (entry is Map && entry['lp'] != null) {
+        final v = double.tryParse(entry['lp'].toString());
+        if (v != null && v > 0) ltp = v;
+      }
+    } catch (_) {}
 
-    // TP/SL always opens PlaceOrderScreen so the user can review/adjust the
-    // pre-filled price and qty before submitting. Even in Instant mode we
-    // skip the bypass — opening new exposure deserves a deliberate
-    // confirmation; instant only applies to cancel / square-off / drag-
-    // modify / quick-place from `+` menu (existing exposure or explicit
-    // user gesture).
-    var realInfo = _cachedScripInfo(scrip);
-    if (realInfo == null) {
-      try {
-        await ref
-            .read(marketWatchProvider)
-            .fetchScripInfo(scrip.token, scrip.exch, context, false);
-      } catch (_) {}
-      if (!mounted) return;
-      realInfo = _cachedScripInfo(scrip) ??
-          ref.read(marketWatchProvider).scripInfoModel;
-    }
-    final args = buildTpSlOrderScreenArgs(
-      scrip: scrip,
-      qty: qtyAbs,
+    // Target above LTP / stop below LTP for a long; mirrored for a short.
+    final tpInit = snap(isLong ? ltp * 1.02 : ltp * 0.98);
+    final slInit = snap(isLong ? ltp * 0.98 : ltp * 1.02);
+
+    final result = await showOcoTpSlDialog(
+      context: context,
+      tsym: tsym,
       isLong: isLong,
-      isTp: isTp,
-      avg: avg,
-      realScripInfo: realInfo,
+      ltp: ltp,
+      tpInit: tpInit,
+      slInit: slInit,
+      ti: ti,
     );
-    await ResponsiveNavigation.toPlaceOrderScreen(
-        context: context, arguments: args);
+    if (result == null || !mounted) return;
+
+    // Exit side is opposite the position: long → SELL, short → BUY. BOTH
+    // legs are plain LMT orders — the OCO triggers come from the oivariable
+    // conditions (d1/d2), not from per-leg SL triggers. Matches the broker's
+    // accepted format (verified against a working request). Leg 1 = target,
+    // leg 2 = stop; `d` is the trigger level and `prc` the limit (same here).
+    final input = PlaceOcoOrderInput(
+      exch: exch,
+      tsym: tsym,
+      validity: 'GTT',
+      trantype: isLong ? 'S' : 'B',
+      ret: 'DAY',
+      remarks: '',
+      qty1: qtyAbs.toString(),
+      prctyp1: 'LMT',
+      prc1: result.tp.toStringAsFixed(2),
+      trgprc1: '',
+      prd1: prd,
+      d1: result.tp.toStringAsFixed(2),
+      qty2: qtyAbs.toString(),
+      prctyp2: 'LMT',
+      prc2: result.sl.toStringAsFixed(2),
+      trgprc2: '',
+      prd2: prd,
+      d2: result.sl.toStringAsFixed(2),
+      alid: '',
+    );
+    await ref.read(orderProvider).placeOCOOrder(input, context);
+  }
+
+  /// Resolves a placed OCO bracket by its alert id from the GTT book.
+  GttOrderBookModel? _findOcoByAlId(String alId) {
+    if (alId.isEmpty) return null;
+    final gtts = ref.read(orderProvider).gttOrderBookModel ?? const [];
+    for (final g in gtts) {
+      if (g.alId == alId && g.placeOrderParamsLeg2 != null) return g;
+    }
+    return null;
   }
 
   void _handleOverlayCloseRequested(int paneIndex, String overlayId) {
@@ -2144,6 +2219,17 @@ class _ChartEngineShellScreenState
     if (paneIndex < 0 || paneIndex >= session.panes.length) return;
     final scrip = session.panes[paneIndex].scrip;
     if (scrip == null) return;
+
+    // OCO bracket close (× on either leg) cancels the whole bracket.
+    if (overlayId.startsWith('ocoTp-') || overlayId.startsWith('ocoSl-')) {
+      final isTp = overlayId.startsWith('ocoTp-');
+      final alId = overlayId.substring(isTp ? 'ocoTp-'.length : 'ocoSl-'.length);
+      final gtt = _findOcoByAlId(alId);
+      if (gtt == null) return;
+      // ignore: discarded_futures
+      showOcoCancelDialog(context: context, ref: ref, gtt: gtt);
+      return;
+    }
 
     // Phase 17.A — close × on an `optionStrike` overlay (option position
     // surfaced on its underlying-index chart). The overlay ID embeds the

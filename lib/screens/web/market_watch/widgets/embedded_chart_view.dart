@@ -7,16 +7,13 @@ import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart
 /// In-house chart engine embedded in the symbol details screen as the
 /// "Trade from Chart" mode replacement for the TradingView portal.
 ///
-/// Owns two integrations with the shared chart-engine session:
-///   1) **Single-pane lock.** If the user previously used the /chart-engine
-///      workspace with a multi-pane layout, that's collapsed back to a
-///      single pane while we're embedded — the details screen is a
-///      single-symbol surface.
-///   2) **Symbol mirror.** The details screen's `wlValue` is the source of
-///      truth; whenever it changes (user picked a new symbol from search
-///      / watchlist / option chain) we push the scrip into pane 0 of the
-///      chart engine session. The shell's own postMessage pipeline then
-///      reloads the iframe's chart.
+/// **Symbol mirror.** The details screen's `wlValue` drives the symbol;
+/// whenever it changes (user picked a new symbol from search / watchlist /
+/// option chain) we push the scrip into the chart engine's ACTIVE pane.
+/// This keeps multi-pane layouts working in embedded mode: the user can
+/// split the chart, click a pane to focus it, then pick a symbol and it
+/// lands on that pane — instead of collapsing back to a single pane.
+/// The shell's own postMessage pipeline then reloads the iframe's chart.
 class EmbeddedChartView extends ConsumerStatefulWidget {
   final DepthInputArgs wlValue;
   const EmbeddedChartView({super.key, required this.wlValue});
@@ -60,17 +57,23 @@ class _EmbeddedChartViewState extends ConsumerState<EmbeddedChartView> {
   void _ensureSync() {
     if (!mounted) return;
     final scrip = _buildScrip(widget.wlValue);
+    // Dedup on the details symbol ALONE — never on the active pane index.
+    // `_ensureSync` runs on every rebuild (incl. after a pane click changes
+    // the active pane). If the key included the pane, focusing a different
+    // pane would re-push the details symbol onto it and clobber whatever it
+    // already held — e.g. clicking the NIFTY pane would overwrite it with
+    // the SENSEX the details header currently shows. Keying on the symbol
+    // means a pane switch with an unchanged details symbol is a no-op; the
+    // push only happens when the user actually picks a new symbol, and it
+    // lands on whichever pane is focused at that moment.
     final key = '${scrip.exch}|${scrip.token}';
     if (_lastSyncedKey == key) return;
     _lastSyncedKey = key;
-    final notifier = ref.read(chartEngineSessionProvider.notifier);
     final session = ref.read(chartEngineSessionProvider);
-    // Force single-pane — multi-pane is the /chart-engine workspace's
-    // domain. Per spec: embedded mode always single.
-    if (session.layout != ChartLayout.single) {
-      notifier.setLayout(ChartLayout.single);
-    }
-    notifier.setPaneSymbol(0, scrip);
+    final target = session.panes.isEmpty
+        ? 0
+        : session.activePaneIndex.clamp(0, session.panes.length - 1);
+    ref.read(chartEngineSessionProvider.notifier).setPaneSymbol(target, scrip);
   }
 
   @override

@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:mynt_plus/models/marketwatch_model/alert_model/alert_pending_model.dart';
+import 'package:mynt_plus/models/order_book_model/gtt_order_book.dart';
 import 'package:mynt_plus/models/order_book_model/modify_order_model.dart';
 import 'package:mynt_plus/models/order_book_model/order_book_model.dart';
+import 'package:mynt_plus/models/order_book_model/place_gtt_order.dart';
 import 'package:mynt_plus/models/order_book_model/place_order_model.dart';
 import 'package:mynt_plus/models/portfolio_model/position_book_model.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
@@ -339,6 +341,103 @@ Future<void> showAlertCancelDialog({
       .fetchCancelAlert(alert.alId ?? '', context);
 }
 
+/// Cancel a placed OCO bracket (both TP and SL legs) from the chart. The
+/// broker treats the OCO as a single GTT keyed by [GttOrderBookModel.alId],
+/// so cancelling either leg removes the whole bracket. Mirrors the wording
+/// of the order-cancel dialog.
+Future<void> showOcoCancelDialog({
+  required BuildContext context,
+  required WidgetRef ref,
+  required GttOrderBookModel gtt,
+}) async {
+  final tsym = gtt.symbol?.isNotEmpty == true ? gtt.symbol! : (gtt.tsym ?? '');
+  final ov = gtt.oivariable;
+  final tp = (ov != null && ov.isNotEmpty) ? ov[0].d ?? '' : '';
+  final sl = (ov != null && ov.length > 1) ? ov[1].d ?? '' : '';
+  final ok = await _showConfirm(
+    context: context,
+    title: 'Cancel TP/SL',
+    message: 'Cancel the bracket for $tsym?\n'
+        'Target $tp and Stop $sl will both be removed.',
+    cancelLabel: 'Keep',
+    confirmLabel: 'Cancel TP/SL',
+    confirmColor: MyntColors.tertiary,
+  );
+  if (!ok || !context.mounted) return;
+  await ref.read(orderProvider).cancelGttOrder(gtt.alId ?? '', context);
+}
+
+/// Modify ONE leg of a placed OCO bracket from a chart drag. [isTpLeg] picks
+/// the target leg (oivariable[0] / place_order_params) vs the stop leg
+/// (oivariable[1] / place_order_params_leg2). The untouched leg is replayed
+/// verbatim so [orderProvider.modifyOCOOrder] (which replaces BOTH legs)
+/// leaves it where it was. Keyed by [GttOrderBookModel.alId].
+Future<void> showOcoLegModifyDialog({
+  required BuildContext context,
+  required WidgetRef ref,
+  required GttOrderBookModel gtt,
+  required bool isTpLeg,
+  required double newPrice,
+}) async {
+  final ov = gtt.oivariable;
+  if (ov == null || ov.length < 2) return;
+  final leg1 = gtt.placeOrderParams;
+  final leg2 = gtt.placeOrderParamsLeg2;
+  // Both legs share the bracket's transaction side (exit side of the
+  // position). Fall back across the available carriers.
+  final trantype =
+      leg1?.trantype ?? leg2?.trantype ?? gtt.trantype ?? 'S';
+  final prd1 = leg1?.prd ?? gtt.prd ?? '';
+  final prd2 = leg2?.prd ?? gtt.prd ?? '';
+  final qty1 = (leg1?.qty ?? gtt.qty ?? 0).toString();
+  final qty2 = (leg2?.qty ?? gtt.qty ?? 0).toString();
+  final prctyp1 = leg1?.prctyp ?? 'LMT';
+  final prctyp2 = leg2?.prctyp ?? 'LMT';
+
+  final newStr = newPrice.toStringAsFixed(2);
+  // Target leg = oivariable[0]; stop leg = oivariable[1]. Update only the
+  // dragged leg's condition (`d`) and limit price (`prc`); keep the other.
+  final d1 = isTpLeg ? newStr : (ov[0].d ?? '');
+  final prc1 = isTpLeg ? newStr : (leg1?.prc ?? ov[0].d ?? '');
+  final d2 = isTpLeg ? (ov[1].d ?? '') : newStr;
+  final prc2 = isTpLeg ? (leg2?.prc ?? ov[1].d ?? '') : newStr;
+
+  final tsym = gtt.symbol?.isNotEmpty == true ? gtt.symbol! : (gtt.tsym ?? '');
+  final legName = isTpLeg ? 'Target' : 'Stop';
+  final oldStr = isTpLeg ? (ov[0].d ?? '') : (ov[1].d ?? '');
+  final ok = await _showConfirm(
+    context: context,
+    title: 'Modify $legName',
+    message: 'Move $legName for $tsym from $oldStr to $newStr?',
+    cancelLabel: 'Keep',
+    confirmLabel: 'Modify',
+  );
+  if (!ok || !context.mounted) return;
+
+  final input = PlaceOcoOrderInput(
+    exch: gtt.exch ?? '',
+    tsym: gtt.tsym ?? '',
+    validity: gtt.validity ?? 'GTT',
+    trantype: trantype,
+    ret: 'DAY',
+    remarks: '',
+    qty1: qty1,
+    prctyp1: prctyp1,
+    prc1: prc1,
+    trgprc1: '',
+    prd1: prd1,
+    d1: d1,
+    qty2: qty2,
+    prctyp2: prctyp2,
+    prc2: prc2,
+    trgprc2: '',
+    prd2: prd2,
+    d2: d2,
+    alid: gtt.alId ?? '',
+  );
+  await ref.read(orderProvider).modifyOCOOrder(input, context);
+}
+
 /// One-time warning shown when the user first enables Instant orders.
 /// Returns true if the user clicks Enable, false otherwise.
 Future<bool> showInstantWarningDialog({
@@ -354,4 +453,273 @@ Future<bool> showInstantWarningDialog({
     confirmLabel: 'Enable',
     confirmColor: const Color(0xFFF59E0B), // amber — caution, not destructive
   );
+}
+
+/// Dialog for setting a Target + Stop-loss on an open position, placed as an
+/// OCO (one-cancels-other) order. Returns the entered (tp, sl) prices, or
+/// null if cancelled. Pre-fills both from the position avg and validates
+/// that each sits on the correct side (target favourable, stop protective)
+/// so the user can't accidentally invert them.
+Future<({double tp, double sl})?> showOcoTpSlDialog({
+  required BuildContext context,
+  required String tsym,
+  required bool isLong,
+  required double ltp,
+  required double tpInit,
+  required double slInit,
+  required double ti,
+}) {
+  return _showIframeSafeDialog<({double tp, double sl})>(
+    context: context,
+    child: _OcoTpSlCard(
+      tsym: tsym,
+      isLong: isLong,
+      ltp: ltp,
+      tpInit: tpInit,
+      slInit: slInit,
+      ti: ti,
+    ),
+  );
+}
+
+class _OcoTpSlCard extends StatefulWidget {
+  final String tsym;
+  final bool isLong;
+  final double ltp;
+  final double tpInit;
+  final double slInit;
+  final double ti;
+  const _OcoTpSlCard({
+    required this.tsym,
+    required this.isLong,
+    required this.ltp,
+    required this.tpInit,
+    required this.slInit,
+    required this.ti,
+  });
+
+  @override
+  State<_OcoTpSlCard> createState() => _OcoTpSlCardState();
+}
+
+class _OcoTpSlCardState extends State<_OcoTpSlCard> {
+  late final TextEditingController _tp;
+  late final TextEditingController _sl;
+  String? _error;
+
+  int get _decimals => widget.ti >= 1
+      ? 0
+      : widget.ti >= 0.1
+          ? 1
+          : 2;
+
+  @override
+  void initState() {
+    super.initState();
+    _tp = TextEditingController(text: widget.tpInit.toStringAsFixed(_decimals));
+    _sl = TextEditingController(text: widget.slInit.toStringAsFixed(_decimals));
+  }
+
+  @override
+  void dispose() {
+    _tp.dispose();
+    _sl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final tp = double.tryParse(_tp.text.trim());
+    final sl = double.tryParse(_sl.text.trim());
+    if (tp == null || sl == null || tp <= 0 || sl <= 0) {
+      setState(() => _error = 'Enter valid target and stop-loss prices.');
+      return;
+    }
+    // OCO legs are LTP-triggered, so both must straddle the CURRENT price
+    // or the broker rejects with "Invalid Condition". Validate against the
+    // live LTP, not the entry avg.
+    final ltp = widget.ltp;
+    if (widget.isLong) {
+      if (tp <= ltp) {
+        setState(() => _error =
+            'Target must be above the current price (${ltp.toStringAsFixed(_decimals)}).');
+        return;
+      }
+      if (sl >= ltp) {
+        setState(() => _error =
+            'Stop-loss must be below the current price (${ltp.toStringAsFixed(_decimals)}).');
+        return;
+      }
+    } else {
+      if (tp >= ltp) {
+        setState(() => _error =
+            'Target must be below the current price (${ltp.toStringAsFixed(_decimals)}).');
+        return;
+      }
+      if (sl <= ltp) {
+        setState(() => _error =
+            'Stop-loss must be above the current price (${ltp.toStringAsFixed(_decimals)}).');
+        return;
+      }
+    }
+    Navigator.of(context).pop((tp: tp, sl: sl));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.dialogDark, light: MyntColors.dialog);
+    final divider = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final titleColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final bodyColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 420,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: divider)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text('Set Target & Stop-loss',
+                        style: MyntWebTextStyles.title(context,
+                            color: titleColor)),
+                  ),
+                  Material(
+                    color: Colors.transparent,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(Icons.close, size: 18, color: bodyColor),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${widget.tsym}  ·  ${widget.isLong ? 'LONG' : 'SHORT'}'
+                    '  ·  LTP ${widget.ltp.toStringAsFixed(_decimals)}',
+                    style: MyntWebTextStyles.caption(context, color: bodyColor),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Placed as an OCO order — when one fills, the other is '
+                    'cancelled.',
+                    style: MyntWebTextStyles.caption(context, color: bodyColor),
+                  ),
+                  const SizedBox(height: 16),
+                  _priceField(context, 'Target (TP)', _tp),
+                  const SizedBox(height: 12),
+                  _priceField(context, 'Stop-loss (SL)', _sl),
+                  if (_error != null) ...[
+                    const SizedBox(height: 10),
+                    Text(_error!,
+                        style: MyntWebTextStyles.caption(context,
+                            color: MyntColors.error)),
+                  ],
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: Text('Cancel',
+                            style: MyntWebTextStyles.buttonMd(context,
+                                color: bodyColor)),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 40,
+                        child: FilledButton(
+                          onPressed: _submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: MyntColors.primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Text('Place OCO',
+                              style: MyntWebTextStyles.buttonMd(context,
+                                  color: Colors.white)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _priceField(
+      BuildContext context, String label, TextEditingController c) {
+    final border = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final labelColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: MyntWebTextStyles.caption(context, color: labelColor)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: c,
+          keyboardType:
+              const TextInputType.numberWithOptions(decimal: true),
+          style: MyntWebTextStyles.body(context),
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: border),
+            ),
+          ),
+          onChanged: (_) {
+            if (_error != null) setState(() => _error = null);
+          },
+        ),
+      ],
+    );
+  }
 }

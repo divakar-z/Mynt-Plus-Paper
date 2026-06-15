@@ -3,6 +3,24 @@ import 'package:mynt_plus/models/marketwatch_model/scrip_info.dart';
 import 'package:mynt_plus/models/order_book_model/order_book_model.dart';
 import 'package:mynt_plus/models/order_book_model/place_order_model.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart';
+import 'package:mynt_plus/screens/web/chart_engine/state/option_underlying_match.dart';
+
+/// Resolves the product code for an order on [scrip] from the user's Order
+/// Defaults (Product Type tab), picking the right family setting:
+///   equity (NSE/BSE)        → equityProduct  ('C' delivery | 'I' intraday)
+///   options (NFO/BFO + OPT) → optionsProduct ('M' normal   | 'I' intraday)
+///   futures / other deriv.  → futuresProduct ('M' normal   | 'I' intraday)
+/// Falls back to the conservative C/M split when no defaults are supplied
+/// (e.g. a code path that doesn't pass them).
+String resolveProduct(ChartScrip scrip, OrderDefaults? defaults) {
+  final isEquity = scrip.exch == 'NSE' || scrip.exch == 'BSE';
+  if (defaults == null) return isEquity ? 'C' : 'M';
+  if (isEquity) return defaults.equityProduct;
+  final instname = scrip.instname.toUpperCase();
+  final isOption =
+      instname.startsWith('OPT') || parseOptionTsym(scrip.tsym) != null;
+  return isOption ? defaults.optionsProduct : defaults.futuresProduct;
+}
 
 /// Variants of an order pre-fill — used by the chart-overlay layer when
 /// opening the existing `PlaceOrderScreenWeb` from a chip / menu item.
@@ -28,6 +46,10 @@ Map<String, dynamic> buildOrderScreenArgs({
   required OrderPrefillKind kind,
   double? price,
   ScripInfoModel? realScripInfo,
+  // Drives the product code (Delivery/Intraday/Normal) from the user's
+  // Order Defaults → Product Type. Without it the order would always open
+  // as CNC/NRML regardless of the user's intraday preference.
+  OrderDefaults? orderDefaults,
 }) {
   String? prctyp;
   bool isBuy = true; // default for blank/create-new-order
@@ -78,8 +100,7 @@ Map<String, dynamic> buildOrderScreenArgs({
   //     exchanges reject ("Product NRML not enabled on exchange NSE")
   // Pick the right product code based on the exchange: NSE/BSE equity →
   // 'C' (CNC); everything else (NFO/BFO/MCX/derivatives) → 'M' (NRML).
-  final isEquity = scrip.exch == 'NSE' || scrip.exch == 'BSE';
-  final defaultPrd = isEquity ? 'C' : 'M';
+  final defaultPrd = resolveProduct(scrip, orderDefaults);
   final raw = <String, dynamic>{
     if (prctyp != null) 'prctyp': prctyp,
     'qty': qty.toString(),
@@ -154,6 +175,10 @@ PlaceOrderInput buildPlaceOrderInput({
   required OrderPrefillKind kind,
   required double price,
   required Map<String, dynamic> deviceInfo,
+  // Product from Order Defaults → Product Type (per instrument family).
+  // Without it instant orders always fired as CNC/NRML, ignoring the
+  // user's intraday preference.
+  OrderDefaults? orderDefaults,
 }) {
   String prctype = 'LMT';
   bool isBuy = true;
@@ -199,8 +224,7 @@ PlaceOrderInput buildPlaceOrderInput({
       break;
   }
 
-  final isEquity = scrip.exch == 'NSE' || scrip.exch == 'BSE';
-  final prd = isEquity ? 'C' : 'M';
+  final prd = resolveProduct(scrip, orderDefaults);
   final channel = defaultTargetPlatform == TargetPlatform.android
       ? '${deviceInfo["brand"]}'
       : '${deviceInfo["model"]}';
@@ -223,90 +247,5 @@ PlaceOrderInput buildPlaceOrderInput({
     mktProt: '',
     channel: channel,
     frzqty: 0,
-  );
-}
-
-// Default percentage offsets from position avg for the chart's quick
-// TP / SL buttons. These are the STARTING values pre-filled into
-// PlaceOrderScreen — the user always reviews and can adjust before
-// submitting (TP/SL never fire instantly, regardless of the Instant
-// toggle — opening exposure deserves a deliberate confirmation).
-const double _defaultTpPct = 0.03; // 3% — favourable side
-const double _defaultSlPct = 0.015; // 1.5% — protective side
-
-double _snapToTick(double price, double ti) {
-  if (ti <= 0) return price;
-  return (price / ti).round() * ti;
-}
-
-double tpPriceFromAvg({
-  required double avg,
-  required bool isLong,
-  double ti = 0.05,
-}) {
-  final raw =
-      isLong ? avg * (1 + _defaultTpPct) : avg * (1 - _defaultTpPct);
-  return _snapToTick(raw, ti);
-}
-
-double slTriggerFromAvg({
-  required double avg,
-  required bool isLong,
-  double ti = 0.05,
-}) {
-  final raw =
-      isLong ? avg * (1 - _defaultSlPct) : avg * (1 + _defaultSlPct);
-  return _snapToTick(raw, ti);
-}
-
-/// Builds the `arguments` map for opening `PlaceOrderScreenWeb` pre-filled
-/// to add a TP (`isTp == true`) or SL (`isTp == false`) for an existing
-/// position. Side is automatically opposite of the position. Price is
-/// snapped to the scrip's tick size so the exchange doesn't reject with
-/// "Price not a multiple of tick size".
-Map<String, dynamic> buildTpSlOrderScreenArgs({
-  required ChartScrip scrip,
-  required int qty,
-  required bool isLong,
-  required bool isTp,
-  required double avg,
-  ScripInfoModel? realScripInfo,
-}) {
-  final price = isTp
-      ? tpPriceFromAvg(avg: avg, isLong: isLong, ti: scrip.ti)
-      : slTriggerFromAvg(avg: avg, isLong: isLong, ti: scrip.ti);
-  final kind = isTp
-      ? (isLong ? OrderPrefillKind.sellLimit : OrderPrefillKind.buyLimit)
-      : (isLong ? OrderPrefillKind.sellStopMkt : OrderPrefillKind.buyStopMkt);
-  return buildOrderScreenArgs(
-    scrip: scrip,
-    qty: qty,
-    kind: kind,
-    price: price,
-    realScripInfo: realScripInfo,
-  );
-}
-
-/// Builds a typed `PlaceOrderInput` for instant-mode TP/SL placement.
-PlaceOrderInput buildTpSlPlaceOrderInput({
-  required ChartScrip scrip,
-  required int qty,
-  required bool isLong,
-  required bool isTp,
-  required double avg,
-  required Map<String, dynamic> deviceInfo,
-}) {
-  final price = isTp
-      ? tpPriceFromAvg(avg: avg, isLong: isLong, ti: scrip.ti)
-      : slTriggerFromAvg(avg: avg, isLong: isLong, ti: scrip.ti);
-  final kind = isTp
-      ? (isLong ? OrderPrefillKind.sellLimit : OrderPrefillKind.buyLimit)
-      : (isLong ? OrderPrefillKind.sellStopMkt : OrderPrefillKind.buyStopMkt);
-  return buildPlaceOrderInput(
-    scrip: scrip,
-    qty: qty,
-    kind: kind,
-    price: price,
-    deviceInfo: deviceInfo,
   );
 }

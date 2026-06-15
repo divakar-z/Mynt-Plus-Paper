@@ -645,6 +645,9 @@ mixin OrderAPI on ApiCore {
   Future<PlaceGttOrderModel> placeOCOOrderAPI(PlaceOcoOrderInput input) async {
     try {
       final uri = Uri.parse(apiLinks.placeOCOOrderURL);
+      // ai_t is LMT_BOS_O for both buy and sell OCO — confirmed against a
+      // working sell-side OCO request (the doc's "LMT_SOB_O for sell" is
+      // not what the broker actually accepts).
       Map payload = {
         "uid": prefs.clientId,
         "ai_t": "LMT_BOS_O",

@@ -1175,7 +1175,10 @@
     }
   }
 
-  let odTab = 'slTp';   // 'slTp' | 'qty' | 'product'
+  // SL/TP defaults are hidden for now (TP/SL is handled via the position
+  // OCO dialog instead). The 'slTp' render branch below is kept dormant so
+  // the tab can be re-enabled by restoring its entry in `tabSpecs`.
+  let odTab = 'qty';   // 'qty' | 'product'  (was: 'slTp' | 'qty' | 'product')
 
   function _renderOrderDefaultsTab(pop) {
     const body = pop.querySelector('.tb-od-body');
@@ -1293,7 +1296,6 @@
     const tabs = document.createElement('div');
     tabs.className = 'tb-tabs';
     const tabSpecs = [
-      { id: 'slTp',    label: 'SL / TP' },
       { id: 'qty',     label: 'Quantity' },
       { id: 'product', label: 'Product Type' },
     ];

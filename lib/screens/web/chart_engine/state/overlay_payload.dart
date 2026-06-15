@@ -1,4 +1,5 @@
 import 'package:mynt_plus/models/marketwatch_model/alert_model/alert_pending_model.dart';
+import 'package:mynt_plus/models/order_book_model/gtt_order_book.dart';
 import 'package:mynt_plus/models/order_book_model/order_book_model.dart';
 import 'package:mynt_plus/models/portfolio_model/position_book_model.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart';
@@ -52,6 +53,7 @@ List<Map<String, Object?>> overlaysForPane({
   required List<PositionBookModel> positions,
   required List<OrderBookModel> orders,
   required List<AlertPendingModel> alerts,
+  List<GttOrderBookModel> ocoOrders = const [],
 }) {
   if (scrip == null) return const [];
   final exch = scrip.exch;
@@ -198,6 +200,66 @@ List<Map<String, Object?>> overlaysForPane({
       'qty': 0,
       'price': price,
     });
+  }
+
+  // OCO brackets (GTT) for this scrip. Each OCO carries two legs:
+  //   oivariable[0] / leg1 → TARGET (TP, green dashed)
+  //   oivariable[1] / leg2 → STOP   (SL, red)
+  // Both share the same al_id so the chart can route a drag-modify to the
+  // right leg (ModifyOCOOrder) and a cancel to the whole OCO. Projected
+  // P&L is shown when the bracket sits against a matching open position.
+  for (final g in ocoOrders) {
+    if (g.exch != exch || g.token != token) continue;
+    if (g.placeOrderParamsLeg2 == null) continue; // single GTT, not an OCO
+    final alId = g.alId ?? '';
+    if (alId.isEmpty) continue;
+    final ov = g.oivariable;
+    if (ov == null || ov.length < 2) continue;
+    final tpPrice = double.tryParse(ov[0].d ?? '');
+    final slPrice = double.tryParse(ov[1].d ?? '');
+    final leg1 = g.placeOrderParams;
+    final leg2 = g.placeOrderParamsLeg2;
+    final tpTrantype = leg1?.trantype ?? g.trantype ?? '';
+    final slTrantype = leg2?.trantype ?? g.trantype ?? '';
+    final tpQtyRaw = leg1?.qty ?? g.qty ?? 0;
+    final slQtyRaw = leg2?.qty ?? 0;
+    final isBuy = tpTrantype == 'B';
+    if (tpPrice != null && tpPrice > 0) {
+      final projPnl = _projectedClosePnl(
+        positions: positions,
+        exch: exch,
+        token: token,
+        orderTrantype: tpTrantype,
+        orderQty: tpQtyRaw,
+        exitPrice: tpPrice,
+      );
+      out.add({
+        'id': 'ocoTp-$alId',
+        'kind': 'ocoTp',
+        'side': isBuy ? 'buy' : 'sell',
+        'qty': isBuy ? tpQtyRaw : -tpQtyRaw,
+        'price': tpPrice,
+        if (projPnl != null) 'projectedPnl': projPnl,
+      });
+    }
+    if (slPrice != null && slPrice > 0) {
+      final projPnl = _projectedClosePnl(
+        positions: positions,
+        exch: exch,
+        token: token,
+        orderTrantype: slTrantype,
+        orderQty: slQtyRaw,
+        exitPrice: slPrice,
+      );
+      out.add({
+        'id': 'ocoSl-$alId',
+        'kind': 'ocoSl',
+        'side': slTrantype == 'B' ? 'buy' : 'sell',
+        'qty': slTrantype == 'B' ? slQtyRaw : -slQtyRaw,
+        'price': slPrice,
+        if (projPnl != null) 'projectedPnl': projPnl,
+      });
+    }
   }
 
   return out;
