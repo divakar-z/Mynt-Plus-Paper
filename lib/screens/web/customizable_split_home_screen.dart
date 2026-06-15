@@ -2690,7 +2690,19 @@ class _CustomizableSplitHomeScreenState
                     ),
                   );
                 },
-              );
+              ).future.whenComplete(() {
+                // Backstop: the dropdown can close WITHOUT the MouseRegion's
+                // onExit firing (tapping a menu item, click-away dismiss, or
+                // Esc). When that happens the chart iframes were left at
+                // pointer-events:none by onEnter/_disableAllChartIframes and
+                // stayed unclickable until something else re-enabled them —
+                // the intermittent "can't click / hover the chart" bug.
+                // Restoring here guarantees the chart is interactive again
+                // no matter how the menu was dismissed. showDropdown returns
+                // an OverlayCompleter, whose `.future` resolves on close.
+                ChartIframeGuard.release();
+                _enableAllChartIframes();
+              });
             },
             child: Row(
               mainAxisSize: MainAxisSize.min,

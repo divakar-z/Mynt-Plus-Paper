@@ -360,6 +360,44 @@ html.light .tb-modal {
   color: var(--text-mute);
   padding: 0 14px 10px;
 }
+
+/* Keyboard-shortcuts help popover (the "?" chip). */
+.tb-help-popover { width: 290px; padding-bottom: 8px; }
+.tb-shortcuts-group {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  padding: 10px 14px 4px;
+}
+.tb-shortcuts-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 14px;
+}
+.tb-shortcuts-label {
+  font-size: 12px;
+  color: var(--text);
+  flex: 1;
+}
+.tb-kbd {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  min-width: 64px;
+  text-align: center;
+  white-space: nowrap;
+}
+html.light .tb-kbd {
+  background: #F1F5F9;
+  border-color: #E2E8F0;
+}
 .tb-popover-section-label {
   font-size: 10px;
   font-weight: 600;

@@ -131,11 +131,17 @@
   let _openWrap = null;
   let _openKeyHandler = null;
   let _openPopoverOutsideHandler = null;
+  // Anchor element that owns the currently open anchored popover. Used so
+  // clicking the SAME button again TOGGLES the popover closed instead of
+  // re-opening it (the outside-mousedown handler ignores clicks on the
+  // anchor, so without this the click handler would just rebuild it).
+  let _openAnchor = null;
   function _closeOpenPopover() {
     if (!_openPopover) return;
     (_openWrap || _openPopover).remove();
     _openPopover = null;
     _openWrap = null;
+    _openAnchor = null;
     if (_openPopoverOutsideHandler) {
       document.removeEventListener('mousedown', _openPopoverOutsideHandler, true);
       _openPopoverOutsideHandler = null;
@@ -146,7 +152,12 @@
     }
   }
   function openPopover(anchorEl, content) {
+    // Toggle: if this anchor's popover is already open, a second click
+    // closes it. Return a detached, never-inserted node so callers that
+    // chain `.classList.add(...)` on the result stay harmless no-ops.
+    const sameAnchorOpen = _openPopover != null && _openAnchor === anchorEl;
     _closeOpenPopover();
+    if (sameAnchorOpen) return document.createElement('div');
     const pop = document.createElement('div');
     pop.className = 'tb-popover';
     pop.appendChild(content);
@@ -180,6 +191,7 @@
     pop.style.top = top + 'px';
     _openPopover = pop;
     _openWrap = pop;
+    _openAnchor = anchorEl;
     _openPopoverOutsideHandler = (e) => {
       if (pop.contains(e.target) || anchorEl.contains(e.target)) return;
       _closeOpenPopover();
@@ -1017,6 +1029,124 @@
   });
   root.appendChild(settingsBtn);
 
+  // ── Keyboard shortcuts help (?) ─────────────────────────────────────────
+  // Icon-only "?" chip. On hover (or click) shows a popover listing every
+  // chart keyboard shortcut, grouped. Hover-bridge: a short close delay so
+  // moving the cursor from the button into the popover doesn't dismiss it.
+  const helpBtn = document.createElement('button');
+  helpBtn.className = 'tb-chip tb-help';
+  helpBtn.type = 'button';
+  helpBtn.title = 'Keyboard shortcuts';
+  helpBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
+      + 'fill="none" stroke="currentColor" stroke-width="2" '
+      + 'stroke-linecap="round" stroke-linejoin="round">'
+      + '<circle cx="12" cy="12" r="10"/>'
+      + '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>'
+      + '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+
+  let _helpPop = null;
+  let _helpCloseTimer = null;
+
+  function _buildShortcutsContent() {
+    const wrap = document.createElement('div');
+    wrap.className = 'tb-shortcuts';
+    const title = document.createElement('div');
+    title.className = 'tb-popover-title';
+    title.textContent = 'Keyboard shortcuts';
+    wrap.appendChild(title);
+    const sub = document.createElement('div');
+    sub.className = 'tb-popover-subtitle';
+    sub.textContent = 'Enable shortcuts in Settings to use the trading + '
+        + 'timeframe keys.';
+    wrap.appendChild(sub);
+    // [group heading] OR [keys, description]
+    const rows = [
+      ['Timeframes', null],
+      ['1', '1 minute'],
+      ['5', '5 minutes'],
+      ['Shift + 1', '15 minutes'],
+      ['H', '1 hour'],
+      ['D', '1 day'],
+      ['Trading', null],
+      ['Alt + B', 'Quick buy'],
+      ['Alt + S', 'Quick sell'],
+      ['Alt + I', 'Toggle instant orders'],
+      ['General', null],
+      ['Esc', 'Cancel drawing / clear selection'],
+    ];
+    for (const [k, desc] of rows) {
+      if (desc === null) {
+        const h = document.createElement('div');
+        h.className = 'tb-shortcuts-group';
+        h.textContent = k;
+        wrap.appendChild(h);
+        continue;
+      }
+      const row = document.createElement('div');
+      row.className = 'tb-shortcuts-row';
+      const keys = document.createElement('span');
+      keys.className = 'tb-kbd';
+      keys.textContent = k;
+      const label = document.createElement('span');
+      label.className = 'tb-shortcuts-label';
+      label.textContent = desc;
+      row.appendChild(keys);
+      row.appendChild(label);
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }
+
+  function _openHelp() {
+    if (_helpCloseTimer) { clearTimeout(_helpCloseTimer); _helpCloseTimer = null; }
+    if (_helpPop) return;
+    const pop = document.createElement('div');
+    pop.className = 'tb-popover tb-help-popover';
+    pop.appendChild(_buildShortcutsContent());
+    // Measure off-screen, then right-align to the button (it lives at the
+    // right edge of the bar) and clamp inside the viewport.
+    pop.style.left = '-9999px';
+    pop.style.top = '0';
+    document.body.appendChild(pop);
+    const rect = helpBtn.getBoundingClientRect();
+    const popW = pop.offsetWidth;
+    const popH = pop.offsetHeight;
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const margin = 8;
+    let left = rect.right - popW;
+    if (left + popW + margin > vw) left = vw - popW - margin;
+    if (left < margin) left = margin;
+    let top = rect.bottom + 4;
+    if (top + popH + margin > vh && rect.top - popH - 4 >= margin) {
+      top = rect.top - popH - 4;
+    }
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    pop.addEventListener('mouseenter', () => {
+      if (_helpCloseTimer) { clearTimeout(_helpCloseTimer); _helpCloseTimer = null; }
+    });
+    pop.addEventListener('mouseleave', _scheduleCloseHelp);
+    _helpPop = pop;
+  }
+
+  function _scheduleCloseHelp() {
+    if (_helpCloseTimer) clearTimeout(_helpCloseTimer);
+    _helpCloseTimer = setTimeout(() => {
+      if (_helpPop) { _helpPop.remove(); _helpPop = null; }
+      _helpCloseTimer = null;
+    }, 160);
+  }
+
+  helpBtn.addEventListener('mouseenter', _openHelp);
+  helpBtn.addEventListener('mouseleave', _scheduleCloseHelp);
+  // Click toggles too — covers touch + keyboard-focus users.
+  helpBtn.addEventListener('click', () => {
+    if (_helpPop) _scheduleCloseHelp();
+    else _openHelp();
+  });
+  root.appendChild(helpBtn);
+
   // ── Order Defaults button + tabbed popover ──────────────────────────────
   // Flutter pushes the full bag via `setOrderDefaults`. Each field change
   // here posts `updateOrderDefaults: {field: value}` as a partial patch;
@@ -1685,7 +1815,7 @@
   // `margin-left: auto` for the flex spacer.
   const ORDER = [
     symWrap, tfBtn, styleBtn, fxBtn, drawBtn, cursorBtn,
-    layoutBtn, badge, odBtn, snapBtn, settingsBtn,
+    layoutBtn, badge, odBtn, snapBtn, settingsBtn, helpBtn,
   ];
   // Move the right-anchor class — Layout is now the first right-group
   // button instead of the INSTANT badge.
