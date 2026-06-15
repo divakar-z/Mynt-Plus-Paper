@@ -4634,9 +4634,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 ? (_isQtyToAmount
                                                                     ? 'Amount'
                                                                     : 'Quantity')
-                                                                : (_isLotToQty
-                                                                    ? 'Quantity'
-                                                                    : 'Lot');
+                                                                : widget.scripInfo.exch == "MCX"
+                                                                    ? 'Lot'
+                                                                    : (_isLotToQty
+                                                                        ? 'Quantity'
+                                                                        : 'Lot');
                                                             _showDebouncedWarning(
                                                                 "$fieldName cannot be ${value == "0" ? '0' : 'empty'}");
                                                                 _marginUpdateDebounceTimer?.cancel();
@@ -6104,11 +6106,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       getGTTFinalQuantity(orderInput.qtyCtrl.text));
                                                                   if (orderInput.qtyCtrl.text.trim().isNotEmpty &&
                                                                       computedQty <= 0) {
+                                                                    String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
                                                                         _isStock && _isQtyToAmount
                                                                             ? "Minimum Allowed Amount should be greater than ${widget.orderArg.ltp}"
-                                                                            : "Quantity cannot be 0");
+                                                                            : "$qtyFieldName cannot be 0");
                                                                     return;
                                                                   }
                                                                   // Freeze qty cap guard — GTT has no slicing, so block any qty
@@ -6123,11 +6126,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
                                                                     if (orderInput.ocoQtyCtrl.text.trim().isNotEmpty &&
                                                                         computedOcoQty <= 0) {
+                                                                      String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           _isStock && _isQtyToAmount
                                                                               ? "Minimum Allowed Amount should be greater than ${widget.orderArg.ltp}"
-                                                                              : "Quantity cannot be 0");
+                                                                              : "OCO $ocoQtyFieldName cannot be 0");
                                                                       return;
                                                                     }
                                                                     // OCO leg freeze qty cap guard (no slicing in GTT)
@@ -6530,7 +6534,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         frezQty *
                                                                             frezQtyOrderSliceMaxLimit;
                                                                   });
-                                                                  if (getFinalQuantity(qtyCtrl.text)
+                                                                  if (qtyCtrl.text
                                                                           .trim()
                                                                           .isEmpty ||
                                                                       priceCtrl.text
@@ -6547,7 +6551,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 : "Lot");
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
-                                                                        getFinalQuantity(qtyCtrl.text).isEmpty
+                                                                        qtyCtrl.text.trim().isEmpty
                                                                             ? "$fieldName cannot be empty"
                                                                             : "Price cannot be empty");
                                                                   } else if ((getFinalQuantity(qtyCtrl.text).trim()) == "0" ||
@@ -8142,6 +8146,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
         } else if (!isSecu) {
           _showSurveillanceBottomSheet(orderInput, isSliceOrd, theme);
         } else {
+          // Capture the parent-close (sticky-gated) so the slice flow can close
+          // the Place Order window after the slices are placed successfully.
+          final sliceParentCloseNotifier =
+              _PlaceOrderDialogCloseNotifier.of(context);
+          final bool sliceStickyOrderWindow =
+              userOrderPreference['stickysrc'] == "True" ||
+                  userOrderPreference['stickysrc'] == true;
           SliceOrderSheetWeb.showAsOverlay(
             context: context,
             scripInfo: widget.scripInfo,
@@ -8161,6 +8172,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
             triggerPriceCtrl: triggerPriceCtrl,
             mktProtCtrl: mktProtCtrl,
             isBracketOrderEnabled: _isBracketOrderEnabled,
+            onParentClose: () {
+              if (!sliceStickyOrderWindow &&
+                  sliceParentCloseNotifier != null &&
+                  mounted) {
+                sliceParentCloseNotifier.onClose();
+              }
+            },
           );
         }
       }

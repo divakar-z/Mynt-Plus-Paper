@@ -1327,7 +1327,8 @@ class OrderProvider extends DefaultChangeNotifier {
       BuildContext context,
       List<PlaceOrderInput> placeOrderInputs,
       int quantity,
-      int reminder) async {
+      int reminder,
+      {VoidCallback? onWebParentClose}) async {
     try {
       _sliceOrderResults.clear();
       List<Future<PlaceOrderModel?>> orderFutures = [];
@@ -1376,6 +1377,9 @@ class OrderProvider extends DefaultChangeNotifier {
         if (kIsWeb) {
           // On web, slice order uses Overlay, so close it using the static method
           SliceOrderSheetWeb.closeOverlay();
+          // Also close the parent Place Order window (caller passes a
+          // sticky-gated callback; mobile closes it via the double pop below).
+          onWebParentClose?.call();
         } else {
           Navigator.pop(context);
           Navigator.pop(context);
