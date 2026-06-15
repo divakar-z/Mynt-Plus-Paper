@@ -103,6 +103,10 @@ class ScreenUtils {
         return 'Closure';
       case ScreenType.caBuyback:
         return 'Buyback';
+      case ScreenType.scanner:
+        return 'Scanner';
+      case ScreenType.orderflow:
+        return 'Orderflow';
     }
   }
 
@@ -207,6 +211,10 @@ class ScreenUtils {
         return Icons.cancel;
       case ScreenType.caBuyback:
         return Icons.recycling;
+      case ScreenType.scanner:
+        return Icons.radar;
+      case ScreenType.orderflow:
+        return Icons.show_chart;
     }
   }
 

@@ -14,6 +14,17 @@
 // ---------------------------------------------------------------------------
 
 (function initTopBar() {
+  // Scan-explanation lite mode — the iframe URL carries `?lite=1`. Bail
+  // immediately so we don't attach 1.6kloc of event listeners + render
+  // the search / timeframe / fx / draw / INSTANT / Order-Defaults /
+  // Snap / Settings chain on a read-only explain view. Reads the URL
+  // directly because this IIFE runs before chart-engine.js's `boot()`
+  // — any flag chart-engine.js sets at load-time isn't here yet.
+  try {
+    if (new URLSearchParams(window.location.search).get('lite') === '1') {
+      return;
+    }
+  } catch (_) {}
   const root = document.getElementById('top-bar');
   if (!root) return;
 
@@ -109,16 +120,29 @@
   }
 
   // ── Shared popover helpers ──────────────────────────────────────────────
-  // Single-open invariant: opening a new popover closes whatever was open.
+  // Single-open invariant: opening a new popover/modal closes whatever
+  // was open. `_openPopover` always points to the popover surface (the
+  // element with `.tb-popover`) so dataset lookups + paint helpers work
+  // regardless of whether it was opened anchored or as a centered modal.
+  // `_openWrap` is the actual element to remove (popover OR modal
+  // backdrop) and `_openKeyHandler` is the ESC handler attached to
+  // modals only.
   let _openPopover = null;
+  let _openWrap = null;
+  let _openKeyHandler = null;
   let _openPopoverOutsideHandler = null;
   function _closeOpenPopover() {
     if (!_openPopover) return;
-    _openPopover.remove();
+    (_openWrap || _openPopover).remove();
     _openPopover = null;
+    _openWrap = null;
     if (_openPopoverOutsideHandler) {
       document.removeEventListener('mousedown', _openPopoverOutsideHandler, true);
       _openPopoverOutsideHandler = null;
+    }
+    if (_openKeyHandler) {
+      document.removeEventListener('keydown', _openKeyHandler);
+      _openKeyHandler = null;
     }
   }
   function openPopover(anchorEl, content) {
@@ -127,15 +151,66 @@
     pop.className = 'tb-popover';
     pop.appendChild(content);
     const rect = anchorEl.getBoundingClientRect();
-    pop.style.left = rect.left + 'px';
-    pop.style.top = (rect.bottom + 4) + 'px';
+    // Append off-screen first so we can measure the popover's natural
+    // width / height, THEN clamp it inside the viewport. Wide popovers
+    // (Settings, Order Defaults) anchored to right-side buttons would
+    // otherwise overflow the right edge.
+    pop.style.left = '-9999px';
+    pop.style.top = '0';
     document.body.appendChild(pop);
+    const popW = pop.offsetWidth;
+    const popH = pop.offsetHeight;
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const margin = 8;
+    // Default: left-align with the anchor. If that would push past the
+    // right edge, right-align with the anchor instead (so the popover
+    // grows leftward from the button). Hard-clamp to viewport in case
+    // the anchor itself is wider than the popover.
+    let left = rect.left;
+    if (left + popW + margin > vw) left = rect.right - popW;
+    if (left + popW + margin > vw) left = vw - popW - margin;
+    if (left < margin) left = margin;
+    // Vertical: prefer below; flip above if it would overflow bottom.
+    let top = rect.bottom + 4;
+    if (top + popH + margin > vh && rect.top - popH - 4 >= margin) {
+      top = rect.top - popH - 4;
+    }
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
     _openPopover = pop;
+    _openWrap = pop;
     _openPopoverOutsideHandler = (e) => {
       if (pop.contains(e.target) || anchorEl.contains(e.target)) return;
       _closeOpenPopover();
     };
     document.addEventListener('mousedown', _openPopoverOutsideHandler, true);
+    return pop;
+  }
+
+  // Centered modal — for popovers that are too large to anchor to a
+  // single button without overflowing the viewport. Backdrop dims the
+  // chart, click-outside or ESC closes. Returns the popover surface
+  // (same shape as `openPopover`'s return value) so the caller's
+  // `pop.dataset.kind = ...` / re-render helpers keep working.
+  function openModal(content) {
+    _closeOpenPopover();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'tb-modal-backdrop';
+    const pop = document.createElement('div');
+    pop.className = 'tb-popover tb-modal';
+    pop.appendChild(content);
+    backdrop.appendChild(pop);
+    document.body.appendChild(backdrop);
+    backdrop.addEventListener('mousedown', (e) => {
+      if (e.target === backdrop) _closeOpenPopover();
+    });
+    _openKeyHandler = (e) => {
+      if (e.key === 'Escape') _closeOpenPopover();
+    };
+    document.addEventListener('keydown', _openKeyHandler);
+    _openPopover = pop;
+    _openWrap = backdrop;
     return pop;
   }
 
@@ -889,12 +964,11 @@
   settingsBtn.className = 'tb-chip tb-settings';
   settingsBtn.type = 'button';
   settingsBtn.title = 'Settings';
-  settingsBtn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" '
+  settingsBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
       + 'fill="none" stroke="currentColor" stroke-width="2" '
       + 'stroke-linecap="round" stroke-linejoin="round">'
       + '<circle cx="12" cy="12" r="3"/>'
-      + '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
-      + '<span>Settings</span>';
+      + '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
   settingsBtn.addEventListener('click', () => {
     const content = document.createElement('div');
@@ -933,7 +1007,10 @@
     const body = document.createElement('div');
     body.className = 'tb-settings-body';
     content.appendChild(body);
-    const pop = openPopover(settingsBtn, content);
+    // Settings is large (380px + multi-tab body) and lives at the right
+    // edge of the bar — anchoring to the button consistently overflows
+    // the viewport. Opens as a centered modal instead.
+    const pop = openModal(content);
     pop.classList.add('tb-settings-popover');
     pop.dataset.kind = 'settings';
     _renderSettingsTab(pop);
@@ -1112,7 +1189,10 @@
     body.className = 'tb-od-body';
     content.appendChild(body);
 
-    const pop = openPopover(odBtn, content);
+    // Order Defaults is also large (420px) — open as a centered modal
+    // so it doesn't overflow the right edge of the viewport. Matches
+    // the Settings behavior.
+    const pop = openModal(content);
     pop.classList.add('tb-od-popover');
     pop.dataset.kind = 'orderDefaults';
     _renderOrderDefaultsTab(pop);
@@ -1521,7 +1601,7 @@
       + 'fill="none" stroke="currentColor" stroke-width="2" '
       + 'stroke-linecap="round" stroke-linejoin="round">'
       + '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>'
-      + '<circle cx="12" cy="13" r="4"/></svg> Snap';
+      + '<circle cx="12" cy="13" r="4"/></svg>';
   snapBtn.title = 'Screenshot active pane';
   snapBtn.addEventListener('click', () => {
     const chart = (window.chartEngine && window.chartEngine.activeChart());
@@ -1594,4 +1674,22 @@
   });
 
   root.appendChild(badge);
+
+  // ── Final layout pass ───────────────────────────────────────────────────
+  // Reorder children to the canonical sequence per user spec:
+  //   [Symbol] [Timeframe] [Style] [fx] [Draw] [Cursor]
+  //       ...flex spacer...
+  //   [Layout] [INSTANT] [Order Defaults] [Snap] [Settings]
+  // `appendChild` of an existing child MOVES it (doesn't create a duplicate);
+  // the first right-group button gets `.tb-right-start` which applies
+  // `margin-left: auto` for the flex spacer.
+  const ORDER = [
+    symWrap, tfBtn, styleBtn, fxBtn, drawBtn, cursorBtn,
+    layoutBtn, badge, odBtn, snapBtn, settingsBtn,
+  ];
+  // Move the right-anchor class — Layout is now the first right-group
+  // button instead of the INSTANT badge.
+  badge.classList.remove('tb-right-start');
+  layoutBtn.classList.add('tb-right-start');
+  for (const el of ORDER) root.appendChild(el);
 })();

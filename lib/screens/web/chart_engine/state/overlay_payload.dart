@@ -185,7 +185,10 @@ List<Map<String, Object?>> overlaysForPane({
 
   for (final a in alerts) {
     if (a.exch != exch || a.token != token) continue;
-    final price = double.tryParse(a.pp ?? '');
+    // Alert target price lives in `d`. The `pp` field is "price
+    // precision" (decimal count e.g. "2") — using it here was the cause
+    // of every alert line rendering at price 2 / off-chart.
+    final price = double.tryParse(a.d ?? '');
     if (price == null || price <= 0) continue;
     final aiT = a.aiT ?? '';
     out.add({

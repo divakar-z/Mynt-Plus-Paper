@@ -56,6 +56,10 @@ function formatTrackList(arr) {
 // ---------------------------------------------------------------------------
 function applyLayout(spec) {
   const layout = document.getElementById('layout');
+  // Any layout change cancels a pane-maximize — clear state without
+  // touching the DOM (applyLayout below rebuilds the grid from scratch).
+  _maximizedPaneId = null;
+  _preMaximize = null;
 
   // Track ratios — prefer persisted ratios for this layout id if shape matches.
   const defCols = parseTrackList(spec.columns);
@@ -74,6 +78,10 @@ function applyLayout(spec) {
   layout.style.gridTemplateRows = formatTrackList(ratios.rows);
   layout.style.gridTemplateColumns = formatTrackList(ratios.columns);
   layout.style.display = 'grid';
+  // Single-pane layouts don't need the active-pane border (there's
+  // nothing to disambiguate). CSS hides the border when this class is
+  // present on the layout container.
+  layout.classList.toggle('single-pane', spec.paneCount === 1);
 
   // Determine desired pane ids ('0'..paneCount-1) and area letters.
   const desired = [];
@@ -115,7 +123,17 @@ function applyLayout(spec) {
     }
     container.style.gridArea = letter;
     if (!panes.has(id)) {
-      panes.set(id, buildChart(container, id));
+      const chart = buildChart(container, id);
+      // When the iframe was loaded with `?lite=1`, every freshly-created
+      // pane inherits lite mode. Without this guard a separate setLiteMode
+      // message could race setLayout and land before the pane existed,
+      // leaving the pane stuck with the default (false).
+      if (window.__chartLiteMode === true &&
+          typeof chart.setLiteMode === 'function') {
+        chart.setLiteMode(true);
+      }
+      panes.set(id, chart);
+      _attachPaneControls(container, id);
     }
   }
 
@@ -299,6 +317,148 @@ function applyActivePane(paneId) {
   for (const el of document.querySelectorAll('.pane')) {
     el.classList.toggle('active', el.id === 'pane-' + paneId);
   }
+}
+
+// Pane-maximize state — tracks whether one pane is currently expanded to
+// fill the whole grid (and what to restore to on toggle-off).
+let _maximizedPaneId = null;
+let _preMaximize = null;
+
+function _restoreMaximize() {
+  if (_maximizedPaneId == null || !_preMaximize) return;
+  const layout = document.getElementById('layout');
+  if (layout) {
+    layout.style.gridTemplateAreas = _preMaximize.areas;
+    layout.style.gridTemplateRows = _preMaximize.rows;
+    layout.style.gridTemplateColumns = _preMaximize.columns;
+  }
+  for (const el of document.querySelectorAll('.pane')) {
+    el.style.display = '';
+  }
+  for (const sp of _splitters) {
+    if (sp.el) sp.el.style.display = '';
+  }
+  _maximizedPaneId = null;
+  _preMaximize = null;
+}
+
+function _maximizePane(paneId) {
+  // Toggle off when clicked on the same maximized pane.
+  if (_maximizedPaneId === paneId) return _restoreMaximize();
+  // Switching maximize from another pane → restore first, then maximize this.
+  if (_maximizedPaneId != null) _restoreMaximize();
+  const layout = document.getElementById('layout');
+  const target = document.getElementById('pane-' + paneId);
+  if (!layout || !target) return;
+  // Single-pane layout — nothing to maximize from / to. No-op.
+  if (panes.size <= 1) return;
+  _preMaximize = {
+    areas: layout.style.gridTemplateAreas,
+    rows: layout.style.gridTemplateRows,
+    columns: layout.style.gridTemplateColumns,
+  };
+  const targetArea = target.style.gridArea || 'a';
+  layout.style.gridTemplateAreas = '"' + targetArea + '"';
+  layout.style.gridTemplateRows = '1fr';
+  layout.style.gridTemplateColumns = '1fr';
+  for (const el of document.querySelectorAll('.pane')) {
+    if (el !== target) el.style.display = 'none';
+  }
+  // Splitters reference now-hidden panes — hide them too.
+  for (const sp of _splitters) {
+    if (sp.el) sp.el.style.display = 'none';
+  }
+  _maximizedPaneId = paneId;
+}
+
+// Float-anchored zoom/pan/maximize/reset controls — bottom-center of
+// each pane. Mirrors TradingView's button bar (− + ⛶ ‹ › ↻). Replaces
+// the chart's double-click "reset main view" gesture (now handled by ↻).
+function _attachPaneControls(container, paneId) {
+  const bar = document.createElement('div');
+  bar.className = 'pane-ctrl';
+  const mk = (svg, title, handler) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pane-ctrl-btn';
+    b.title = title;
+    b.innerHTML = svg;
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handler();
+    });
+    return b;
+  };
+  const chartCall = (method) => () => {
+    const chart = panes.get(paneId);
+    if (chart && typeof chart[method] === 'function') chart[method]();
+  };
+  // Stroke-only SVG icons, sized for the 22px buttons.
+  const ICONS = {
+    minus: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
+        + '<line x1="3" y1="8" x2="13" y2="8"/></svg>',
+    plus: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
+        + '<line x1="3" y1="8" x2="13" y2="8"/>'
+        + '<line x1="8" y1="3" x2="8" y2="13"/></svg>',
+    fit: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+        + 'stroke-linejoin="round">'
+        + '<polyline points="3 6 3 3 6 3"/>'
+        + '<polyline points="10 3 13 3 13 6"/>'
+        + '<polyline points="13 10 13 13 10 13"/>'
+        + '<polyline points="6 13 3 13 3 10"/></svg>',
+    left: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+        + 'stroke-linejoin="round"><polyline points="10 3 5 8 10 13"/></svg>',
+    right: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+        + 'stroke-linejoin="round"><polyline points="6 3 11 8 6 13"/></svg>',
+    reset: '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+        + 'stroke-linejoin="round">'
+        + '<path d="M3 8a5 5 0 1 0 1.5-3.5"/>'
+        + '<polyline points="3 3 3 5 5 5"/></svg>',
+  };
+  bar.appendChild(mk(ICONS.minus, 'Zoom out',          chartCall('zoomOut')));
+  bar.appendChild(mk(ICONS.plus,  'Zoom in',           chartCall('zoomIn')));
+  bar.appendChild(mk(ICONS.fit,   'Maximize / restore pane',
+                                                       () => _maximizePane(paneId)));
+  bar.appendChild(mk(ICONS.left,  'Pan left',          chartCall('panLeft')));
+  bar.appendChild(mk(ICONS.right, 'Pan right',         chartCall('panRight')));
+  bar.appendChild(mk(ICONS.reset, 'Reset view',        chartCall('resetView')));
+  container.appendChild(bar);
+
+  // Proximity-based reveal. Show the bar only when the cursor is inside
+  // a small trigger zone around its anchor (bottom-center of the main
+  // candle area). Whole-pane hover would be too noisy — the user wants
+  // the bar to stay out of sight while they're reading the chart.
+  // Trigger zone: width 280px, height 90px, centered on the bar.
+  let _visible = false;
+  const TRIGGER_W = 280;
+  const TRIGGER_H = 90;
+  function _setVisible(v) {
+    if (v === _visible) return;
+    _visible = v;
+    bar.classList.toggle('visible', v);
+  }
+  container.addEventListener('mousemove', (e) => {
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    // Bar's anchor: horizontally centered, vertically `subH + 50` from
+    // bottom (matches the CSS — bar lifts off the X-axis labels).
+    const subH = parseFloat(
+        getComputedStyle(container).getPropertyValue('--main-chart-bottom')
+    ) || 0;
+    const anchorX = rect.width / 2;
+    const anchorY = rect.height - subH - 50;
+    const inside = Math.abs(x - anchorX) <= TRIGGER_W / 2 &&
+        Math.abs(y - anchorY) <= TRIGGER_H / 2;
+    _setVisible(inside);
+  });
+  container.addEventListener('mouseleave', () => _setVisible(false));
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +722,30 @@ function handleMessage(d) {
       }
       break;
     }
+    case 'setLiteMode': {
+      const v = (d.value && d.value.value) === true;
+      for (const chart of panes.values()) {
+        if (typeof chart.setLiteMode === 'function') chart.setLiteMode(v);
+      }
+      break;
+    }
+    case 'setExplanationData': {
+      const { paneId, bars, indicators, matched, columns, ticker, displayName } =
+          d.value || {};
+      if (typeof paneId !== 'string' || !Array.isArray(bars)) return;
+      const chart = panes.get(paneId);
+      if (chart && typeof chart.setExplanationData === 'function') {
+        chart.setExplanationData({
+          bars,
+          indicators: indicators || {},
+          matched: Array.isArray(matched) ? matched : [],
+          columns: Array.isArray(columns) ? columns : [],
+          ticker: typeof ticker === 'string' ? ticker : '',
+          displayName: typeof displayName === 'string' ? displayName : '',
+        });
+      }
+      break;
+    }
     default:
       // Unknown message types are silently ignored (forward-compat with later phases).
       break;
@@ -571,6 +755,20 @@ function handleMessage(d) {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+// Scan-explanation lite mode: `?lite=1` in the iframe URL hides the HTML
+// top bar entirely and flags the body. Runs at module top so the bar is
+// hidden BEFORE topbar.js's IIFE (which still attaches DOM unless its
+// own URL-param check has fired by then — defense in depth).
+try {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('lite') === '1') {
+    window.__chartLiteMode = true;
+    document.body.classList.add('chart-lite');
+    const tb = document.getElementById('top-bar');
+    if (tb) tb.style.display = 'none';
+  }
+} catch (_) {}
+
 function boot() {
   applyTheme(THEME);
   // No default pane — wait for the first setLayout from Flutter.

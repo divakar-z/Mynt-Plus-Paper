@@ -71,42 +71,73 @@ html, body {
    nearly empty — controls are appended by topbar.js (and per-control
    modules) only when their feature flag is on. Hidden entirely when
    empty so the chart owns the full height in pre-migration mode. */
+/* Top bar. Pinned at iframe top, mirrors the host website's surface so
+   the chart UI doesn't look like a foreign patch dropped onto the app.
+   Light mode goes pure white to match the parent screen; dark mode uses
+   the chart's slate background so OLED screens still feel cohesive. */
 #top-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 4px;
+  padding: 0 10px;
   min-height: 0;
   background: var(--bg);
   border-bottom: 1px solid var(--card-border);
   overflow: visible;
+}
+html.light #top-bar {
+  background: #FFFFFF;
+  border-bottom: 1px solid #E2E8F0;
 }
 #top-bar:empty {
   display: none;
   border-bottom: 0;
 }
 #top-bar:not(:empty) {
-  height: 40px;
+  height: 44px;
 }
 
+/* Right-group anchor — flex auto-margin pushes everything after it
+   to the right edge, separating the chart-control group from the
+   trade-control group. */
+.tb-right-start {
+  margin-left: auto;
+}
+
+/* Base button — bumped to 28px height + 12px horizontal padding for a
+   more confident hit target that matches TradingView's button scale. */
 .tb-chip {
-  height: 24px;
+  height: 28px;
   padding: 0 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   color: var(--text-soft);
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   user-select: none;
-  transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+/* Light-mode buttons go pure white with a slate-200 border so they
+   read as clean tappable surfaces against the white top bar — the
+   "patchy gray" look in slate-100 (the var --card-bg default) was the
+   biggest visual mismatch with the parent screen. */
+html.light .tb-chip {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+  color: #475569;
+}
+html.light .tb-chip:hover {
+  background: #F8FAFC;
+  border-color: #CBD5E1;
+  color: #0F172A;
 }
 /* `cursor: crosshair` on .pane bleeds into the popover when the popover
    visually overlays the chart canvas. Force the default arrow on the
@@ -121,29 +152,38 @@ html, body {
 .tb-chip:hover {
   color: var(--text);
   border-color: var(--text-mute);
+  background: var(--grid-soft);
 }
 .tb-chip:active { transform: translateY(0.5px); }
 .tb-chip:disabled { opacity: 0.6; cursor: default; }
 
 /* INSTANT badge. Default state is a subtle "off" chip; when on, fills with
    amber to match the existing Flutter widget's color so the migration is
-   visually transparent. */
+   visually transparent. Selectors are double-classed so they outweigh the
+   `html.light .tb-chip` light-mode override (otherwise the amber fill
+   would be overwritten back to white). */
 .tb-instant { letter-spacing: 0.06em; }
 .tb-instant-icon { font-size: 12px; line-height: 1; }
-.tb-instant--on {
+.tb-chip.tb-instant--on,
+html.light .tb-chip.tb-instant--on {
   background: #F59E0B;
   border-color: #F59E0B;
   color: #FFFFFF;
 }
-.tb-instant--on:hover {
+.tb-chip.tb-instant--on:hover,
+html.light .tb-chip.tb-instant--on:hover {
   background: #D97706;
   border-color: #D97706;
   color: #FFFFFF;
 }
 
-/* Layout picker — icon-only chip with the current layout glyph. The glyph
-   is canvas-painted so it matches the Flutter implementation pixel-for-pixel. */
-.tb-layout {
+/* Square icon-only chips — Layout picker, Snap, Settings.
+   Shared shape: 28×28, no inner padding, centred glyph. The visible
+   icons inherit `currentColor` so they automatically follow the
+   button's text-colour transitions on hover / active. */
+.tb-layout,
+.tb-snap,
+.tb-settings {
   width: 28px;
   padding: 0;
   justify-content: center;
@@ -165,8 +205,39 @@ html, body {
   z-index: 1000;
   padding: 8px 6px;
 }
+/* Light-mode popovers also go pure white to match the buttons +
+   parent screen — keeps the surface chrome consistent across the
+   entire chart UI. */
 html.light .tb-popover {
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
+}
+
+/* Centered-modal variant of `.tb-popover`. Used for popovers too large
+   to anchor cleanly to a single button (Settings, today). The backdrop
+   dims the chart and traps the click — outside-click or ESC closes. */
+.tb-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+html.light .tb-modal-backdrop {
+  background: rgba(15, 23, 42, 0.45);
+}
+.tb-modal {
+  position: relative;        /* override .tb-popover absolute positioning */
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+html.light .tb-modal {
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.20);
 }
 .tb-layout-popover { width: 280px; }
 .tb-layout-row {
@@ -704,6 +775,13 @@ html.light .tb-popover {
   outline: none;
   transition: border-color 80ms ease;
 }
+html.light .tb-sym-input {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+}
+html.light .tb-sym-input:focus {
+  border-color: var(--accent);
+}
 .tb-sym-input::placeholder {
   color: var(--text-mute);
   font-weight: 400;
@@ -796,6 +874,78 @@ html.light .tb-popover {
 }
 .pane.active::after {
   border: 2px solid var(--accent);
+}
+/* Single-pane layouts: the active border is meaningless (there's only one
+   pane to ever be active) — drop it so the chart edge sits cleanly. */
+#layout.single-pane .pane.active::after {
+  border: 1px solid transparent;
+}
+
+/* Floating pane-control bar — bottom-CENTER of the main candle area.
+   Stays above any sub-panes via the `--main-chart-bottom` CSS var that
+   chart.js updates from `_subPaneTotalH`. Hidden by default; revealed
+   when the cursor is near the bar (JS-managed `.visible` class via
+   chart-engine.js's mousemove proximity check). */
+.pane-ctrl {
+  position: absolute;
+  left: 50%;
+  /* Lifted off the X-axis labels — sits a comfortable distance above
+     them rather than touching, matching TradingView's resting height. */
+  bottom: calc(var(--main-chart-bottom, 0px) + 50px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 6;
+  user-select: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+.pane-ctrl.visible,
+.pane-ctrl:hover {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pane-ctrl-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 6px;
+  color: #475569;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  transition: color 100ms ease, border-color 100ms ease,
+              background 100ms ease, box-shadow 100ms ease;
+}
+.pane-ctrl-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: #F8FAFC;
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.18);
+}
+.pane-ctrl-btn:active {
+  transform: translateY(0.5px);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+/* Dark-mode override — keep the same white-on-floating-shadow feel but
+   tinted for OLED comfort. Buttons still read as a distinct cluster
+   against the chart's dark canvas. */
+html:not(.light) .pane-ctrl-btn {
+  background: #1F2937;
+  border-color: #374151;
+  color: #CBD5E1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.30);
+}
+html:not(.light) .pane-ctrl-btn:hover {
+  background: #111827;
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.30);
 }
 .pane.dragging { cursor: grabbing; }
 .pane.zoom-y { cursor: ns-resize; }

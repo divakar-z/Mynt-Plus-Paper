@@ -59,7 +59,12 @@ class _OiTokenInfo {
 /// `/chart-engine/index.html` and bridges Flutter state ↔ iframe via
 /// postMessage. Mirrors the proven patterns from `OrderflowShellScreen`.
 class ChartEngineShellScreen extends ConsumerStatefulWidget {
-  const ChartEngineShellScreen({super.key});
+  /// When true, the Flutter top-bar row is skipped — the iframe's own
+  /// HTML/JS top bar (Symbol search, Timeframe, INSTANT, indicators, etc.)
+  /// owns all controls. Used by `EmbeddedChartView` to drop the now-empty
+  /// Flutter chrome inside the symbol details screen.
+  final bool embedded;
+  const ChartEngineShellScreen({super.key, this.embedded = false});
 
   @override
   ConsumerState<ChartEngineShellScreen> createState() =>
@@ -220,6 +225,18 @@ class _ChartEngineShellScreenState
     }
     _wsStreamSub?.cancel();
     _wsStreamSub = null;
+    // Flutter Web's HtmlElementView occasionally leaves the iframe
+    // element in the DOM after the widget unmounts — a "ghost" iframe
+    // that keeps intercepting pointer events. When this shell is used
+    // as the embedded chart inside the details screen and the user
+    // toggles back to TradingView, that ghost iframe sits on top of
+    // the TradingView portal and makes it look unresponsive. Force-
+    // remove the element on dispose to kill that hit region.
+    try {
+      final el = html.document.getElementById(_iframeId);
+      el?.remove();
+    } catch (_) {}
+    _iframe = null;
     super.dispose();
   }
 
@@ -1778,6 +1795,19 @@ class _ChartEngineShellScreenState
       final tradable = info.nontrd != '1';
       _tradableCache[key] = tradable;
       _pushTradable(paneIndex, key, tradable);
+      // Backfill lot size + tick size. Several entry paths (EmbeddedChartView,
+      // raw search picks, some watchlist rows missing `ls`) land with the
+      // conservative ls=1/ti=0.05 defaults; without this the qty stays
+      // at 1 even for option/future contracts.
+      final lotSize = int.tryParse(info.ls ?? '');
+      final tickSize = double.tryParse(info.ti ?? '');
+      if ((lotSize != null && lotSize > 0) ||
+          (tickSize != null && tickSize > 0)) {
+        ref
+            .read(chartEngineSessionProvider.notifier)
+            .backfillPaneScripMetadata(paneIndex,
+                ls: lotSize, ti: tickSize);
+      }
     }).catchError((_) {});
   }
 
@@ -2629,7 +2659,12 @@ class _ChartEngineShellScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ChartEngineTopBar(onPopupVisibilityChanged: _setIframePointerEvents),
+          // The Flutter top-bar is now mostly empty (all its controls
+          // migrated to the iframe's HTML top bar). Skipped in embedded
+          // mode so the symbol details screen doesn't carry a dead strip.
+          if (!widget.embedded)
+            ChartEngineTopBar(
+                onPopupVisibilityChanged: _setIframePointerEvents),
           Expanded(
             child: MouseRegion(
               opaque: false,

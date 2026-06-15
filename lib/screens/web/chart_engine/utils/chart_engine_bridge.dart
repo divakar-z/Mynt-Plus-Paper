@@ -303,3 +303,38 @@ String encodeSetActivePaneSymbol(Map<String, dynamic>? scrip) =>
       'type': 'setActivePaneSymbol',
       'value': {'scrip': scrip},
     });
+
+/// Toggles the chart's "lite" mode for the explain view. In lite mode the
+/// JS engine suppresses click handlers tied to ordering (plus button, bid /
+/// ask click, qty chip) — the explain view is read-only.
+String encodeSetLiteMode(bool value) => jsonEncode({
+      'type': 'setLiteMode',
+      'value': {'value': value},
+    });
+
+/// Hands the chart a pre-baked scan-explanation payload: bars, per-bar
+/// boolean match mask, server-computed indicator series, and column
+/// metadata (sub-panel placement + color hints). The chart renders these
+/// directly without going through the normal data subscription or local
+/// indicator pipeline.
+String encodeSetExplanationData({
+  required String paneId,
+  required List<Map<String, dynamic>> bars,
+  required Map<String, List<double?>> indicators,
+  required List<bool> matched,
+  required List<Map<String, dynamic>> columns,
+  required String ticker,
+  String? displayName,
+}) =>
+    jsonEncode({
+      'type': 'setExplanationData',
+      'value': {
+        'paneId': paneId,
+        'bars': bars,
+        'indicators': indicators,
+        'matched': matched,
+        'columns': columns,
+        'ticker': ticker,
+        if (displayName != null) 'displayName': displayName,
+      },
+    });

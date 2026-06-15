@@ -26,6 +26,8 @@ class NavigationDrawerWeb extends StatelessWidget {
   final VoidCallback? onOptionFlashTap;
   final VoidCallback? onScalperTap;
   final VoidCallback? onStrategyBuilderTap;
+  final VoidCallback? onScannerTap;
+  final VoidCallback? onOrderflowTap;
   final VoidCallback? onChartsTap;
   final VoidCallback? onClose;
 
@@ -42,6 +44,8 @@ class NavigationDrawerWeb extends StatelessWidget {
   final bool? showOptionFlash;
   final bool? showScalper;
   final bool? showStrategyBuilder;
+  final bool? showScanner;
+  final bool? showOrderflow;
   final bool? showCharts;
 
   const NavigationDrawerWeb({
@@ -64,6 +68,8 @@ class NavigationDrawerWeb extends StatelessWidget {
     this.onOptionFlashTap,
     this.onScalperTap,
     this.onStrategyBuilderTap,
+    this.onScannerTap,
+    this.onOrderflowTap,
     this.onChartsTap,
     this.onClose,
     this.showHome,
@@ -78,6 +84,8 @@ class NavigationDrawerWeb extends StatelessWidget {
     this.showOptionFlash,
     this.showScalper,
     this.showStrategyBuilder,
+    this.showScanner,
+    this.showOrderflow,
     this.showCharts,
   });
 
@@ -159,7 +167,7 @@ class NavigationDrawerWeb extends StatelessWidget {
                     ),
 
                   // TRADE section - show if any TRADE item is visible
-                  if ((showPositions ?? true) || (showHoldings ?? true) || (showOrders ?? true) || (showFunds ?? true) || (showOptionZ ?? (onOptionZTap != null)) || (showOptionFlash ?? (onOptionFlashTap != null)) || (showScalper ?? (onScalperTap != null)) || (showStrategyBuilder ?? (onStrategyBuilderTap != null)) || (showCharts ?? (onChartsTap != null)))
+                  if ((showPositions ?? true) || (showHoldings ?? true) || (showOrders ?? true) || (showFunds ?? true) || (showOptionZ ?? (onOptionZTap != null)) || (showOptionFlash ?? (onOptionFlashTap != null)) || (showScalper ?? (onScalperTap != null)) || (showStrategyBuilder ?? (onStrategyBuilderTap != null)) || (showScanner ?? (onScannerTap != null)) || (showOrderflow ?? (onOrderflowTap != null)) || (showCharts ?? (onChartsTap != null)))
                     _buildSectionHeader(context, 'TRADE'),
                   if (showPositions ?? true)
                     _buildDrawerItem(
@@ -226,6 +234,22 @@ class NavigationDrawerWeb extends StatelessWidget {
                       screenName: 'strategyBuilder',
                       badge: 'NEW',
                       onTap: onStrategyBuilderTap!,
+                    ),
+                  if ((showScanner ?? (onScannerTap != null)) && onScannerTap != null)
+                    _buildDrawerItem(
+                      context: context,
+                      title: 'Scanner',
+                      icon: shadcn.LucideIcons.radar,
+                      screenName: 'scanner',
+                      onTap: onScannerTap!,
+                    ),
+                  if ((showOrderflow ?? (onOrderflowTap != null)) && onOrderflowTap != null)
+                    _buildDrawerItem(
+                      context: context,
+                      title: 'Orderflow',
+                      icon: shadcn.LucideIcons.activity,
+                      screenName: 'orderflow',
+                      onTap: onOrderflowTap!,
                     ),
                   if ((showCharts ?? (onChartsTap != null)) && onChartsTap != null)
                     _buildDrawerItem(

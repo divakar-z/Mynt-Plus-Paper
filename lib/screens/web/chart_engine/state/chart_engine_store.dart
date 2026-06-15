@@ -177,6 +177,25 @@ class ChartScrip {
         ti: (j['ti'] as num?)?.toDouble() ?? 0.05,
         instname: j['instname'] as String? ?? '',
       );
+
+  ChartScrip copyWith({
+    String? exch,
+    String? token,
+    String? tsym,
+    String? dispName,
+    int? ls,
+    double? ti,
+    String? instname,
+  }) =>
+      ChartScrip(
+        exch: exch ?? this.exch,
+        token: token ?? this.token,
+        tsym: tsym ?? this.tsym,
+        dispName: dispName ?? this.dispName,
+        ls: ls ?? this.ls,
+        ti: ti ?? this.ti,
+        instname: instname ?? this.instname,
+      );
 }
 
 /// User-toggleable chart overlays for a pane. All default to on.
@@ -724,6 +743,58 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
     } catch (_) {
       // Persistence is best-effort; never block the UI.
     }
+  }
+
+  /// Backfills the pane's scrip metadata (`ls`, `ti`) when the broker's
+  /// GetSecurityInfo response lands AFTER `setPaneSymbol`. Some entry
+  /// paths (EmbeddedChartView's `DepthInputArgs`, raw search picks, …)
+  /// don't carry lot size, so the scrip lands with the conservative
+  /// `ls=1`/`ti=0.05` defaults — qty then collapses to 1 even for
+  /// option/future contracts. When the real values arrive, this method
+  /// patches the scrip and re-runs the family-aware qty computation so
+  /// the user sees correct lot-multiplied qty within the API's round-trip.
+  void backfillPaneScripMetadata(int index, {int? ls, double? ti}) {
+    if (index < 0 || index >= state.panes.length) return;
+    final pane = state.panes[index];
+    final scrip = pane.scrip;
+    if (scrip == null) return;
+    final newLs = (ls != null && ls > 0) ? ls : scrip.ls;
+    final newTi = (ti != null && ti > 0) ? ti : scrip.ti;
+    if (newLs == scrip.ls && newTi == scrip.ti) return;
+    // Recompute qty only when ls changed AND the current qty matches the
+    // initial computation for the OLD ls (i.e. the user hasn't manually
+    // tweaked qty since). Avoids stomping user edits.
+    final defaults = ref.read(orderDefaultsProvider);
+    final instname = scrip.instname.toUpperCase();
+    final isOption = instname.startsWith('OPT') ||
+        parseOptionTsym(scrip.tsym) != null;
+    final isFuture = instname.startsWith('FUT') ||
+        (!isOption && newLs > 1);
+    int? nextQty;
+    if (newLs != scrip.ls) {
+      final oldLs = scrip.ls > 0 ? scrip.ls : 1;
+      final oldExpectedQty = isOption
+          ? defaults.optionsDefaultQty * oldLs
+          : isFuture
+              ? defaults.futuresDefaultQty * oldLs
+              : defaults.equityDefaultQty;
+      if (pane.qty == oldExpectedQty || pane.qty == oldLs) {
+        nextQty = isOption
+            ? defaults.optionsDefaultQty * newLs
+            : isFuture
+                ? defaults.futuresDefaultQty * newLs
+                : defaults.equityDefaultQty;
+        if (nextQty <= 0) nextQty = newLs;
+      }
+    }
+    final patched = scrip.copyWith(ls: newLs, ti: newTi);
+    state = state.copyWithPane(
+        index,
+        pane.copyWith(
+          scrip: patched,
+          qty: nextQty ?? pane.qty,
+        ));
+    _schedulePersist();
   }
 
   void setPaneSymbol(int index, ChartScrip scrip) {

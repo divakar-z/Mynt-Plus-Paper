@@ -423,4 +423,12 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get mfbasketanalysis => "$dashBoardURL/mfbasket/collections/portfolio_store";
   String get mfbaskbacktest => "$dashBoardURL/mfbasket/collections/portfolio_analysis";
 
+  // ===========================================================================
+  // StockScanner (read-only stock research backend — FastAPI)
+  // TODO: Swap to prod URL when StockScanner backend is hosted publicly.
+  //       Assumes PUBLIC_READ_MODE=true on the backend (no API key required).
+  // ===========================================================================
+  String get stockScannerBaseURL => 'https://agg.zebuetrade.com/scanner';
+  String get stockScannerApi => '$stockScannerBaseURL/api/v1';
+
 }

@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../models/scanner_model/scan_explain.dart' show ExplainKey, ExplainScope;
 import '../screens/web/customizable_split_home_screen.dart';
+// ScannerSubPage is re-exported via the import above (no separate file).
 import '../screens/splash_screen.dart';
 import '../screens/web/authentication/login/login_web.dart';
 import '../screens/web/oauth/oauth_login_screen.dart';
@@ -52,6 +54,18 @@ class WebRoutes {
   static const String notification = '/notification';
   static const String oauthAuthorize = '/OAuthlogin/authorize/oauth';
   static const String dailyPnl = '/dailypnl';
+  static const String scanner = '/scanner';
+  static const String scannerSymbols = '/scanner/symbols';
+  static const String scannerScanners = '/scanner/scanners';
+  static const String scannerFundamentals = '/scanner/fundamentals';
+  static const String scannerCustom = '/scanner/custom';
+  /// Scan-explanation deep links. `:code` is the built-in scanner code
+  /// (`RSI14_OVERSOLD` etc.); `:cid` is the saved custom scan numeric id.
+  static const String scannerExplainBuiltin =
+      '/scanner/explain/builtin/:code/:ticker';
+  static const String scannerExplainCustom =
+      '/scanner/explain/custom/:cid/:ticker';
+  static const String orderflow = '/orderflow';
 }
 
 /// Global GoRouter instance for web
@@ -294,6 +308,82 @@ void initializeWebRouter() {
             digilockerState: stateParam,
           );
         },
+      ),
+
+      // Scanner shell + 4 sub-page deep links
+      GoRoute(
+        path: WebRoutes.scanner,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerSymbols,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.symbols,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerScanners,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.scanners,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerFundamentals,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.fundamentals,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerCustom,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.customScans,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerExplainBuiltin,
+        builder: (context, state) {
+          final code = state.pathParameters['code'] ?? '';
+          final ticker = state.pathParameters['ticker'] ?? '';
+          return CustomizableSplitHomeScreen(
+            initialRightPanel: ScreenTypeParam.scanner,
+            initialScannerSubPage: ScannerSubPage.scanners,
+            initialExplainArgs: ExplainKey(
+              scope: ExplainScope.builtin,
+              id: code,
+              ticker: ticker,
+            ),
+          );
+        },
+      ),
+      GoRoute(
+        path: WebRoutes.scannerExplainCustom,
+        builder: (context, state) {
+          final cid = state.pathParameters['cid'] ?? '';
+          final ticker = state.pathParameters['ticker'] ?? '';
+          return CustomizableSplitHomeScreen(
+            initialRightPanel: ScreenTypeParam.scanner,
+            initialScannerSubPage: ScannerSubPage.customScans,
+            initialExplainArgs: ExplainKey(
+              scope: ExplainScope.custom,
+              id: cid,
+              ticker: ticker,
+            ),
+          );
+        },
+      ),
+
+      // Orderflow footprint chart
+      GoRoute(
+        path: WebRoutes.orderflow,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.orderflow,
+        ),
       ),
     ],
 

@@ -9,7 +9,9 @@ import 'package:mynt_plus/provider/user_profile_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/screens/web/chart/web_chart_manager.dart';
 import 'package:mynt_plus/screens/web/market_watch/scrip_depth_info_web.dart';
+import 'package:mynt_plus/screens/web/market_watch/state/trade_from_chart_mode_provider.dart';
 import 'package:mynt_plus/screens/web/market_watch/tv_chart/webview_chart.dart';
+import 'package:mynt_plus/screens/web/market_watch/widgets/embedded_chart_view.dart';
 import 'package:mynt_plus/screens/web/market_watch/options/option_chain_ss_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/search_dialog_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/set_alert_web.dart';
@@ -618,7 +620,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             ),
                             const SizedBox(width: 8),
                           ],
-                          // Sidebar toggle icon
+                          // Sidebar toggle icon — always visible. The depth
+                          // panel is user-controlled and stays open/closed
+                          // independent of the Trade-from-Chart mode.
                           Material(
                             color: Colors.transparent,
                             child: InkWell(
@@ -1150,6 +1154,19 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     }
 
     // Overview (index 0) and Chart (index 1) tabs - show chart via persistent portal
+    // UNLESS the user has toggled "Trade from Chart" on, in which case the
+    // in-house chart engine replaces the TradingView portal here.
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider);
+    if (tradeFromChart) {
+      // Hide the TradingView portal so it doesn't bleed through behind the
+      // embedded iframe. The portal stays mounted (its state persists) —
+      // we just flip its visibility flag.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(userProfileProvider).hideInlineChart();
+      });
+      return EmbeddedChartView(wlValue: widget.wlValue);
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         // Set up the portal target and update symbol
@@ -1194,6 +1211,14 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final theme = shadcn.Theme.of(context);
     final isDark = isDarkMode(context);
 
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    // The Trade from Chart pill only makes sense when the chart area is
+    // actually visible — Overview (0) and Chart (1) tabs. Hidden on
+    // Options / Stock Report tabs where the chart isn't shown.
+    final showTradeFromChartPill =
+        _selectedTabIndex == 0 || _selectedTabIndex == 1;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1235,6 +1260,64 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
             ),
           ),
           if (index < tabs.length - 1) const SizedBox(width: 8),
+        ],
+        // "Trade from Chart" toggle pill — swaps the chart area between
+        // the TradingView portal (OFF, default) and our in-house chart
+        // engine (ON). Persisted via SharedPreferences per session. Only
+        // visible on Overview/Chart tabs (chart-bearing tabs).
+        if (showTradeFromChartPill) ...[
+        const SizedBox(width: 16),
+        MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () =>
+                ref.read(tradeFromChartModeProvider.notifier).toggle(),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: tradeFromChart
+                    ? accent
+                    : (isDark
+                        ? Colors.white.withValues(alpha: 0.06)
+                        : Colors.black.withValues(alpha: 0.04)),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: tradeFromChart
+                      ? accent
+                      : (isDark
+                          ? Colors.white.withValues(alpha: 0.12)
+                          : Colors.black.withValues(alpha: 0.08)),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.candlestick_chart,
+                    size: 14,
+                    color: tradeFromChart
+                        ? Colors.white
+                        : theme.colorScheme.mutedForeground,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Trade from Chart',
+                    style: MyntWebTextStyles.body(
+                      context,
+                      fontWeight: MyntFonts.semiBold,
+                    ).copyWith(
+                      color: tradeFromChart
+                          ? Colors.white
+                          : theme.colorScheme.mutedForeground,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
         ],
       ],
     );

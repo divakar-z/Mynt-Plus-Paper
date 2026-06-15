@@ -98,6 +98,12 @@ class Chart {
     // still render under the cursor. Lets the user keep the value readout
     // without the visual clutter of full-span lines.
     this.showCrosshairLines = true;
+    // Scan-explanation lite mode + payload. When `_liteMode` is true the
+    // chart suppresses order/depth click dispatches (no plus, no bid/ask
+    // tap-to-place). When `_explainPayload` is set, the render loop also
+    // paints matched-bar shading and server-supplied indicator series.
+    this._liteMode = false;
+    this._explainPayload = null;
     this._oiData = []; // [{strike, callOi, putOi, callOiChgPct, putOiChgPct}]
     // 1Hz redraw so the countdown text updates each second without ticks.
     // Created on demand; toggled by _updateSecondTimer.
@@ -210,15 +216,24 @@ class Chart {
     this._activeMeasure = null; // { kind, color, points: [{price, ts}] }
     this._drawingHits = [];         // [{ rect, drawingId, action: 'delete'|'drag', kind }]
     this._indicatorChipHits = [];   // [{ rect, indicatorId, action: 'toggleHide'|'delete' }]
+    // Full-row rects for each indicator chip — used to (a) keep the row
+    // icons visible while the cursor is anywhere over the row (the cursor
+    // moving onto an icon shouldn't blink the icons out), and (b)
+    // suppress the chart crosshair when over any chip area.
+    this._indicatorRowRects = []; // [{ rect, indicatorId }]
+    this._hoveredIndicatorRowId = null;
     // Collapse state for the indicator chip stack — persisted per pane id.
     // When collapsed only the header chip is shown so the chart area isn't
     // eaten by a tall column of chips when many indicators are active.
     try {
-      this._indicatorChipsCollapsed =
-          window.localStorage.getItem('chartEngineIndChipsCollapsed_' + paneId)
-              === '1';
+      // Default collapsed — matches TradingView UX. A single tiny "˅ N"
+      // button stays out of the way; click expands to the full list.
+      // Persisted per pane so the user's choice sticks.
+      const raw = window.localStorage
+          .getItem('chartEngineIndChipsCollapsed_' + paneId);
+      this._indicatorChipsCollapsed = raw == null ? true : raw === '1';
     } catch (_) {
-      this._indicatorChipsCollapsed = false;
+      this._indicatorChipsCollapsed = true;
     }
 
     // Phase 10 — selection + drag-to-move + color swatch palette.
@@ -360,6 +375,142 @@ class Chart {
     if (this.scrip) this._loadHistory();
   }
 
+  // Lite mode — used by the scan-explanation host. Suppresses order/depth
+  // click dispatches (the explain view is read-only) and is the gate for
+  // the matched-bar shading + server indicator render branch in draw().
+  setLiteMode(value) {
+    const next = value === true;
+    if (this._liteMode === next) return;
+    this._liteMode = next;
+    this.scheduleRedraw();
+  }
+
+  // Hands the chart a pre-baked explanation payload. Bars become the
+  // candle series (replacing any history-load result); the indicators map,
+  // matched mask, and column metadata feed the render branch in draw().
+  // Server bars carry `date` strings; we synthesise epoch-ms timestamps
+  // since the internal candle shape keys on `ts`. `ticker` becomes a
+  // minimal pseudo-scrip so the few `this.scrip`-dependent render paths
+  // (OHLC strip label, axis chips) don't see null.
+  setExplanationData({ bars, indicators, matched, columns, ticker, displayName }) {
+    const list = Array.isArray(bars) ? bars : [];
+    this.candles = list.map((b) => {
+      // Internal `ts` is in SECONDS (every aggregator + axis call multiplies
+      // by 1000 to get ms — e.g. `_drawTimeAxis` does `c.ts * 1000`). Server
+      // sends `date: "YYYY-MM-DD"` so we parse, divide, floor.
+      const ts = (b && typeof b.date === 'string')
+          ? Math.floor(Date.parse(b.date + 'T00:00:00Z') / 1000)
+          : 0;
+      const num = (v) => (typeof v === 'number' && isFinite(v))
+          ? v
+          : (Number(v) || 0);
+      return {
+        ts,
+        o: num(b.open),
+        h: num(b.high),
+        l: num(b.low),
+        c: num(b.close),
+        v: num(b.volume),
+      };
+    });
+    // Daily timeframe so `_drawTimeAxis` formats labels as "16 Apr" (its
+    // `>= 1440` branch) instead of `hh:mm`, and so `_advanceEmptyBarsIfNeeded`
+    // self-disables (its own >= 1440 guard).
+    this.timeframeMinutes = 1440;
+    this._explainPayload = {
+      indicators: (indicators && typeof indicators === 'object') ? indicators : {},
+      matched: Array.isArray(matched) ? matched : [],
+      columns: Array.isArray(columns) ? columns : [],
+    };
+    // Explain mode IS lite mode — the lite-host's standalone setLiteMode
+    // message races setLayout and lands before pane '0' exists, so this
+    // is the reliable place to flip the flag for an explain chart.
+    this._liteMode = true;
+    // Decide which float columns render as main-pane overlays vs their
+    // own sub-pane. Server provides a `sub_panel` hint, but for some
+    // scanners that hint is wrong from the price scale's perspective:
+    // a "volume > 5× SMA(volume,20)" scanner returns volume columns
+    // with sub_panel=false, then the values (~50,000) sit completely
+    // off the price-pane y-range (~200). Auto-promote any float column
+    // whose magnitude exceeds 5× the candle price range to a sub-pane.
+    let priceMax = 0;
+    for (const c of this.candles) {
+      const a = Math.max(Math.abs(c.h), Math.abs(c.l));
+      if (a > priceMax) priceMax = a;
+    }
+    priceMax = priceMax > 0 ? priceMax : 1;
+    const indicatorsObj = (indicators && typeof indicators === 'object')
+        ? indicators
+        : {};
+    const isScaleMismatch = (col) => {
+      const series = indicatorsObj[col.key];
+      if (!Array.isArray(series)) return false;
+      let maxAbs = 0;
+      for (const v of series) {
+        if (typeof v === 'number' && isFinite(v)) {
+          const a = Math.abs(v);
+          if (a > maxAbs) maxAbs = a;
+        }
+      }
+      return maxAbs > priceMax * 5;
+    };
+    const subKeys = new Set();
+    const allCols = Array.isArray(columns) ? columns : [];
+    for (const c of allCols) {
+      if (!c || c.kind !== 'float') continue;
+      if (c.sub_panel === true || isScaleMismatch(c)) subKeys.add(c.key);
+    }
+    // Inject pseudo-indicators for sub-pane columns so the existing
+    // sub-pane layout + axis + hover-overlay machinery handles them with
+    // zero duplication. Kind='explain' is registered in SUB_KINDS and
+    // routes through `_drawExplainSubPane` + `_subPaneRange`'s 'explain'
+    // case. Replace (don't append) so navigating between explain views
+    // doesn't pile pseudo-indicators on top of each other.
+    const subCols = allCols.filter((c) => c && subKeys.has(c.key));
+    this._indicators = subCols.map((c, i) => ({
+      id: 'explain-' + (c.key || i),
+      kind: 'explain',
+      color: (typeof c.color_hint === 'string' && c.color_hint)
+          ? c.color_hint
+          : '#F59E0B',
+      label: c.label || c.key || ('Indicator ' + (i + 1)),
+      explainKey: c.key,
+      hidden: false,
+      params: {},
+    }));
+    // Stash the resolved sub-pane key set so `_drawExplainOverlays` can
+    // skip these on the main pane (they're now drawn in their sub-pane).
+    this._explainPayload.subKeys = subKeys;
+    // Pseudo-scrip so existing render paths that read this.scrip (OHLC
+    // strip header, axis price chips, etc.) don't see null. Daily bars on
+    // NSE equities → tick size 0.05 is the safe default.
+    const safeTicker = typeof ticker === 'string' ? ticker : '';
+    const safeName = typeof displayName === 'string' && displayName
+        ? displayName
+        : (safeTicker || 'Explanation');
+    this.scrip = {
+      exch: 'NSE',
+      token: '',
+      tsym: safeTicker,
+      dispName: safeName,
+      ti: 0.05,
+      ls: 1,
+    };
+    this._scripTradable = false; // suppresses the LTP plus button in lite mode
+    // Fit-all + reset pan so the user lands on the full window. Without
+    // this, a fresh explain payload would sit at the chart's previous
+    // offset and look blank until the user manually fit-resets.
+    this.view = {
+      ...this.view,
+      offsetX: 0,
+      autoFollow: true,
+      autoFitY: true,
+      priceCenter: null,
+      pricePerPx: null,
+    };
+    this.scheduleRedraw();
+  }
+
   // Two-layer palette. setTheme replaces `_basePalette` with the theme's
   // built-in colours; the Customize tab overlays `_customPalette` on top.
   // setPalette accepts EITHER a full theme palette (old API — has
@@ -409,6 +560,48 @@ class Chart {
     const q = Number.isFinite(qty) ? Math.max(1, Math.trunc(qty)) : 1;
     if (q === this.qty) return;
     this.qty = q;
+    this.scheduleRedraw();
+  }
+
+  // ── Public view controls (driven by the floating pane button bar) ──────
+  // Same math as the wheel handler but exposed as discrete callable
+  // actions so the chart-engine.js layer can wire HTML buttons to them.
+  zoomIn() {
+    this.view.cellW = Math.max(4, Math.min(60, this.view.cellW * 1.2));
+    this.view.autoFollow = false;
+    this.scheduleRedraw();
+  }
+  zoomOut() {
+    this.view.cellW = Math.max(4, Math.min(60, this.view.cellW * 0.85));
+    this.view.autoFollow = false;
+    this.scheduleRedraw();
+  }
+  panLeft() {
+    // Positive offsetX shifts the row right → older candles slide in
+    // from the left edge (i.e. visual pan-left).
+    this.view.offsetX = (this.view.offsetX || 0) + this.view.cellW * 5;
+    this.view.autoFollow = false;
+    this.scheduleRedraw();
+  }
+  panRight() {
+    this.view.offsetX = (this.view.offsetX || 0) - this.view.cellW * 5;
+    this.view.autoFollow = false;
+    this.scheduleRedraw();
+  }
+  fitVisible() {
+    // Re-fit Y axis to the currently visible candles without resetting X.
+    this.view.priceCenter = null;
+    this.view.pricePerPx = null;
+    this.view.autoFitY = true;
+    this.scheduleRedraw();
+  }
+  resetView() {
+    // Full reset — most-recent candles, default zoom, auto Y fit.
+    this.view.offsetX = 0;
+    this.view.priceCenter = null;
+    this.view.pricePerPx = null;
+    this.view.autoFollow = true;
+    this.view.autoFitY = true;
     this.scheduleRedraw();
   }
 
@@ -1558,7 +1751,12 @@ class Chart {
           this._pinnedHover = { x, y };
           this.scheduleRedraw();
         }
-        if (msg) {
+        if (msg && !this._liteMode) {
+          // In lite mode the chart is read-only — suppress every
+          // order/depth/overlay click dispatch (plus, bid/ask, qty chip,
+          // overlay open, overlay close). The explain host doesn't pass
+          // overlays in the first place, but defense in depth — a stray
+          // hit from a residual overlay would still pop an order dialog.
           try { parent.postMessage(JSON.stringify(msg), '*'); } catch (_) {}
         }
         return;
@@ -1936,6 +2134,22 @@ class Chart {
             this.scheduleRedraw();
           }
 
+          // Top header strip (symbol chip + OHLC line + bid/ask buttons)
+          // sits at the very top of the canvas. Suppress the crosshair
+          // when the cursor is over this strip so the dashed lines don't
+          // bleed through the text/buttons. Header always starts at the
+          // left of the plot area.
+          const headerStripH = this.scrip ? 84 : (this.candles.length > 0 ? 40 : 24);
+          const headerStripW = 300; // covers symbol + OHLC + bid/ask widths
+          if (y < headerStripH && x >= 8 && x < 8 + headerStripW) {
+            if (this.hover.inside) {
+              this.hover.inside = false;
+              this.hover.x = null;
+              this.hover.y = null;
+              this.scheduleRedraw();
+            }
+            return;
+          }
           // Phase 7 — delete-chip cursor + in-progress trendline tracking.
           let drawingChipHover = false;
           for (const h of this._drawingHits) {
@@ -1945,16 +2159,41 @@ class Chart {
               break;
             }
           }
-          // Indicator chip hover — pointer cursor over any eye/gear/× icon.
+          // Indicator chip hover — extends across the entire row (label +
+          // icon block), not just the eye/gear/× hit rects. Two reasons:
+          //   1. So cursor moving from label area onto an icon doesn't
+          //      flip the row's "hovered" state off and on (which would
+          //      blink the icons out for one frame).
+          //   2. So the chart crosshair stays suppressed across the whole
+          //      chip column, not just over icon centroids.
           let indicatorChipHover = false;
+          let indicatorRowId = null;
           if (!drawingChipHover) {
-            for (const h of this._indicatorChipHits) {
-              const r = h.rect;
-              if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+            // Full-row rects first (covers label + icons + spacing).
+            for (const r of this._indicatorRowRects) {
+              const rc = r.rect;
+              if (x >= rc.x && x <= rc.x + rc.w &&
+                  y >= rc.y && y <= rc.y + rc.h) {
                 indicatorChipHover = true;
+                indicatorRowId = r.indicatorId;
                 break;
               }
             }
+            // Plus the icon hit rects (covers the header collapse/expand
+            // button + any future rect that isn't tied to a row).
+            if (!indicatorChipHover) {
+              for (const h of this._indicatorChipHits) {
+                const r = h.rect;
+                if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+                  indicatorChipHover = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (this._hoveredIndicatorRowId !== indicatorRowId) {
+            this._hoveredIndicatorRowId = indicatorRowId;
+            this.scheduleRedraw();
           }
           if (drawingChipHover || indicatorChipHover) {
             wrap.style.cursor = 'pointer';
@@ -2115,8 +2354,11 @@ class Chart {
         this.scheduleRedraw();
         return;
       }
-      // If the dblclick lands inside a sub-pane, reset THAT sub-pane's Y
-      // view to auto-fit instead of resetting the main pane.
+      // Sub-pane Y-axis reset stays on double-click — it's a per-sub-pane
+      // shortcut that wouldn't fit a single global toolbar. Main-pane
+      // reset moved to the floating control bar (zoomReset button); the
+      // double-click main-pane reset was removed to avoid colliding with
+      // it and to match TradingView's UX.
       const rectDc = wrap.getBoundingClientRect();
       const dcY = e.clientY - rectDc.top;
       if (this._subDividerY != null && dcY > this._subDividerY + 3) {
@@ -2127,15 +2369,16 @@ class Chart {
           return;
         }
       }
-      this.view.offsetX = 0;
-      this.view.priceCenter = null;
-      this.view.pricePerPx = null;
-      this.view.autoFollow = true;
-      this.view.autoFitY = true;
-      this.scheduleRedraw();
     });
     wrap.addEventListener('mouseleave', () => {
       if (this.hover.inside) { this.hover.inside = false; this.scheduleRedraw(); }
+      // Clear indicator-row hover too so icons fade out cleanly when
+      // the cursor exits the pane (mouseleave skips the mousemove
+      // recalculation that would otherwise nil this out).
+      if (this._hoveredIndicatorRowId != null) {
+        this._hoveredIndicatorRowId = null;
+        this.scheduleRedraw();
+      }
       // Phase 19.2 — cancel rect drag if the cursor leaves the chart.
       if (this._rectDragging) {
         this._rectDragging = false;
@@ -2242,7 +2485,7 @@ class Chart {
     // panel. Volume no longer eats vertical space; bars are drawn with
     // reduced alpha so candles remain the dominant signal.
     const volH = this.overlays.volume ? Math.round(innerH * 0.22) : 0;
-    const SUB_KINDS = new Set(['rsi', 'macd', 'stoch', 'atr', 'stochrsi', 'squeeze', 'efi', 'wt', 'crsi', 'ao', 'mfi', 'obv', 'cmf', 'wr']);
+    const SUB_KINDS = new Set(['rsi', 'macd', 'stoch', 'atr', 'stochrsi', 'squeeze', 'efi', 'wt', 'crsi', 'ao', 'mfi', 'obv', 'cmf', 'wr', 'explain']);
     const subPaneIndicators =
         this._indicators.filter((i) => SUB_KINDS.has(i.kind) && !i.hidden);
     const subPaneCount = subPaneIndicators.length;
@@ -2252,6 +2495,17 @@ class Chart {
     // Candle area gets back the full innerH (minus sub-panes); volume
     // overlays the bottom slice of it.
     const candleH = innerH - subPaneTotalH;
+    // Publish the sub-pane offset to CSS so the floating control bar
+    // (`.pane-ctrl`) stays anchored to the bottom of the MAIN candle area
+    // — not the bottom of the whole pane container, which would put it
+    // inside the indicator sub-pane(s) when those are present.
+    if (this._publishedSubH !== subPaneTotalH) {
+      this._publishedSubH = subPaneTotalH;
+      try {
+        this.container.style.setProperty(
+            '--main-chart-bottom', subPaneTotalH + 'px');
+      } catch (_) {}
+    }
 
     const plot = {
       left: 8, top: topPad,
@@ -2285,6 +2539,10 @@ class Chart {
         // read kind-specific keys (fast/slow, bbLength/kcMult, …) the same
         // way overlay compute helpers do via the indicator object.
         params: ind.params || {},
+        // Explain-mode metadata — used by `_drawExplainSubPane` to look up
+        // the server's series and label. Harmless on other kinds.
+        explainKey: ind.explainKey,
+        label: ind.label,
         left: plot.left, top: subCursorY,
         right: plot.right, bottom: subCursorY + subPaneH,
         width: plot.right - plot.left, height: subPaneH,
@@ -2410,8 +2668,12 @@ class Chart {
     this._drawOiBars(plot, lo, hi, priceToY);
 
     // LTP marker BEFORE the axis so the right-axis label area gets the
-    // coloured chip on top of any overlapping nice-stride label.
-    this._drawLtpLine(plot, priceToY, lo, hi);
+    // coloured chip on top of any overlapping nice-stride label. Skipped
+    // in lite mode (the explain view has no live LTP and the bar-close
+    // countdown of "0:00" on historical data is just noise).
+    if (!this._liteMode) {
+      this._drawLtpLine(plot, priceToY, lo, hi);
+    }
 
     // Overlay lines + inline labels (gutter price chips moved AFTER axis below).
     this._drawOverlays(plot, lo, hi, priceToY);
@@ -2427,6 +2689,14 @@ class Chart {
       this._drawSubPaneDivider(plot, subPlots[0].top);
     } else {
       this._subDividerY = null;
+    }
+
+    // Scan-explanation overlays — matched-bar yellow shading + server
+    // indicator lines/markers. Drawn after candles + local indicators so
+    // the tint sits on top (subtle 12% alpha), with explain indicator
+    // lines fully opaque on top of the tint.
+    if (this._explainPayload) {
+      this._drawExplainOverlays(plot, lo, hi, priceToY);
     }
 
     // Phase 7 — user-placed drawings (HLines + Trendlines + in-progress).
@@ -2502,8 +2772,13 @@ class Chart {
       }
     }
     this._drawOhlc(plot);
-    this._drawIndicatorChips(plot);
-    this._drawStalePill(plot);
+    // Indicator chips (delete/hide/settings on each active indicator) +
+    // staleness pill belong to the live trade view. Both are noise in
+    // the read-only explain view.
+    if (!this._liteMode) {
+      this._drawIndicatorChips(plot);
+      this._drawStalePill(plot);
+    }
 
     // Reset alpha and draw the loading banner on top, full-opacity.
     if (dimming) {
@@ -2594,17 +2869,37 @@ class Chart {
   }
 
   _drawPriceAxis(plot, lo, hi) {
-    // Nice-stride label algorithm — pick the smallest "nice" multiplier of
-    // the symbol's tick size that leaves ~30px between labels.
-    const step = (this.scrip && this.scrip.ti && this.scrip.ti > 0) ? this.scrip.ti : 0.05;
-    const minPx = 30;
+    // Nice-stride label algorithm — pick a "round" stride that leaves
+    // ~50px between labels (matches TradingView's density). Generic over
+    // any range / tick size: a SENSEX swing of 12000 points works the
+    // same as a NIFTY-options swing of 50 points.
+    //
+    // Old implementation hard-coded multipliers of `ti` up to 5000×ti,
+    // which for SILVERMIC (ti=0.05) maxed the stride at 250 — far too
+    // dense for a 12k-point range. The fraction-of-power-of-10 approach
+    // here scales correctly to any magnitude.
     const range = hi - lo;
+    if (range <= 0) return;
+    const minPx = 50;
     const pxPerUnit = plot.height / range;
     const minStepUnits = minPx / pxPerUnit;
-    const niceMultipliers = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
-    let stride = step * niceMultipliers[niceMultipliers.length - 1];
-    for (const m of niceMultipliers) {
-      if (m * step >= minStepUnits) { stride = m * step; break; }
+    // Smallest power of 10 that fits inside minStepUnits — then nudge up
+    // through 1× / 2× / 2.5× / 5× / 10× until we clear the threshold.
+    const baseExp = Math.floor(Math.log10(minStepUnits));
+    const base = Math.pow(10, baseExp);
+    let stride = base * 10;
+    for (const f of [1, 2, 2.5, 5, 10]) {
+      if (base * f >= minStepUnits) { stride = base * f; break; }
+    }
+    // When the symbol has a tick size, snap the stride to a multiple of
+    // it so labels land on real tradable prices. Only kicks in when the
+    // stride is already larger than ti (which is the normal case — when
+    // the range is too tight for that, we'd see ti-level labels anyway).
+    const ti = (this.scrip && this.scrip.ti && this.scrip.ti > 0)
+        ? this.scrip.ti : 0;
+    if (ti > 0 && stride > ti) {
+      const snapped = Math.round(stride / ti) * ti;
+      if (snapped > 0) stride = snapped;
     }
     const first = Math.ceil(lo / stride) * stride;
     // Skip the axis label whose price is closest to the LTP — the LTP chip
@@ -2628,7 +2923,16 @@ class Chart {
         }
       }
       if (covered) continue;
-      this.ctx.fillText(p.toFixed(stride < 1 ? 2 : 0), plot.right + 4, y);
+      // Decimals: enough to render `stride` precisely. e.g. stride 0.05
+      // needs 2 dp, 0.5 needs 1 dp, 2.5 needs 1 dp, 5+ needs 0 dp.
+      const decimals = stride >= 1
+          ? 0
+          : stride >= 0.1
+              ? 1
+              : stride >= 0.01
+                  ? 2
+                  : 4;
+      this.ctx.fillText(p.toFixed(decimals), plot.right + 4, y);
     }
   }
 
@@ -2811,11 +3115,14 @@ class Chart {
     if (!this.scrip) return 0;
     const tf = this._formatTimeframeLabel(this.timeframeMinutes);
     const text = (this.scrip.dispName || this.scrip.tsym || '') + ' · ' + tf;
-    this.ctx.font = '700 11px Geist, sans-serif';
+    // 14px bold for the symbol — visual anchor of the chart. Sits over
+    // transparent background; render-order is fine because OHLC line 2
+    // is below it.
+    this.ctx.font = '700 14px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
     this.ctx.fillStyle = this.palette.axisTextStrong;
     this.ctx.textAlign = 'left';
-    this.ctx.fillText(text, plot.left + 4, 14);
+    this.ctx.fillText(text, plot.left + 4, 16);
     return this.ctx.measureText(text).width + 12;
   }
 
@@ -2827,24 +3134,21 @@ class Chart {
 
   _drawOhlc(plot) {
     this.ctx.textBaseline = 'middle';
-    const chipY = 14;   // Line 1 — SYMBOL · TIMEFRAME
-    const ohlcY = 30;   // Line 2 — O H L C V
+    const chipY = 16;   // Line 1 — SYMBOL · TIMEFRAME (bumped to match larger font)
+    const ohlcY = 30;   // Line 2 — O H L C V — tucked just under the bigger symbol
 
-    // Measure widths for the opaque background strip — covers whichever
-    // line is wider so neither text bleeds onto the candles behind.
-    let chipW = 0;
+    // No opaque background strip anymore — text reads directly over the
+    // candles, TradingView-style. Symbol bumped to 14px so it's the
+    // visual anchor of the chart.
     let chipText = '';
     if (this.scrip) {
       chipText = (this.scrip.dispName || this.scrip.tsym || '') +
           ' · ' + this._formatTimeframeLabel(this.timeframeMinutes);
-      this.ctx.font = '700 11px Geist, sans-serif';
-      chipW = this.ctx.measureText(chipText).width + 12;
     }
 
     const haveCandles = this.candles.length > 0;
     let idx = -1;
     let c, dir, segs;
-    let ohlcW = 0;
     if (haveCandles) {
       idx = this.candles.length - 1;
       if (this.hover.inside && this.hover.x != null) {
@@ -2860,37 +3164,25 @@ class Chart {
         ['C', this._fmtPrice(c.c), dir],
         ['V', this._fmtVol(c.v), this.palette.ohlcValue],
       ];
-      // Append live OI for futures contracts. Options also carry OI on
-      // touchline but they get a dedicated strike-OI strip on the chart
-      // already, so we don't double-show it here. The touchline OI is the
-      // single scalar for THIS contract — exactly what futures need.
       const instname = (this.scrip && this.scrip.instname) || '';
       if (instname.startsWith('FUT') && this.tickState.oi != null) {
         segs.push(['OI', this._fmtVol(this.tickState.oi), this.palette.ohlcValue]);
       }
-      this.ctx.font = '600 11px Geist, sans-serif';
-      for (const [label, value] of segs) {
-        ohlcW += this.ctx.measureText(label).width + 4;
-        ohlcW += this.ctx.measureText(value).width + 12;
-      }
     }
 
-    if (chipW === 0 && ohlcW === 0) return;
-    const stripH = this.scrip ? 84 : (haveCandles ? 40 : 24);
-    const stripW = Math.max(chipW, ohlcW, 280) + 8; // 280 covers the tall bid/ask strip when OHLC is short
-    this.ctx.fillStyle = this.palette.bg;
-    this.ctx.fillRect(plot.left, 0, stripW, stripH);
+    if (!chipText && !haveCandles) return;
 
-    // Line 1 — pane chip
+    // Line 1 — symbol chip (the existing helper handles tinted pill)
     this._drawPaneChip(plot);
 
     if (!haveCandles) return;
 
-    // Line 2 — OHLC segments
+    // Line 2 — OHLC segments. Tighter spacing + a subtle alpha so they
+    // don't dominate the chart but stay readable over busy candle areas.
     let x = plot.left + 4;
     this.ctx.font = '600 11px Geist, sans-serif';
     for (const [label, value, color] of segs) {
-      this.ctx.fillStyle = this.palette.ohlcLabel;
+      this.ctx.fillStyle = this._withAlpha(this.palette.ohlcLabel, 0.85);
       this.ctx.textAlign = 'left';
       this.ctx.fillText(label, x, ohlcY);
       x += this.ctx.measureText(label).width + 4;
@@ -2898,7 +3190,12 @@ class Chart {
       this.ctx.fillText(value, x, ohlcY);
       x += this.ctx.measureText(value).width + 12;
     }
-    this._drawBidAskQtyStrip(plot);
+    // Bid/ask/qty strip is for active trading — and on a non-tradable
+    // pseudo-scrip (explain mode) it falls into the "INDEX" placeholder
+    // rendering with empty BID/ASK chips. Skip it entirely in lite mode.
+    if (!this._liteMode) {
+      this._drawBidAskQtyStrip(plot);
+    }
   }
 
   // ── Indicator chip strip (top-of-chart) ───────────────────────────────────
@@ -2917,225 +3214,241 @@ class Chart {
 
   _drawIndicatorChips(plot) {
     this._indicatorChipHits = [];
+    this._indicatorRowRects = [];
     if (!this._indicators || this._indicators.length === 0) return;
     const ctx = this.ctx;
 
-    // Chip strip sits BELOW the OHLC + bid/ask header strip so it never
+    // List sits BELOW the OHLC + bid/ask header strip so it never
     // overlaps the BUY chip on tradable symbols.
     const haveCandles = this.candles.length > 0;
     const stripH = this.scrip ? 84 : (haveCandles ? 40 : 24);
 
-    const h = 30;
-    const padX = 12;
-    const swatchSize = 14;
-    const iconW = 20;
-    const iconGap = 4;
-    const labelGap = 10;
-    const rowGap = 4;
-
     ctx.save();
-    ctx.font = '600 12px Geist, sans-serif';
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
 
+    // Theme-aware palette for the chips. Hardcoded dark-mode values
+    // (slate-900 backings, slate-200 text) were unreadable in light mode
+    // where the chart bg is pure white. These resolve to readable
+    // contrasts in either mode.
+    const isLight = (this._basePalette && this._basePalette.bg === '#FFFFFF');
+    const chipBg = isLight ? 'rgba(248,250,252,0.96)' : 'rgba(15,23,42,0.78)';
+    const chipBgHover = isLight ? '#F1F5F9' : 'rgba(15,23,42,0.97)';
+    const chipBorder = isLight ? '#E2E8F0' : 'rgba(148,163,184,0.28)';
+    const chipBorderHover = isLight ? '#94A3B8' : 'rgba(148,163,184,0.55)';
+    const textActive = this.palette.axisTextStrong;
+    const textMuted = this.palette.axisText;
+    const iconActive = isLight ? '#475569' : '#CBD5E1';
+    const iconDim = isLight ? '#94A3B8' : '#6B7280';
+
     let y = stripH + 6;
 
-    // ── Collapse / expand header chip ────────────────────────────────────
-    // Always rendered when there are 2+ indicators (no point collapsing 1).
-    // When collapsed, this is the only chip shown; click expands.
-    if (this._indicators.length >= 2) {
-      const headerLabel = this._indicatorChipsCollapsed
-          ? 'Indicators · ' + this._indicators.length
-          : 'Indicators';
-      const labelTextW = ctx.measureText(headerLabel).width;
-      const headerW = padX + labelTextW + 8 + iconW + padX;
-      const hx = plot.left + 6;
-      ctx.fillStyle = 'rgba(15,23,42,0.92)';
-      this._roundedRect(hx, y, headerW, h, 7);
+    // ── Collapsed pill — TradingView-style "˅ N" minimal button ─────────
+    // Default state. Click to expand.
+    if (this._indicatorChipsCollapsed) {
+      const label = '˅ ' + this._indicators.length;
+      ctx.font = '600 11px Geist, sans-serif';
+      const labelW = ctx.measureText(label).width;
+      const w = labelW + 16;
+      const h = 22;
+      const x = plot.left + 6;
+      ctx.fillStyle = chipBg;
+      this._roundedRect(x, y, w, h, 4);
       ctx.fill();
-      ctx.strokeStyle = 'rgba(148,163,184,0.45)';
+      ctx.strokeStyle = chipBorder;
       ctx.lineWidth = 1;
-      this._roundedRect(hx, y, headerW, h, 7);
+      this._roundedRect(x, y, w, h, 4);
       ctx.stroke();
-      ctx.fillStyle = '#E5E7EB';
-      ctx.fillText(headerLabel, hx + padX, y + h / 2 + 0.5);
-      // Chevron pointing down when expanded (so click collapses), right
-      // when collapsed (so click expands).
-      const cxg = hx + headerW - padX - iconW / 2;
-      const cyg = y + h / 2;
-      ctx.strokeStyle = '#E5E7EB';
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      if (this._indicatorChipsCollapsed) {
-        // ▶
-        ctx.moveTo(cxg - 3, cyg - 4);
-        ctx.lineTo(cxg + 3, cyg);
-        ctx.lineTo(cxg - 3, cyg + 4);
-      } else {
-        // ▼
-        ctx.moveTo(cxg - 4, cyg - 2);
-        ctx.lineTo(cxg, cyg + 3);
-        ctx.lineTo(cxg + 4, cyg - 2);
-      }
-      ctx.stroke();
+      ctx.fillStyle = textActive;
+      ctx.fillText(label, x + 8, y + h / 2);
       this._indicatorChipHits.push({
-        rect: { x: hx, y: y, w: headerW, h: h },
+        rect: { x, y, w, h },
         action: 'toggleCollapse',
       });
-      y += h + rowGap;
-      if (this._indicatorChipsCollapsed) {
-        ctx.restore();
-        return;
-      }
+      ctx.restore();
+      return;
     }
+
+    // ── Expanded — clean text list per TradingView ──────────────────────
+    // Each row: [color dot] [name + period] [eye] [gear] [×]. Icons
+    // appear only on row hover.
+    const rowH = 18;
+    const dotSize = 8;
+    const labelGap = 8;
+    const iconW = 16;
+    const iconGap = 2;
+
+    // Header "˄ Indicators" — click to collapse back.
+    {
+      const label = '˄ Indicators';
+      ctx.font = '600 11px Geist, sans-serif';
+      const lw = ctx.measureText(label).width;
+      const hw = lw + 16;
+      const hx = plot.left + 6;
+      ctx.fillStyle = chipBg;
+      this._roundedRect(hx, y, hw, 22, 4);
+      ctx.fill();
+      ctx.strokeStyle = chipBorder;
+      ctx.lineWidth = 1;
+      this._roundedRect(hx, y, hw, 22, 4);
+      ctx.stroke();
+      ctx.fillStyle = textActive;
+      ctx.fillText(label, hx + 8, y + 11);
+      this._indicatorChipHits.push({
+        rect: { x: hx, y, w: hw, h: 22 },
+        action: 'toggleCollapse',
+      });
+      y += 22 + 4;
+    }
+
+    ctx.font = '500 11px Geist, sans-serif';
 
     for (const ind of this._indicators) {
       const label = this._indicatorLabel(ind);
-      const labelW = Math.max(48, ctx.measureText(label).width);
-      // Total chip width — clamped so it doesn't run off the canvas on a
-      // narrow pane. The icon block is always the same; label width flexes.
-      let chipW = padX + swatchSize + labelGap + labelW + labelGap +
-          iconW * 3 + iconGap * 2 + padX;
-      const maxW = Math.max(140, plot.right - plot.left - 12);
-      if (chipW > maxW) chipW = maxW;
+      const indColor = ind.color || '#3B82F6';
+      const textColor = ind.hidden ? textMuted : textActive;
 
       const x = plot.left + 6;
-      const indColor = ind.color || '#3B82F6';
+      const labelW = ctx.measureText(label).width;
+      const rowRight = x + dotSize + labelGap + labelW + labelGap +
+          iconW * 3 + iconGap * 2 + 8;
+      const rowW = rowRight - x;
+      const rowHovered = this._hoveredIndicatorRowId === ind.id;
+      this._indicatorRowRects.push({
+        rect: { x, y, w: rowW, h: rowH },
+        indicatorId: ind.id,
+      });
 
-      // Tinted card — indicator colour at low alpha + matching border,
-      // matte dark background underneath so the tint reads consistently
-      // even over light candles or volume bars.
-      ctx.fillStyle = 'rgba(15,23,42,0.92)';
-      this._roundedRect(x, y, chipW, h, 7);
-      ctx.fill();
-      ctx.fillStyle = ind.hidden
-          ? 'rgba(75,85,99,0.30)'
-          : _hexToRgba(indColor, 0.22);
-      this._roundedRect(x, y, chipW, h, 7);
-      ctx.fill();
-      ctx.strokeStyle = ind.hidden
-          ? 'rgba(255,255,255,0.10)'
-          : _hexToRgba(indColor, 0.65);
-      ctx.lineWidth = 1;
-      this._roundedRect(x, y, chipW, h, 7);
-      ctx.stroke();
+      // Row backdrop — only painted on hover. At rest the row is just
+      // dot + label over the chart (TradingView style). Hover gets a
+      // solid backing + border so the icons have a clean surface to
+      // target against.
+      if (rowHovered) {
+        ctx.fillStyle = chipBgHover;
+        this._roundedRect(x, y, rowW, rowH, 4);
+        ctx.fill();
+        ctx.strokeStyle = chipBorderHover;
+        ctx.lineWidth = 1;
+        this._roundedRect(x, y, rowW, rowH, 4);
+        ctx.stroke();
+      }
 
-      // Colour swatch
-      const swatchX = x + padX;
-      const swatchY = y + (h - swatchSize) / 2;
-      ctx.fillStyle = ind.hidden ? '#6B7280' : indColor;
-      this._roundedRect(swatchX, swatchY, swatchSize, swatchSize, 3);
+      // Color dot — keeps the indicator's own color even when hidden
+      // (dimmed to a slate so the row still reads as "this is the row
+      // for indicator X" even after toggling visibility off).
+      const dotX = x + 6;
+      const dotY = y + (rowH - dotSize) / 2;
+      ctx.fillStyle = ind.hidden ? iconDim : indColor;
+      ctx.beginPath();
+      ctx.roundRect(dotX, dotY, dotSize, dotSize, 2);
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-      ctx.lineWidth = 1;
-      this._roundedRect(swatchX, swatchY, swatchSize, swatchSize, 3);
-      ctx.stroke();
 
       // Label
-      const labelX = swatchX + swatchSize + labelGap;
-      ctx.fillStyle = ind.hidden ? '#9CA3AF' : '#FFFFFF';
-      ctx.font = '600 12px Geist, sans-serif';
-      ctx.fillText(label, labelX, y + h / 2 + 0.5);
+      const labelX = dotX + dotSize + labelGap;
+      ctx.fillStyle = textColor;
+      ctx.fillText(label, labelX, y + rowH / 2);
 
-      // Icon block anchored to the RIGHT edge of the chip so the row
-      // always lines up vertically across multiple chips.
-      const blockW = iconW * 3 + iconGap * 2;
-      const blockX = x + chipW - padX - blockW;
+      // Icons render only on row hover — high contrast against the
+      // solidified hover backing.
+      const iconsStartX = labelX + labelW + labelGap;
       const iconY = y;
-      const iconHitH = h;
+      const iconColor = ind.hidden ? iconDim : iconActive;
 
-      // Icons paint directly on the tinted chip — no inset plate. The
-      // earlier black plate read as "small button on top of card" which
-      // looked busy; cleaner without it.
-      const drawIconButton = (ix, paint) => {
+      const drawIcon = (ix, paint) => {
         const cx = ix + iconW / 2;
-        const cy = y + h / 2;
+        const cy = y + rowH / 2;
         paint(cx, cy);
       };
 
-      // Eye / hide — solid line + filled pupil, bolder strokes for legibility.
-      const eyeX = blockX;
-      drawIconButton(eyeX, (cx, cy) => {
-        ctx.strokeStyle = ind.hidden ? '#9CA3AF' : '#F8FAFC';
-        ctx.lineWidth = 1.8;
-        if (ind.hidden) {
+      const eyeX = iconsStartX;
+      const gearX = eyeX + iconW + iconGap;
+      const xIconX = gearX + iconW + iconGap;
+
+      if (rowHovered) {
+        // Eye
+        drawIcon(eyeX, (cx, cy) => {
+          ctx.strokeStyle = iconColor;
+          ctx.lineWidth = 1.4;
+          if (ind.hidden) {
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, 5, 3, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx - 6, cy + 4);
+            ctx.lineTo(cx + 6, cy - 4);
+            ctx.stroke();
+          } else {
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, 5.5, 3, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = iconColor;
+            ctx.beginPath();
+            ctx.arc(cx, cy, 1.4, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        });
+        // Gear
+        drawIcon(gearX, (cx, cy) => {
+          ctx.strokeStyle = iconColor;
+          ctx.fillStyle = iconColor;
+          ctx.lineWidth = 1.4;
+          const inner = 2.6;
+          const outer = 4.6;
+          for (let i = 0; i < 8; i++) {
+            const a = (i * Math.PI) / 4;
+            const dx = Math.cos(a);
+            const dy = Math.sin(a);
+            ctx.beginPath();
+            ctx.moveTo(cx + dx * inner, cy + dy * inner);
+            ctx.lineTo(cx + dx * outer, cy + dy * outer);
+            ctx.stroke();
+          }
           ctx.beginPath();
-          ctx.ellipse(cx, cy, 6, 3.5, 0, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(cx - 7, cy + 5);
-          ctx.lineTo(cx + 7, cy - 5);
-          ctx.stroke();
-        } else {
-          ctx.beginPath();
-          ctx.ellipse(cx, cy, 6.5, 3.5, 0, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.fillStyle = '#F8FAFC';
-          ctx.beginPath();
-          ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
+          ctx.arc(cx, cy, inner, 0, Math.PI * 2);
           ctx.fill();
-        }
-      });
+          ctx.save();
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.beginPath();
+          ctx.arc(cx, cy, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        });
+        // × — destructive accent. Theme-aware: red-600 in light mode for
+        // strong contrast on white, lighter red in dark mode.
+        drawIcon(xIconX, (cx, cy) => {
+          const deleteColor = ind.hidden
+              ? iconDim
+              : (isLight ? '#DC2626' : '#F87171');
+          ctx.strokeStyle = deleteColor;
+          ctx.lineWidth = 1.6;
+          const xs = 4;
+          ctx.beginPath();
+          ctx.moveTo(cx - xs, cy - xs);
+          ctx.lineTo(cx + xs, cy + xs);
+          ctx.moveTo(cx + xs, cy - xs);
+          ctx.lineTo(cx - xs, cy + xs);
+          ctx.stroke();
+        });
+      }
+      // Hit rects pushed regardless — keeps clicks reliable even if the
+      // icons aren't rendered yet on this exact frame.
       this._indicatorChipHits.push({
-        rect: { x: eyeX, y: iconY, w: iconW, h: iconHitH },
+        rect: { x: eyeX, y: iconY, w: iconW, h: rowH },
         indicatorId: ind.id,
         action: 'toggleHide',
       });
-
-      // Gear — 8 stubby teeth + filled hub with cut-out centre. Bolder
-      // strokes so it reads as a cog at small size.
-      const gearX = eyeX + iconW + iconGap;
-      drawIconButton(gearX, (cx, cy) => {
-        ctx.strokeStyle = ind.hidden ? '#9CA3AF' : '#F8FAFC';
-        ctx.fillStyle = ind.hidden ? '#9CA3AF' : '#F8FAFC';
-        ctx.lineWidth = 2;
-        const inner = 3.8;
-        const outer = 6.4;
-        for (let i = 0; i < 8; i++) {
-          const a = (i * Math.PI) / 4;
-          const dx = Math.cos(a);
-          const dy = Math.sin(a);
-          ctx.beginPath();
-          ctx.moveTo(cx + dx * inner, cy + dy * inner);
-          ctx.lineTo(cx + dx * outer, cy + dy * outer);
-          ctx.stroke();
-        }
-        ctx.beginPath();
-        ctx.arc(cx, cy, inner, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.save();
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.beginPath();
-        ctx.arc(cx, cy, 1.6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      });
       this._indicatorChipHits.push({
-        rect: { x: gearX, y: iconY, w: iconW, h: iconHitH },
+        rect: { x: gearX, y: iconY, w: iconW, h: rowH },
         indicatorId: ind.id,
         action: 'openSettings',
       });
-
-      // Delete × — destructive accent, bolder strokes for legibility.
-      const xIconX = gearX + iconW + iconGap;
-      drawIconButton(xIconX, (cx, cy) => {
-        ctx.strokeStyle = '#FCA5A5';
-        ctx.lineWidth = 2;
-        const xs = 5;
-        ctx.beginPath();
-        ctx.moveTo(cx - xs, cy - xs);
-        ctx.lineTo(cx + xs, cy + xs);
-        ctx.moveTo(cx + xs, cy - xs);
-        ctx.lineTo(cx - xs, cy + xs);
-        ctx.stroke();
-      });
       this._indicatorChipHits.push({
-        rect: { x: xIconX, y: iconY, w: iconW, h: iconHitH },
+        rect: { x: xIconX, y: iconY, w: iconW, h: rowH },
         indicatorId: ind.id,
         action: 'delete',
       });
 
-      y += h + rowGap;
+      y += rowH;
     }
     ctx.restore();
   }
@@ -4426,8 +4739,12 @@ class Chart {
   // magnet's _yForPriceForDrag returned a too-low Y, so the |dy| threshold
   // never fired and snap silently no-op'd.
   _subPaneTotalH(innerH) {
+    // Must match the SUB_KINDS set in draw() — divergence breaks layout
+    // math (draw() allocates sub-panes that this helper says don't exist
+    // → magnet snap + sub-pane axis labels end up at wrong Y positions).
     const SUB_KINDS = new Set(['rsi', 'macd', 'stoch', 'atr', 'stochrsi',
-        'squeeze', 'efi', 'wt', 'crsi', 'ao', 'mfi', 'obv', 'cmf', 'wr']);
+        'squeeze', 'efi', 'wt', 'crsi', 'ao', 'mfi', 'obv', 'cmf', 'wr',
+        'explain']);
     const visibleSubs = this._indicators
         .filter((i) => SUB_KINDS.has(i.kind) && !i.hidden);
     if (visibleSubs.length === 0) return 0;
@@ -7061,6 +7378,259 @@ class Chart {
     }
   }
 
+  // Scan-explanation overlays. Renders three things on top of the main
+  // candle pane:
+  //   1. Yellow matched-bar shading — contiguous runs of `matched[i]===true`
+  //      become a single translucent rect spanning the price-panel y-range.
+  //   2. Float-kind server indicator lines (e.g. SMA, EMA, Senkou A/B). One
+  //      stroke per column, color from `column.color_hint` when supplied.
+  //      Sub-panel-flagged indicators (RSI/MACD/etc.) are skipped for v1
+  //      and surface only in the predicate panel — the main pane can't
+  //      display values on the wrong price scale.
+  //   3. Boolean-kind markers — small dots above the high of each bar where
+  //      the indicator series is truthy AND the predicate matched, so e.g.
+  //      "Hammer formed" puts a marker exactly at the hammer bar.
+  //   4. Enum-kind background bands deferred — the predicate panel surfaces
+  //      the regime label, which is enough signal for v1.
+  _drawExplainOverlays(plot, lo, hi, priceToY) {
+    if (!this._explainPayload || this.candles.length === 0) return;
+    const visible = this._visibleCandles();
+    if (visible.length === 0) return;
+    const firstAbs = this.candles.indexOf(visible[0]);
+    if (firstAbs < 0) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+
+    const matched = this._explainPayload.matched || [];
+    const indicators = this._explainPayload.indicators || {};
+    const columns = this._explainPayload.columns || [];
+
+    // (1) Matched-bar shading. Walk the visible range; emit one rect per
+    // contiguous run of trues. Half a cell of padding on either side so
+    // adjacent matches visually merge instead of looking like a striped
+    // pattern. Drawn on top of candles with 12% alpha so candles stay
+    // legible — TradingView/StockEdge use a similar amber tint.
+    {
+      const cellW = this.view.cellW;
+      const half = cellW / 2;
+      ctx.fillStyle = 'rgba(245,158,11,0.16)';
+      let runStartIdx = -1;
+      for (let i = 0; i <= visible.length; i++) {
+        const absIdx = firstAbs + i;
+        const isMatched = i < visible.length && matched[absIdx] === true;
+        if (isMatched && runStartIdx < 0) {
+          runStartIdx = absIdx;
+        } else if (!isMatched && runStartIdx >= 0) {
+          const xStart = this._candleXCenter(runStartIdx, plot) - half;
+          const xEnd = this._candleXCenter(absIdx - 1, plot) + half;
+          ctx.fillRect(xStart, plot.top, xEnd - xStart, plot.bottom - plot.top);
+          runStartIdx = -1;
+        }
+      }
+    }
+
+    // (2) Float-kind server indicator lines on the main pane. Skip any
+    // column that setExplanationData reclassified as a sub-pane (either
+    // because the server said so or because its values are off the
+    // price scale — see the `subKeys` set built there).
+    const defaultPalette = [
+      '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#06B6D4',
+    ];
+    const subKeys = (this._explainPayload && this._explainPayload.subKeys)
+        ? this._explainPayload.subKeys
+        : new Set();
+    let paletteIdx = 0;
+    for (const col of columns) {
+      if (!col || col.kind !== 'float') continue;
+      if (subKeys.has(col.key)) continue;
+      const series = indicators[col.key];
+      if (!Array.isArray(series)) continue;
+      const color = (typeof col.color_hint === 'string' && col.color_hint)
+          ? col.color_hint
+          : defaultPalette[paletteIdx++ % defaultPalette.length];
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < visible.length; i++) {
+        const absIdx = firstAbs + i;
+        const raw = series[absIdx];
+        const v = (typeof raw === 'number' && isFinite(raw)) ? raw : null;
+        if (v == null) { started = false; continue; }
+        const x = this._candleXCenter(absIdx, plot);
+        const y = priceToY(v);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // (2.5) Enum-kind regime ribbon — e.g. SuperTrend direction
+    // (1=Up green, -1=Down red). Rendered as a thin strip at the bottom
+    // of the main pane (line-style indicator) rather than a full-pane
+    // background wash, so candles stay the dominant signal. Each
+    // contiguous run of the same enum value becomes a solid colored
+    // segment in the strip.
+    const enumColors = (value) => {
+      if (value === 1 || value === 1.0) return '#16A34A';   // green-600 (up)
+      if (value === -1 || value === -1.0) return '#DC2626';   // red-600 (down)
+      if (value === 0 || value === 0.0) return '#94A3B8';     // slate-400 (neutral)
+      return null;
+    };
+    const cellW = this.view.cellW;
+    const halfCell = cellW / 2;
+    // Stack ribbons just above the bottom gutter — one row per enum
+    // column, 6px tall + 2px gap. Newest at the very bottom so volume
+    // bars (which overlay the price pane's bottom region) stay visible.
+    let ribbonRowY = plot.bottom - 6;
+    for (const col of columns) {
+      if (!col || col.kind !== 'enum') continue;
+      const series = indicators[col.key];
+      if (!Array.isArray(series)) continue;
+      let runStartIdx = -1;
+      let runValue = null;
+      const flushRun = (endAbsIdxExclusive) => {
+        if (runStartIdx < 0) return;
+        const fill = enumColors(runValue);
+        if (fill) {
+          const xStart = this._candleXCenter(runStartIdx, plot) - halfCell;
+          const xEnd = this._candleXCenter(endAbsIdxExclusive - 1, plot) + halfCell;
+          ctx.fillStyle = fill;
+          ctx.fillRect(xStart, ribbonRowY, xEnd - xStart, 6);
+        }
+        runStartIdx = -1;
+        runValue = null;
+      };
+      for (let i = 0; i <= visible.length; i++) {
+        const absIdx = firstAbs + i;
+        const v = (i < visible.length) ? series[absIdx] : null;
+        if (v == null || !isFinite(v)) {
+          flushRun(absIdx);
+          continue;
+        }
+        if (runStartIdx < 0) {
+          runStartIdx = absIdx;
+          runValue = v;
+        } else if (v !== runValue) {
+          flushRun(absIdx);
+          runStartIdx = absIdx;
+          runValue = v;
+        }
+      }
+      // Tiny label to the left of the ribbon so the user knows what
+      // the colors mean. Drawn at low opacity so it doesn't compete.
+      ctx.save();
+      ctx.font = '600 9px Geist, sans-serif';
+      ctx.fillStyle = this._withAlpha(this.palette.axisText, 0.85);
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillText(col.label || col.key || '', plot.left + 4, ribbonRowY + 3);
+      ctx.restore();
+      ribbonRowY -= 8; // next ribbon stacks above this one (6 + 2 gap)
+    }
+
+    // (3) Boolean-kind markers — small dot above the bar high.
+    for (const col of columns) {
+      if (!col || col.kind !== 'boolean') continue;
+      const series = indicators[col.key];
+      if (!Array.isArray(series)) continue;
+      const color = (typeof col.color_hint === 'string' && col.color_hint)
+          ? col.color_hint
+          : '#F59E0B';
+      ctx.fillStyle = color;
+      for (let i = 0; i < visible.length; i++) {
+        const absIdx = firstAbs + i;
+        const raw = series[absIdx];
+        const isTrue = raw === true || raw === 1 || raw === 1.0;
+        if (!isTrue) continue;
+        const c = visible[i];
+        const x = this._candleXCenter(absIdx, plot);
+        const y = priceToY(c.h) - 6;
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // Draws one explain-mode sub-pane (RSI / MACD-line / CCI / ADX etc.).
+  // Values come from `this._explainPayload.indicators[sp.explainKey]` —
+  // pre-computed by the server, NOT from a local `_computeXxx`. Reference
+  // lines are added for the common bounded oscillators (RSI: 30/70,
+  // unbounded: zero line if range crosses).
+  _drawExplainSubPane(sp) {
+    const ctx = this.ctx;
+    if (this.candles.length === 0) return;
+    if (!this._explainPayload || !this._explainPayload.indicators) return;
+    const series = this._explainPayload.indicators[sp.explainKey];
+    if (!Array.isArray(series)) return;
+    const range = this._subPaneEffectiveRange(sp);
+    if (!range) return;
+    const [yMin, yMax] = range;
+    if (yMax === yMin) return;
+    const yFor = (v) => sp.top + (yMax - v) * sp.height / (yMax - yMin);
+
+    ctx.save();
+    ctx.fillStyle = this.palette.bg;
+    ctx.fillRect(sp.left, sp.top, sp.width, sp.height);
+
+    // Reference lines — overbought/oversold for RSI/MFI/Stoch (30/70),
+    // bull/bear for ADX (25), zero line when range crosses zero (CCI etc).
+    const key = (sp.explainKey || '').toLowerCase();
+    const refs = [];
+    if (key.startsWith('rsi') || key.startsWith('mfi') ||
+        key.startsWith('stoch_')) {
+      refs.push(30, 70);
+    } else if (key.startsWith('adx')) {
+      refs.push(25);
+    }
+    if (yMin < 0 && yMax > 0) refs.push(0);
+    ctx.strokeStyle = this.palette.axisText;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (const lvl of refs) {
+      if (lvl < yMin || lvl > yMax) continue;
+      const y = yFor(lvl);
+      ctx.beginPath();
+      ctx.moveTo(sp.left, y);
+      ctx.lineTo(sp.right, y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Main line trace.
+    const visible = this._visibleCandles();
+    if (visible.length === 0) { ctx.restore(); return; }
+    const firstAbs = this.candles.indexOf(visible[0]);
+    ctx.strokeStyle = sp.color || '#F59E0B';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < visible.length; i++) {
+      const absIdx = firstAbs + i;
+      const raw = series[absIdx];
+      const v = (typeof raw === 'number' && isFinite(raw)) ? raw : null;
+      if (v == null) { started = false; continue; }
+      const x = this._candleXCenter(absIdx, sp);
+      const y = yFor(v);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Top-left label so the user sees what the panel is showing.
+    ctx.font = '600 10px Geist, sans-serif';
+    ctx.fillStyle = sp.color || '#F59E0B';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(sp.label || sp.explainKey || 'Indicator',
+        sp.left + 4, sp.top + 8);
+    ctx.restore();
+  }
+
   _drawSubPanes(subPlots) {
     if (subPlots.length === 0) { this._lastSubPlots = []; return; }
     // Cache for hit-tests (mousedown / wheel / dblclick).
@@ -7116,6 +7686,7 @@ class Chart {
           case 'obv':      this._drawObvInPane(sp); break;
           case 'cmf':      this._drawCmfInPane(sp); break;
           case 'wr':       this._drawWilliamsRInPane(sp); break;
+          case 'explain':  this._drawExplainSubPane(sp); break;
         }
         this.ctx.restore();
         // Right-axis labels — bounded oscillators get their static range;
@@ -7251,6 +7822,17 @@ class Chart {
       const x = v ? v[idx] : null;
       return (x && x.mom != null) ? x.mom : null;
     }
+    if (k === 'explain') {
+      // Server-supplied series; no local compute. Drives the latest-value
+      // chip on the right gutter + the hover-crosshair value chip.
+      const series = (this._explainPayload &&
+          this._explainPayload.indicators)
+          ? this._explainPayload.indicators[sp.explainKey]
+          : null;
+      if (!Array.isArray(series)) return null;
+      const v = series[idx];
+      return (typeof v === 'number' && isFinite(v)) ? v : null;
+    }
     return null;
   }
 
@@ -7335,6 +7917,38 @@ class Chart {
         // positive and negative bars are visually balanced.
         const mag = Math.max(Math.abs(lo), Math.abs(hi));
         return [-mag, mag];
+      }
+      case 'explain': {
+        // Bounded oscillators that the explain view commonly drives —
+        // pin to canonical ranges so the panel scale matches what users
+        // see on other platforms (TradingView, Sahi). Anything else
+        // auto-fits to the visible data so the line uses the full panel.
+        const key = (sp.explainKey || '').toString().toLowerCase();
+        if (key.startsWith('rsi') || key.startsWith('stoch_') ||
+            key.startsWith('mfi') || key.startsWith('cci') ||
+            key.startsWith('roc') || key.startsWith('momentum_score') ||
+            key.startsWith('adx')) {
+          // 0..100 covers RSI/MFI/Stoch/ADX. CCI/ROC frequently exceed
+          // 100 — fall through to auto-fit for those.
+          if (key.startsWith('rsi') || key.startsWith('stoch_') ||
+              key.startsWith('mfi') || key.startsWith('adx')) {
+            return [0, 100];
+          }
+        }
+        const series = (this._explainPayload &&
+            this._explainPayload.indicators)
+            ? this._explainPayload.indicators[sp.explainKey]
+            : null;
+        if (!Array.isArray(series)) return null;
+        let lo = Infinity, hi = -Infinity;
+        for (const v of series) {
+          if (v == null || !isFinite(v)) continue;
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+        if (!isFinite(lo) || !isFinite(hi) || lo === hi) return null;
+        const pad = (hi - lo) * 0.10;
+        return [lo - pad, hi + pad];
       }
       default:
         return null;

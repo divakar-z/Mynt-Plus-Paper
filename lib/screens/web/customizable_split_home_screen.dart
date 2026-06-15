@@ -102,6 +102,9 @@ import '../../../utils/custom_navigator.dart';
 import '../../../routes/route_names.dart';
 import '../../../routes/web_router.dart';
 import '../../models/marketwatch_model/get_quotes.dart';
+import '../../models/scanner_model/scan_explain.dart' show ExplainKey;
+import 'scanner/scanner_shell_screen.dart';
+import 'orderflow/orderflow_shell_screen.dart';
 import 'market_watch/chart_with_depth_web.dart';
 // import 'market_watch/scrip_tabs_manager.dart';
 
@@ -176,7 +179,17 @@ enum ScreenTypeParam {
   saveBasketStrategy,
   profileDetails,
   caBuyback,
-  charts,
+  scanner,
+  orderflow,
+  charts
+}
+
+/// Sub-page within the Scanner shell — drives the left rail + IndexedStack.
+enum ScannerSubPage {
+  symbols,
+  scanners,
+  fundamentals,
+  customScans,
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -188,11 +201,20 @@ class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
   final String? digilockerCode;
   final String? digilockerState;
 
+  /// Optional initial Scanner sub-page (used when arriving via /scanner/<sub>).
+  final ScannerSubPage? initialScannerSubPage;
+
+  /// Optional initial Scan-Explanation args (used when arriving via
+  /// /scanner/explain/{builtin|custom}/{id}/{ticker}).
+  final ExplainKey? initialExplainArgs;
+
   const CustomizableSplitHomeScreen({
     super.key,
     this.initialRightPanel,
     this.digilockerCode,
     this.digilockerState,
+    this.initialScannerSubPage,
+    this.initialExplainArgs,
   });
 
   @override
@@ -726,6 +748,12 @@ class _CustomizableSplitHomeScreenState
       case ScreenTypeParam.caBuyback:
         _handleCABuybackTap();
         break;
+      case ScreenTypeParam.scanner:
+        _replaceScreenInPanel(ScreenType.scanner);
+        break;
+      case ScreenTypeParam.orderflow:
+        _replaceScreenInPanel(ScreenType.orderflow);
+        break;
       case ScreenTypeParam.dashboard:
       case ScreenTypeParam.watchlist:
         // Default panels, no action needed
@@ -1188,9 +1216,25 @@ class _CustomizableSplitHomeScreenState
     _handleReconnectionSuccess();
   }
 
+  /// True when any panel currently shows the Scanner shell — the Scanner
+  /// page renders full-width with no watchlist (same pattern as Scalper).
+  bool get _isScannerActive {
+    for (final panel in _panels) {
+      if (panel.screenType == ScreenType.scanner) return true;
+      if (panel.screens.isNotEmpty &&
+          panel.activeScreenIndex >= 0 &&
+          panel.activeScreenIndex < panel.screens.length &&
+          panel.screens[panel.activeScreenIndex] == ScreenType.scanner) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// New layout: Watchlist full height on one side, AppBar + Content on other side
   /// Respects panel swap - checks which panel has watchlist
   /// In scalper mode: hides watchlist, shows AppBar + Scalper content full-width
+  /// In scanner mode: hides watchlist, shows AppBar + Scanner shell full-width
   Widget _buildNewLayout(ThemesProvider theme) {
     // Scalper mode: full-width AppBar + Scalper content, no watchlist
     if (_isScalperMode) {
@@ -1199,6 +1243,21 @@ class _CustomizableSplitHomeScreenState
           _buildRightSideAppBar(theme.isDarkMode),
           const Expanded(
             child: ScalperScreenWeb(embedded: true),
+          ),
+        ],
+      );
+    }
+
+    // Scanner mode: full-width AppBar + Scanner shell, no watchlist
+    if (_isScannerActive) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          Expanded(
+            child: ScannerShellScreen(
+              initialSubPage: widget.initialScannerSubPage,
+              initialExplainArgs: widget.initialExplainArgs,
+            ),
           ),
         ],
       );
@@ -1455,6 +1514,7 @@ class _CustomizableSplitHomeScreenState
     bool? showOptionZ,
     bool? showOptionFlash,
     bool? showScalper,
+    bool? showScanner,
     bool? showCharts,
   }) {
     final theme = ref.read(themeProvider);
@@ -1534,6 +1594,14 @@ class _CustomizableSplitHomeScreenState
             shadcn.closeDrawer(drawerContext);
             _handleScalperTap();
           },
+          onScannerTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleScannerTap();
+          },
+          onOrderflowTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleOrderflowTap();
+          },
           onChartsTap: () {
             shadcn.closeDrawer(drawerContext);
             _handleChartsTap();
@@ -1563,6 +1631,7 @@ class _CustomizableSplitHomeScreenState
           showOptionZ: showOptionZ,
           showOptionFlash: showOptionFlash,
           showScalper: showScalper,
+          showScanner: showScanner,
           showCharts: showCharts,
         ),
         );
@@ -1653,6 +1722,7 @@ class _CustomizableSplitHomeScreenState
                           showOptionZ: !showAllLeftNav, // Options dropdown hidden with left nav
                           showOptionFlash: !showAllLeftNav,
                           showScalper: !showAllLeftNav,
+                          showScanner: !showAllLeftNav,
                           showCharts: !showAllLeftNav,
                         );
                       }
@@ -2181,6 +2251,32 @@ class _CustomizableSplitHomeScreenState
     WebNavigationHelper.updateUrl(WebRoutes.scalper);
   }
 
+  void _handleScannerTap({ScannerSubPage? initial}) {
+    _replaceScreenInPanel(ScreenType.scanner);
+    final path = initial == null
+        ? WebRoutes.scanner
+        : _scannerPath(initial);
+    WebNavigationHelper.updateUrl(path);
+  }
+
+  void _handleOrderflowTap() {
+    _replaceScreenInPanel(ScreenType.orderflow);
+    WebNavigationHelper.updateUrl(WebRoutes.orderflow);
+  }
+
+  String _scannerPath(ScannerSubPage p) {
+    switch (p) {
+      case ScannerSubPage.symbols:
+        return WebRoutes.scannerSymbols;
+      case ScannerSubPage.scanners:
+        return WebRoutes.scannerScanners;
+      case ScannerSubPage.fundamentals:
+        return WebRoutes.scannerFundamentals;
+      case ScannerSubPage.customScans:
+        return WebRoutes.scannerCustom;
+    }
+  }
+
   void _handleChartsTap() {
     setState(() => _isChartsMode = true);
     WebNavigationHelper.updateUrl(WebRoutes.charts);
@@ -2465,6 +2561,82 @@ class _CustomizableSplitHomeScreenState
                                 ),
                               ),
                               const SizedBox(width: 4),
+                              Transform.translate(
+                                offset: const Offset(0, -6),
+                                child: Text(
+                                  'Beta',
+                                  style: MyntWebTextStyles.caption(
+                                    context,
+                                    color: Colors.red,
+                                    fontWeight: MyntFonts.semiBold,
+                                  ).copyWith(fontSize: 10),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Scanner
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleScannerTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.radar,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Scanner',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Orderflow — nested under Scanner in the Options menu
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleOrderflowTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.activity,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Orderflow',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
                               Transform.translate(
                                 offset: const Offset(0, -6),
                                 child: Text(
@@ -2964,6 +3136,13 @@ class _CustomizableSplitHomeScreenState
         return FormDownloadScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: _goBackInRightPanel);
+      case ScreenType.scanner:
+        return ScannerShellScreen(
+          initialSubPage: widget.initialScannerSubPage,
+          initialExplainArgs: widget.initialExplainArgs,
+        );
+      case ScreenType.orderflow:
+        return const OrderflowShellScreen();
       // caEvent and cpAction removed
     }
   }
@@ -3077,6 +3256,10 @@ class _CustomizableSplitHomeScreenState
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.scanner:
+        return 'Scanner';
+      case ScreenType.orderflow:
+        return 'Orderflow';
       // caEvent and cpAction removed
     }
   }
@@ -3190,6 +3373,10 @@ class _CustomizableSplitHomeScreenState
         return Icons.download;
       case ScreenType.closureDetails:
         return Icons.cancel;
+      case ScreenType.scanner:
+        return Icons.radar;
+      case ScreenType.orderflow:
+        return Icons.show_chart;
       // caEvent and cpAction removed
     }
   }
@@ -3636,6 +3823,12 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.formDownload:
         break;
       case ScreenType.closureDetails:
+        break;
+      case ScreenType.scanner:
+        _replaceScreenInPanel(ScreenType.scanner);
+        break;
+      case ScreenType.orderflow:
+        _replaceScreenInPanel(ScreenType.orderflow);
         break;
       // caEvent and cpAction removed
     }
@@ -4515,6 +4708,12 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.dashboard:
       case ScreenType.watchlist:
         urlPath = WebRoutes.home;
+        break;
+      case ScreenType.scanner:
+        urlPath = WebRoutes.scanner;
+        break;
+      case ScreenType.orderflow:
+        urlPath = WebRoutes.orderflow;
         break;
       default:
         // Don't update URL for other screen types (like scripDepthInfo, etc.)
@@ -5690,6 +5889,8 @@ enum ScreenType {
   nomineeDetails,
   formDownload,
   closureDetails,
+  scanner,
+  orderflow,
 }
 
 // Hoverable navigation item widget
