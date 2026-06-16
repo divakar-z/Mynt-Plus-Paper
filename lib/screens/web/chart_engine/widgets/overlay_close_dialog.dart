@@ -438,6 +438,175 @@ Future<void> showOcoLegModifyDialog({
   await ref.read(orderProvider).modifyOCOOrder(input, context);
 }
 
+/// Text-entry dialog for annotation drawing tools (text / note / callout /
+/// comment / price label / sign post). Returns the entered string, or null if
+/// the user cancelled (caller removes the just-placed drawing on null).
+Future<String?> showDrawingTextDialog({
+  required BuildContext context,
+  String initial = '',
+  String title = 'Add text',
+}) {
+  return _showIframeSafeDialog<String>(
+    context: context,
+    child: _DrawingTextCard(initial: initial, title: title),
+  );
+}
+
+class _DrawingTextCard extends StatefulWidget {
+  final String initial;
+  final String title;
+  const _DrawingTextCard({required this.initial, required this.title});
+  @override
+  State<_DrawingTextCard> createState() => _DrawingTextCardState();
+}
+
+class _DrawingTextCardState extends State<_DrawingTextCard> {
+  late final TextEditingController _ctrl =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.of(context).pop(_ctrl.text.trim());
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.dialogDark, light: MyntColors.dialog);
+    final divider = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final titleColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final bodyColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 420,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: divider)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(widget.title,
+                        style: MyntWebTextStyles.title(context,
+                            color: titleColor)),
+                  ),
+                  Material(
+                    color: Colors.transparent,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(Icons.close, size: 18, color: bodyColor),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: _ctrl,
+                    autofocus: true,
+                    maxLines: 3,
+                    minLines: 1,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _submit(),
+                    style: MyntWebTextStyles.body(context, color: titleColor),
+                    decoration: InputDecoration(
+                      hintText: 'Enter text…',
+                      hintStyle:
+                          MyntWebTextStyles.body(context, color: bodyColor),
+                      filled: true,
+                      fillColor: resolveThemeColor(context,
+                          dark: MyntColors.cardHoverDark,
+                          light: MyntColors.cardHover),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: divider),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: divider),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                            const BorderSide(color: MyntColors.primary),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: Text('Cancel',
+                            style: MyntWebTextStyles.buttonMd(context,
+                                color: bodyColor)),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 40,
+                        child: FilledButton(
+                          onPressed: _submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: MyntColors.primary,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Text('Add',
+                              style: MyntWebTextStyles.buttonMd(context,
+                                  color: Colors.white)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// One-time warning shown when the user first enables Instant orders.
 /// Returns true if the user clicks Enable, false otherwise.
 Future<bool> showInstantWarningDialog({

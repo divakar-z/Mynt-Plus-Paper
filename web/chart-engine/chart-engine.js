@@ -132,6 +132,11 @@ function applyLayout(spec) {
           typeof chart.setLiteMode === 'function') {
         chart.setLiteMode(true);
       }
+      // Inherit the current drawing-rail gutter so a pane created while the
+      // rail is collapsed doesn't render with a stale 46px inset.
+      if (window.__drawRailGutter != null && typeof chart.setLeftGutter === 'function') {
+        chart.setLeftGutter(window.__drawRailGutter);
+      }
       panes.set(id, chart);
       _attachPaneControls(container, id);
     }
@@ -843,4 +848,42 @@ window.chartEngine = {
     if (!el || !el.id || !el.id.startsWith('pane-')) return null;
     return panes.get(el.id.slice('pane-'.length)) || null;
   },
+};
+
+// ---------------------------------------------------------------------------
+// The Lab (lab.js) needs the active pane's raw candles. Resolve the active
+// chart via the same DOM marker `activeChart()` uses; fall back to the first
+// pane in the Map so the Lab still has data before the first `setActivePane`.
+// Returns the chart's `this.candles` array ([{o,h,l,c,v,ts}], ts in SECONDS),
+// or [] when no pane exists yet.
+// ---------------------------------------------------------------------------
+window.__activePaneCandles = () => {
+  let chart = window.chartEngine.activeChart();
+  if (!chart) {
+    const it = panes.values().next();
+    chart = it.done ? null : it.value;
+  }
+  return (chart && Array.isArray(chart.candles)) ? chart.candles : [];
+};
+
+// The Lab also needs the active chart instance itself to push ghost
+// projections (Echoes / Oracle paths) onto the canvas via setLabProjection().
+window.__activePaneChart = () => {
+  let chart = window.chartEngine.activeChart();
+  if (!chart) {
+    const it = panes.values().next();
+    chart = it.done ? null : it.value;
+  }
+  return chart || null;
+};
+
+// The drawing rail (topbar.js) toggles the left gutter on every pane so the
+// chart content shifts as the rail expands/collapses. Remembered so panes
+// created later inherit the current state.
+window.__drawRailGutter = 46;
+window.__setChartLeftGutter = (px) => {
+  window.__drawRailGutter = Math.max(0, +px || 0);
+  for (const ch of panes.values()) {
+    if (ch && typeof ch.setLeftGutter === 'function') ch.setLeftGutter(window.__drawRailGutter);
+  }
 };

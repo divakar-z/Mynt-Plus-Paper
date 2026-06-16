@@ -78,9 +78,12 @@ class DrawingPoint {
 /// User-placed on-chart drawing (Phase 7). HLine has 1 point, Trendline 2.
 class ChartDrawing {
   final String id;
-  final String kind; // 'hline' | 'trendline' | 'rect' | 'hray' | 'fib' | 'path'
+  final String kind; // registry tool id: 'hline'|'trendline'|'rect'|'hray'|'fib'|'path'|'ray'|'xline'|'vline'|…
   final String color;
   final List<DrawingPoint> points;
+  // User text for annotation tools (text/note/callout/comment/pricelabel/
+  // signpost). Empty for geometric tools.
+  final String text;
   // Per-drawing lock — when true, the drawing's drag-band and delete chip
   // are ignored in chart.js. Independent of the global `drawingsLocked` flag
   // (which locks everything).
@@ -93,6 +96,7 @@ class ChartDrawing {
     required this.kind,
     required this.color,
     required this.points,
+    this.text = '',
     this.locked = false,
     this.thickness = 1,
   });
@@ -102,6 +106,7 @@ class ChartDrawing {
     String? kind,
     String? color,
     List<DrawingPoint>? points,
+    String? text,
     bool? locked,
     int? thickness,
   }) =>
@@ -110,6 +115,7 @@ class ChartDrawing {
         kind: kind ?? this.kind,
         color: color ?? this.color,
         points: points ?? this.points,
+        text: text ?? this.text,
         locked: locked ?? this.locked,
         thickness: thickness ?? this.thickness,
       );
@@ -119,6 +125,7 @@ class ChartDrawing {
         'kind': kind,
         'color': color,
         'points': [for (final p in points) p.toJson()],
+        if (text.isNotEmpty) 'text': text,
         if (locked) 'locked': true,
         if (thickness != 1) 'thickness': thickness,
       };
@@ -131,6 +138,7 @@ class ChartDrawing {
           for (final p in (j['points'] as List? ?? const []))
             DrawingPoint.fromJson(p as Map<String, dynamic>),
         ],
+        text: j['text'] as String? ?? '',
         locked: j['locked'] as bool? ?? false,
         thickness: (j['thickness'] as num?)?.toInt().clamp(1, 4) ?? 1,
       );
@@ -252,6 +260,23 @@ String defaultIndicatorColor(String kind) {
     case 'ob':       return '#22C55E';
     case 'liqsweep': return '#22C55E';
     case 'mss':      return '#22C55E';
+    case 'supertrend': return '#22C55E';
+    case 'wma':      return '#F59E0B';
+    case 'hma':      return '#EC4899';
+    case 'keltner':  return '#06B6D4';
+    case 'donchian': return '#06B6D4';
+    case 'cci':      return '#3B82F6';
+    case 'roc':      return '#A855F7';
+    case 'adx':      return '#3B82F6';
+    case 'cvd':      return '#06B6D4';
+    case 'psar':     return '#22C55E';
+    case 'vwma':     return '#F59E0B';
+    case 'trix':     return '#A855F7';
+    case 'vortex':   return '#22C55E';
+    case 'uo':       return '#3B82F6';
+    case 'dpo':      return '#EAB308';
+    case 'pvt':      return '#06B6D4';
+    case 'ad':       return '#10B981';
   }
   return '#3B82F6';
 }
@@ -286,6 +311,23 @@ int defaultIndicatorPeriod(String kind) {
     case 'ob':       return 14;
     case 'liqsweep': return 0;
     case 'mss':      return 0;
+    case 'supertrend': return 10;
+    case 'wma':      return 20;
+    case 'hma':      return 20;
+    case 'keltner':  return 20;
+    case 'donchian': return 20;
+    case 'cci':      return 20;
+    case 'roc':      return 9;
+    case 'adx':      return 14;
+    case 'cvd':      return 0;
+    case 'psar':     return 0;
+    case 'vwma':     return 20;
+    case 'trix':     return 15;
+    case 'vortex':   return 14;
+    case 'uo':       return 0;
+    case 'dpo':      return 20;
+    case 'pvt':      return 0;
+    case 'ad':       return 0;
     default:         return 20;
   }
 }
@@ -488,7 +530,10 @@ class PaneState {
   // candleStyle), but the picker doesn't expose it. Any old persisted
   // 'renko' value is silently coerced to 'candles' by the absence here.
   static const _validStyles = <String>{
-    'candles', 'hollow', 'bars', 'line', 'area', 'heikin-ashi',
+    'candles', 'hollow', 'bars', 'line', 'area', 'heikin-ashi', 'renko',
+    // Phase 30 — additional chart types (mirror chart.js setCandleStyle).
+    'baseline', 'step', 'columns', 'hlcbars', 'highlow', 'hlcarea',
+    'volcandles', 'linebreak', 'kagi', 'range', 'pnf',
   };
 
   static PaneState fromJson(Map<String, dynamic> j) {
@@ -1104,6 +1149,7 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
     String drawingId, {
     List<DrawingPoint>? points,
     String? color,
+    String? text,
     bool? locked,
     int? thickness,
   }) {
@@ -1115,6 +1161,7 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
     list[idx] = old.copyWith(
       color: color ?? old.color,
       points: points ?? old.points,
+      text: text ?? old.text,
       locked: locked ?? old.locked,
       thickness: thickness ?? old.thickness,
     );

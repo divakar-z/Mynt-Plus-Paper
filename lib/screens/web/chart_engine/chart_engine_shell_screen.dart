@@ -56,6 +56,12 @@ class _OiTokenInfo {
   });
 }
 
+/// Annotation drawing tools that carry user text — placement triggers a
+/// text-entry dialog (see `_promptDrawingText`).
+const Set<String> _kTextDrawTools = {
+  'text', 'note', 'callout', 'comment', 'pricelabel', 'signpost',
+};
+
 /// Full-page Chart Engine shell. Hosts the iframe at
 /// `/chart-engine/index.html` and bridges Flutter state ↔ iframe via
 /// postMessage. Mirrors the proven patterns from `OrderflowShellScreen`.
@@ -534,6 +540,12 @@ class _ChartEngineShellScreenState
                   n.addDrawing(scripKey, drawing);
                   // Exit draw mode after a single placement.
                   n.setActiveDrawTool(null);
+                  // Annotation tools prompt for their text right after
+                  // placement; cancelling removes the just-added drawing.
+                  if (_kTextDrawTools.contains(drawing.kind) &&
+                      drawing.text.isEmpty) {
+                    _promptDrawingText(scripKey, drawing.id);
+                  }
                 }
               }
             }
@@ -2204,6 +2216,20 @@ class _ChartEngineShellScreenState
     await ref.read(orderProvider).placeOCOOrder(input, context);
   }
 
+  /// Prompts for an annotation's text right after it is placed. Empty / cancel
+  /// removes the just-added drawing; otherwise the text is saved (which
+  /// re-pushes the drawing to the iframe via `_pushSession`).
+  Future<void> _promptDrawingText(String scripKey, String drawingId) async {
+    final value = await showDrawingTextDialog(context: context);
+    if (!mounted) return;
+    final n = ref.read(chartEngineSessionProvider.notifier);
+    if (value == null || value.isEmpty) {
+      n.removeDrawing(scripKey, drawingId);
+    } else {
+      n.updateDrawing(scripKey, drawingId, text: value);
+    }
+  }
+
   /// Resolves a placed OCO bracket by its alert id from the GTT book.
   GttOrderBookModel? _findOcoByAlId(String alId) {
     if (alId.isEmpty) return null;
@@ -2797,6 +2823,11 @@ const Set<String> _kKindsWithPeriod = {
   'sma', 'ema', 'rsi', 'bb', 'macd', 'stoch', 'atr',
   'zlema', 'mcginley', 'stochrsi', 'squeeze', 'efi',
   'vstop', 'wt', 'crsi', 'mfi', 'cmf', 'wr',
+  // Phase 29 — single-period additions (supertrend/keltner use schemas).
+  'wma', 'hma', 'donchian', 'cci', 'roc', 'adx',
+  // Added indicators with a single scalar lookback (psar uses a schema;
+  // pvt/ad have no period).
+  'trix', 'vortex', 'uo', 'dpo', 'vwma',
 };
 
 String _humanKind(String kind) {

@@ -798,7 +798,23 @@ html.light .tb-kbd {
 .tb-sym-wrap {
   display: flex;
   align-items: center;
+  gap: 6px;
 }
+.tb-sym-exch {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--grid-soft);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.tb-sym-exch[hidden] { display: none; }
 .tb-sym-input {
   width: 220px;
   height: 28px;
@@ -1024,3 +1040,364 @@ html:not(.light) .pane-ctrl-btn:hover {
 #overlay-title { font-size: 13px; font-weight: 600; color: var(--text); }
 #overlay-detail { margin-top: 4px; font-size: 11px; }
 .muted { color: var(--text-mute); }
+
+/* ── Left drawing rail (full-height, flush-left, TradingView-style) ───────── */
+.draw-rail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 44px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 0;
+  background: var(--bg);
+  border-right: 1px solid var(--card-border);
+}
+.draw-rail[hidden] { display: none; }
+/* The group buttons scroll if the catalogue is taller than the chart; the
+   cursor (top) and the action cluster (bottom) stay pinned. */
+.draw-rail-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+  scrollbar-width: thin;
+}
+.draw-rail-tools::-webkit-scrollbar { width: 4px; }
+.draw-rail-tools::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 2px; }
+.draw-rail-sep { width: 26px; height: 1px; background: var(--card-border); margin: 5px auto; flex-shrink: 0; }
+.draw-rail-btn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 1px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.draw-rail-ic { display: flex; align-items: center; justify-content: center; }
+.draw-rail-btn:hover { background: var(--grid-soft); color: var(--text); }
+.draw-rail-btn--active { background: rgba(59, 130, 246, 0.16); color: var(--accent); }
+.draw-rail-btn--active:hover { background: rgba(59, 130, 246, 0.20); color: var(--accent); }
+.draw-rail-btn--on { color: var(--accent); }
+.draw-rail-btn--danger:hover { background: rgba(239, 68, 68, 0.14); color: #EF4444; }
+.draw-rail-collapse { color: var(--text-mute); }
+/* Caret revealed on hover; hovering it opens the group's options. */
+.draw-rail-caret {
+  position: absolute;
+  right: 1px;
+  bottom: 3px;
+  display: flex;
+  color: var(--text-mute);
+  opacity: 0;
+  transition: opacity 0.08s ease;
+}
+.draw-rail-btn:hover .draw-rail-caret { opacity: 1; }
+.draw-rail-caret:hover { color: var(--accent); }
+
+/* Collapsed → a slim blue tab pinned to the left edge. */
+.draw-rail-reopen {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  width: 16px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: var(--accent);
+  color: #FFFFFF;
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.22);
+}
+.draw-rail-reopen[hidden] { display: none; }
+.draw-rail-reopen svg { width: 13px; height: 13px; }
+
+/* Floating tooltip for rail buttons. */
+.draw-rail-tip {
+  position: fixed;
+  z-index: 4000;
+  background: #1F2937;
+  color: #FFFFFF;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.30);
+}
+.draw-rail-tip[hidden] { display: none; }
+
+/* Flyout list rows with a leading tool icon. */
+.draw-rail-row { display: flex; align-items: center; gap: 9px; }
+.draw-rail-row-ic { display: inline-flex; color: var(--text-soft); flex-shrink: 0; }
+.tb-list-row--active { background: var(--accent); color: #FFFFFF; }
+.tb-list-row--active .tb-list-row-label,
+.tb-list-row--active .draw-rail-row-ic { color: #FFFFFF; }
+
+/* Lab ---------------------------------------------------------------------- */
+.tb-lab > span { font-size: 12px; }
+.tb-lab-popover { width: 420px; max-width: 92vw; }
+.tb-lab-body {
+  margin-top: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.tb-lab-empty,
+.tb-lab-note {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tb-lab-empty { padding: 24px 4px; text-align: center; }
+.tb-lab-note {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--card-border);
+  font-style: italic;
+}
+
+/* Stat cards */
+.tb-lab-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.tb-lab-stat {
+  flex: 1 1 70px;
+  min-width: 70px;
+  padding: 8px 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+}
+.tb-lab-stat-val { font-size: 15px; font-weight: 700; color: var(--text); }
+.tb-lab-stat-lbl {
+  margin-top: 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+}
+.tb-lab-stat--up .tb-lab-stat-val { color: #22C55E; }
+.tb-lab-stat--down .tb-lab-stat-val { color: #EF4444; }
+
+/* Match list */
+.tb-lab-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.tb-lab-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+.tb-lab-row + .tb-lab-row { border-top: 1px solid var(--card-border); }
+.tb-lab-row-date { color: var(--text-soft); }
+.tb-lab-row-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tb-lab-up { color: #22C55E; }
+.tb-lab-down { color: #EF4444; }
+
+/* Oracle bands */
+.tb-lab-bands {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 6px;
+}
+.tb-lab-band {
+  flex: 1 1 0;
+  padding: 7px 4px;
+  text-align: center;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+}
+.tb-lab-band-lbl {
+  font-size: 10px;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tb-lab-band-val {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.tb-lab-odds-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.tb-lab-target-input {
+  width: 90px;
+  padding: 7px 9px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  outline: none;
+}
+.tb-lab-target-input:focus { border-color: var(--accent); }
+.tb-lab-odds-suffix { font-size: 12px; color: var(--text-soft); }
+
+/* Market Clock */
+.tb-lab-clock {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 6px;
+}
+.tb-lab-clock-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.tb-lab-clock-lbl {
+  width: 42px;
+  flex-shrink: 0;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+.tb-lab-clock-track {
+  flex: 1 1 auto;
+  height: 10px;
+  background: var(--card-border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.tb-lab-clock-fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+}
+.tb-lab-up-bg { background: #22C55E; }
+.tb-lab-down-bg { background: #EF4444; }
+.tb-lab-clock-val {
+  width: 48px;
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Lab — floating panel + projection controls + radial clock (Phase 31) */
+.tb-lab-panel {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  width: 360px;
+  max-height: calc(100vh - 70px);
+  display: flex;
+  flex-direction: column;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+  z-index: 1500;
+  overflow: hidden;
+}
+html.light .tb-lab-panel { background: #FFFFFF; box-shadow: 0 14px 36px rgba(15, 23, 42, 0.14); }
+.tb-lab-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px 8px;
+}
+.tb-lab-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.tb-lab-close {
+  border: none; background: transparent; color: var(--text-mute);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.tb-lab-close:hover { color: var(--text); }
+.tb-lab-tabs { padding: 0 12px; }
+.tb-lab-panel .tb-lab-body {
+  padding: 10px 14px 14px;
+  overflow-y: auto;
+  width: auto;
+}
+.tb-lab-controls { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 10px; }
+.tb-lab-field { display: flex; flex-direction: column; gap: 3px; }
+.tb-lab-field-lbl { font-size: 10px; color: var(--text-mute); font-weight: 600; }
+.tb-lab-select {
+  height: 28px; padding: 0 6px; border-radius: 6px;
+  border: 1px solid var(--card-border); background: var(--card-bg);
+  color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+html.light .tb-lab-select { background: #FFFFFF; }
+.tb-lab-btn {
+  margin-left: auto; height: 28px; padding: 0 12px; border-radius: 6px;
+  border: 1px solid var(--card-border); background: var(--grid-soft);
+  color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tb-lab-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* Echoes list */
+.tb-lab-elist { display: flex; flex-direction: column; }
+.tb-lab-erow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 2px; border-bottom: 1px solid var(--grid-soft);
+}
+.tb-lab-erow-idx { width: 18px; color: var(--text-mute); font-size: 11px; text-align: right; }
+.tb-lab-spark { flex: 0 0 auto; }
+.tb-lab-erow-date { flex: 1 1 auto; font-size: 12px; color: var(--text-soft); }
+.tb-lab-erow-val { font-size: 13px; font-weight: 700; }
+/* Oracle odds */
+.tb-lab-odds-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tb-lab-quick { display: flex; gap: 6px; margin-bottom: 10px; }
+.tb-lab-chip {
+  height: 26px; padding: 0 10px; border-radius: 6px;
+  border: 1px solid var(--card-border); background: var(--card-bg);
+  color: var(--text-soft); font: inherit; font-size: 12px; cursor: pointer;
+}
+.tb-lab-chip:hover { border-color: var(--accent); color: var(--accent); }
+.tb-lab-odds-out { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.tb-lab-odds-line {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; color: var(--text-soft);
+}
+.tb-lab-odds-pct { font-weight: 700; color: var(--text); }
+/* Market clock */
+.tb-lab-modes { display: flex; gap: 6px; margin-bottom: 12px; justify-content: center; }
+.tb-lab-mode {
+  height: 26px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--card-border); background: transparent;
+  color: var(--text-soft); font: inherit; font-size: 12px; cursor: pointer;
+}
+.tb-lab-mode--on { background: var(--accent); color: #FFFFFF; border-color: var(--accent); }
+.tb-lab-rose { display: block; margin: 0 auto; }
+.tb-lab-weekdays {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 6px; height: 70px; margin: 14px 6px 4px;
+}
+.tb-lab-wd { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
+.tb-lab-wd-bar { width: 70%; border-radius: 3px 3px 0 0; }
+.tb-lab-wd-lbl { font-size: 10px; color: var(--text-mute); }

@@ -578,4 +578,63 @@ const Map<String, IndicatorSchema> _kSchemas = {
       ),
     ],
   ),
+  // ── Phase 29 — multi-param additions ────────────────────────────────────
+  'supertrend': IndicatorSchema(
+    kind: 'supertrend',
+    displayName: 'SuperTrend',
+    shortDescription: 'ATR-banded trend follower; flips on the close cross.',
+    legacyPeriodKey: 'atrLength',
+    params: [
+      IndicatorParam(
+        key: 'atrLength', label: 'ATR Length',
+        description: 'Average True Range period',
+        defaultValue: 10, min: 2, max: 200,
+      ),
+      IndicatorParam(
+        key: 'mult', label: 'Multiplier',
+        description: 'Band width as ATR multiples',
+        defaultValue: 3.0, min: 0.5, max: 10, step: 0.1, isInt: false,
+      ),
+    ],
+  ),
+  'keltner': IndicatorSchema(
+    kind: 'keltner',
+    displayName: 'Keltner Channels',
+    shortDescription: 'EMA midline with ATR-scaled upper/lower bands.',
+    legacyPeriodKey: 'length',
+    params: [
+      IndicatorParam(
+        key: 'length', label: 'EMA Length',
+        description: 'Midline EMA period',
+        defaultValue: 20, min: 1, max: 999,
+      ),
+      IndicatorParam(
+        key: 'mult', label: 'Multiplier',
+        description: 'Band width as ATR multiples',
+        defaultValue: 2.0, min: 0.5, max: 10, step: 0.1, isInt: false,
+      ),
+      IndicatorParam(
+        key: 'atrLength', label: 'ATR Length',
+        description: 'ATR period for the band width',
+        defaultValue: 10, min: 1, max: 200,
+      ),
+    ],
+  ),
+  'psar': IndicatorSchema(
+    kind: 'psar',
+    displayName: 'Parabolic SAR',
+    shortDescription: 'Wilder stop-and-reverse dots; accel ramps to a cap.',
+    params: [
+      IndicatorParam(
+        key: 'accel', label: 'Acceleration',
+        description: 'Starting/step acceleration factor',
+        defaultValue: 0.02, min: 0.01, max: 0.2, step: 0.01, isInt: false,
+      ),
+      IndicatorParam(
+        key: 'maxAccel', label: 'Max Acceleration',
+        description: 'Acceleration factor ceiling',
+        defaultValue: 0.2, min: 0.01, max: 0.2, step: 0.01, isInt: false,
+      ),
+    ],
+  ),
 };

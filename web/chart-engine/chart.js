@@ -39,6 +39,1957 @@ function _hexToRgba(hex, alpha) {
   return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
 }
 
+// ---------------------------------------------------------------------------
+// Drawing-tool registry (Phase 28).
+//
+// Historically every drawing tool was a hand-written `if (d.kind === 'x')`
+// branch inside renderOne + the placement handler + the hit-test. That does
+// not scale to the 60+ tools we are porting from the CandL library, so new
+// tools are declared here as data: each entry owns its click-count and a pure
+// `render(g, d)` that draws onto the canvas and returns the geometry the
+// common code needs (`endX`/`endY` for the floating toolbar anchor, `dragRect`
+// for the translate hit-band). The existing built-in kinds (hline, trendline,
+// rect, fib, measure, path, hray) are still rendered by their original
+// branches and will be migrated into this table in a later stage; until then
+// renderOne consults this registry FIRST and falls back to the branches.
+//
+// The `g` (geometry) helper bag handed to every render fn:
+//   g.ctx        — canvas 2D context (already saved/restored by the caller)
+//   g.plot       — { left, top, right, bottom, width }
+//   g.color      — resolved stroke colour
+//   g.strokeW    — resolved stroke width (selection-aware)
+//   g.isSelected, g.isInProgress
+//   g.drawLine(ax,ay,bx,by) — white-halo + coloured stroke line helper
+//   g.tsToX(ts)  — bar timestamp (sec) → x
+//   g.priceToY(p)— price → y
+//   g.hover      — { inside, x, y } live cursor (for in-progress previews)
+//   g.lineParams(px,py,dx,dy) — Liang–Barsky param range [t0,t1] clipping the
+//                  infinite line through (px,py)+t·(dx,dy) to the plot rect,
+//                  or null when the line misses the rect entirely.
+const DRAWING_TOOLS = {
+  // ── Migrated built-ins (Phase 28 Stage 2) ───────────────────────────────────
+  // These replace the original hand-written renderOne branches; behaviour is
+  // identical, now expressed as registry entries.
+
+  // Horizontal line — one click, full width at the price.
+  hline: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const y = g.priceToY(p.price);
+      g.drawLine(g.plot.left, y, g.plot.right, y);
+      return {
+        endX: g.plot.right, endY: y,
+        dragRect: g.isInProgress ? null
+            : { x: g.plot.left, y: y - 4, w: g.plot.right - g.plot.left, h: 8 },
+      };
+    },
+  },
+
+  // Horizontal ray — one click, from the anchor's x to the right edge.
+  hray: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const y = g.priceToY(p.price);
+      const xs = Math.max(g.plot.left, g.tsToX(p.ts));
+      g.drawLine(xs, y, g.plot.right, y);
+      return {
+        endX: g.plot.right, endY: y,
+        dragRect: g.isInProgress ? null
+            : { x: xs, y: y - 4, w: g.plot.right - xs, h: 8 },
+      };
+    },
+  },
+
+  // Trendline — two clicks.
+  trendline: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      g.drawLine(x1, y1, x2, y2);
+      return {
+        endX: x2, endY: y2,
+        dragRect: g.isInProgress ? null : _bandRect(x1, y1, x2, y2),
+      };
+    },
+  },
+
+  // Rectangle — two clicks; in-progress tracks the cursor in pixel space.
+  rect: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) {
+        if (g.isInProgress && g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+        else { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      } else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      if (![x1, y1, x2, y2].every(Number.isFinite)) return null;
+      const rx = Math.min(x1, x2), ry = Math.min(y1, y2);
+      const rw = Math.abs(x2 - x1), rh = Math.abs(y2 - y1);
+      const ctx = g.ctx;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 4;
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.strokeStyle = g.color; ctx.lineWidth = g.isSelected ? 2.5 : 2;
+      ctx.strokeRect(rx, ry, rw, rh);
+      return {
+        endX: Math.max(x1, x2), endY: (y1 + y2) / 2,
+        dragRect: g.isInProgress ? null : { x: rx, y: ry, w: rw, h: rh },
+      };
+    },
+  },
+
+  // Fibonacci retracement — two clicks; 7 ratio lines across the x range.
+  fib: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts);
+      let x2, p2Price;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); p2Price = p2.price; }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; p2Price = g.yToPrice(g.hover.y) ?? p1.price; }
+      else return null;
+      const xL = Math.min(x1, x2), xR = Math.max(x1, x2);
+      const hi = Math.max(p1.price, p2Price), lo = Math.min(p1.price, p2Price);
+      const range = hi - lo;
+      if (range <= 0) return null;
+      const ratios = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+      const labels = ['0%', '23.6%', '38.2%', '50%', '61.8%', '78.6%', '100%'];
+      const cs = ['#94A3B8', '#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#94A3B8'];
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.font = '500 10px Geist, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      for (let i = 0; i < ratios.length; i++) {
+        const fp = hi - range * ratios[i];
+        const y = g.priceToY(fp);
+        ctx.strokeStyle = cs[i];
+        ctx.lineWidth = g.isSelected ? 1.5 : 1;
+        ctx.setLineDash(i === 0 || i === ratios.length - 1 ? [] : [4, 4]);
+        ctx.beginPath(); ctx.moveTo(xL, y); ctx.lineTo(xR, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = cs[i];
+        ctx.fillText(labels[i] + '  ' + fp.toFixed(2), xL + 4, y - 6);
+      }
+      ctx.restore();
+      return {
+        endX: xR, endY: g.priceToY((hi + lo) / 2),
+        dragRect: g.isInProgress ? null
+            : { x: xL, y: g.priceToY(hi) - 4, w: xR - xL, h: g.priceToY(lo) - g.priceToY(hi) + 8 },
+      };
+    },
+  },
+
+  // Vertical line — one click, spans the full plot height at the bar's x.
+  vline: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts);
+      if (!Number.isFinite(x)) return null;
+      g.drawLine(x, g.plot.top, x, g.plot.bottom);
+      return {
+        endX: x,
+        endY: (g.plot.top + g.plot.bottom) / 2,
+        dragRect: g.isInProgress ? null
+            : { x: x - 4, y: g.plot.top, w: 8, h: g.plot.bottom - g.plot.top },
+      };
+    },
+  },
+
+  // Ray — two clicks; starts at p1, runs through p2 and extends to the plot
+  // edge in that direction only.
+  ray: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts);
+      const y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      const dx = x2 - x1, dy = y2 - y1;
+      const range = g.lineParams(x1, y1, dx, dy);
+      // Forward from p1 (t≥0) to the far edge; fall back to the raw segment.
+      let ex = x2, ey = y2;
+      if (range) {
+        const tEnd = Math.max(range[0], range[1]);
+        if (tEnd > 0) { ex = x1 + dx * tEnd; ey = y1 + dy * tEnd; }
+      }
+      g.drawLine(x1, y1, ex, ey);
+      return {
+        endX: ex, endY: ey,
+        dragRect: g.isInProgress ? null : _bandRect(x1, y1, ex, ey),
+      };
+    },
+  },
+
+  // Extended line ("xline") — two clicks; the infinite line through both
+  // anchors, clipped to the plot on both sides.
+  xline: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts);
+      const y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      const dx = x2 - x1, dy = y2 - y1;
+      const range = g.lineParams(x1, y1, dx, dy);
+      let ax = x1, ay = y1, bx = x2, by = y2;
+      if (range) {
+        ax = x1 + dx * range[0]; ay = y1 + dy * range[0];
+        bx = x1 + dx * range[1]; by = y1 + dy * range[1];
+      }
+      g.drawLine(ax, ay, bx, by);
+      return {
+        endX: Math.max(ax, bx), endY: (ay + by) / 2,
+        dragRect: g.isInProgress ? null : _bandRect(ax, ay, bx, by),
+      };
+    },
+  },
+
+  // ── Shapes ───────────────────────────────────────────────────────────────
+
+  // Arrow — two clicks; a line with a filled arrowhead at the second anchor.
+  arrow: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      g.drawLine(x1, y1, x2, y2);
+      _drawArrowHead(g.ctx, x1, y1, x2, y2, g.color, 11);
+      return {
+        endX: Math.max(x1, x2), endY: (y1 + y2) / 2,
+        dragRect: g.isInProgress ? null : _bandRect(x1, y1, x2, y2),
+      };
+    },
+  },
+
+  // Triangle — three clicks; filled closed polygon.
+  triangle: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length === 0) return null;
+      const scr = pts.map((p) => ({ x: g.tsToX(p.ts), y: g.priceToY(p.price) }));
+      if (g.isInProgress && scr.length < 3 && g.hover.inside && g.hover.x != null) {
+        scr.push({ x: g.hover.x, y: g.hover.y });
+      }
+      if (scr.length < 2) return { endX: scr[0].x, endY: scr[0].y, dragRect: null };
+      const ctx = g.ctx;
+      if (scr.length >= 3) {
+        ctx.save();
+        ctx.fillStyle = _hexToRgba(g.color, 0.10);
+        ctx.beginPath();
+        ctx.moveTo(scr[0].x, scr[0].y);
+        ctx.lineTo(scr[1].x, scr[1].y);
+        ctx.lineTo(scr[2].x, scr[2].y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+      for (let i = 0; i < scr.length - 1; i++) {
+        g.drawLine(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
+      }
+      if (scr.length >= 3) g.drawLine(scr[2].x, scr[2].y, scr[0].x, scr[0].y);
+      const xs = scr.map((s) => s.x), ys = scr.map((s) => s.y);
+      return {
+        endX: Math.max(...xs), endY: Math.min(...ys),
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // Circle — two clicks; centre at p1, radius = pixel distance to p2.
+  circle: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const cx = g.tsToX(p1.ts), cy = g.priceToY(p1.price);
+      let ex, ey;
+      const p2 = d.points[1];
+      if (p2) { ex = g.tsToX(p2.ts); ey = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { ex = g.hover.x; ey = g.hover.y; }
+      else return null;
+      const r = Math.hypot(ex - cx, ey - cy);
+      if (!Number.isFinite(r) || r <= 0) return { endX: cx, endY: cy, dragRect: null };
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.08);
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = g.color; ctx.lineWidth = g.strokeW;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      return {
+        endX: cx + r, endY: cy,
+        dragRect: g.isInProgress ? null : { x: cx - r, y: cy - r, w: 2 * r, h: 2 * r },
+      };
+    },
+  },
+
+  // Arc — two clicks; upper half-ellipse spanning the anchors' bounding box.
+  arc: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+      const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+      if (rx <= 0 || ry <= 0) { g.drawLine(x1, y1, x2, y2); return { endX: Math.max(x1, x2), endY: cy, dragRect: null }; }
+      const ctx = g.ctx;
+      const stroke = (w, c) => {
+        ctx.strokeStyle = c; ctx.lineWidth = w;
+        ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, Math.PI, 2 * Math.PI); ctx.stroke();
+      };
+      stroke(4, 'rgba(255,255,255,0.85)');
+      stroke(g.strokeW, g.color);
+      return {
+        endX: Math.max(x1, x2), endY: cy - ry,
+        dragRect: g.isInProgress ? null : { x: cx - rx, y: cy - ry - 4, w: 2 * rx, h: ry + 8 },
+      };
+    },
+  },
+
+  // Curve — three clicks; quadratic Bézier (start, control, end).
+  curve: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length === 0) return null;
+      const scr = pts.map((p) => ({ x: g.tsToX(p.ts), y: g.priceToY(p.price) }));
+      if (g.isInProgress && scr.length < 3 && g.hover.inside && g.hover.x != null) {
+        scr.push({ x: g.hover.x, y: g.hover.y });
+      }
+      if (scr.length < 2) return { endX: scr[0].x, endY: scr[0].y, dragRect: null };
+      const ctx = g.ctx;
+      const drawQ = (w, c) => {
+        ctx.strokeStyle = c; ctx.lineWidth = w; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(scr[0].x, scr[0].y);
+        if (scr.length >= 3) ctx.quadraticCurveTo(scr[1].x, scr[1].y, scr[2].x, scr[2].y);
+        else ctx.lineTo(scr[1].x, scr[1].y);
+        ctx.stroke();
+      };
+      drawQ(4, 'rgba(255,255,255,0.85)');
+      drawQ(g.strokeW, g.color);
+      const xs = scr.map((s) => s.x), ys = scr.map((s) => s.y);
+      return {
+        endX: Math.max(...xs), endY: scr[scr.length - 1].y,
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // Rotated rectangle — three clicks; p1→p2 is one edge, p3 sets the
+  // perpendicular extent (and thus the opposite edge).
+  rotrect: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length < 1) return null;
+      const a = { x: g.tsToX(pts[0].ts), y: g.priceToY(pts[0].price) };
+      let b;
+      if (pts.length >= 2) b = { x: g.tsToX(pts[1].ts), y: g.priceToY(pts[1].price) };
+      else if (g.hover.inside && g.hover.x != null) b = { x: g.hover.x, y: g.hover.y };
+      else return { endX: a.x, endY: a.y, dragRect: null };
+      let third = null;
+      if (pts.length >= 3) third = { x: g.tsToX(pts[2].ts), y: g.priceToY(pts[2].price) };
+      else if (pts.length === 2 && g.hover.inside && g.hover.x != null) third = { x: g.hover.x, y: g.hover.y };
+      if (!third) {
+        g.drawLine(a.x, a.y, b.x, b.y);
+        return { endX: Math.max(a.x, b.x), endY: (a.y + b.y) / 2, dragRect: null };
+      }
+      const vx = b.x - a.x, vy = b.y - a.y, len = Math.hypot(vx, vy) || 1;
+      const nx = -vy / len, ny = vx / len;
+      const off = (third.x - b.x) * nx + (third.y - b.y) * ny;
+      const corners = [
+        a, b,
+        { x: b.x + nx * off, y: b.y + ny * off },
+        { x: a.x + nx * off, y: a.y + ny * off },
+      ];
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.08);
+      ctx.beginPath(); ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 4; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+      for (let i = 0; i < 4; i++) {
+        g.drawLine(corners[i].x, corners[i].y, corners[(i + 1) % 4].x, corners[(i + 1) % 4].y);
+      }
+      const xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
+      return {
+        endX: Math.max(...xs), endY: Math.min(...ys),
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // ── Channels ─────────────────────────────────────────────────────────────
+
+  // Parallel channel — p1→p2 is the base line, p3 sets the parallel offset;
+  // the band between the two lines is lightly filled.
+  channel: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length < 1) return null;
+      const a = { x: g.tsToX(pts[0].ts), y: g.priceToY(pts[0].price) };
+      let b;
+      if (pts.length >= 2) b = { x: g.tsToX(pts[1].ts), y: g.priceToY(pts[1].price) };
+      else if (g.hover.inside && g.hover.x != null) b = { x: g.hover.x, y: g.hover.y };
+      else return { endX: a.x, endY: a.y, dragRect: null };
+      let third = null;
+      if (pts.length >= 3) third = { x: g.tsToX(pts[2].ts), y: g.priceToY(pts[2].price) };
+      else if (pts.length === 2 && g.hover.inside && g.hover.x != null) third = { x: g.hover.x, y: g.hover.y };
+      if (!third) {
+        g.drawLine(a.x, a.y, b.x, b.y);
+        return {
+          endX: Math.max(a.x, b.x), endY: (a.y + b.y) / 2,
+          dragRect: g.isInProgress ? null : _bandRect(a.x, a.y, b.x, b.y),
+        };
+      }
+      const vx = b.x - a.x, vy = b.y - a.y, len = Math.hypot(vx, vy) || 1;
+      const nx = -vy / len, ny = vx / len;
+      const off = (third.x - a.x) * nx + (third.y - a.y) * ny;
+      const a2 = { x: a.x + nx * off, y: a.y + ny * off };
+      const b2 = { x: b.x + nx * off, y: b.y + ny * off };
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.07);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.lineTo(b2.x, b2.y); ctx.lineTo(a2.x, a2.y);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+      g.drawLine(a.x, a.y, b.x, b.y);
+      g.drawLine(a2.x, a2.y, b2.x, b2.y);
+      const xs = [a.x, b.x, a2.x, b2.x], ys = [a.y, b.y, a2.y, b2.y];
+      return {
+        endX: Math.max(...xs), endY: Math.min(...ys),
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // Linear regression channel — two clicks pick a time range; a least-squares
+  // fit over the candles inside that range is drawn with ±2σ bands. Data-aware
+  // (re-fits from candle closes, so it ignores vertical drags).
+  regression: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      let t2;
+      const p2 = d.points[1];
+      if (p2) t2 = p2.ts;
+      else if (g.hover.inside && g.hover.x != null) t2 = g.xToTs(g.hover.x);
+      else return null;
+      const lo = Math.min(p1.ts, t2), hi = Math.max(p1.ts, t2);
+      const cs = (g.candles || []).filter((c) => c.ts >= lo && c.ts <= hi);
+      if (cs.length < 2) {
+        const xa = g.tsToX(p1.ts), xb = g.tsToX(t2), y = g.priceToY(p1.price);
+        g.drawLine(xa, y, xb, y);
+        return { endX: Math.max(xa, xb), endY: y, dragRect: null };
+      }
+      const n = cs.length;
+      let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (let i = 0; i < n; i++) { const y = cs[i].c; sx += i; sy += y; sxx += i * i; sxy += i * y; }
+      const denom = (n * sxx - sx * sx) || 1;
+      const slope = (n * sxy - sx * sy) / denom;
+      const intercept = (sy - slope * sx) / n;
+      let ss = 0;
+      for (let i = 0; i < n; i++) { const r = cs[i].c - (intercept + slope * i); ss += r * r; }
+      const sd = Math.sqrt(ss / n);
+      const k = 2;
+      const fit0 = intercept, fitN = intercept + slope * (n - 1);
+      const x0 = g.tsToX(cs[0].ts), xN = g.tsToX(cs[n - 1].ts);
+      const y0 = g.priceToY(fit0), yN = g.priceToY(fitN);
+      const yt0 = g.priceToY(fit0 + k * sd), ytN = g.priceToY(fitN + k * sd);
+      const yb0 = g.priceToY(fit0 - k * sd), ybN = g.priceToY(fitN - k * sd);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.06);
+      ctx.beginPath();
+      ctx.moveTo(x0, yt0); ctx.lineTo(xN, ytN);
+      ctx.lineTo(xN, ybN); ctx.lineTo(x0, yb0);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+      g.drawLine(x0, y0, xN, yN);
+      ctx.save();
+      ctx.setLineDash([4, 4]); ctx.strokeStyle = g.color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x0, yt0); ctx.lineTo(xN, ytN); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x0, yb0); ctx.lineTo(xN, ybN); ctx.stroke();
+      ctx.restore();
+      return {
+        endX: Math.max(x0, xN), endY: (y0 + yN) / 2,
+        dragRect: g.isInProgress ? null
+            : { x: Math.min(x0, xN), y: Math.min(yt0, ytN) - 4,
+                w: Math.abs(xN - x0), h: Math.abs(ybN - yt0) + 8 },
+      };
+    },
+  },
+
+  // Andrews' Pitchfork — three clicks: handle (p1) + two prongs (p2, p3). The
+  // median runs from p1 through the midpoint of p2–p3; parallel tines pass
+  // through p2 and p3. All three rays extend to the plot edge.
+  pitchfork: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length < 1) return null;
+      const P = (p) => ({ x: g.tsToX(p.ts), y: g.priceToY(p.price) });
+      const a = P(pts[0]);
+      let b;
+      if (pts.length >= 2) b = P(pts[1]);
+      else if (g.hover.inside && g.hover.x != null) b = { x: g.hover.x, y: g.hover.y };
+      else return { endX: a.x, endY: a.y, dragRect: null };
+      let c;
+      if (pts.length >= 3) c = P(pts[2]);
+      else if (pts.length === 2 && g.hover.inside && g.hover.x != null) c = { x: g.hover.x, y: g.hover.y };
+      else { g.drawLine(a.x, a.y, b.x, b.y); return { endX: Math.max(a.x, b.x), endY: (a.y + b.y) / 2, dragRect: null }; }
+      const mid = { x: (b.x + c.x) / 2, y: (b.y + c.y) / 2 };
+      const dx = mid.x - a.x, dy = mid.y - a.y;
+      const extend = (px, py) => {
+        const range = g.lineParams(px, py, dx, dy);
+        if (!range) return { x: px, y: py };
+        const t = Math.max(range[0], range[1]);
+        return { x: px + dx * t, y: py + dy * t };
+      };
+      const medEnd = extend(a.x, a.y);
+      g.drawLine(a.x, a.y, medEnd.x, medEnd.y);
+      g.drawLine(b.x, b.y, c.x, c.y);
+      const eb = extend(b.x, b.y), ec = extend(c.x, c.y);
+      g.drawLine(b.x, b.y, eb.x, eb.y);
+      g.drawLine(c.x, c.y, ec.x, ec.y);
+      const xs = [a.x, b.x, c.x, medEnd.x, eb.x, ec.x];
+      const ys = [a.y, b.y, c.y, medEnd.y, eb.y, ec.y];
+      return {
+        endX: Math.max(...xs), endY: medEnd.y,
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // ── Lines (extra) ──────────────────────────────────────────────────────────
+
+  // Crosshair line — one click; full-width horizontal + full-height vertical.
+  crossline: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      g.drawLine(g.plot.left, y, g.plot.right, y);
+      g.drawLine(x, g.plot.top, x, g.plot.bottom);
+      return {
+        endX: x, endY: y,
+        dragRect: g.isInProgress ? null
+            : { x: x - 4, y: g.plot.top, w: 8, h: g.plot.bottom - g.plot.top },
+      };
+    },
+  },
+
+  // Info line — a trendline annotated with Δprice / % / bars / angle.
+  infoline: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      const p2 = d.points[1];
+      let x2, y2, price2, ts2;
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); price2 = p2.price; ts2 = p2.ts; }
+      else if (g.hover.inside && g.hover.x != null) {
+        x2 = g.hover.x; y2 = g.hover.y; price2 = g.yToPrice(y2); ts2 = g.xToTs(x2);
+      } else return null;
+      g.drawLine(x1, y1, x2, y2);
+      const dP = price2 - p1.price;
+      const pct = p1.price !== 0 ? (dP / p1.price) * 100 : 0;
+      const barMs = (g.candles && g.candles.length > 1)
+          ? (g.candles[1].ts - g.candles[0].ts) || 1 : 1;
+      const bars = Math.round((ts2 - p1.ts) / barMs);
+      const ang = Math.atan2(-(y2 - y1), (x2 - x1)) * 180 / Math.PI;
+      const txt = (dP >= 0 ? '+' : '') + dP.toFixed(2) + ' (' + pct.toFixed(2) + '%)  '
+          + bars + 'b  ' + ang.toFixed(0) + '°';
+      _drawNodeLabel(g.ctx, (x1 + x2) / 2, (y1 + y2) / 2, txt, g.color, true);
+      return {
+        endX: Math.max(x1, x2), endY: (y1 + y2) / 2,
+        dragRect: g.isInProgress ? null : _bandRect(x1, y1, x2, y2),
+      };
+    },
+  },
+
+  // Trend angle — a trendline with its slope angle called out.
+  trendangle: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      const p2 = d.points[1];
+      let x2, y2;
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      g.drawLine(x1, y1, x2, y2);
+      // Reference horizontal + small arc at the origin.
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = _hexToRgba(g.color, 0.6);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + 40, y1); ctx.stroke();
+      const ang = Math.atan2(-(y2 - y1), (x2 - x1));
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(x1, y1, 22, 0, -ang, ang > 0); ctx.stroke();
+      ctx.restore();
+      _drawNodeLabel(g.ctx, x1 + 30, y1 - 16,
+          (ang * 180 / Math.PI).toFixed(1) + '°', g.color, true);
+      return {
+        endX: Math.max(x1, x2), endY: (y1 + y2) / 2,
+        dragRect: g.isInProgress ? null : _bandRect(x1, y1, x2, y2),
+      };
+    },
+  },
+
+  // ── Channels / forks (extra) ────────────────────────────────────────────────
+
+  // Flat channel — two horizontal lines at the anchor prices, full width.
+  channelflat: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const y1 = g.priceToY(p1.price);
+      let y2;
+      const p2 = d.points[1];
+      if (p2) y2 = g.priceToY(p2.price);
+      else if (g.hover.inside && g.hover.y != null) y2 = g.hover.y;
+      else return null;
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.07);
+      ctx.fillRect(g.plot.left, Math.min(y1, y2), g.plot.right - g.plot.left, Math.abs(y2 - y1));
+      ctx.restore();
+      g.drawLine(g.plot.left, y1, g.plot.right, y1);
+      g.drawLine(g.plot.left, y2, g.plot.right, y2);
+      return {
+        endX: g.plot.right, endY: (y1 + y2) / 2,
+        dragRect: g.isInProgress ? null
+            : { x: g.plot.left, y: Math.min(y1, y2) - 4,
+                w: g.plot.right - g.plot.left, h: Math.abs(y2 - y1) + 8 },
+      };
+    },
+  },
+
+  // ── Gann ─────────────────────────────────────────────────────────────────
+
+  // Gann fan — fan of geometric-angle rays (1×1, 1×2, 2×1 …) from p1; p2 sets
+  // the 1×1 unit box.
+  gannfan: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      const ux = x2 - x1, uy = y2 - y1; // 1×1 unit vector (signed)
+      const ratios = [1 / 8, 1 / 4, 1 / 3, 1 / 2, 1, 2, 3, 4, 8];
+      for (const r of ratios) {
+        // price/time ratio r: dx = ux, dy = uy * r  (steeper as r grows)
+        const dx = ux, dy = uy * r;
+        const range = g.lineParams(x1, y1, dx, dy);
+        if (!range) continue;
+        const t = Math.max(range[0], range[1]);
+        if (t <= 0) continue;
+        const ex = x1 + dx * t, ey = y1 + dy * t;
+        const main = Math.abs(r - 1) < 1e-9;
+        if (main) {
+          g.drawLine(x1, y1, ex, ey);
+        } else {
+          g.ctx.save();
+          g.ctx.strokeStyle = _hexToRgba(g.color, 0.7);
+          g.ctx.lineWidth = 1;
+          g.ctx.beginPath(); g.ctx.moveTo(x1, y1); g.ctx.lineTo(ex, ey); g.ctx.stroke();
+          g.ctx.restore();
+        }
+      }
+      return {
+        endX: Math.max(x1, x2), endY: y1,
+        dragRect: g.isInProgress ? null : _bandRect(x1, y1, x2, y2),
+      };
+    },
+  },
+
+  // Gann box — a box subdivided by Gann ratios on both axes plus diagonals.
+  gannbox: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      const L = Math.min(x1, x2), R = Math.max(x1, x2);
+      const T = Math.min(y1, y2), B = Math.max(y1, y2);
+      const ratios = [0, 0.25, 0.382, 0.5, 0.618, 0.75, 1];
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.strokeStyle = _hexToRgba(g.color, 0.5);
+      ctx.lineWidth = 1;
+      for (const r of ratios) {
+        const x = L + (R - L) * r, y = T + (B - T) * r;
+        ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, B); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(R, y); ctx.stroke();
+      }
+      ctx.restore();
+      g.drawLine(L, T, R, B);
+      g.drawLine(L, B, R, T);
+      return {
+        endX: R, endY: T,
+        dragRect: g.isInProgress ? null : { x: L, y: T - 4, w: R - L, h: (B - T) + 8 },
+      };
+    },
+  },
+
+  // ── Fibonacci family ───────────────────────────────────────────────────────
+
+  // Fib extension — three clicks (A,B,C); levels projected from C as ratios of
+  // the A→B leg.
+  fibext: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length < 2) {
+        const p = pts && pts[0];
+        if (!p) return null;
+        return { endX: g.tsToX(p.ts), endY: g.priceToY(p.price), dragRect: null };
+      }
+      const a = pts[0], b = pts[1];
+      let c;
+      if (pts.length >= 3) c = pts[2];
+      else if (g.hover.inside && g.hover.x != null) c = { ts: g.xToTs(g.hover.x), price: g.yToPrice(g.hover.y) };
+      else c = b;
+      const leg = b.price - a.price;
+      const xL = g.tsToX(c.ts);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.font = '500 10px Geist, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      let minY = Infinity, maxY = -Infinity;
+      for (let i = 0; i < _FIB_EXT.length; i++) {
+        const price = c.price + leg * _FIB_EXT[i];
+        const y = g.priceToY(price);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        ctx.strokeStyle = _FIB_COLORS[i % _FIB_COLORS.length];
+        ctx.lineWidth = g.isSelected ? 1.5 : 1;
+        ctx.setLineDash(i === 0 ? [] : [4, 4]);
+        ctx.beginPath(); ctx.moveTo(xL, y); ctx.lineTo(g.plot.right, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = _FIB_COLORS[i % _FIB_COLORS.length];
+        ctx.fillText((_FIB_EXT[i] * 100).toFixed(1) + '%  ' + price.toFixed(2), xL + 4, y - 6);
+      }
+      ctx.restore();
+      // The A→B→C guide.
+      g.drawLine(g.tsToX(a.ts), g.priceToY(a.price), g.tsToX(b.ts), g.priceToY(b.price));
+      g.drawLine(g.tsToX(b.ts), g.priceToY(b.price), xL, g.priceToY(c.price));
+      return {
+        endX: g.plot.right, endY: (minY + maxY) / 2,
+        dragRect: g.isInProgress ? null
+            : { x: xL, y: minY - 4, w: g.plot.right - xL, h: (maxY - minY) + 8 },
+      };
+    },
+  },
+
+  // Fib retracement (registry version — 2 clicks, full level set).
+  fibchannel: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length < 1) return null;
+      const a = { x: g.tsToX(pts[0].ts), y: g.priceToY(pts[0].price) };
+      let b;
+      if (pts.length >= 2) b = { x: g.tsToX(pts[1].ts), y: g.priceToY(pts[1].price) };
+      else if (g.hover.inside && g.hover.x != null) b = { x: g.hover.x, y: g.hover.y };
+      else return { endX: a.x, endY: a.y, dragRect: null };
+      let third;
+      if (pts.length >= 3) third = { x: g.tsToX(pts[2].ts), y: g.priceToY(pts[2].price) };
+      else if (pts.length === 2 && g.hover.inside && g.hover.x != null) third = { x: g.hover.x, y: g.hover.y };
+      if (!third) { g.drawLine(a.x, a.y, b.x, b.y); return { endX: Math.max(a.x, b.x), endY: (a.y + b.y) / 2, dragRect: null }; }
+      const vx = b.x - a.x, vy = b.y - a.y, len = Math.hypot(vx, vy) || 1;
+      const nx = -vy / len, ny = vx / len;
+      const base = (third.x - a.x) * nx + (third.y - a.y) * ny;
+      const ctx = g.ctx;
+      let minY = Infinity, maxY = -Infinity;
+      for (let i = 0; i < _FIB_RETR.length; i++) {
+        const off = base * _FIB_RETR[i];
+        const ax = a.x + nx * off, ay = a.y + ny * off;
+        const bx = b.x + nx * off, by = b.y + ny * off;
+        minY = Math.min(minY, ay, by); maxY = Math.max(maxY, ay, by);
+        ctx.save();
+        ctx.strokeStyle = _FIB_COLORS[i % _FIB_COLORS.length];
+        ctx.lineWidth = 1;
+        ctx.setLineDash(i === 0 || i === _FIB_RETR.length - 1 ? [] : [4, 4]);
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.restore();
+      }
+      const xs = [a.x, b.x], ys = [minY, maxY];
+      return {
+        endX: Math.max(a.x, b.x), endY: (minY + maxY) / 2,
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // Fib time zones — vertical lines at Fibonacci bar offsets; p1→p2 sets the
+  // unit spacing.
+  fibtimezone: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts);
+      let x2;
+      const p2 = d.points[1];
+      if (p2) x2 = g.tsToX(p2.ts);
+      else if (g.hover.inside && g.hover.x != null) x2 = g.hover.x;
+      else return null;
+      const unit = x2 - x1;
+      if (Math.abs(unit) < 1) return { endX: x1, endY: g.plot.top, dragRect: null };
+      const ctx = g.ctx;
+      for (let i = 0; i < _FIB_TIME.length; i++) {
+        const x = x1 + unit * _FIB_TIME[i];
+        if (x < g.plot.left - 2 || x > g.plot.right + 2) continue;
+        ctx.save();
+        ctx.strokeStyle = _FIB_COLORS[i % _FIB_COLORS.length];
+        ctx.lineWidth = 1;
+        ctx.setLineDash(i === 0 ? [] : [4, 4]);
+        ctx.beginPath(); ctx.moveTo(x, g.plot.top); ctx.lineTo(x, g.plot.bottom); ctx.stroke();
+        ctx.restore();
+      }
+      return {
+        endX: x1 + unit, endY: (g.plot.top + g.plot.bottom) / 2,
+        dragRect: g.isInProgress ? null
+            : { x: x1 - 4, y: g.plot.top, w: 8, h: g.plot.bottom - g.plot.top },
+      };
+    },
+  },
+
+  // Fib fan — fan of rays from p1 at Fibonacci ratios of the p1→p2 box.
+  fibfan: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; y2 = g.hover.y; }
+      else return null;
+      const dyTotal = y2 - y1, dxTotal = x2 - x1;
+      for (let i = 0; i < _FIB_RETR.length; i++) {
+        const r = _FIB_RETR[i];
+        const dx = dxTotal, dy = dyTotal * r;
+        const range = g.lineParams(x1, y1, dx, dy);
+        if (!range) continue;
+        const t = Math.max(range[0], range[1]);
+        if (t <= 0) continue;
+        const ex = x1 + dx * t, ey = y1 + dy * t;
+        g.ctx.save();
+        g.ctx.strokeStyle = _FIB_COLORS[i % _FIB_COLORS.length];
+        g.ctx.lineWidth = 1;
+        g.ctx.beginPath(); g.ctx.moveTo(x1, y1); g.ctx.lineTo(ex, ey); g.ctx.stroke();
+        g.ctx.restore();
+      }
+      return {
+        endX: Math.max(x1, x2), endY: (y1 + y2) / 2,
+        dragRect: g.isInProgress ? null : _bandRect(x1, y1, x2, y2),
+      };
+    },
+  },
+
+  // Fib circles — concentric ellipses at Fibonacci radii around p1; p2 sets the
+  // 100% radius.
+  fibcircle: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const cx = g.tsToX(p1.ts), cy = g.priceToY(p1.price);
+      let ex, ey;
+      const p2 = d.points[1];
+      if (p2) { ex = g.tsToX(p2.ts); ey = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { ex = g.hover.x; ey = g.hover.y; }
+      else return null;
+      const rx = Math.abs(ex - cx), ry = Math.abs(ey - cy);
+      if (rx <= 0 || ry <= 0) return { endX: cx, endY: cy, dragRect: null };
+      const ctx = g.ctx;
+      const ratios = [0.382, 0.618, 1.0];
+      for (let i = 0; i < ratios.length; i++) {
+        ctx.save();
+        ctx.strokeStyle = _FIB_COLORS[i % _FIB_COLORS.length];
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.ellipse(cx, cy, rx * ratios[i], ry * ratios[i], 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      return {
+        endX: cx + rx, endY: cy,
+        dragRect: g.isInProgress ? null : { x: cx - rx, y: cy - ry, w: 2 * rx, h: 2 * ry },
+      };
+    },
+  },
+
+  // ── Patterns (harmonic / wave / chart) ──────────────────────────────────────
+
+  xabcd: { clicks: 5, render(g, d) { return _renderPolyPattern(g, d, ['X', 'A', 'B', 'C', 'D'], { fill: true }); } },
+  cypher: { clicks: 5, render(g, d) { return _renderPolyPattern(g, d, ['X', 'A', 'B', 'C', 'D'], { fill: true }); } },
+  abcd: { clicks: 4, render(g, d) { return _renderPolyPattern(g, d, ['A', 'B', 'C', 'D']); } },
+  trianglepattern: { clicks: 5, render(g, d) { return _renderPolyPattern(g, d, ['A', 'B', 'C', 'D', 'E']); } },
+  threedrives: { clicks: 7, render(g, d) { return _renderPolyPattern(g, d, ['0', 'A', '1', 'B', '2', 'C', '3']); } },
+  elliottimpulse: { clicks: 6, render(g, d) { return _renderPolyPattern(g, d, ['0', '1', '2', '3', '4', '5']); } },
+  elliottcorrection: { clicks: 4, render(g, d) { return _renderPolyPattern(g, d, ['0', 'A', 'B', 'C']); } },
+  headshoulders: { clicks: 7, render(g, d) { return _renderPolyPattern(g, d, ['', 'LS', '', 'H', '', 'RS', '']); } },
+
+  // ── Projection / measure ────────────────────────────────────────────────────
+
+  // Price range — vertical measure of Δprice / % between two prices.
+  pricerange: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let y2, price2;
+      const p2 = d.points[1];
+      if (p2) { y2 = g.priceToY(p2.price); price2 = p2.price; }
+      else if (g.hover.inside && g.hover.y != null) { y2 = g.hover.y; price2 = g.yToPrice(y2); }
+      else return null;
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, price2 >= p1.price ? 0.08 : 0.08);
+      ctx.fillRect(x1 - 30, Math.min(y1, y2), 60, Math.abs(y2 - y1));
+      ctx.restore();
+      g.drawLine(x1 - 30, y1, x1 + 30, y1);
+      g.drawLine(x1 - 30, y2, x1 + 30, y2);
+      const dP = price2 - p1.price;
+      const pct = p1.price !== 0 ? (dP / p1.price) * 100 : 0;
+      _drawNodeLabel(g.ctx, x1, (y1 + y2) / 2,
+          (dP >= 0 ? '+' : '') + dP.toFixed(2) + ' (' + pct.toFixed(2) + '%)', g.color, false);
+      return {
+        endX: x1 + 30, endY: (y1 + y2) / 2,
+        dragRect: g.isInProgress ? null
+            : { x: x1 - 30, y: Math.min(y1, y2) - 4, w: 60, h: Math.abs(y2 - y1) + 8 },
+      };
+    },
+  },
+
+  // Date range — horizontal measure of bar/time span between two times.
+  daterange: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const y = g.priceToY(p1.price);
+      const x1 = g.tsToX(p1.ts);
+      let x2, ts2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); ts2 = p2.ts; }
+      else if (g.hover.inside && g.hover.x != null) { x2 = g.hover.x; ts2 = g.xToTs(x2); }
+      else return null;
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.08);
+      ctx.fillRect(Math.min(x1, x2), y - 16, Math.abs(x2 - x1), 32);
+      ctx.restore();
+      g.drawLine(x1, y - 16, x1, y + 16);
+      g.drawLine(x2, y - 16, x2, y + 16);
+      const barMs = (g.candles && g.candles.length > 1) ? (g.candles[1].ts - g.candles[0].ts) || 1 : 1;
+      const bars = Math.round((ts2 - p1.ts) / barMs);
+      _drawNodeLabel(g.ctx, (x1 + x2) / 2, y, Math.abs(bars) + ' bars', g.color, false);
+      return {
+        endX: Math.max(x1, x2), endY: y,
+        dragRect: g.isInProgress ? null
+            : { x: Math.min(x1, x2), y: y - 18, w: Math.abs(x2 - x1), h: 36 },
+      };
+    },
+  },
+
+  // Date-&-price range — measure box reporting Δprice / % / bars together.
+  dprange: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const x1 = g.tsToX(p1.ts), y1 = g.priceToY(p1.price);
+      let x2, y2, price2, ts2;
+      const p2 = d.points[1];
+      if (p2) { x2 = g.tsToX(p2.ts); y2 = g.priceToY(p2.price); price2 = p2.price; ts2 = p2.ts; }
+      else if (g.hover.inside && g.hover.x != null) {
+        x2 = g.hover.x; y2 = g.hover.y; price2 = g.yToPrice(y2); ts2 = g.xToTs(x2);
+      } else return null;
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.07);
+      ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+      ctx.strokeStyle = _hexToRgba(g.color, 0.7);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+      ctx.restore();
+      const dP = price2 - p1.price;
+      const pct = p1.price !== 0 ? (dP / p1.price) * 100 : 0;
+      const barMs = (g.candles && g.candles.length > 1) ? (g.candles[1].ts - g.candles[0].ts) || 1 : 1;
+      const bars = Math.round((ts2 - p1.ts) / barMs);
+      _drawNodeLabel(g.ctx, (x1 + x2) / 2, (y1 + y2) / 2,
+          (dP >= 0 ? '+' : '') + dP.toFixed(2) + ' (' + pct.toFixed(2) + '%)  ' + Math.abs(bars) + 'b',
+          g.color, false);
+      return {
+        endX: Math.max(x1, x2), endY: Math.min(y1, y2),
+        dragRect: g.isInProgress ? null
+            : { x: Math.min(x1, x2), y: Math.min(y1, y2) - 4, w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) + 8 },
+      };
+    },
+  },
+
+  // Forecast — three clicks: a base leg (p1→p2) and a projected leg (p2→p3),
+  // the projection drawn dashed with a shaded cone.
+  forecast: {
+    clicks: 3,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length < 1) return null;
+      const a = { x: g.tsToX(pts[0].ts), y: g.priceToY(pts[0].price) };
+      let b;
+      if (pts.length >= 2) b = { x: g.tsToX(pts[1].ts), y: g.priceToY(pts[1].price) };
+      else if (g.hover.inside && g.hover.x != null) b = { x: g.hover.x, y: g.hover.y };
+      else return { endX: a.x, endY: a.y, dragRect: null };
+      g.drawLine(a.x, a.y, b.x, b.y);
+      let c;
+      if (pts.length >= 3) c = { x: g.tsToX(pts[2].ts), y: g.priceToY(pts[2].price) };
+      else if (pts.length === 2 && g.hover.inside && g.hover.x != null) c = { x: g.hover.x, y: g.hover.y };
+      if (c) {
+        const ctx = g.ctx;
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = g.color;
+        ctx.lineWidth = g.strokeW;
+        ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = _hexToRgba(g.color, 0.08);
+        const cone = Math.abs(c.y - b.y) * 0.4 + 8;
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(c.x, c.y - cone);
+        ctx.lineTo(c.x, c.y + cone);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        _drawArrowHead(g.ctx, b.x, b.y, c.x, c.y, g.color, 10);
+      }
+      const xs = c ? [a.x, b.x, c.x] : [a.x, b.x];
+      const ys = c ? [a.y, b.y, c.y] : [a.y, b.y];
+      return {
+        endX: Math.max(...xs), endY: Math.min(...ys),
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // Polyline — variable-point open path (double-click / Esc to finish), drawn
+  // like the freehand path but with straight segments between explicit clicks.
+  polyline: {
+    clicks: -1,
+    variable: true,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length === 0) return null;
+      const scr = pts.map((p) => ({ x: g.tsToX(p.ts), y: g.priceToY(p.price) }));
+      if (g.isInProgress && g.hover.inside && g.hover.x != null) {
+        scr.push({ x: g.hover.x, y: g.hover.y });
+      }
+      if (scr.length < 2) return { endX: scr[0].x, endY: scr[0].y, dragRect: null };
+      for (let i = 0; i < scr.length - 1; i++) {
+        g.drawLine(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
+      }
+      const xs = scr.map((s) => s.x), ys = scr.map((s) => s.y);
+      return {
+        endX: scr[scr.length - 1].x, endY: scr[scr.length - 1].y,
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // ── Pitchfork variants ──────────────────────────────────────────────────────
+  // Ported from CandL: Schiff (origin = mid(p0,p1)), Modified Schiff
+  // (origin = mid(p0, mid(p1,p2))), Inside (origin = p0, tines at 0.25/0.75 of
+  // the p1–p2 span). All head toward mid(p1,p2).
+  pitchforkschiff: {
+    clicks: 3,
+    render(g, d) {
+      const an = _forkAnchors(g, d);
+      const partial = _forkPartial(g, an);
+      if (partial) return partial;
+      const target = _lerpPt(an.b, an.c, 0.5);
+      return _drawForkInChart(g, _lerpPt(an.a, an.b, 0.5), an.b, an.c, target);
+    },
+  },
+  pitchforkmod: {
+    clicks: 3,
+    render(g, d) {
+      const an = _forkAnchors(g, d);
+      const partial = _forkPartial(g, an);
+      if (partial) return partial;
+      const target = _lerpPt(an.b, an.c, 0.5);
+      return _drawForkInChart(g, _lerpPt(an.a, target, 0.5), an.b, an.c, target);
+    },
+  },
+  pitchforkinside: {
+    clicks: 3,
+    render(g, d) {
+      const an = _forkAnchors(g, d);
+      const partial = _forkPartial(g, an);
+      if (partial) return partial;
+      const target = _lerpPt(an.b, an.c, 0.5);
+      return _drawForkInChart(g, an.a, _lerpPt(an.b, an.c, 0.25), _lerpPt(an.b, an.c, 0.75), target);
+    },
+  },
+
+  // Disjoint channel — four clicks: edge p0→p1 and an independent edge p2→p3,
+  // with the quad between them filled.
+  channeldisjoint: {
+    clicks: 4,
+    render(g, d) {
+      const pts = d.points;
+      if (!pts || pts.length < 1) return null;
+      const P = (p) => ({ x: g.tsToX(p.ts), y: g.priceToY(p.price) });
+      const hov = (g.hover.inside && g.hover.x != null) ? { x: g.hover.x, y: g.hover.y } : null;
+      const a = P(pts[0]);
+      const b = pts[1] ? P(pts[1]) : hov;
+      if (!b) return { endX: a.x, endY: a.y, dragRect: null };
+      const c = pts[2] ? P(pts[2]) : (pts.length === 2 ? hov : null);
+      const e = pts[3] ? P(pts[3]) : (pts.length === 3 ? hov : null);
+      const ctx = g.ctx;
+      if (c && e) {
+        ctx.save();
+        ctx.fillStyle = _hexToRgba(g.color, 0.07);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+        ctx.lineTo(e.x, e.y); ctx.lineTo(c.x, c.y);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+        g.drawLine(c.x, c.y, e.x, e.y);
+      }
+      g.drawLine(a.x, a.y, b.x, b.y);
+      const ptsScr = [a, b]; if (c) ptsScr.push(c); if (e) ptsScr.push(e);
+      const xs = ptsScr.map((p) => p.x), ys = ptsScr.map((p) => p.y);
+      return {
+        endX: Math.max(...xs), endY: Math.min(...ys),
+        dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+      };
+    },
+  },
+
+  // ── Smart (data-aware) tools ────────────────────────────────────────────────
+
+  // Long / Short position — one click sets the entry; the stop is 1.5×Wilder
+  // ATR(14) away and the target at 2R. `expand` stores [entry, stop, target]
+  // as three points so each level is an independently draggable handle.
+  longpos: {
+    clicks: 1,
+    expand: (points, chart) => _positionExpand(points, chart, 1),
+    render(g, d) { return _positionRender(g, d, 1); },
+  },
+  shortpos: {
+    clicks: 1,
+    expand: (points, chart) => _positionExpand(points, chart, -1),
+    render(g, d) { return _positionRender(g, d, -1); },
+  },
+
+  // Anchored VWAP — one click anchors; cumulative volume-weighted mean of
+  // typical price from the anchor forward, with ±1σ bands.
+  avwap: {
+    clicks: 1,
+    render(g, d) {
+      const p0 = d.points[0];
+      if (!p0 || !g.candles || g.candles.length === 0) return null;
+      const start = _nearestIndex(g.candles, p0.ts);
+      if (start < 0) return null;
+      const n = g.candles.length - start;
+      const vwap = new Array(n), sd = new Array(n);
+      let pv = 0, pv2 = 0, vol = 0, tpSum = 0;
+      for (let k = 0; k < n; k++) {
+        const c = g.candles[start + k];
+        const tp = (c.h + c.l + c.c) / 3;
+        const v = c.v > 0 ? c.v : 0;
+        pv += tp * v; pv2 += tp * tp * v; vol += v; tpSum += tp;
+        if (vol > 0) { const m = pv / vol; vwap[k] = m; sd[k] = Math.sqrt(Math.max(0, pv2 / vol - m * m)); }
+        else { vwap[k] = tpSum / (k + 1); sd[k] = 0; }
+      }
+      const xs = new Array(n);
+      for (let k = 0; k < n; k++) xs[k] = g.tsToX(g.candles[start + k].ts);
+      const ctx = g.ctx;
+      if (n > 1) {
+        ctx.save();
+        ctx.fillStyle = _hexToRgba(g.color, 0.08);
+        ctx.beginPath();
+        for (let k = 0; k < n; k++) { const y = g.priceToY(vwap[k] + sd[k]); k === 0 ? ctx.moveTo(xs[k], y) : ctx.lineTo(xs[k], y); }
+        for (let k = n - 1; k >= 0; k--) { const y = g.priceToY(vwap[k] - sd[k]); ctx.lineTo(xs[k], y); }
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+      const trace = (off) => {
+        ctx.save(); ctx.strokeStyle = _hexToRgba(g.color, 0.5); ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let k = 0; k < n; k++) { const y = g.priceToY(vwap[k] + off * sd[k]); k === 0 ? ctx.moveTo(xs[k], y) : ctx.lineTo(xs[k], y); }
+        ctx.stroke(); ctx.restore();
+      };
+      trace(1); trace(-1);
+      const main = (w, col) => {
+        ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = w;
+        ctx.beginPath();
+        for (let k = 0; k < n; k++) { const y = g.priceToY(vwap[k]); k === 0 ? ctx.moveTo(xs[k], y) : ctx.lineTo(xs[k], y); }
+        ctx.stroke(); ctx.restore();
+      };
+      main(3, 'rgba(255,255,255,0.7)');
+      main(g.strokeW, g.color);
+      const x0 = xs[0], y0 = g.priceToY(vwap[0]);
+      _drawNodeLabel(g.ctx, x0, y0, 'aVWAP', g.color, true);
+      const yN = g.priceToY(vwap[n - 1]);
+      return {
+        endX: xs[n - 1], endY: yN,
+        dragRect: g.isInProgress ? null
+            : { x: x0 - 6, y: Math.min(y0, yN) - 18, w: 12, h: Math.abs(yN - y0) + 36 },
+      };
+    },
+  },
+
+  // Smart level — one click drops a self-scoring S/R zone; opacity grows with
+  // the number of distinct times price has touched the zone.
+  smartlevel: {
+    clicks: 1,
+    render(g, d) {
+      const p0 = d.points[0];
+      if (!p0) return null;
+      const heightPct = 0.5;
+      const half = Math.abs(p0.price) * heightPct / 200;
+      const lo = p0.price - half, hi = p0.price + half;
+      const yLo = g.priceToY(lo), yHi = g.priceToY(hi);
+      const CLUSTER_GAP = 3;
+      let touches = 0, lastTouch = -1 - CLUSTER_GAP;
+      const cs = g.candles || [];
+      for (let i = 0; i < cs.length; i++) {
+        if (cs[i].l <= hi && cs[i].h >= lo) {
+          if (i - lastTouch - 1 >= CLUSTER_GAP) touches++;
+          lastTouch = i;
+        }
+      }
+      const alpha = 0.06 + Math.min(touches, 8) / 8 * 0.18;
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, alpha);
+      ctx.fillRect(g.plot.left, Math.min(yLo, yHi), g.plot.right - g.plot.left, Math.abs(yHi - yLo));
+      ctx.restore();
+      const yMid = g.priceToY(p0.price);
+      g.drawLine(g.plot.left, yMid, g.plot.right, yMid);
+      _drawNodeLabel(g.ctx, g.plot.right - 60, yMid,
+          touches + ' touch' + (touches === 1 ? '' : 'es'), g.color, true);
+      return {
+        endX: g.plot.right, endY: yMid,
+        dragRect: g.isInProgress ? null
+            : { x: g.plot.left, y: Math.min(yLo, yHi) - 2, w: g.plot.right - g.plot.left, h: Math.abs(yHi - yLo) + 4 },
+      };
+    },
+  },
+
+  // Volume X-ray — two clicks define a box; candle volume inside is bucketed
+  // into 24 price rows drawn as a left-anchored histogram, POC highlighted.
+  volxray: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      let ts2, price2;
+      const p2 = d.points[1];
+      if (p2) { ts2 = p2.ts; price2 = p2.price; }
+      else if (g.hover.inside && g.hover.x != null) { ts2 = g.xToTs(g.hover.x); price2 = g.yToPrice(g.hover.y); }
+      else return null;
+      const tLo = Math.min(p1.ts, ts2), tHi = Math.max(p1.ts, ts2);
+      const pLo = Math.min(p1.price, price2), pHi = Math.max(p1.price, price2);
+      const ROWS = 24;
+      const rows = new Array(ROWS).fill(0);
+      const rowH = (pHi - pLo) / ROWS;
+      let max = 0, poc = -1;
+      const cs = g.candles || [];
+      if (rowH > 0) {
+        for (const c of cs) {
+          if (c.ts < tLo || c.ts > tHi || !(c.v > 0)) continue;
+          const lo = Math.max(c.l, pLo), hi = Math.min(c.h, pHi);
+          if (hi < lo) continue;
+          const range = c.h - c.l;
+          if (range <= 0) {
+            const r = Math.min(ROWS - 1, Math.max(0, Math.floor((c.c - pLo) / rowH)));
+            rows[r] += c.v; continue;
+          }
+          const r0 = Math.min(ROWS - 1, Math.max(0, Math.floor((lo - pLo) / rowH)));
+          const r1 = Math.min(ROWS - 1, Math.max(0, Math.ceil((hi - pLo) / rowH) - 1));
+          for (let r = r0; r <= r1; r++) {
+            const rLo = pLo + r * rowH;
+            const overlap = Math.min(hi, rLo + rowH) - Math.max(lo, rLo);
+            if (overlap > 0) rows[r] += c.v * (overlap / range);
+          }
+        }
+        for (let r = 0; r < ROWS; r++) if (rows[r] > max) { max = rows[r]; poc = r; }
+      }
+      const xL = g.tsToX(tLo), xR = g.tsToX(tHi);
+      const yT = g.priceToY(pHi), yB = g.priceToY(pLo);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.strokeStyle = _hexToRgba(g.color, 0.5); ctx.lineWidth = 1;
+      ctx.strokeRect(xL, yT, xR - xL, yB - yT);
+      ctx.restore();
+      const maxW = (xR - xL) * 0.9;
+      for (let r = 0; r < ROWS && max > 0; r++) {
+        const w = rows[r] / max * maxW;
+        if (w <= 0) continue;
+        const ryTop = g.priceToY(pLo + (r + 1) * rowH);
+        const rh = Math.abs(g.priceToY(pLo + r * rowH) - ryTop);
+        ctx.save();
+        ctx.fillStyle = _hexToRgba(r === poc ? _SMART_GREEN : g.color, r === poc ? 0.5 : 0.28);
+        ctx.fillRect(xL, ryTop, w, Math.max(1, rh - 1));
+        ctx.restore();
+      }
+      if (poc >= 0) {
+        const yPoc = g.priceToY(pLo + (poc + 0.5) * rowH);
+        ctx.save();
+        ctx.setLineDash([4, 4]); ctx.strokeStyle = _SMART_GREEN; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(xL, yPoc); ctx.lineTo(xR, yPoc); ctx.stroke();
+        ctx.restore();
+      }
+      return {
+        endX: xR, endY: yT,
+        dragRect: g.isInProgress ? null : { x: xL, y: yT - 4, w: xR - xL, h: (yB - yT) + 8 },
+      };
+    },
+  },
+
+  // ── Annotations (text-bearing) ───────────────────────────────────────────────
+  // Text content is entered via a Flutter dialog after placement (the shell
+  // listens for these kinds on drawingCommitted) and round-trips in d.text.
+
+  // Plain text label.
+  text: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const t = d.text || 'Text';
+      const w = _drawText(g.ctx, x, y, t, g.color, 'left');
+      return {
+        endX: x + w, endY: y,
+        dragRect: g.isInProgress ? null : { x: x - 2, y: y - 10, w: w + 4, h: 20 },
+      };
+    },
+  },
+
+  // Sticky note — tinted rounded box.
+  note: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const t = d.text || 'Note';
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.font = '600 11px Geist, sans-serif';
+      const tw = ctx.measureText(t).width;
+      ctx.restore();
+      const w = tw + 16, h = 22, bx = x, by = y - h / 2;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.16);
+      _roundRectPath(ctx, bx, by, w, h, 5); ctx.fill();
+      ctx.strokeStyle = g.color; ctx.lineWidth = 1;
+      _roundRectPath(ctx, bx, by, w, h, 5); ctx.stroke();
+      ctx.restore();
+      _drawText(g.ctx, bx + 8, y, t, g.color, 'left');
+      return { endX: bx + w, endY: y, dragRect: g.isInProgress ? null : { x: bx, y: by, w, h } };
+    },
+  },
+
+  // Speech-bubble comment sitting above the anchor with a tail to it.
+  comment: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const t = d.text || 'Comment';
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.font = '600 11px Geist, sans-serif';
+      const tw = ctx.measureText(t).width;
+      ctx.restore();
+      const w = tw + 16, h = 22;
+      const bx = x - w / 2, by = y - h - 12;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.16);
+      _roundRectPath(ctx, bx, by, w, h, 6); ctx.fill();
+      // tail
+      ctx.beginPath();
+      ctx.moveTo(x - 5, by + h); ctx.lineTo(x + 5, by + h); ctx.lineTo(x, by + h + 9);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = g.color; ctx.lineWidth = 1;
+      _roundRectPath(ctx, bx, by, w, h, 6); ctx.stroke();
+      ctx.restore();
+      _drawText(g.ctx, x, by + h / 2, t, g.color, 'center');
+      return { endX: bx + w, endY: by, dragRect: g.isInProgress ? null : { x: bx, y: by, w, h: h + 12 } };
+    },
+  },
+
+  // Callout — two clicks: p1 is the target, p2 the label box, joined by a
+  // leader line.
+  callout: {
+    clicks: 2,
+    render(g, d) {
+      const p1 = d.points[0];
+      if (!p1) return null;
+      const tx = g.tsToX(p1.ts), ty = g.priceToY(p1.price);
+      let bxc, byc;
+      const p2 = d.points[1];
+      if (p2) { bxc = g.tsToX(p2.ts); byc = g.priceToY(p2.price); }
+      else if (g.hover.inside && g.hover.x != null) { bxc = g.hover.x; byc = g.hover.y; }
+      else { return { endX: tx, endY: ty, dragRect: null }; }
+      const t = d.text || 'Callout';
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.font = '600 11px Geist, sans-serif';
+      const tw = ctx.measureText(t).width;
+      ctx.restore();
+      const w = tw + 16, h = 22, bx = bxc - w / 2, by = byc - h / 2;
+      g.drawLine(tx, ty, bxc, byc);
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.16);
+      _roundRectPath(ctx, bx, by, w, h, 5); ctx.fill();
+      ctx.strokeStyle = g.color; ctx.lineWidth = 1;
+      _roundRectPath(ctx, bx, by, w, h, 5); ctx.stroke();
+      ctx.restore();
+      _drawText(g.ctx, bxc, byc, t, g.color, 'center');
+      return {
+        endX: Math.max(tx, bx + w), endY: Math.min(ty, by),
+        dragRect: g.isInProgress ? null : _bboxRect([tx, bx, bx + w], [ty, by, by + h]),
+      };
+    },
+  },
+
+  // Price label — a tag pinned to the price with a left pointer.
+  pricelabel: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const t = d.text || p.price.toFixed(2);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.font = '600 11px Geist, sans-serif';
+      const tw = ctx.measureText(t).width;
+      ctx.restore();
+      const w = tw + 16, h = 20, bx = x + 7, by = y - h / 2;
+      ctx.save();
+      ctx.fillStyle = g.color;
+      ctx.beginPath();
+      ctx.moveTo(x, y); ctx.lineTo(bx, y - 5); ctx.lineTo(bx, y + 5);
+      ctx.closePath(); ctx.fill();
+      _roundRectPath(ctx, bx, by, w, h, 4); ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.font = '600 11px Geist, sans-serif';
+      ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(t, bx + 8, y);
+      ctx.restore();
+      return { endX: bx + w, endY: y, dragRect: g.isInProgress ? null : { x, y: by, w: w + 7, h } };
+    },
+  },
+
+  // Sign post — vertical pole from the bar up to a label box.
+  signpost: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const t = d.text || 'Sign';
+      const topY = Math.max(g.plot.top + 14, y - 48);
+      g.drawLine(x, y, x, topY);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.font = '600 11px Geist, sans-serif';
+      const tw = ctx.measureText(t).width;
+      ctx.restore();
+      const w = tw + 16, h = 20, bx = x - w / 2, by = topY - h;
+      ctx.save();
+      ctx.fillStyle = _hexToRgba(g.color, 0.9);
+      _roundRectPath(ctx, bx, by, w, h, 4); ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.font = '600 11px Geist, sans-serif';
+      ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(t, x, by + h / 2);
+      ctx.restore();
+      return {
+        endX: x + w / 2, endY: by,
+        dragRect: g.isInProgress ? null : { x: bx, y: by, w, h: (y - by) },
+      };
+    },
+  },
+
+  // ── Markers (no text) ────────────────────────────────────────────────────────
+
+  // Up arrow below the point (bullish marker).
+  arrowup: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = g.color;
+      ctx.beginPath();
+      ctx.moveTo(x, y); ctx.lineTo(x - 7, y + 12); ctx.lineTo(x - 2.5, y + 12);
+      ctx.lineTo(x - 2.5, y + 22); ctx.lineTo(x + 2.5, y + 22);
+      ctx.lineTo(x + 2.5, y + 12); ctx.lineTo(x + 7, y + 12);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+      return { endX: x + 7, endY: y, dragRect: g.isInProgress ? null : { x: x - 8, y: y - 2, w: 16, h: 26 } };
+    },
+  },
+
+  // Down arrow above the point (bearish marker).
+  arrowdown: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = g.color;
+      ctx.beginPath();
+      ctx.moveTo(x, y); ctx.lineTo(x - 7, y - 12); ctx.lineTo(x - 2.5, y - 12);
+      ctx.lineTo(x - 2.5, y - 22); ctx.lineTo(x + 2.5, y - 22);
+      ctx.lineTo(x + 2.5, y - 12); ctx.lineTo(x + 7, y - 12);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+      return { endX: x + 7, endY: y, dragRect: g.isInProgress ? null : { x: x - 8, y: y - 26, w: 16, h: 28 } };
+    },
+  },
+
+  // Flag — pole + pennant.
+  flag: {
+    clicks: 1,
+    render(g, d) {
+      const p = d.points[0];
+      if (!p) return null;
+      const x = g.tsToX(p.ts), y = g.priceToY(p.price);
+      const topY = y - 26;
+      g.drawLine(x, y, x, topY);
+      const ctx = g.ctx;
+      ctx.save();
+      ctx.fillStyle = g.color;
+      ctx.beginPath();
+      ctx.moveTo(x, topY); ctx.lineTo(x + 16, topY + 5); ctx.lineTo(x, topY + 10);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+      return { endX: x + 16, endY: topY, dragRect: g.isInProgress ? null : { x: x - 2, y: topY - 2, w: 20, h: (y - topY) + 4 } };
+    },
+  },
+};
+
+// Long/short position render (shared by longpos/shortpos). dir = +1 long.
+// Build the [entry, stop, target] point set for a position tool from the
+// single clicked anchor (stop 1.5×ATR away, target at 2R). All three share the
+// entry's time so they stack as draggable horizontal levels.
+function _positionExpand(points, chart, dir) {
+  const e = points && points[0];
+  if (!e) return points;
+  const bars = (chart && chart.candles) ? chart.candles : [];
+  const idx = _nearestIndex(bars, e.ts);
+  let atr = _wilderATR(bars, idx, 14);
+  if (atr === undefined || !(atr > 0)) atr = Math.max(Math.abs(e.price) * 0.02, 1e-8);
+  const stop = e.price - dir * 1.5 * atr;
+  const target = e.price + dir * 2 * Math.abs(e.price - stop);
+  return [
+    { ts: e.ts, price: e.price },
+    { ts: e.ts, price: stop },
+    { ts: e.ts, price: target },
+  ];
+}
+
+function _positionRender(g, d, dir) {
+  const pts = d.points;
+  const e = pts && pts[0];
+  if (!e) return null;
+  const x0 = g.tsToX(e.ts);
+  const barSec = _barSec(g.candles);
+  const x1 = g.tsToX(e.ts + 12 * barSec);
+  const w = (Number.isFinite(x1) && x1 - x0 > 8) ? (x1 - x0) : 120;
+  let stop, target;
+  if (pts.length >= 3 && pts[1] && pts[2]) {
+    // Stored (and independently draggable) stop / target levels.
+    stop = pts[1].price;
+    target = pts[2].price;
+  } else {
+    const idx = _nearestIndex(g.candles, e.ts);
+    let atr = _wilderATR(g.candles, idx, 14);
+    if (atr === undefined || !(atr > 0)) atr = Math.max(Math.abs(e.price) * 0.02, 1e-8);
+    stop = e.price - dir * 1.5 * atr;
+    target = e.price + dir * 2 * Math.abs(e.price - stop);
+  }
+  const riskBase = Math.abs(e.price - stop);
+  const riskR = riskBase > 0 ? Math.abs(target - e.price) / riskBase : 0;
+  const yE = g.priceToY(e.price), yS = g.priceToY(stop), yT = g.priceToY(target);
+  const ctx = g.ctx;
+  ctx.save();
+  ctx.fillStyle = _hexToRgba(_SMART_RED, 0.12);
+  ctx.fillRect(x0, Math.min(yE, yS), w, Math.abs(yS - yE));
+  ctx.fillStyle = _hexToRgba(_SMART_GREEN, 0.12);
+  ctx.fillRect(x0, Math.min(yE, yT), w, Math.abs(yT - yE));
+  ctx.setLineDash([4, 3]); ctx.lineWidth = 1;
+  ctx.strokeStyle = _SMART_RED;
+  ctx.beginPath(); ctx.moveTo(x0, yS); ctx.lineTo(x0 + w, yS); ctx.stroke();
+  ctx.strokeStyle = _SMART_GREEN;
+  ctx.beginPath(); ctx.moveTo(x0, yT); ctx.lineTo(x0 + w, yT); ctx.stroke();
+  ctx.restore();
+  g.drawLine(x0, yE, x0 + w, yE);
+  _drawNodeLabel(g.ctx, x0 + w, yE, 'Entry ' + e.price.toFixed(2), g.color, false);
+  _drawNodeLabel(g.ctx, x0 + w, yT, 'Target ' + target.toFixed(2), _SMART_GREEN, false);
+  _drawNodeLabel(g.ctx, x0 + w, yS, 'Stop ' + stop.toFixed(2), _SMART_RED, false);
+  _drawNodeLabel(g.ctx, x0 + w / 2, Math.min(yT, yS) - 2, 'R:R ' + riskR.toFixed(1), g.color, true);
+  const ys = [yE, yS, yT];
+  return {
+    endX: x0 + w, endY: yE,
+    dragRect: g.isInProgress ? null
+        : { x: x0, y: Math.min(...ys) - 4, w, h: Math.max(...ys) - Math.min(...ys) + 8 },
+  };
+}
+
+// Axis-aligned bounding band (with a little vertical slack) around a segment,
+// used as the translate hit-region for registry-drawn line tools.
+function _bandRect(ax, ay, bx, by) {
+  if (![ax, ay, bx, by].every(Number.isFinite)) return null;
+  const minX = Math.min(ax, bx), maxX = Math.max(ax, bx);
+  const minY = Math.min(ay, by), maxY = Math.max(ay, by);
+  return { x: minX, y: minY - 4, w: maxX - minX, h: (maxY - minY) + 8 };
+}
+
+// Liang–Barsky parameter clip: the t-range over which the infinite line
+// (px,py) + t·(dx,dy) lies inside the rectangle [L,R]×[T,B]. Returns [t0,t1]
+// (t0 ≤ t1) or null if the line misses the rect (or has zero direction).
+function _lineRectParams(px, py, dx, dy, L, T, R, B) {
+  if (dx === 0 && dy === 0) return null;
+  let t0 = -Infinity, t1 = Infinity;
+  const p = [-dx, dx, -dy, dy];
+  const q = [px - L, R - px, py - T, B - py];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return null; // parallel and outside this edge
+    } else {
+      const r = q[i] / p[i];
+      if (p[i] < 0) { if (r > t0) t0 = r; }
+      else { if (r < t1) t1 = r; }
+    }
+  }
+  if (t0 > t1) return null;
+  return [t0, t1];
+}
+
+// Filled arrowhead at (x2,y2) pointing along (x1,y1)→(x2,y2).
+function _drawArrowHead(ctx, x1, y1, x2, y2, color, size) {
+  const ang = Math.atan2(y2 - y1, x2 - x1);
+  const a = size || 10;
+  const spread = Math.PI / 7;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - a * Math.cos(ang - spread), y2 - a * Math.sin(ang - spread));
+  ctx.lineTo(x2 - a * Math.cos(ang + spread), y2 - a * Math.sin(ang + spread));
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+// Bounding-box dragRect for a set of screen points (with vertical slack).
+function _bboxRect(xs, ys) {
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null;
+  return { x: minX, y: minY - 4, w: maxX - minX, h: (maxY - minY) + 8 };
+}
+
+// A small pill label centred at (x,y) — used for pattern vertices and info
+// readouts. `above` lifts it above the point.
+function _drawNodeLabel(ctx, x, y, text, color, above) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  ctx.save();
+  ctx.font = '700 10px Geist, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const ly = above === false ? y : y - 13;
+  const w = Math.max(16, ctx.measureText(text).width + 8);
+  ctx.fillStyle = 'rgba(15,23,42,0.82)';
+  _roundRectPath(ctx, x - w / 2, ly - 8, w, 16, 4);
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  _roundRectPath(ctx, x - w / 2, ly - 8, w, 16, 4);
+  ctx.stroke();
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(text, x, ly);
+  ctx.restore();
+}
+
+// Draw legible text with a white halo (so it reads over candles). Returns the
+// measured text width. `align` defaults to 'left'.
+function _drawText(ctx, x, y, t, color, align) {
+  ctx.save();
+  ctx.font = '600 12px Geist, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = align || 'left';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 3;
+  ctx.strokeText(t, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(t, x, y);
+  const w = ctx.measureText(t).width;
+  ctx.restore();
+  return w;
+}
+
+// Rounded-rect path (module-level twin of the Chart method, for the helpers
+// that draw outside a Chart instance).
+function _roundRectPath(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+// Connect a sequence of anchors with the halo line, optionally close the
+// polygon, and label each vertex. Shared by the harmonic / wave / chart
+// patterns (XABCD, ABCD, Cypher, Elliott, Three Drives, Head & Shoulders…).
+// `labels` length also defines how many anchors the shape expects, so the
+// in-progress preview appends the live cursor as the next provisional vertex.
+function _renderPolyPattern(g, d, labels, opts) {
+  const o = opts || {};
+  const pts = d.points;
+  if (!pts || pts.length === 0) return null;
+  const scr = pts.map((p) => ({ x: g.tsToX(p.ts), y: g.priceToY(p.price) }));
+  if (g.isInProgress && scr.length < labels.length &&
+      g.hover.inside && g.hover.x != null) {
+    scr.push({ x: g.hover.x, y: g.hover.y });
+  }
+  if (scr.length >= 3 && o.fill) {
+    g.ctx.save();
+    g.ctx.fillStyle = _hexToRgba(g.color, 0.08);
+    g.ctx.beginPath();
+    g.ctx.moveTo(scr[0].x, scr[0].y);
+    for (let i = 1; i < scr.length; i++) g.ctx.lineTo(scr[i].x, scr[i].y);
+    g.ctx.closePath();
+    g.ctx.fill();
+    g.ctx.restore();
+  }
+  for (let i = 0; i < scr.length - 1; i++) {
+    g.drawLine(scr[i].x, scr[i].y, scr[i + 1].x, scr[i + 1].y);
+  }
+  if (o.close && scr.length >= labels.length && scr.length >= 3) {
+    g.drawLine(scr[scr.length - 1].x, scr[scr.length - 1].y, scr[0].x, scr[0].y);
+  }
+  for (let i = 0; i < scr.length && i < labels.length; i++) {
+    if (labels[i]) _drawNodeLabel(g.ctx, scr[i].x, scr[i].y, labels[i], g.color, true);
+  }
+  const xs = scr.map((s) => s.x), ys = scr.map((s) => s.y);
+  return {
+    endX: Math.max(...xs), endY: Math.min(...ys),
+    dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+  };
+}
+
+// Canonical Fibonacci ratio sets reused by the Fib-family tools.
+const _FIB_RETR = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+const _FIB_EXT = [0, 0.382, 0.618, 1.0, 1.272, 1.618, 2.0, 2.618];
+const _FIB_TIME = [0, 1, 2, 3, 5, 8, 13, 21, 34];
+const _FIB_COLORS = ['#94A3B8', '#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#94A3B8', '#EC4899', '#22D3EE'];
+
+const _SMART_RED = '#ef5350';
+const _SMART_GREEN = '#26a69a';
+
+// Median candle spacing (sec) from the loaded candles; 1 when unknown.
+function _barSec(candles) {
+  if (!candles || candles.length < 2) return 1;
+  return (candles[1].ts - candles[0].ts) || 1;
+}
+
+// Index of the candle nearest to ts (candles ascending by ts). -1 if empty.
+function _nearestIndex(candles, ts) {
+  if (!candles || candles.length === 0) return -1;
+  let lo = 0, hi = candles.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (candles[mid].ts < ts) lo = mid + 1; else hi = mid;
+  }
+  // lo is first >= ts; pick whichever neighbour is closer.
+  if (lo > 0 && Math.abs(candles[lo - 1].ts - ts) <= Math.abs(candles[lo].ts - ts)) return lo - 1;
+  return lo;
+}
+
+// Wilder ATR over `period` ending at candle index `last` (inclusive).
+// Returns undefined when there isn't enough history.
+function _wilderATR(candles, last, period) {
+  if (!candles || last < period) return undefined;
+  let atr = 0;
+  for (let i = last - period + 1; i <= last; i++) {
+    const c = candles[i], prev = candles[i - 1];
+    if (!prev) return undefined;
+    const tr = Math.max(
+        c.h - c.l,
+        Math.abs(c.h - prev.c),
+        Math.abs(c.l - prev.c));
+    atr += tr;
+  }
+  return atr / period;
+}
+
+function _lerpPt(p, q, t) {
+  return { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
+}
+
+// Resolve a 3-anchor fork's screen points with live-cursor preview for the
+// pending anchor. Returns { a, b, c } where b/c may be null while placing.
+function _forkAnchors(g, d) {
+  const pts = d.points;
+  if (!pts || pts.length < 1) return null;
+  const P = (p) => ({ x: g.tsToX(p.ts), y: g.priceToY(p.price) });
+  const a = P(pts[0]);
+  let b = null, c = null;
+  if (pts.length >= 2) b = P(pts[1]);
+  else if (g.hover.inside && g.hover.x != null) b = { x: g.hover.x, y: g.hover.y };
+  if (pts.length >= 3) c = P(pts[2]);
+  else if (pts.length === 2 && g.hover.inside && g.hover.x != null) c = { x: g.hover.x, y: g.hover.y };
+  return { a, b, c };
+}
+
+// Draw a pitchfork from its median origin/target and the two tine anchors.
+// Median + both tines are rays extended to the plot edge; the p1–p2 base is
+// dashed and the band between the tines is lightly filled.
+function _drawForkInChart(g, origin, b, c, target) {
+  const dx = target.x - origin.x, dy = target.y - origin.y;
+  const ext = (px, py) => {
+    const range = g.lineParams(px, py, dx, dy);
+    if (!range) return { x: px, y: py };
+    const t = Math.max(range[0], range[1]);
+    return { x: px + dx * t, y: py + dy * t };
+  };
+  const mEnd = ext(origin.x, origin.y);
+  const bEnd = ext(b.x, b.y);
+  const cEnd = ext(c.x, c.y);
+  const ctx = g.ctx;
+  ctx.save();
+  ctx.fillStyle = _hexToRgba(g.color, 0.06);
+  ctx.beginPath();
+  ctx.moveTo(b.x, b.y); ctx.lineTo(bEnd.x, bEnd.y);
+  ctx.lineTo(cEnd.x, cEnd.y); ctx.lineTo(c.x, c.y);
+  ctx.closePath(); ctx.fill();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = _hexToRgba(g.color, 0.7); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+  ctx.restore();
+  g.drawLine(b.x, b.y, bEnd.x, bEnd.y);
+  g.drawLine(c.x, c.y, cEnd.x, cEnd.y);
+  g.drawLine(origin.x, origin.y, mEnd.x, mEnd.y);
+  const xs = [origin.x, b.x, c.x, mEnd.x, bEnd.x, cEnd.x];
+  const ys = [origin.y, b.y, c.y, mEnd.y, bEnd.y, cEnd.y];
+  return {
+    endX: Math.max(...xs), endY: mEnd.y,
+    dragRect: g.isInProgress ? null : _bboxRect(xs, ys),
+  };
+}
+
+// Shared partial/edge handling for the fork variants: returns a result object
+// when the fork isn't fully placeable yet (so the variant just builds origin/
+// target from the anchors when this returns null).
+function _forkPartial(g, an) {
+  if (!an || !an.b) return an ? { endX: an.a.x, endY: an.a.y, dragRect: null } : null;
+  if (!an.c) {
+    g.drawLine(an.a.x, an.a.y, an.b.x, an.b.y);
+    return {
+      endX: Math.max(an.a.x, an.b.x), endY: (an.a.y + an.b.y) / 2,
+      dragRect: null,
+    };
+  }
+  return null;
+}
+
 class Chart {
   constructor({ container, paneId, palette, requestHistory, subscribe, unsubscribe, notifyBrickSize }) {
     this._notifyBrickSize = typeof notifyBrickSize === 'function' ? notifyBrickSize : (() => {});
@@ -75,6 +2026,11 @@ class Chart {
     this._haPrev = null;          // {haOpen, haClose} cached between bars
     this._renkoBricks = [];       // {idx, openPrice, closePrice, direction, sourceBarTime, sourceBarIndex}
     this._renkoBrickSize = 0;     // ATR-derived, pushed back via _notifyBrickSize
+    // Phase 26 — rebinned pseudo-candle array for linebreak / kagi / range / pnf.
+    // Each element mirrors a candle: {o,h,l,c,v,ts, direction, ...extra}. Built
+    // by _rebuildRebinned() and consumed by the draw switch + _seriesLength().
+    this._rebinned = [];
+    this._rebinnedStyle = null;   // which style _rebinned was built for
 
     // Phase 18 — option-chain OI bars + LTP bar-close countdown.
     this.showOptionChainOi = false;
@@ -214,6 +2170,16 @@ class Chart {
     // or null. Set when the user completes the 2nd measure-tool click,
     // cleared on the next mousedown anywhere else or on tool change.
     this._activeMeasure = null; // { kind, color, points: [{price, ts}] }
+    // Phase 31 — CandLlabs ghost projections (Echoes / Oracle). Anchored at the
+    // last bar, sprouting rightward into future space. Ported from CandL's
+    // ProjectionLine / ProjectionBand + setProjections auto-fit.
+    this._projLines = [];           // [{ id, color, opacity, width, dashed, points:[{barOffset, price}] }]
+    this._projBand = null;          // { color, opacity, upper:[{barOffset,price}], lower:[{barOffset,price}] }
+    this._projSavedOffsetX = null;  // restore the user's pan when projections clear
+    // Phase 30 — left gutter reserved for the floating drawing rail. The rail
+    // toggles this (46 when shown, 0 when collapsed) so the header + candles
+    // reclaim the space. Lite mode always uses 0 (no rail there).
+    this._leftGutter = 46;
     this._drawingHits = [];         // [{ rect, drawingId, action: 'delete'|'drag', kind }]
     this._indicatorChipHits = [];   // [{ rect, indicatorId, action: 'toggleHide'|'delete' }]
     // Full-row rects for each indicator chip — used to (a) keep the row
@@ -243,6 +2209,11 @@ class Chart {
     this._dragStartClientX = 0;
     this._dragStartClientY = 0;
     this._dragDrawingMoved = false;
+    // Phase 30 — per-anchor handle editing (reshape / extend a single point).
+    this._dragHandleId = null;     // drawingId whose handle is being dragged
+    this._dragHandleIndex = -1;    // which point index
+    this._dragHandleMoved = false;
+    this._drawingHandleHits = [];  // [{ rect, drawingId, pointIndex }]
     this._colorSwatchHits = []; // [{ rect, color, drawingId }]
     // Per-toolbar popup state — { drawingId, kind: 'color'|'stroke', anchorX }
     // Set when the user clicks the color or stroke button; cleared on
@@ -306,6 +2277,13 @@ class Chart {
       '_computeAO', '_computeMFI', '_computeOBV', '_computeCMF',
       '_computeWilliamsR', '_computeCisd', '_computeFvg', '_computeOb',
       '_computeLiqSweep', '_computeMss',
+      // Phase 29 — added indicators.
+      '_computeWMA', '_computeHMA', '_computeKeltner', '_computeDonchian',
+      '_computeSuperTrend', '_computeCCI', '_computeROC', '_computeCVD',
+      '_computeADX',
+      // Added indicators — PSAR, VWMA, TRIX, Vortex, UO, DPO, PVT, A/D.
+      '_computePSAR', '_computeVWMA', '_computeTRIX', '_computeVortex',
+      '_computeUO', '_computeDPO', '_computePVT', '_computeAD',
     ];
     for (const name of NAMES) {
       const raw = Chart.prototype[name];
@@ -349,6 +2327,8 @@ class Chart {
     this._resetData();
     this._renkoBricks = [];
     this._renkoBrickSize = 0;
+    this._rebinned = [];
+    this._clearLabProjection();
     this._pendingOverlayMoves.clear();
     // _notifyBrickSize is re-emitted after the next history load completes.
     this._loadHistory();
@@ -370,9 +2350,113 @@ class Chart {
     this._resetData();
     this._renkoBricks = [];
     this._renkoBrickSize = 0;
+    this._rebinned = [];
+    this._clearLabProjection();
     this._pendingOverlayMoves.clear();
     // _notifyBrickSize is re-emitted after the next history load completes.
     if (this.scrip) this._loadHistory();
+  }
+
+  // ── Phase 31 — CandLlabs ghost projections ───────────────────────────────
+  // The Lab panel computes future paths (Echoes / Oracle) and hands us
+  // ProjectionLine[] + an optional ProjectionBand. We anchor them at the last
+  // bar (barOffset 0 = now) and, on first set, pan left once so the projection
+  // plus a little breathing room is visible (the user's pan is restored when
+  // projections clear). Mirrors CandL's setProjections / drawProjections.
+  setLabProjection(data) {
+    if (!data || (!Array.isArray(data.lines) && !data.band)) {
+      this._clearLabProjection();
+      return;
+    }
+    this._projLines = Array.isArray(data.lines) ? data.lines : [];
+    this._projBand = data.band || null;
+    // Auto-fit: reveal future space for the longest projection + 3 bars.
+    let maxOff = 0;
+    for (const l of this._projLines) {
+      for (const p of l.points) if (p.barOffset > maxOff) maxOff = p.barOffset;
+    }
+    if (this._projBand) {
+      for (const p of this._projBand.upper) if (p.barOffset > maxOff) maxOff = p.barOffset;
+      for (const p of this._projBand.lower) if (p.barOffset > maxOff) maxOff = p.barOffset;
+    }
+    const cw = this.view.cellW || 6;
+    // offsetX shifts the series; more-negative reveals room on the right.
+    const want = -(maxOff + 3) * cw + 0.5 * cw;
+    if (this._projSavedOffsetX == null) this._projSavedOffsetX = this.view.offsetX || 0;
+    if ((this.view.offsetX || 0) > want) this.view.offsetX = want;
+    this.scheduleRedraw();
+  }
+
+  // Set the left gutter reserved for the drawing rail (px). The rail calls
+  // this on collapse (0) / expand (46) so the chart content shifts with it.
+  setLeftGutter(px) {
+    const next = Math.max(0, +px || 0);
+    if (next === this._leftGutter) return;
+    this._leftGutter = next;
+    this.scheduleRedraw();
+  }
+
+  _clearLabProjection() {
+    if (this._projLines.length === 0 && !this._projBand &&
+        this._projSavedOffsetX == null) return;
+    if (this._projSavedOffsetX != null) {
+      this.view.offsetX = this._projSavedOffsetX;
+      this._projSavedOffsetX = null;
+    }
+    this._projLines = [];
+    this._projBand = null;
+    this.scheduleRedraw();
+  }
+
+  // Render ghost projections — translucent band first, then the ghost lines.
+  // Drawn above candles/overlays but beneath drawings + crosshair.
+  _drawLabProjection(plot, priceToY) {
+    if (this._projLines.length === 0 && !this._projBand) return;
+    const lastIndex = this._seriesLength() - 1;
+    if (lastIndex < 0) return;
+    const xAt = (off) => this._candleXCenter(lastIndex + off, plot);
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.left, plot.top, plot.width, plot.height);
+    ctx.clip();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    const band = this._projBand;
+    if (band && band.upper.length >= 2 && band.lower.length >= 2) {
+      ctx.beginPath();
+      for (let i = 0; i < band.upper.length; i++) {
+        const p = band.upper[i];
+        const x = xAt(p.barOffset), y = priceToY(p.price);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      for (let i = band.lower.length - 1; i >= 0; i--) {
+        const p = band.lower[i];
+        ctx.lineTo(xAt(p.barOffset), priceToY(p.price));
+      }
+      ctx.closePath();
+      ctx.globalAlpha = Math.min(1, Math.max(0, band.opacity));
+      ctx.fillStyle = band.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    for (const line of this._projLines) {
+      if (!line.points || line.points.length < 2) continue;
+      ctx.beginPath();
+      for (let i = 0; i < line.points.length; i++) {
+        const p = line.points[i];
+        const x = xAt(p.barOffset), y = priceToY(p.price);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.globalAlpha = Math.min(1, Math.max(0, line.opacity));
+      ctx.strokeStyle = line.color;
+      ctx.lineWidth = line.width || 1;
+      ctx.setLineDash(line.dashed ? [4, 3] : []);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+    ctx.restore();
   }
 
   // Lite mode — used by the scan-explanation host. Suppresses order/depth
@@ -662,8 +2746,12 @@ class Chart {
   // Phase 7 — toggle draw mode. Null exits; 'hline' / 'trendline' / 'rect' / 'hray' enters.
   // Phase 21 — extended to include 'fib' and 'path'.
   setDrawMode(kind) {
-    const VALID = new Set(['hline','trendline','rect','hray','fib','path','measure']);
-    const next = VALID.has(kind) ? kind : null;
+    // `measure` (ephemeral) and `path` (freehand polyline) keep bespoke
+    // placement; every other tool is declared in the registry.
+    const LEGACY = new Set(['measure', 'path']);
+    const valid = LEGACY.has(kind) ||
+        Object.prototype.hasOwnProperty.call(DRAWING_TOOLS, kind);
+    const next = valid ? kind : null;
     this._drawMode = next;
     this._inProgressDrawing = null;
     // Picking a DIFFERENT tool clears the one-shot measurement, but
@@ -720,10 +2808,13 @@ class Chart {
   }
 
   setCandleStyle(style) {
-    const valid = new Set(['candles','hollow','bars','line','area','heikin-ashi','renko']);
+    const valid = new Set(['candles','hollow','bars','line','area','heikin-ashi',
+      'renko','baseline','step','columns','hlcbars','highlow','hlcarea',
+      'volcandles','linebreak','kagi','range','pnf']);
     const next = valid.has(style) ? style : 'candles';
     if (next === this.candleStyle) return;
     const wasRenko = this.candleStyle === 'renko';
+    const wasRebin = this._isRebinnedStyle(this.candleStyle);
     this.candleStyle = next;
     // Always reset HA cache so it starts clean on the next draw.
     this._haPrev = null;
@@ -742,6 +2833,24 @@ class Chart {
       this._renkoBricks = [];
       this._renkoBrickSize = 0;
       if (wasRenko) this._notifyBrickSize(0); // tell Flutter to clear the subtitle
+    }
+    // Phase 26 — rebinned (non-renko) styles maintain their own pseudo-candle
+    // array (this._rebinned). Rebuild it when switching INTO such a style,
+    // and clear it otherwise so _seriesLength() falls back to raw candles.
+    if (this._isRebinnedStyle(next)) {
+      this._rebuildRebinned();
+    } else {
+      this._rebinned = [];
+      this._rebinnedStyle = null;
+    }
+    // Switching to/from a rebinned style (or between rebinned types) changes the
+    // column COUNT drastically — Range / P&F produce far more columns than the
+    // raw candle count. The previous pan/zoom would then push the whole series
+    // off-screen (looks blank). Reset the horizontal pan + re-enable auto-fit so
+    // the latest columns are visible.
+    if (wasRenko || wasRebin || this._isRebinnedStyle(next)) {
+      this.view.offsetX = 0;
+      this.view.priceCenter = null; // re-arm vertical auto-fit
     }
     this.scheduleRedraw();
   }
@@ -924,6 +3033,12 @@ class Chart {
         this.candles, this.tickState, this.aggState, targetMs);
     if (result === 'applied') {
       this._lastTickAt = Date.now();
+      // Phase 26 — rebinned styles re-derive their pseudo-candle array from the
+      // (now-updated) candles whenever a tick is applied. Cheap relative to the
+      // redraw and keeps panning/scaling consistent with the raw series.
+      if (this._isRebinnedStyle(this.candleStyle)) {
+        this._rebuildRebinned();
+      }
       this.scheduleRedraw();
     }
     // Renko tick update — use the same price that drives bar commits (tickState.lp).
@@ -966,6 +3081,8 @@ class Chart {
       if (this.candleStyle === 'renko') {
         this._rebuildRenko();
         this._notifyBrickSize(this._renkoBrickSize);
+      } else if (this._isRebinnedStyle(this.candleStyle)) {
+        this._rebuildRebinned();
       }
       this.scheduleRedraw();
       return;
@@ -988,6 +3105,8 @@ class Chart {
     if (this.candleStyle === 'renko') {
       this._rebuildRenko();
       this._notifyBrickSize(this._renkoBrickSize);
+    } else if (this._isRebinnedStyle(this.candleStyle)) {
+      this._rebuildRebinned();
     }
     this.scheduleRedraw();
     if (this.scrip) this.subscribe({ exch: this.scrip.exch, token: this.scrip.token });
@@ -1415,6 +3534,28 @@ class Chart {
           }
         }
 
+        // --- Phase 30: anchor-handle hit → start single-point reshape ---
+        // Checked BEFORE the body drag-band so grabbing an endpoint reshapes
+        // (extends) the drawing instead of translating the whole thing.
+        if (!this._drawMode) {
+          for (const h of this._drawingHandleHits) {
+            const r = h.rect;
+            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+              const target = this._drawings.find((dd) => dd.id === h.drawingId);
+              if (target && !target.locked) {
+                e.preventDefault();
+                e.stopPropagation();
+                this._selectedDrawingId = h.drawingId;
+                this._dragHandleId = h.drawingId;
+                this._dragHandleIndex = h.pointIndex;
+                this._dragHandleMoved = false;
+                this.scheduleRedraw();
+                return;
+              }
+            }
+          }
+        }
+
         // --- Phase 10: drawing line-band hit → select + start drag-to-move ---
         // Only consider drag hits when we're NOT in draw-mode (placement) so
         // the user can still click on top of an existing drawing to add a new
@@ -1475,116 +3616,6 @@ class Chart {
             price = bestPrice;
           }
         }
-        if (this._drawMode === 'hline') {
-          const drawing = {
-            id: 'd-' + Date.now().toString(36) + '-' +
-                Math.random().toString(36).slice(2, 8),
-            kind: 'hline',
-            color: '#3B82F6',
-            points: [{ price, ts }],
-          };
-          try {
-            parent.postMessage(JSON.stringify({
-              type: 'drawingCommitted',
-              value: { paneId: this.paneId, drawing },
-            }), '*');
-          } catch (_) {}
-          // Keep tool active for multi-draw — user toggles off via the
-          // Draw button or by picking a different tool.
-          this._inProgressDrawing = null;
-          this.scheduleRedraw();
-          return;
-        }
-        // Rectangle — pure 2-click. Click 1 anchors the first corner;
-        // mousemove previews; Click 2 commits. Switched away from the
-        // earlier click-drag-release scheme because a click-without-drag
-        // was silently cancelling instead of placing a corner — users
-        // expected the click to "stick" like every other 2-click tool.
-        if (this._drawMode === 'rect') {
-          if (!this._inProgressDrawing) {
-            this._inProgressDrawing = {
-              kind: 'rect',
-              color: '#3B82F6',
-              points: [{ price, ts }],
-            };
-            this.scheduleRedraw();
-            return;
-          }
-          const drawing = {
-            id: 'd-' + Date.now().toString(36) + '-' +
-                Math.random().toString(36).slice(2, 8),
-            kind: 'rect',
-            color: '#3B82F6',
-            points: [
-              this._inProgressDrawing.points[0],
-              { price, ts },
-            ],
-          };
-          try {
-            parent.postMessage(JSON.stringify({
-              type: 'drawingCommitted',
-              value: { paneId: this.paneId, drawing },
-            }), '*');
-          } catch (_) {}
-          // Keep tool active so the user can draw another rectangle
-          // without re-clicking the Draw → Rectangle button. Picking a
-          // different tool or clicking Rectangle again exits.
-          this._inProgressDrawing = null;
-          this.scheduleRedraw();
-          return;
-        }
-        // Phase 19.3 — Horizontal Ray: single-click commit (like hline but anchored-right).
-        if (this._drawMode === 'hray') {
-          const drawing = {
-            id: 'd-' + Date.now().toString(36) + '-' +
-                Math.random().toString(36).slice(2, 8),
-            kind: 'hray',
-            color: '#3B82F6',
-            points: [{ price, ts }],
-          };
-          try {
-            parent.postMessage(JSON.stringify({
-              type: 'drawingCommitted',
-              value: { paneId: this.paneId, drawing },
-            }), '*');
-          } catch (_) {}
-          // Keep tool active for multi-draw.
-          this._inProgressDrawing = null;
-          this.scheduleRedraw();
-          return;
-        }
-        // Trendline — first click stores point, second commits.
-        if (this._drawMode === 'trendline') {
-          if (!this._inProgressDrawing) {
-            this._inProgressDrawing = {
-              kind: 'trendline',
-              color: '#3B82F6',
-              points: [{ price, ts }],
-            };
-            this.scheduleRedraw();
-            return;
-          }
-          const drawing = {
-            id: 'd-' + Date.now().toString(36) + '-' +
-                Math.random().toString(36).slice(2, 8),
-            kind: 'trendline',
-            color: '#3B82F6',
-            points: [
-              this._inProgressDrawing.points[0],
-              { price, ts },
-            ],
-          };
-          try {
-            parent.postMessage(JSON.stringify({
-              type: 'drawingCommitted',
-              value: { paneId: this.paneId, drawing },
-            }), '*');
-          } catch (_) {}
-          // Keep tool active for multi-draw.
-          this._inProgressDrawing = null;
-          this.scheduleRedraw();
-          return;
-        }
         // Measure — 2-click, EPHEMERAL. Click 1 sets anchor; click 2 commits
         // a single measurement that stays on screen until the next click
         // anywhere on the chart clears it. NOT stored in the drawings list
@@ -1606,38 +3637,6 @@ class Chart {
           this.scheduleRedraw();
           return;
         }
-        // Phase 21.A — Fibonacci Retracement: first click stores anchor, second commits.
-        if (this._drawMode === 'fib') {
-          if (!this._inProgressDrawing) {
-            this._inProgressDrawing = {
-              kind: 'fib',
-              color: '#3B82F6',
-              points: [{ price, ts }],
-            };
-            this.scheduleRedraw();
-            return;
-          }
-          const drawing = {
-            id: 'd-' + Date.now().toString(36) + '-' +
-                Math.random().toString(36).slice(2, 8),
-            kind: 'fib',
-            color: '#3B82F6',
-            points: [
-              this._inProgressDrawing.points[0],
-              { price, ts },
-            ],
-          };
-          try {
-            parent.postMessage(JSON.stringify({
-              type: 'drawingCommitted',
-              value: { paneId: this.paneId, drawing },
-            }), '*');
-          } catch (_) {}
-          // Keep tool active for multi-draw.
-          this._inProgressDrawing = null;
-          this.scheduleRedraw();
-          return;
-        }
         // Phase 21.B — Path (multi-point polyline): each click appends a point.
         // Double-click or Esc commits; Esc with < 2 points cancels.
         if (this._drawMode === 'path') {
@@ -1655,6 +3654,69 @@ class Chart {
             this._inProgressDrawing.points.push({ price, ts });
           }
           this.scheduleRedraw();
+          return;
+        }
+        // Phase 28 — generic placement for registry-driven tools. Single-click
+        // tools (clicks≤1) commit immediately; multi-click tools accumulate
+        // anchors and commit once `clicks` points are placed. The tool stays
+        // active for repeat-draw, matching the built-in branches.
+        const _impl = DRAWING_TOOLS[this._drawMode];
+        if (_impl) {
+          // Variable-point tools (polyline) accumulate anchors like `path`
+          // and commit on double-click / Esc (handled elsewhere).
+          if (_impl.variable) {
+            if (!this._inProgressDrawing) {
+              this._inProgressDrawing = {
+                kind: this._drawMode,
+                color: '#3B82F6',
+                points: [{ price, ts }],
+              };
+            } else if (this._inProgressDrawing.points.length < 64) {
+              this._inProgressDrawing.points.push({ price, ts });
+            }
+            this.scheduleRedraw();
+            return;
+          }
+          const need = Math.max(1, _impl.clicks || 1);
+          const commit = (points) => {
+            // Tools with an `expand` hook (position tools) turn the placed
+            // anchors into a richer point set (entry/stop/target) so each
+            // level becomes an independently draggable handle.
+            const finalPoints = (typeof _impl.expand === 'function')
+                ? _impl.expand(points, this)
+                : points;
+            const drawing = {
+              id: 'd-' + Date.now().toString(36) + '-' +
+                  Math.random().toString(36).slice(2, 8),
+              kind: this._drawMode,
+              color: '#3B82F6',
+              points: finalPoints,
+            };
+            try {
+              parent.postMessage(JSON.stringify({
+                type: 'drawingCommitted',
+                value: { paneId: this.paneId, drawing },
+              }), '*');
+            } catch (_) {}
+            this._inProgressDrawing = null;
+            this.scheduleRedraw();
+          };
+          if (!this._inProgressDrawing) {
+            if (need <= 1) { commit([{ price, ts }]); return; }
+            this._inProgressDrawing = {
+              kind: this._drawMode,
+              color: '#3B82F6',
+              points: [{ price, ts }],
+            };
+            this.scheduleRedraw();
+            return;
+          }
+          this._inProgressDrawing.points.push({ price, ts });
+          if (this._inProgressDrawing.points.length >= need) {
+            commit(this._inProgressDrawing.points.slice());
+          } else {
+            this.scheduleRedraw();
+          }
           return;
         }
       }
@@ -1849,6 +3911,29 @@ class Chart {
         this.scheduleRedraw();
         return;
       }
+      // Phase 30 — anchor-handle reshape release. Persist the new points.
+      if (this._dragHandleId != null) {
+        if (this._dragHandleMoved) {
+          const d = this._drawings.find((dd) => dd.id === this._dragHandleId);
+          if (d) {
+            try {
+              parent.postMessage(JSON.stringify({
+                type: 'drawingMoved',
+                value: {
+                  paneId: this.paneId,
+                  drawingId: this._dragHandleId,
+                  points: d.points,
+                },
+              }), '*');
+            } catch (_) {}
+          }
+        }
+        this._dragHandleId = null;
+        this._dragHandleIndex = -1;
+        this._dragHandleMoved = false;
+        this.scheduleRedraw();
+        return;
+      }
       // Phase 10 — drawing drag release. If we moved >2px, post
       // drawingMoved with the new points so Flutter can persist them.
       if (this._dragDrawingId) {
@@ -2015,18 +4100,27 @@ class Chart {
         this._dragDrawingMoved = false;
         this.scheduleRedraw();
       }
+      if (this._dragHandleId != null) {
+        this._dragHandleId = null;
+        this._dragHandleIndex = -1;
+        this._dragHandleMoved = false;
+        this.scheduleRedraw();
+      }
       if (this._selectedDrawingId) {
         this._selectedDrawingId = null;
         this.scheduleRedraw();
       }
       if (this._drawMode || this._inProgressDrawing) {
-        // Phase 21.B — Path with ≥2 points commits on Esc; otherwise cancel.
-        if (this._drawMode === 'path' && this._inProgressDrawing &&
+        // Phase 21.B / 28 — Path or any variable-point registry tool
+        // (polyline) with ≥2 points commits on Esc; otherwise cancel.
+        const _vimpl = DRAWING_TOOLS[this._drawMode];
+        if ((this._drawMode === 'path' || (_vimpl && _vimpl.variable)) &&
+            this._inProgressDrawing &&
             this._inProgressDrawing.points.length >= 2) {
           const drawing = {
             id: 'd-' + Date.now().toString(36) + '-' +
                 Math.random().toString(36).slice(2, 8),
-            kind: 'path',
+            kind: this._inProgressDrawing.kind,
             color: '#3B82F6',
             points: this._inProgressDrawing.points.slice(),
           };
@@ -2060,6 +4154,22 @@ class Chart {
             this._subPaneRatio = newRatio;
             this.scheduleRedraw();
           }
+        }
+        return;
+      }
+      // Phase 30 — reshape: drag a single anchor handle to the cursor.
+      if (this._dragHandleId != null) {
+        const rectH = wrap.getBoundingClientRect();
+        const lx = e.clientX - rectH.left;
+        const ly = e.clientY - rectH.top;
+        const price = this._snapPrice(this._yToPriceForDrag(ly));
+        const ts = this._xToTs(lx);
+        const d = this._drawings.find((dd) => dd.id === this._dragHandleId);
+        if (d && d.points && d.points[this._dragHandleIndex] != null &&
+            price != null && ts != null) {
+          this._dragHandleMoved = true;
+          d.points[this._dragHandleIndex] = { price, ts };
+          this.scheduleRedraw();
         }
         return;
       }
@@ -2341,14 +4451,17 @@ class Chart {
       this.scheduleRedraw();
     }, { passive: false });
     wrap.addEventListener('dblclick', (e) => {
-      // Phase 21.B — Path: double-click commits the in-progress polyline when
-      // it has at least 2 points. Prevents the view-reset below from firing.
-      if (this._drawMode === 'path' && this._inProgressDrawing &&
+      // Phase 21.B / 28 — Path or any variable-point registry tool (polyline):
+      // double-click commits the in-progress polyline when it has at least 2
+      // points. Prevents the view-reset below from firing.
+      const _dimpl = DRAWING_TOOLS[this._drawMode];
+      if ((this._drawMode === 'path' || (_dimpl && _dimpl.variable)) &&
+          this._inProgressDrawing &&
           this._inProgressDrawing.points.length >= 2) {
         const drawing = {
           id: 'd-' + Date.now().toString(36) + '-' +
               Math.random().toString(36).slice(2, 8),
-          kind: 'path',
+          kind: this._inProgressDrawing.kind,
           color: '#3B82F6',
           points: this._inProgressDrawing.points.slice(),
         };
@@ -2444,6 +4557,23 @@ class Chart {
     return plot.right - (N - 1 - absoluteIndex + 0.5) * this.view.cellW + this.view.offsetX;
   }
 
+  // Inverse of _candleXCenter for the visible window: returns [first, last]
+  // column indices (clamped to [0, count-1]) whose x falls inside the plot,
+  // with a 1-column margin. Used by the rebinned/renko auto-fit so the y-axis
+  // tracks the on-screen columns instead of the whole series.
+  _visibleIndexRange(plot, count) {
+    if (count <= 0) return [0, 0];
+    const W = this.view.cellW || 1;
+    const O = this.view.offsetX || 0;
+    const base = count - 1 + 0.5;
+    let last = Math.ceil(base + O / W) + 1;
+    let first = Math.floor(base + (O - (plot.right - plot.left)) / W) - 1;
+    if (first < 0) first = 0;
+    if (last > count - 1) last = count - 1;
+    if (first > last) { first = 0; last = count - 1; }
+    return [first, last];
+  }
+
   scheduleRedraw() {
     // Every redraw (pan / zoom / tick) is also a chance to top up older
     // candles if the user has scrolled close to the start of loaded data.
@@ -2493,7 +4623,7 @@ class Chart {
     // panel. Volume no longer eats vertical space; bars are drawn with
     // reduced alpha so candles remain the dominant signal.
     const volH = this.overlays.volume ? Math.round(innerH * 0.22) : 0;
-    const SUB_KINDS = new Set(['rsi', 'macd', 'stoch', 'atr', 'stochrsi', 'squeeze', 'efi', 'wt', 'crsi', 'ao', 'mfi', 'obv', 'cmf', 'wr', 'explain']);
+    const SUB_KINDS = new Set(['rsi', 'macd', 'stoch', 'atr', 'stochrsi', 'squeeze', 'efi', 'wt', 'crsi', 'ao', 'mfi', 'obv', 'cmf', 'wr', 'cci', 'roc', 'cvd', 'adx', 'trix', 'vortex', 'uo', 'dpo', 'pvt', 'ad', 'explain']);
     const subPaneIndicators =
         this._indicators.filter((i) => SUB_KINDS.has(i.kind) && !i.hidden);
     const subPaneCount = subPaneIndicators.length;
@@ -2515,8 +4645,13 @@ class Chart {
       } catch (_) {}
     }
 
+    // Phase 30 — reserve a left gutter for the floating drawing rail so the
+    // on-canvas header (symbol / OHLC) and candles aren't hidden underneath
+    // it. Toggled by the rail (collapsed → 0). Lite mode has no rail.
+    const railGutter = this._liteMode ? 0
+        : (this._leftGutter != null ? this._leftGutter : 46);
     const plot = {
-      left: 8, top: topPad,
+      left: 8 + railGutter, top: topPad,
       right: w - rightGutter,
       bottom: topPad + candleH,
     };
@@ -2572,10 +4707,9 @@ class Chart {
       lo = Infinity; hi = -Infinity;
       if (this.candleStyle === 'renko') {
         const bricks = this._renkoBricks;
-        const first = Math.max(0,
-            Math.floor(this.view.firstVisible != null ? this.view.firstVisible : 0));
-        const last = Math.min(bricks.length - 1,
-            Math.ceil(this.view.lastVisible != null ? this.view.lastVisible : bricks.length - 1));
+        // Fit only the columns currently on screen (not all of history) so the
+        // y-axis zooms to the visible action.
+        const [first, last] = this._visibleIndexRange(plot, bricks.length);
         for (let i = first; i <= last; i++) {
           const v1 = bricks[i].openPrice;
           const v2 = bricks[i].closePrice;
@@ -2583,6 +4717,19 @@ class Chart {
           if (v1 > hi) hi = v1; if (v2 > hi) hi = v2;
         }
         // Guard against empty bricks (no bricks yet).
+        if (hi === -Infinity) { lo = 0; hi = 1; }
+      } else if (this._isRebinnedStyle(this.candleStyle)
+          && this._rebinnedStyle === this.candleStyle
+          && this._rebinned.length > 0) {
+        // Phase 26/30 — auto-fit scans only the VISIBLE rebinned columns so the
+        // y-axis follows the on-screen window (scanning the whole array made
+        // recent columns squish into a sliver against the full-history range).
+        const arr = this._rebinned;
+        const [first, last] = this._visibleIndexRange(plot, arr.length);
+        for (let i = first; i <= last; i++) {
+          const b = arr[i];
+          if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h;
+        }
         if (hi === -Infinity) { lo = 0; hi = 1; }
       } else {
         for (const c of visible) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
@@ -2618,14 +4765,30 @@ class Chart {
       case 'hollow':      this._drawCandlesCore(visible, firstVisibleAbs, plot, priceToY, {hollow: true}); break;
       case 'heikin-ashi': this._drawCandlesCore(visible, firstVisibleAbs, plot, priceToY, {heikinAshi: true}); break;
       case 'renko':       this._drawRenko(plot, priceToY); break;
+      // Phase 26 — additional simple styles (reuse visible candle slice).
+      case 'baseline':    this._drawBaseline(visible, firstVisibleAbs, plot, priceToY); break;
+      case 'step':        this._drawStepLine(visible, firstVisibleAbs, plot, priceToY); break;
+      case 'columns':     this._drawColumns(visible, firstVisibleAbs, plot, priceToY); break;
+      case 'hlcbars':     this._drawHlcBars(visible, firstVisibleAbs, plot, priceToY); break;
+      case 'highlow':     this._drawHighLow(visible, firstVisibleAbs, plot, priceToY); break;
+      case 'hlcarea':     this._drawHlcArea(visible, firstVisibleAbs, plot, priceToY); break;
+      case 'volcandles':  this._drawVolCandles(visible, firstVisibleAbs, plot, priceToY); break;
+      // Phase 26 — rebinned styles (draw their own pseudo-candle array, mirror renko).
+      case 'linebreak':   this._drawRebinnedCandles(plot, priceToY, {}); break;
+      case 'kagi':        this._drawKagi(plot, priceToY); break;
+      case 'range':       this._drawRebinnedCandles(plot, priceToY, {}); break;
+      case 'pnf':         this._drawPnf(plot, priceToY); break;
       case 'candles':
       default:            this._drawCandlesCore(visible, firstVisibleAbs, plot, priceToY, {}); break;
     }
 
     // Volume bars (optional panel below the candle plot).
     // Per-brick volume isn't meaningful on Renko (one brick spans fractions of
-    // multiple bars), so the volume panel is hidden entirely on Renko.
-    if (volPlot && this.candleStyle !== 'renko') {
+    // multiple bars), so the volume panel is hidden entirely on Renko. Same
+    // logic applies to the other rebinned styles (linebreak/kagi/range/pnf):
+    // the X axis is rebinned, so raw-candle volume bars wouldn't line up.
+    if (volPlot && this.candleStyle !== 'renko'
+        && !this._isRebinnedStyle(this.candleStyle)) {
       let maxV = 0;
       for (const c of visible) { if (c.v > maxV) maxV = c.v; }
       if (maxV > 0) {
@@ -2665,12 +4828,23 @@ class Chart {
     // slice — re-deriving from view-state here would scan all loaded history.
     // Phase 20 — Key Levels (pivot S/R) drawn as background reference before
     // H/L markers and overlay chips.
-    this._drawKeyLevels(plot, lo, hi, priceToY);
+    // Phase 30 — these overlays are computed against the REAL candle series and
+    // positioned at real-candle x/price, so they don't map onto a rebinned axis
+    // (Renko / Kagi / Line Break / Range / P&F), where the column count and
+    // price binning differ. Suppress them there so they don't render detached
+    // from the series.
+    const _rebinAxis = this.candleStyle === 'renko'
+        || this._isRebinnedStyle(this.candleStyle);
+    if (!_rebinAxis) {
+      this._drawKeyLevels(plot, lo, hi, priceToY);
+    }
     // Phase 23.4 — Volume Profile gutter histogram (after key levels, before H/L markers).
     this._drawVolumeProfile(plot, lo, hi, priceToY);
-    this._drawHighLowMarkers(plot, priceToY, visible, firstVisibleAbs);
-    // Phase 25 — auto-pattern swing pivot markers + HH/HL/LH/LL labels.
-    this._drawAutoPattern(plot, lo, hi, priceToY);
+    if (!_rebinAxis) {
+      this._drawHighLowMarkers(plot, priceToY, visible, firstVisibleAbs);
+      // Phase 25 — auto-pattern swing pivot markers + HH/HL/LH/LL labels.
+      this._drawAutoPattern(plot, lo, hi, priceToY);
+    }
 
     // Phase 18 — OI bars drawn before the LTP chip so they sit beneath it.
     this._drawOiBars(plot, lo, hi, priceToY);
@@ -2706,6 +4880,10 @@ class Chart {
     if (this._explainPayload) {
       this._drawExplainOverlays(plot, lo, hi, priceToY);
     }
+
+    // Phase 31 — CandLlabs ghost projections (Echoes / Oracle). Above
+    // candles/overlays, beneath user drawings + crosshair.
+    this._drawLabProjection(plot, priceToY);
 
     // Phase 7 — user-placed drawings (HLines + Trendlines + in-progress).
     this._drawDrawings(plot, priceToY);
@@ -2771,6 +4949,12 @@ class Chart {
         if (this.candleStyle === 'renko' && tidx < this._renkoBricks.length) {
           const b = this._renkoBricks[tidx];
           label = `Brick #${b.idx} · src ${this._fmtHoverTime(b.sourceBarTime)}`;
+        } else if (this._isRebinnedStyle(this.candleStyle)
+            && this._rebinnedStyle === this.candleStyle
+            && tidx < this._rebinned.length) {
+          // Phase 26 — rebinned styles map a hovered column to its source bar
+          // time (ts is carried on each pseudo-candle).
+          label = this._fmtHoverTime(this._rebinned[tidx].ts);
         } else if (tidx < this.candles.length) {
           label = this._fmtHoverTime(this.candles[tidx].ts);
         } else {
@@ -3122,7 +5306,8 @@ class Chart {
   _drawPaneChip(plot) {
     if (!this.scrip) return 0;
     const tf = this._formatTimeframeLabel(this.timeframeMinutes);
-    const text = (this.scrip.dispName || this.scrip.tsym || '') + ' · ' + tf;
+    const exch = this.scrip.exch ? ' · ' + this.scrip.exch : '';
+    const text = (this.scrip.dispName || this.scrip.tsym || '') + ' · ' + tf + exch;
     // 14px bold for the symbol — visual anchor of the chart. Sits over
     // transparent background; render-order is fine because OHLC line 2
     // is below it.
@@ -3731,9 +5916,18 @@ class Chart {
   }
 
   _seriesLength() {
-    return this.candleStyle === 'renko'
-        ? this._renkoBricks.length
-        : this.candles.length;
+    if (this.candleStyle === 'renko') return this._renkoBricks.length;
+    if (this._isRebinnedStyle(this.candleStyle)
+        && this._rebinnedStyle === this.candleStyle
+        && this._rebinned.length > 0) {
+      return this._rebinned.length;
+    }
+    return this.candles.length;
+  }
+
+  _isRebinnedStyle(style) {
+    return style === 'linebreak' || style === 'kagi'
+        || style === 'range' || style === 'pnf';
   }
 
   // ── Phase 16 F1 — Renko transform pipeline ───────────────────────────────
@@ -3858,6 +6052,566 @@ class Chart {
         this.candles.length - 1);
     if (newLast !== last) this.scheduleRedraw();
   }
+
+  // ── Phase 26 — additional chart styles ────────────────────────────────────
+
+  // 1) Baseline — area split at a baseline (first visible close). Green
+  //    fill+line above the baseline, red fill+line below it.
+  _drawBaseline(visible, firstVisibleAbs, plot, priceToY) {
+    if (visible.length === 0) return;
+    const baseline = visible[0].c;
+    const baseY = priceToY(baseline);
+    const up = this.palette.bull;
+    const down = this.palette.bear;
+    const xs = new Array(visible.length);
+    const ys = new Array(visible.length);
+    for (let i = 0; i < visible.length; i++) {
+      xs[i] = this._candleXCenter(firstVisibleAbs + i, plot);
+      ys[i] = priceToY(visible[i].c);
+    }
+    // Build the close polyline once.
+    const tracePath = () => {
+      this.ctx.beginPath();
+      for (let i = 0; i < xs.length; i++) {
+        if (i === 0) this.ctx.moveTo(xs[i], ys[i]);
+        else this.ctx.lineTo(xs[i], ys[i]);
+      }
+    };
+    // Fill ABOVE baseline (green), clipped to the region above baseY.
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(plot.left, plot.top, plot.right - plot.left, baseY - plot.top);
+    this.ctx.clip();
+    this.ctx.fillStyle = this._withAlpha(up, 0.22);
+    this.ctx.beginPath();
+    this.ctx.moveTo(xs[0], baseY);
+    for (let i = 0; i < xs.length; i++) this.ctx.lineTo(xs[i], ys[i]);
+    this.ctx.lineTo(xs[xs.length - 1], baseY);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.restore();
+    // Fill BELOW baseline (red).
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(plot.left, baseY, plot.right - plot.left, plot.bottom - baseY);
+    this.ctx.clip();
+    this.ctx.fillStyle = this._withAlpha(down, 0.22);
+    this.ctx.beginPath();
+    this.ctx.moveTo(xs[0], baseY);
+    for (let i = 0; i < xs.length; i++) this.ctx.lineTo(xs[i], ys[i]);
+    this.ctx.lineTo(xs[xs.length - 1], baseY);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.restore();
+    // Stroke the line in two colours by clipping above/below the baseline.
+    this.ctx.lineWidth = 1.5;
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(plot.left, plot.top, plot.right - plot.left, baseY - plot.top);
+    this.ctx.clip();
+    this.ctx.strokeStyle = up; tracePath(); this.ctx.stroke();
+    this.ctx.restore();
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(plot.left, baseY, plot.right - plot.left, plot.bottom - baseY);
+    this.ctx.clip();
+    this.ctx.strokeStyle = down; tracePath(); this.ctx.stroke();
+    this.ctx.restore();
+    // Baseline reference line.
+    this.ctx.strokeStyle = this.palette.gridSoft;
+    this.ctx.lineWidth = 1;
+    this.ctx.setLineDash([3, 3]);
+    this.ctx.beginPath();
+    this.ctx.moveTo(plot.left, baseY); this.ctx.lineTo(plot.right, baseY);
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
+  }
+
+  // 2) Step line — close drawn as horizontal steps (hold then jump).
+  _drawStepLine(visible, firstVisibleAbs, plot, priceToY) {
+    if (visible.length === 0) return;
+    this.ctx.strokeStyle = this.palette.accent || this.palette.bull;
+    this.ctx.lineWidth = 1.5;
+    this.ctx.beginPath();
+    let prevY = null;
+    for (let i = 0; i < visible.length; i++) {
+      const x = this._candleXCenter(firstVisibleAbs + i, plot);
+      const y = priceToY(visible[i].c);
+      if (i === 0) {
+        this.ctx.moveTo(x, y);
+      } else {
+        // Horizontal hold from prev x to current x at the prev level, then
+        // a vertical jump to the new level.
+        this.ctx.lineTo(x, prevY);
+        this.ctx.lineTo(x, y);
+      }
+      prevY = y;
+    }
+    this.ctx.stroke();
+  }
+
+  // 3) Columns — thin vertical bars baseline→close, coloured up/down vs the
+  //    previous close. Baseline is the lowest visible close so bars read as
+  //    a column histogram of the close series.
+  _drawColumns(visible, firstVisibleAbs, plot, priceToY) {
+    if (visible.length === 0) return;
+    let minC = Infinity;
+    for (const c of visible) if (c.c < minC) minC = c.c;
+    const baseY = priceToY(minC);
+    const bodyW = Math.max(1, Math.min(this.view.cellW - 2, 6));
+    for (let i = 0; i < visible.length; i++) {
+      const c = visible[i];
+      const prevC = i > 0 ? visible[i - 1].c
+          : (firstVisibleAbs > 0 ? this.candles[firstVisibleAbs - 1].c : c.c);
+      const isUp = c.c >= prevC;
+      this.ctx.fillStyle = isUp ? this.palette.bull : this.palette.bear;
+      const x = this._candleXCenter(firstVisibleAbs + i, plot);
+      const yTop = priceToY(c.c);
+      const h = Math.max(1, baseY - yTop);
+      this.ctx.fillRect(Math.round(x - bodyW / 2), yTop, bodyW, h);
+    }
+  }
+
+  // 4) HLC bars — high-low vertical + right close tick only (no open tick).
+  _drawHlcBars(visible, firstVisibleAbs, plot, priceToY) {
+    const tickLen = Math.max(2, Math.floor(this.view.cellW / 2));
+    for (let i = 0; i < visible.length; i++) {
+      const c = visible[i];
+      const xCenter = Math.round(this._candleXCenter(firstVisibleAbs + i, plot));
+      const prevC = i > 0 ? visible[i - 1].c
+          : (firstVisibleAbs > 0 ? this.candles[firstVisibleAbs - 1].c : c.o);
+      const isUp = c.c >= prevC;
+      this.ctx.strokeStyle = isUp ? this.palette.bull : this.palette.bear;
+      this.ctx.lineWidth = 1.2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(xCenter + 0.5, priceToY(c.h));
+      this.ctx.lineTo(xCenter + 0.5, priceToY(c.l));
+      const yc = priceToY(c.c);
+      this.ctx.moveTo(xCenter + 0.5, yc);
+      this.ctx.lineTo(xCenter + tickLen + 0.5, yc);
+      this.ctx.stroke();
+    }
+  }
+
+  // 5) High-Low — high-low vertical line only, coloured up/down vs prev close.
+  _drawHighLow(visible, firstVisibleAbs, plot, priceToY) {
+    for (let i = 0; i < visible.length; i++) {
+      const c = visible[i];
+      const xCenter = Math.round(this._candleXCenter(firstVisibleAbs + i, plot));
+      const prevC = i > 0 ? visible[i - 1].c
+          : (firstVisibleAbs > 0 ? this.candles[firstVisibleAbs - 1].c : c.o);
+      const isUp = c.c >= prevC;
+      this.ctx.strokeStyle = isUp ? this.palette.bull : this.palette.bear;
+      this.ctx.lineWidth = 1.4;
+      this.ctx.beginPath();
+      this.ctx.moveTo(xCenter + 0.5, priceToY(c.h));
+      this.ctx.lineTo(xCenter + 0.5, priceToY(c.l));
+      this.ctx.stroke();
+    }
+  }
+
+  // 6) HLC area — translucent band between high & low + a close line.
+  _drawHlcArea(visible, firstVisibleAbs, plot, priceToY) {
+    if (visible.length === 0) return;
+    const stroke = this.palette.accent || this.palette.bull;
+    const xs = new Array(visible.length);
+    const yh = new Array(visible.length);
+    const yl = new Array(visible.length);
+    const yc = new Array(visible.length);
+    for (let i = 0; i < visible.length; i++) {
+      xs[i] = this._candleXCenter(firstVisibleAbs + i, plot);
+      yh[i] = priceToY(visible[i].h);
+      yl[i] = priceToY(visible[i].l);
+      yc[i] = priceToY(visible[i].c);
+    }
+    // Band polygon: highs left→right, then lows right→left.
+    this.ctx.fillStyle = this._withAlpha(stroke, 0.16);
+    this.ctx.beginPath();
+    this.ctx.moveTo(xs[0], yh[0]);
+    for (let i = 1; i < xs.length; i++) this.ctx.lineTo(xs[i], yh[i]);
+    for (let i = xs.length - 1; i >= 0; i--) this.ctx.lineTo(xs[i], yl[i]);
+    this.ctx.closePath();
+    this.ctx.fill();
+    // Close line on top.
+    this.ctx.strokeStyle = stroke;
+    this.ctx.lineWidth = 1.5;
+    this.ctx.beginPath();
+    for (let i = 0; i < xs.length; i++) {
+      if (i === 0) this.ctx.moveTo(xs[i], yc[i]);
+      else this.ctx.lineTo(xs[i], yc[i]);
+    }
+    this.ctx.stroke();
+  }
+
+  // 7) Volume candles — candles whose body width scales with volume relative
+  //    to the visible rolling max. Wick stays 1px; only the body breathes.
+  _drawVolCandles(visible, firstVisibleAbs, plot, priceToY) {
+    let maxV = 0;
+    for (const c of visible) if (c.v > maxV) maxV = c.v;
+    const fullW = Math.max(1, this.view.cellW - 2);
+    const minW = Math.max(1, fullW * 0.2);
+    for (let i = 0; i < visible.length; i++) {
+      const c = visible[i];
+      const absoluteIdx = firstVisibleAbs + i;
+      const xCenter = this._candleXCenter(absoluteIdx, plot);
+      const isBull = c.c >= c.o;
+      const color = isBull ? this.palette.bull : this.palette.bear;
+      // Wick.
+      this.ctx.fillStyle = color;
+      this.ctx.fillRect(Math.round(xCenter), priceToY(c.h), 1, priceToY(c.l) - priceToY(c.h));
+      // Body width scaled by volume share.
+      const frac = maxV > 0 ? (c.v / maxV) : 1;
+      const bodyW = Math.max(minW, fullW * frac);
+      const bodyTop = Math.min(priceToY(c.o), priceToY(c.c));
+      const bodyBot = Math.max(priceToY(c.o), priceToY(c.c));
+      const bodyH = Math.max(1, bodyBot - bodyTop);
+      this.ctx.fillRect(Math.round(xCenter - bodyW / 2), bodyTop, bodyW, bodyH);
+    }
+  }
+
+  // ── Phase 26 — rebinned styles (mirror the renko pipeline) ────────────────
+
+  // Build this._rebinned for the current style. Each element is a pseudo-candle
+  // {o,h,l,c,v,ts,direction} so the shared draw helpers + _seriesLength() work.
+  _rebuildRebinned() {
+    this._rebinned = [];
+    this._rebinnedStyle = this.candleStyle;
+    const bars = this.candles;
+    if (!bars || bars.length === 0) return;
+    switch (this.candleStyle) {
+      case 'linebreak': this._rebinned = this._buildLineBreak(bars); break;
+      case 'kagi':      this._rebinned = this._buildKagi(bars); break;
+      case 'range':     this._rebinned = this._buildRange(bars); break;
+      case 'pnf':       this._rebinned = this._buildPnf(bars); break;
+      default:          this._rebinned = []; this._rebinnedStyle = null; break;
+    }
+  }
+
+  // Three Line Break: a new line is drawn when the close exceeds the extreme
+  // of the prior `lines` (3) lines; a reversal needs to exceed the extreme of
+  // the last `lines` lines in the opposite direction. Otherwise no new line.
+  _buildLineBreak(bars, lines = 3) {
+    const out = [];
+    let dir = 0; // +1 up, -1 down, 0 unset
+    for (let i = 0; i < bars.length; i++) {
+      const close = bars[i].c;
+      const ts = bars[i].ts;
+      if (out.length === 0) {
+        // Seed from the first two distinct closes.
+        if (i === 0) continue;
+        const open = bars[0].c;
+        if (close === open) continue;
+        dir = close > open ? 1 : -1;
+        out.push({
+          o: open, c: close,
+          h: Math.max(open, close), l: Math.min(open, close),
+          v: 0, ts, direction: dir > 0 ? 'up' : 'down',
+        });
+        continue;
+      }
+      const last = out[out.length - 1];
+      if (dir > 0) {
+        if (close > last.c) {
+          out.push(this._lbLine(last.c, close, ts, 'up'));
+        } else {
+          // Reversal needs to break the low of the last `lines` lines.
+          const lookback = out.slice(Math.max(0, out.length - lines));
+          let minLow = Infinity;
+          for (const ln of lookback) if (ln.l < minLow) minLow = ln.l;
+          if (close < minLow) {
+            dir = -1;
+            out.push(this._lbLine(last.l, close, ts, 'down'));
+          }
+        }
+      } else {
+        if (close < last.c) {
+          out.push(this._lbLine(last.c, close, ts, 'down'));
+        } else {
+          const lookback = out.slice(Math.max(0, out.length - lines));
+          let maxHigh = -Infinity;
+          for (const ln of lookback) if (ln.h > maxHigh) maxHigh = ln.h;
+          if (close > maxHigh) {
+            dir = 1;
+            out.push(this._lbLine(last.h, close, ts, 'up'));
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  _lbLine(open, close, ts, direction) {
+    return {
+      o: open, c: close,
+      h: Math.max(open, close), l: Math.min(open, close),
+      v: 0, ts, direction,
+    };
+  }
+
+  // Kagi: a continuous line that reverses only when price moves against the
+  // current direction by at least `reversal` (default ~4% of price). Rendered
+  // as pseudo-candles (one per leg); thick (yang) once price clears the prior
+  // shoulder high, thin (yin) once it breaks the prior shoulder low. We encode
+  // thickness in `direction` ('up' = yang/thick, 'down' = yin/thin) at draw
+  // time via the leg's own trend, and store the leg endpoints in o/c.
+  _buildKagi(bars) {
+    if (bars.length < 2) return [];
+    // Reversal threshold = ATR-based brick size (same scale as Renko), NOT a
+    // fixed % of price — a 4% reversal on an intraday index is ~hundreds of
+    // points, so the line almost never reverses and looks empty.
+    const ti = (this.scrip && this.scrip.ti) || 0.05;
+    const reversal = Math.max(ti, this._computeRenkoBrickSize());
+    const out = [];
+    let trend = 0; // +1 rising, -1 falling
+    let anchor = bars[0].c; // start of the current leg
+    let extreme = bars[0].c; // current leg extreme (high if rising, low if falling)
+    let ts0 = bars[0].ts;
+    for (let i = 1; i < bars.length; i++) {
+      const p = bars[i].c;
+      const ts = bars[i].ts;
+      if (trend === 0) {
+        if (p >= anchor + reversal) { trend = 1; extreme = p; }
+        else if (p <= anchor - reversal) { trend = -1; extreme = p; }
+        continue;
+      }
+      if (trend > 0) {
+        if (p > extreme) { extreme = p; }
+        else if (p <= extreme - reversal) {
+          // Reversal down: close the rising leg, start a falling leg.
+          out.push(this._kagiLeg(anchor, extreme, ts0, 'up'));
+          anchor = extreme; extreme = p; trend = -1; ts0 = ts;
+        }
+      } else {
+        if (p < extreme) { extreme = p; }
+        else if (p >= extreme + reversal) {
+          out.push(this._kagiLeg(anchor, extreme, ts0, 'down'));
+          anchor = extreme; extreme = p; trend = 1; ts0 = ts;
+        }
+      }
+    }
+    // Flush the final in-progress leg.
+    if (trend !== 0) {
+      out.push(this._kagiLeg(anchor, extreme, ts0, trend > 0 ? 'up' : 'down'));
+    }
+    return out;
+  }
+
+  _kagiLeg(from, to, ts, direction) {
+    return {
+      o: from, c: to,
+      h: Math.max(from, to), l: Math.min(from, to),
+      v: 0, ts, direction,
+    };
+  }
+
+  _medianClose(bars) {
+    const cs = bars.map((b) => b.c).filter((v) => isFinite(v)).sort((a, b) => a - b);
+    if (cs.length === 0) return 1;
+    const mid = Math.floor(cs.length / 2);
+    return cs.length % 2 ? cs[mid] : (cs[mid - 1] + cs[mid]) / 2;
+  }
+
+  // Range bars: a new bar is emitted each time price travels a fixed amount
+  // (the range size) from the current bar's open. Size auto-derived from ATR
+  // (reusing _computeRenkoBrickSize, which is ATR(14) snapped to tick).
+  _buildRange(bars) {
+    const size = this._computeRenkoBrickSize();
+    if (!isFinite(size) || size <= 0) return [];
+    const out = [];
+    let cur = null;
+    const start = (o, ts) => ({ o, h: o, l: o, c: o, v: 0, ts, direction: 'up' });
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i];
+      // Drive the range engine with H/L/C of each source bar so intrabar
+      // travel still forms bars. Use close as the dominant driver.
+      const prices = [b.o, (b.c >= b.o ? b.l : b.h), (b.c >= b.o ? b.h : b.l), b.c];
+      for (const price of prices) {
+        if (!isFinite(price)) continue;
+        if (cur === null) { cur = start(price, b.ts); continue; }
+        if (price > cur.h) cur.h = price;
+        if (price < cur.l) cur.l = price;
+        cur.c = price;
+        cur.v += 0;
+        while (cur.h - cur.l >= size) {
+          // Close a bar spanning exactly `size` from the open in the travel
+          // direction, then seed the next from the breakout level.
+          const up = price >= cur.o;
+          const close = up ? cur.o + size : cur.o - size;
+          out.push({
+            o: cur.o, c: close,
+            h: up ? close : cur.h, l: up ? cur.l : close,
+            v: 0, ts: b.ts, direction: up ? 'up' : 'down',
+          });
+          cur = start(close, b.ts);
+        }
+      }
+    }
+    if (cur && cur.h !== cur.l) {
+      cur.direction = cur.c >= cur.o ? 'up' : 'down';
+      out.push(cur);
+    }
+    return out;
+  }
+
+  // Point & Figure: X (up) / O (down) columns. Box size ~% of median price (or
+  // ATR), reversal = 3 boxes. We rebin into pseudo-candles where each element
+  // is a column spanning [low,high] with direction up (X) / down (O). The
+  // dedicated drawer renders X/O glyphs across the column's box range.
+  _buildPnf(bars, reversalBoxes = 3) {
+    const box = this._computeRenkoBrickSize(); // ATR-snapped; reused as box size.
+    if (!isFinite(box) || box <= 0) return [];
+    const boxes = (p) => Math.floor(p / box); // box index for a price
+    const out = [];
+    let dir = 0;            // +1 X column, -1 O column
+    let topBox = null;      // highest box filled in current X column
+    let botBox = null;      // lowest box filled in current O column
+    const pushCol = (lowBox, highBox, direction, ts) => {
+      out.push({
+        o: lowBox * box, c: highBox * box,
+        l: lowBox * box, h: highBox * box,
+        v: 0, ts, direction,
+        boxSize: box, lowBox, highBox,
+      });
+    };
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i];
+      const hiB = boxes(b.h);
+      const loB = boxes(b.l);
+      if (dir === 0) {
+        // Seed: prefer an up column.
+        dir = 1; topBox = hiB; botBox = loB;
+        continue;
+      }
+      if (dir > 0) {
+        if (hiB > topBox) {
+          topBox = hiB; // extend the X column
+        } else if (loB <= topBox - reversalBoxes) {
+          // Reverse down: close X column, open O column one box below the top.
+          pushCol(botBox != null ? botBox : (topBox - (hiB - loB)), topBox, 'up',
+              b.ts);
+          dir = -1; botBox = loB; topBox = null;
+        }
+      } else {
+        if (loB < botBox) {
+          botBox = loB; // extend the O column
+        } else if (hiB >= botBox + reversalBoxes) {
+          pushCol(botBox, topBox != null ? topBox : (botBox + (hiB - loB)), 'down',
+              b.ts);
+          dir = 1; topBox = hiB; botBox = null;
+        }
+      }
+    }
+    // Flush the final column.
+    if (dir > 0 && topBox != null) {
+      pushCol(botBox != null ? botBox : topBox - 1, topBox, 'up',
+          bars[bars.length - 1].ts);
+    } else if (dir < 0 && botBox != null) {
+      pushCol(botBox, topBox != null ? topBox : botBox + 1, 'down',
+          bars[bars.length - 1].ts);
+    }
+    return out;
+  }
+
+  // Generic drawer for rebinned pseudo-candles (linebreak / range). Mirrors
+  // _drawRenko: iterates this._rebinned by index using _candleXCenter(i).
+  _drawRebinnedCandles(plot, priceToY, opts) {
+    const arr = this._rebinned;
+    if (!arr || arr.length === 0) return;
+    const total = arr.length;
+    const firstVisible = Math.max(0,
+        Math.floor(this.view.firstVisible != null ? this.view.firstVisible : 0));
+    const lastVisible = Math.min(total - 1,
+        Math.ceil(this.view.lastVisible != null ? this.view.lastVisible : total - 1));
+    if (firstVisible > lastVisible) return;
+    const bodyW = Math.max(1, this.view.cellW - 2);
+    for (let i = firstVisible; i <= lastVisible; i++) {
+      const b = arr[i];
+      const xCenter = this._candleXCenter(i, plot);
+      const color = b.direction === 'up' ? this.palette.bull : this.palette.bear;
+      this.ctx.fillStyle = color;
+      const yTop = Math.min(priceToY(b.o), priceToY(b.c));
+      const yBot = Math.max(priceToY(b.o), priceToY(b.c));
+      const h = Math.max(1, yBot - yTop);
+      this.ctx.fillRect(Math.round(xCenter - bodyW / 2), yTop, bodyW, h);
+    }
+  }
+
+  // Kagi line drawer — connects leg endpoints with a stepped line. Thick when
+  // the leg rises (yang), thin when it falls (yin); colour follows direction.
+  _drawKagi(plot, priceToY) {
+    const arr = this._rebinned;
+    if (!arr || arr.length === 0) return;
+    const total = arr.length;
+    const firstVisible = Math.max(0,
+        Math.floor(this.view.firstVisible != null ? this.view.firstVisible : 0));
+    const lastVisible = Math.min(total - 1,
+        Math.ceil(this.view.lastVisible != null ? this.view.lastVisible : total - 1));
+    if (firstVisible > lastVisible) return;
+    for (let i = firstVisible; i <= lastVisible; i++) {
+      const b = arr[i];
+      const x = this._candleXCenter(i, plot);
+      const yFrom = priceToY(b.o);
+      const yTo = priceToY(b.c);
+      const isUp = b.direction === 'up';
+      this.ctx.strokeStyle = isUp ? this.palette.bull : this.palette.bear;
+      this.ctx.lineWidth = isUp ? 2.4 : 1.0; // yang thick, yin thin
+      this.ctx.beginPath();
+      // Horizontal connector from the previous leg's x, then the vertical leg.
+      if (i > firstVisible) {
+        const xPrev = this._candleXCenter(i - 1, plot);
+        this.ctx.moveTo(xPrev, yFrom);
+        this.ctx.lineTo(x, yFrom);
+      } else {
+        this.ctx.moveTo(x, yFrom);
+      }
+      this.ctx.lineTo(x, yTo);
+      this.ctx.stroke();
+    }
+  }
+
+  // Point & Figure drawer — renders X (up) / O (down) glyphs stacked across
+  // each column's box range. One glyph per box between low and high.
+  _drawPnf(plot, priceToY) {
+    const arr = this._rebinned;
+    if (!arr || arr.length === 0) return;
+    const total = arr.length;
+    const firstVisible = Math.max(0,
+        Math.floor(this.view.firstVisible != null ? this.view.firstVisible : 0));
+    const lastVisible = Math.min(total - 1,
+        Math.ceil(this.view.lastVisible != null ? this.view.lastVisible : total - 1));
+    if (firstVisible > lastVisible) return;
+    const cellW = Math.max(2, this.view.cellW - 2);
+    const half = cellW / 2;
+    for (let i = firstVisible; i <= lastVisible; i++) {
+      const b = arr[i];
+      const x = this._candleXCenter(i, plot);
+      const isUp = b.direction === 'up';
+      const box = b.boxSize || (b.h - b.l) || 1;
+      this.ctx.strokeStyle = isUp ? this.palette.bull : this.palette.bear;
+      this.ctx.lineWidth = 1.4;
+      // Iterate box rows from low to high (inclusive).
+      for (let price = b.l; price <= b.h + 1e-9; price += box) {
+        const yMid = priceToY(price + box / 2);
+        const yTop = priceToY(price + box);
+        const yBot = priceToY(price);
+        if (isUp) {
+          // X — two diagonals across the box cell.
+          this.ctx.beginPath();
+          this.ctx.moveTo(x - half, yBot); this.ctx.lineTo(x + half, yTop);
+          this.ctx.moveTo(x - half, yTop); this.ctx.lineTo(x + half, yBot);
+          this.ctx.stroke();
+        } else {
+          // O — an ellipse inscribed in the box cell.
+          const ry = Math.abs(yBot - yTop) / 2 - 1;
+          this.ctx.beginPath();
+          this.ctx.ellipse(x, yMid, half, Math.max(1, ry), 0, 0, Math.PI * 2);
+          this.ctx.stroke();
+        }
+      }
+    }
+  }
+
+  // ── End Phase 26 draw helpers ─────────────────────────────────────────────
 
   // ── End Phase 16 draw helpers ─────────────────────────────────────────────
 
@@ -4167,6 +6921,7 @@ class Chart {
   _drawDrawings(plot, priceToY) {
     this._drawingHits = [];
     this._colorSwatchHits = [];
+    this._drawingHandleHits = [];
     // Phase 23.3 — when all drawings are hidden, skip rendering but keep hit arrays empty.
     if (this.drawingsHidden) return;
     if (this._drawings.length === 0 && !this._inProgressDrawing) return;
@@ -4208,165 +6963,35 @@ class Chart {
         ctx.stroke();
       };
 
-      if (d.kind === 'hline') {
-        const p = d.points[0];
-        if (!p) { ctx.restore(); return; }
-        const y = priceToY(p.price);
-        endY = y;
-        drawLine(plot.left, y, plot.right, y);
-        if (!isInProgress) {
-          dragRect = {
-            x: plot.left, y: y - 4,
-            w: plot.right - plot.left, h: 8,
-          };
-        }
-      } else if (d.kind === 'hray') {
-        // Phase 19.3 — horizontal ray: extends from anchor X to plot.right.
-        const p = d.points[0];
-        if (!p) { ctx.restore(); return; }
-        const y = priceToY(p.price);
-        const xStart = this._tsToX(p.ts, plot);
-        // Clamp start to plot.left so a ray anchored off-screen-left still
-        // shows from the left edge to plot.right.
-        const xs = Math.max(plot.left, xStart);
-        endY = y;
-        endX = plot.right;
-        drawLine(xs, y, plot.right, y);
-        if (!isInProgress) {
-          dragRect = {
-            x: xs, y: y - 4,
-            w: plot.right - xs, h: 8,
-          };
-        }
-      } else if (d.kind === 'trendline') {
-        const p1 = d.points[0];
-        const p2 = d.points[1];
-        if (!p1) { ctx.restore(); return; }
-        const x1 = this._tsToX(p1.ts, plot);
-        const y1 = priceToY(p1.price);
-        let x2, y2;
-        if (p2) {
-          x2 = this._tsToX(p2.ts, plot);
-          y2 = priceToY(p2.price);
-        } else if (this.hover.inside && this.hover.x != null) {
-          // In-progress trendline tracks the live cursor.
-          x2 = this.hover.x;
-          y2 = this.hover.y;
-        } else {
-          ctx.restore();
-          return;
-        }
-        endX = x2;
-        endY = y2;
-        drawLine(x1, y1, x2, y2);
-        if (!isInProgress) {
-          const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
-          const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
-          dragRect = {
-            x: minX, y: minY - 4,
-            w: (maxX - minX), h: (maxY - minY) + 8,
-          };
-        }
-      } else if (d.kind === 'rect') {
-        // Phase 10 — 4-line stroked rectangle. Reuses the line-halo style
-        // (white halo under coloured stroke) for consistency with the other
-        // drawings.
-        const p1 = d.points[0];
-        const p2 = d.points[1];
-        if (!p1) { ctx.restore(); return; }
-        const x1 = this._tsToX(p1.ts, plot);
-        const y1 = priceToY(p1.price);
-        let x2, y2;
-        if (p2) {
-          if (isInProgress && this.hover.inside && this.hover.x != null) {
-            // In-progress: use direct pixel coords so the preview tracks the
-            // cursor smoothly without ts-snap rounding (which collapses same-
-            // candle drags to a zero-width rect).
-            x2 = this.hover.x;
-            y2 = this.hover.y;
-          } else {
-            x2 = this._tsToX(p2.ts, plot);
-            y2 = priceToY(p2.price);
-          }
-        } else if (this.hover.inside && this.hover.x != null) {
-          x2 = this.hover.x;
-          y2 = this.hover.y;
-        } else {
-          ctx.restore();
-          return;
-        }
-        endX = Math.max(x1, x2);
-        endY = (y1 + y2) / 2;
-        if (Number.isFinite(x1) && Number.isFinite(y1) &&
-            Number.isFinite(x2) && Number.isFinite(y2)) {
-          const rx = Math.min(x1, x2);
-          const ry = Math.min(y1, y2);
-          const rw = Math.abs(x2 - x1);
-          const rh = Math.abs(y2 - y1);
-          // White halo
-          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-          ctx.lineWidth = 4;
-          ctx.strokeRect(rx, ry, rw, rh);
-          // Coloured stroke (slightly thicker when selected)
-          ctx.strokeStyle = color;
-          ctx.lineWidth = isSelected ? 2.5 : 2;
-          ctx.strokeRect(rx, ry, rw, rh);
-          if (!isInProgress) {
-            dragRect = { x: rx, y: ry, w: rw, h: rh };
-          }
-        }
-      } else if (d.kind === 'fib') {
-        // Phase 21.A — Fibonacci Retracement: 7 horizontal lines at fib ratios
-        // spanning the X range between the two anchor timestamps.
-        const p1 = d.points[0];
-        const p2 = d.points[1];
-        if (!p1) { ctx.restore(); return; }
-        const x1 = this._tsToX(p1.ts, plot);
-        let x2;
-        let p2Price;
-        if (p2) {
-          x2 = this._tsToX(p2.ts, plot);
-          p2Price = p2.price;
-        } else if (this.hover.inside && this.hover.x != null) {
-          x2 = this.hover.x;
-          p2Price = this._yToPriceForDrag(this.hover.y) ?? p1.price;
-        } else {
-          ctx.restore();
-          return;
-        }
-        const xL = Math.min(x1, x2);
-        const xR = Math.max(x1, x2);
-        const hi = Math.max(p1.price, p2Price);
-        const lo = Math.min(p1.price, p2Price);
-        const range = hi - lo;
-        if (range <= 0) { ctx.restore(); return; }
-        const ratios = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
-        const labels = ['0%','23.6%','38.2%','50%','61.8%','78.6%','100%'];
-        const cs = ['#94A3B8','#0EA5E9','#10B981','#F59E0B','#EF4444','#8B5CF6','#94A3B8'];
-        endX = xR; endY = priceToY((hi + lo) / 2);
-        ctx.save();
-        ctx.font = '500 10px Geist, sans-serif';
-        ctx.textBaseline = 'middle';
-        ctx.textAlign = 'left';
-        for (let i = 0; i < ratios.length; i++) {
-          const fibPrice = hi - range * ratios[i];
-          const y = priceToY(fibPrice);
-          ctx.strokeStyle = cs[i];
-          ctx.lineWidth = isSelected ? 1.5 : 1;
-          ctx.setLineDash(i === 0 || i === ratios.length - 1 ? [] : [4, 4]);
-          ctx.beginPath();
-          ctx.moveTo(xL, y);
-          ctx.lineTo(xR, y);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.fillStyle = cs[i];
-          ctx.fillText(labels[i] + '  ' + fibPrice.toFixed(2), xL + 4, y - 6);
-        }
-        ctx.restore();
-        if (!isInProgress) {
-          dragRect = { x: xL, y: priceToY(hi) - 4,
-                       w: xR - xL, h: priceToY(lo) - priceToY(hi) + 8 };
-        }
+      // Phase 28 — registry-driven tools render first. Each impl draws onto the
+      // canvas and returns { endX, endY, dragRect }; the common post-render code
+      // below (drag hit-band + selected floating toolbar) is shared with the
+      // legacy branches. Unknown kinds fall through to the original if-chain.
+      const _impl = DRAWING_TOOLS[d.kind];
+      if (_impl && typeof _impl.render === 'function') {
+        const g = {
+          ctx,
+          plot,
+          color,
+          strokeW,
+          isSelected,
+          isInProgress,
+          drawLine,
+          hover: this.hover,
+          candles: this.candles,
+          tsToX: (ts) => this._tsToX(ts, plot),
+          xToTs: (xx) => this._xToTs(xx),
+          priceToY,
+          yToPrice: (yy) => this._yToPriceForDrag(yy),
+          lineParams: (px, py, dx, dy) =>
+              _lineRectParams(px, py, dx, dy,
+                  plot.left, plot.top, plot.right, plot.bottom),
+        };
+        const r = _impl.render(g, d);
+        if (!r) { ctx.restore(); return; }
+        endX = Number.isFinite(r.endX) ? r.endX : plot.right;
+        endY = Number.isFinite(r.endY) ? r.endY : 0;
+        dragRect = r.dragRect || null;
       } else if (d.kind === 'path') {
         // Phase 21.B — Path: multi-point polyline. Single in-progress point
         // previews to cursor; 2+ points render the polyline and extend to cursor
@@ -4424,6 +7049,37 @@ class Chart {
           action: 'drag',
           kind: d.kind,
         });
+      }
+
+      // Phase 30 — per-anchor edit handles. When a drawing is selected and not
+      // locked, draw a draggable square at every anchor so the user can reshape
+      // / extend it (drag an endpoint) instead of only translating the whole
+      // shape. Skipped for `path`/`brush` (too many points) and `measure`.
+      if (!isInProgress && isSelected && !d.locked &&
+          d.kind !== 'path' && d.kind !== 'measure' &&
+          Array.isArray(d.points)) {
+        const hs = 4; // half-size of the handle square
+        ctx.save();
+        for (let pi = 0; pi < d.points.length; pi++) {
+          const pt = d.points[pi];
+          if (!pt) continue;
+          const hx = this._tsToX(pt.ts, plot);
+          const hy = priceToY(pt.price);
+          if (!Number.isFinite(hx) || !Number.isFinite(hy)) continue;
+          ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = d.color || '#3B82F6';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.rect(hx - hs, hy - hs, hs * 2, hs * 2);
+          ctx.fill();
+          ctx.stroke();
+          this._drawingHandleHits.push({
+            rect: { x: hx - hs - 3, y: hy - hs - 3, w: hs * 2 + 6, h: hs * 2 + 6 },
+            drawingId: d.id,
+            pointIndex: pi,
+          });
+        }
+        ctx.restore();
       }
 
       // Sahi-style floating toolbar — single row of equal-sized icon buttons
@@ -4731,14 +7387,17 @@ class Chart {
 
     // Phase 16 F2 — on Renko, hide time-axis drawings (trendline, rect, fib,
     // channel, etc.). Only price-only drawings (hline) make sense when the
-    // X axis is brick-indexed rather than time-indexed.
-    const isRenko = this.candleStyle === 'renko';
+    // X axis is brick-indexed rather than time-indexed. Phase 26 — same applies
+    // to all rebinned styles (linebreak/kagi/range/pnf): their X axis is
+    // rebin-indexed, not time-indexed.
+    const isRebinAxis = this.candleStyle === 'renko'
+        || this._isRebinnedStyle(this.candleStyle);
     for (const d of this._drawings) {
-      if (isRenko && d.kind !== 'hline') continue;
+      if (isRebinAxis && d.kind !== 'hline') continue;
       renderOne(d, false);
     }
     if (this._inProgressDrawing) {
-      if (!isRenko || this._inProgressDrawing.kind === 'hline') {
+      if (!isRebinAxis || this._inProgressDrawing.kind === 'hline') {
         renderOne(this._inProgressDrawing, true);
       }
     }
@@ -4778,7 +7437,8 @@ class Chart {
     // → magnet snap + sub-pane axis labels end up at wrong Y positions).
     const SUB_KINDS = new Set(['rsi', 'macd', 'stoch', 'atr', 'stochrsi',
         'squeeze', 'efi', 'wt', 'crsi', 'ao', 'mfi', 'obv', 'cmf', 'wr',
-        'explain']);
+        'cci', 'roc', 'cvd', 'adx', 'trix', 'vortex', 'uo', 'dpo', 'pvt',
+        'ad', 'explain']);
     const visibleSubs = this._indicators
         .filter((i) => SUB_KINDS.has(i.kind) && !i.hidden);
     if (visibleSubs.length === 0) return 0;
@@ -6889,7 +9549,14 @@ class Chart {
             c: b.closePrice, h: b.closePrice, l: b.closePrice,
             o: b.openPrice, ts: b.sourceBarTime, v: 0,
           }))
-        : this.candles;
+        : (this._isRebinnedStyle(this.candleStyle)
+            && this._rebinnedStyle === this.candleStyle
+            && this._rebinned.length > 0)
+          // Phase 26 — rebinned styles already carry {o,h,l,c,v,ts}; run
+          // indicators on those pseudo-candles so X aligns with the rebinned
+          // series (same logic as the renko branch above).
+          ? this._rebinned
+          : this.candles;
     const _savedCandles = this.candles;
     this.candles = seriesBars;
     try {
@@ -7403,6 +10070,138 @@ class Chart {
         }
       }
 
+      // Phase 29 — WMA / HMA: single-line overlays like SMA/EMA.
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'wma' && ind.kind !== 'hma') continue;
+        const values = ind.kind === 'wma'
+            ? this._computeWMA(ind.period)
+            : this._computeHMA(ind.period);
+        ctx.strokeStyle = ind.color || '#3B82F6';
+        ctx.lineWidth = (ind.thickness && ind.thickness > 1) ? ind.thickness : 1.5;
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < visible.length; i++) {
+          const absIdx = firstAbs + i;
+          const v = values[absIdx];
+          if (v == null) continue;
+          const x = this._candleXCenter(absIdx, plot);
+          const y = priceToY(v);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        this._drawIndicatorAxisChip(
+            plot, priceToY, values[firstAbs + visible.length - 1],
+            ind.color || '#3B82F6');
+      }
+
+      // Phase 29 — Keltner / Donchian: 3-line channels (mid + upper + lower).
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'keltner' && ind.kind !== 'donchian') continue;
+        const bands = ind.kind === 'keltner'
+            ? this._computeKeltner(ind)
+            : this._computeDonchian(ind);
+        const col = ind.color || '#06B6D4';
+        const drawSeries = (vals, w) => {
+          ctx.strokeStyle = col;
+          ctx.lineWidth = w;
+          ctx.beginPath();
+          let started = false;
+          for (let i = 0; i < visible.length; i++) {
+            const absIdx = firstAbs + i;
+            const v = vals[absIdx];
+            if (v == null) continue;
+            const x = this._candleXCenter(absIdx, plot);
+            const y = priceToY(v);
+            if (!started) { ctx.moveTo(x, y); started = true; }
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        };
+        drawSeries(bands.upper, 1);
+        drawSeries(bands.mid, 1.5);
+        drawSeries(bands.lower, 1);
+        const last = firstAbs + visible.length - 1;
+        this._drawIndicatorAxisChip(plot, priceToY, bands.upper[last], col);
+        this._drawIndicatorAxisChip(plot, priceToY, bands.mid[last], col);
+        this._drawIndicatorAxisChip(plot, priceToY, bands.lower[last], col);
+      }
+
+      // Phase 29 — SuperTrend: solid line in the current trend colour, flips
+      // green↔red on the close cross (like Volatility Stop but solid).
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'supertrend') continue;
+        const st = this._computeSuperTrend(ind);
+        ctx.save();
+        ctx.lineWidth = (ind.thickness && ind.thickness > 1) ? ind.thickness : 2;
+        let prevDir = null;
+        let started = false;
+        ctx.beginPath();
+        for (let i = 0; i < st.st.length; i++) {
+          const v = st.st[i];
+          const d = st.dir[i];
+          if (v == null || !isFinite(v)) { started = false; prevDir = d; continue; }
+          if (d !== prevDir && started) {
+            ctx.stroke();
+            ctx.beginPath();
+            started = false;
+          }
+          ctx.strokeStyle = d === 1 ? '#22C55E' : '#EF4444';
+          const x = this._candleXCenter(i, plot);
+          const y = priceToY(v);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+          prevDir = d;
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // VWMA: single-line volume-weighted MA overlay (like SMA/EMA).
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'vwma') continue;
+        const values = this._computeVWMA(ind.period || 20);
+        ctx.strokeStyle = ind.color || '#F59E0B';
+        ctx.lineWidth = (ind.thickness && ind.thickness > 1) ? ind.thickness : 1.5;
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < visible.length; i++) {
+          const absIdx = firstAbs + i;
+          const v = values[absIdx];
+          if (v == null) continue;
+          const x = this._candleXCenter(absIdx, plot);
+          const y = priceToY(v);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        this._drawIndicatorAxisChip(
+            plot, priceToY, values[firstAbs + visible.length - 1],
+            ind.color || '#F59E0B');
+      }
+
+      // Parabolic SAR: one trend-coloured dot per bar (green = SAR below
+      // price / uptrend, red = SAR above price / downtrend).
+      for (const ind of this._indicators) {
+        if (ind.hidden) continue;
+        if (ind.kind !== 'psar') continue;
+        const ps = this._computePSAR(ind);
+        const sar = ps.sar, dir = ps.dir;
+        for (let i = 0; i < visible.length; i++) {
+          const absIdx = firstAbs + i;
+          const v = sar[absIdx];
+          if (v == null || !isFinite(v)) continue;
+          ctx.fillStyle = dir[absIdx] === 1 ? '#22C55E' : '#EF4444';
+          ctx.beginPath();
+          ctx.arc(this._candleXCenter(absIdx, plot), priceToY(v), 1.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
       ctx.restore();
     } finally {
       // Always restore the real bar series — even if an exception is thrown
@@ -7680,7 +10479,11 @@ class Chart {
             c: b.closePrice, h: b.closePrice, l: b.closePrice,
             o: b.openPrice, ts: b.sourceBarTime, v: 0,
           }))
-        : this.candles;
+        : (this._isRebinnedStyle(this.candleStyle)
+            && this._rebinnedStyle === this.candleStyle
+            && this._rebinned.length > 0)
+          ? this._rebinned   // Phase 26 — see _drawIndicators note above.
+          : this.candles;
     const _savedCandles = this.candles;
     this.candles = seriesBars;
     try {
@@ -7721,6 +10524,16 @@ class Chart {
           case 'obv':      this._drawObvInPane(sp); break;
           case 'cmf':      this._drawCmfInPane(sp); break;
           case 'wr':       this._drawWilliamsRInPane(sp); break;
+          case 'cci':      this._drawCciInPane(sp); break;
+          case 'roc':      this._drawRocInPane(sp); break;
+          case 'cvd':      this._drawCvdInPane(sp); break;
+          case 'adx':      this._drawAdxInPane(sp); break;
+          case 'trix':     this._drawTrixInPane(sp); break;
+          case 'vortex':   this._drawVortexInPane(sp); break;
+          case 'uo':       this._drawUoInPane(sp); break;
+          case 'dpo':      this._drawDpoInPane(sp); break;
+          case 'pvt':      this._drawPvtInPane(sp); break;
+          case 'ad':       this._drawAdInPane(sp); break;
           case 'explain':  this._drawExplainSubPane(sp); break;
         }
         this.ctx.restore();
@@ -7830,6 +10643,16 @@ class Chart {
     if (k === 'mfi')      return (this._computeMFI(sp.period) || [])[idx];
     if (k === 'cmf')      return (this._computeCMF(sp.period) || [])[idx];
     if (k === 'wr')       return (this._computeWilliamsR(sp.period) || [])[idx];
+    if (k === 'cci')      return (this._computeCCI(sp.period || 20) || [])[idx];
+    if (k === 'roc')      return (this._computeROC(sp.period || 9) || [])[idx];
+    if (k === 'cvd')      return (this._computeCVD() || [])[idx];
+    if (k === 'adx')      return ((this._computeADX(sp.period || 14) || {}).adx || [])[idx];
+    if (k === 'trix')     return (this._computeTRIX(sp.period || 15) || [])[idx];
+    if (k === 'vortex')   return ((this._computeVortex(sp.period || 14) || {}).viPlus || [])[idx];
+    if (k === 'uo')       return (this._computeUO() || [])[idx];
+    if (k === 'dpo')      return (this._computeDPO(sp.period || 20) || [])[idx];
+    if (k === 'pvt')      return (this._computePVT() || [])[idx];
+    if (k === 'ad')       return (this._computeAD() || [])[idx];
     if (k === 'atr')      return (this._computeATR(sp.period) || [])[idx];
     if (k === 'ao')       return (this._computeAO() || [])[idx];
     if (k === 'obv')      return (this._computeOBV() || [])[idx];
@@ -7886,6 +10709,68 @@ class Chart {
         return [-100, 0];
       case 'cmf':
         return [-1, 1];
+      case 'cci': {
+        const v = this._computeCCI(sp.period || 20);
+        let lo = Infinity, hi = -Infinity;
+        for (const x of v) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        return (isFinite(lo) && isFinite(hi)) ? [Math.min(lo, -100), Math.max(hi, 100)] : null;
+      }
+      case 'roc': {
+        const v = this._computeROC(sp.period || 9);
+        let lo = Infinity, hi = -Infinity;
+        for (const x of v) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        if (!isFinite(lo) || !isFinite(hi)) return null;
+        const mag = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+        return [-mag, mag];
+      }
+      case 'cvd': {
+        const v = this._computeCVD();
+        let lo = Infinity, hi = -Infinity;
+        for (const x of v) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        return (isFinite(lo) && isFinite(hi)) ? [lo, hi] : null;
+      }
+      case 'adx': {
+        const r = this._computeADX(sp.period || 14);
+        let hi = 0;
+        for (const arr of [r.adx, r.plusDI, r.minusDI]) {
+          for (const x of arr) { if (x != null && isFinite(x) && x > hi) hi = x; }
+        }
+        return [0, Math.max(50, hi)];
+      }
+      case 'uo':
+        return [0, 100];
+      case 'trix': {
+        const v = this._computeTRIX(sp.period || 15);
+        let lo = Infinity, hi = -Infinity;
+        for (const x of v) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        return (isFinite(lo) && isFinite(hi)) ? [lo, hi] : null;
+      }
+      case 'dpo': {
+        const v = this._computeDPO(sp.period || 20);
+        let lo = Infinity, hi = -Infinity;
+        for (const x of v) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        return (isFinite(lo) && isFinite(hi)) ? [lo, hi] : null;
+      }
+      case 'pvt': {
+        const v = this._computePVT();
+        let lo = Infinity, hi = -Infinity;
+        for (const x of v) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        return (isFinite(lo) && isFinite(hi)) ? [lo, hi] : null;
+      }
+      case 'ad': {
+        const v = this._computeAD();
+        let lo = Infinity, hi = -Infinity;
+        for (const x of v) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        return (isFinite(lo) && isFinite(hi)) ? [lo, hi] : null;
+      }
+      case 'vortex': {
+        const r = this._computeVortex(sp.period || 14);
+        let lo = Infinity, hi = -Infinity;
+        for (const arr of [r.viPlus, r.viMinus]) {
+          for (const x of arr) { if (x == null || !isFinite(x)) continue; if (x < lo) lo = x; if (x > hi) hi = x; }
+        }
+        return (isFinite(lo) && isFinite(hi)) ? [lo, hi] : null;
+      }
       case 'wt':
         return [-100, 100];
       case 'macd': {
@@ -9027,5 +11912,598 @@ class Chart {
     this.ctx.font = '500 9px Geist, sans-serif';
     this.ctx.textAlign = 'left'; this.ctx.textBaseline = 'top';
     this.ctx.fillText('%R ' + (sp.period || 14), sp.left + 4, sp.top + 2);
+  }
+
+  // ── Phase 29 — added indicators ──────────────────────────────────────────
+
+  // Weighted moving average (linear weights n..1) over close.
+  _computeWMA(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const out = new Array(bars.length).fill(null);
+    if (bars.length < n) return out;
+    const denom = n * (n + 1) / 2;
+    for (let i = n - 1; i < bars.length; i++) {
+      let s = 0;
+      for (let k = 0; k < n; k++) s += bars[i - k].c * (n - k);
+      out[i] = s / denom;
+    }
+    return out;
+  }
+
+  // Generic linear-WMA over an arbitrary value array (used by HMA). Not
+  // memoized (array arg) — callers are already memoized.
+  _wmaArr(values, period) {
+    const n = Math.max(1, period | 0);
+    const out = new Array(values.length).fill(null);
+    const denom = n * (n + 1) / 2;
+    for (let i = n - 1; i < values.length; i++) {
+      let s = 0, ok = true;
+      for (let k = 0; k < n; k++) {
+        const v = values[i - k];
+        if (v == null || !isFinite(v)) { ok = false; break; }
+        s += v * (n - k);
+      }
+      out[i] = ok ? s / denom : null;
+    }
+    return out;
+  }
+
+  // Hull MA: WMA(2·WMA(n/2) − WMA(n), √n).
+  _computeHMA(period) {
+    const n = Math.max(2, period | 0);
+    const closes = this.candles.map((c) => c.c);
+    const half = Math.max(1, Math.round(n / 2));
+    const sq = Math.max(1, Math.round(Math.sqrt(n)));
+    const w1 = this._wmaArr(closes, half);
+    const w2 = this._wmaArr(closes, n);
+    const raw = closes.map((_, i) =>
+        (w1[i] != null && w2[i] != null) ? (2 * w1[i] - w2[i]) : null);
+    return this._wmaArr(raw, sq);
+  }
+
+  // Keltner Channels: EMA mid ± mult·ATR.
+  _computeKeltner(arg) {
+    const p = (arg && typeof arg === 'object') ? (arg.params || {}) : {};
+    const period = +p.length || +arg.period || 20;
+    const mult = +p.mult || 2;
+    const atrP = +p.atrLength || 10;
+    const mid = this._computeEMA(period);
+    const atr = this._computeATR(atrP);
+    const N = this.candles.length;
+    const upper = new Array(N).fill(null), lower = new Array(N).fill(null);
+    for (let i = 0; i < N; i++) {
+      if (mid[i] != null && atr[i] != null) {
+        upper[i] = mid[i] + mult * atr[i];
+        lower[i] = mid[i] - mult * atr[i];
+      }
+    }
+    return { mid, upper, lower };
+  }
+
+  // Donchian Channels: rolling high / low / midline.
+  _computeDonchian(arg) {
+    const p = (arg && typeof arg === 'object') ? (arg.params || {}) : {};
+    const period = +p.length || +arg.period || 20;
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const N = bars.length;
+    const upper = new Array(N).fill(null), lower = new Array(N).fill(null), mid = new Array(N).fill(null);
+    for (let i = n - 1; i < N; i++) {
+      let hh = -Infinity, ll = Infinity;
+      for (let j = i - n + 1; j <= i; j++) {
+        if (bars[j].h > hh) hh = bars[j].h;
+        if (bars[j].l < ll) ll = bars[j].l;
+      }
+      upper[i] = hh; lower[i] = ll; mid[i] = (hh + ll) / 2;
+    }
+    return { upper, lower, mid };
+  }
+
+  // SuperTrend: ATR-banded trend follower. Returns { st, dir } where
+  // dir 1 = up (green), -1 = down (red); st is the active band level.
+  _computeSuperTrend(arg) {
+    const p = (arg && typeof arg === 'object') ? (arg.params || {}) : {};
+    const period = +p.atrLength || +arg.period || 10;
+    const mult = +p.mult || 3;
+    const bars = this.candles;
+    const N = bars.length;
+    const atr = this._computeATR(period);
+    const st = new Array(N).fill(null), dir = new Array(N).fill(null);
+    let fu = null, fl = null, prevST = null, prevDir = 1;
+    for (let i = 0; i < N; i++) {
+      if (atr[i] == null) continue;
+      const hl2 = (bars[i].h + bars[i].l) / 2;
+      const bu = hl2 + mult * atr[i], bl = hl2 - mult * atr[i];
+      const prevClose = i > 0 ? bars[i - 1].c : bars[i].c;
+      const newFu = (fu == null) ? bu : ((bu < fu || prevClose > fu) ? bu : fu);
+      const newFl = (fl == null) ? bl : ((bl > fl || prevClose < fl) ? bl : fl);
+      const close = bars[i].c;
+      let d, s;
+      if (prevST == null) { d = close >= hl2 ? 1 : -1; s = d === 1 ? newFl : newFu; }
+      else if (prevDir === 1) {
+        if (close < newFl) { d = -1; s = newFu; } else { d = 1; s = newFl; }
+      } else {
+        if (close > newFu) { d = 1; s = newFl; } else { d = -1; s = newFu; }
+      }
+      fu = newFu; fl = newFl; prevST = s; prevDir = d;
+      st[i] = s; dir[i] = d;
+    }
+    return { st, dir };
+  }
+
+  // Commodity Channel Index.
+  _computeCCI(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const out = new Array(bars.length).fill(null);
+    if (bars.length < n) return out;
+    const tp = bars.map((b) => (b.h + b.l + b.c) / 3);
+    for (let i = n - 1; i < bars.length; i++) {
+      let sum = 0;
+      for (let j = i - n + 1; j <= i; j++) sum += tp[j];
+      const sma = sum / n;
+      let dev = 0;
+      for (let j = i - n + 1; j <= i; j++) dev += Math.abs(tp[j] - sma);
+      const mad = dev / n;
+      out[i] = mad > 0 ? (tp[i] - sma) / (0.015 * mad) : 0;
+    }
+    return out;
+  }
+
+  // Rate of Change (%) vs the close `period` bars ago.
+  _computeROC(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const out = new Array(bars.length).fill(null);
+    for (let i = n; i < bars.length; i++) {
+      const prev = bars[i - n].c;
+      out[i] = prev !== 0 ? (bars[i].c / prev - 1) * 100 : null;
+    }
+    return out;
+  }
+
+  // Cumulative Volume Delta — signed by candle direction (no L2 tape).
+  _computeCVD() {
+    const bars = this.candles;
+    const out = new Array(bars.length).fill(null);
+    let cum = 0;
+    for (let i = 0; i < bars.length; i++) {
+      const c = bars[i];
+      const sgn = c.c > c.o ? 1 : c.c < c.o ? -1 : 0;
+      cum += sgn * (c.v || 0);
+      out[i] = cum;
+    }
+    return out;
+  }
+
+  // ADX / DMI (Wilder). Returns { adx, plusDI, minusDI }.
+  _computeADX(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const len = bars.length;
+    const adx = new Array(len).fill(null);
+    const pdi = new Array(len).fill(null);
+    const mdi = new Array(len).fill(null);
+    if (len < 2 * n) return { adx, plusDI: pdi, minusDI: mdi };
+    const tr = new Array(len).fill(0);
+    const plusDM = new Array(len).fill(0);
+    const minusDM = new Array(len).fill(0);
+    for (let i = 1; i < len; i++) {
+      const up = bars[i].h - bars[i - 1].h;
+      const dn = bars[i - 1].l - bars[i].l;
+      plusDM[i] = (up > dn && up > 0) ? up : 0;
+      minusDM[i] = (dn > up && dn > 0) ? dn : 0;
+      tr[i] = Math.max(
+          bars[i].h - bars[i].l,
+          Math.abs(bars[i].h - bars[i - 1].c),
+          Math.abs(bars[i].l - bars[i - 1].c));
+    }
+    let trS = 0, pS = 0, mS = 0;
+    for (let i = 1; i <= n; i++) { trS += tr[i]; pS += plusDM[i]; mS += minusDM[i]; }
+    const dx = new Array(len).fill(null);
+    for (let i = n; i < len; i++) {
+      if (i > n) {
+        trS = trS - trS / n + tr[i];
+        pS = pS - pS / n + plusDM[i];
+        mS = mS - mS / n + minusDM[i];
+      }
+      const pDI = trS > 0 ? 100 * pS / trS : 0;
+      const mDI = trS > 0 ? 100 * mS / trS : 0;
+      pdi[i] = pDI; mdi[i] = mDI;
+      const sum = pDI + mDI;
+      dx[i] = sum > 0 ? 100 * Math.abs(pDI - mDI) / sum : 0;
+    }
+    const adxStart = n + n - 1;
+    if (adxStart < len) {
+      let s = 0;
+      for (let i = n; i <= adxStart; i++) s += dx[i] || 0;
+      adx[adxStart] = s / n;
+      for (let i = adxStart + 1; i < len; i++) {
+        adx[i] = (adx[i - 1] * (n - 1) + (dx[i] || 0)) / n;
+      }
+    }
+    return { adx, plusDI: pdi, minusDI: mdi };
+  }
+
+  // Shared single-line sub-pane renderer (background-less, mirrors %R style).
+  _lineSubPane(sp, values, label, color, refLines) {
+    const visible = this._visibleCandles();
+    if (!visible.length) return;
+    const firstAbs = this.candles.indexOf(visible[0]);
+    if (firstAbs < 0) return;
+    let yMin = sp.viewMin, yMax = sp.viewMax;
+    if (yMin == null || yMax == null) {
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < visible.length; i++) {
+        const v = values[firstAbs + i];
+        if (v != null && isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      }
+      if (!isFinite(lo) || !isFinite(hi)) return;
+      const pad = (hi - lo) * 0.1 || 1;
+      yMin = lo - pad; yMax = hi + pad;
+    }
+    if (yMax === yMin) yMax = yMin + 1;
+    const yFor = (v) => sp.top + sp.height - ((v - yMin) / (yMax - yMin)) * sp.height;
+    if (refLines && refLines.length) {
+      this.ctx.strokeStyle = this.palette.gridSoft || 'rgba(120,120,120,0.25)';
+      this.ctx.lineWidth = 0.5;
+      this.ctx.beginPath();
+      for (const lv of refLines) {
+        if (lv < yMin || lv > yMax) continue;
+        const y = yFor(lv);
+        this.ctx.moveTo(sp.left, y); this.ctx.lineTo(sp.right, y);
+      }
+      this.ctx.stroke();
+    }
+    this.ctx.strokeStyle = sp.color || color;
+    this.ctx.lineWidth = 1.25;
+    this.ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < visible.length; i++) {
+      const a = firstAbs + i;
+      const v = values[a];
+      if (v == null || !isFinite(v)) { started = false; continue; }
+      const x = this._candleXCenter(a, sp);
+      const y = yFor(v);
+      if (!started) { this.ctx.moveTo(x, y); started = true; }
+      else this.ctx.lineTo(x, y);
+    }
+    this.ctx.stroke();
+    this.ctx.fillStyle = this.palette.axisText || '#94a3b8';
+    this.ctx.font = '500 9px Geist, sans-serif';
+    this.ctx.textAlign = 'left'; this.ctx.textBaseline = 'top';
+    this.ctx.fillText(label, sp.left + 4, sp.top + 2);
+  }
+
+  _drawCciInPane(sp) {
+    const period = sp.period || 20;
+    this._lineSubPane(sp, this._computeCCI(period), 'CCI ' + period, '#3B82F6', [-100, 0, 100]);
+  }
+
+  _drawRocInPane(sp) {
+    const period = sp.period || 9;
+    this._lineSubPane(sp, this._computeROC(period), 'ROC ' + period, '#A855F7', [0]);
+  }
+
+  _drawCvdInPane(sp) {
+    this._lineSubPane(sp, this._computeCVD(), 'CVD', '#06B6D4', [0]);
+  }
+
+  _drawTrixInPane(sp) {
+    const period = sp.period || 15;
+    this._lineSubPane(sp, this._computeTRIX(period), 'TRIX ' + period, '#A855F7', [0]);
+  }
+
+  _drawUoInPane(sp) {
+    this._lineSubPane(sp, this._computeUO(), 'UO', '#3B82F6', [30, 50, 70]);
+  }
+
+  _drawDpoInPane(sp) {
+    const period = sp.period || 20;
+    this._lineSubPane(sp, this._computeDPO(period), 'DPO ' + period, '#EAB308', [0]);
+  }
+
+  _drawPvtInPane(sp) {
+    this._lineSubPane(sp, this._computePVT(), 'PVT', '#06B6D4', [0]);
+  }
+
+  _drawAdInPane(sp) {
+    this._lineSubPane(sp, this._computeAD(), 'A/D', '#10B981', [0]);
+  }
+
+  _drawAdxInPane(sp) {
+    const visible = this._visibleCandles();
+    if (!visible.length) return;
+    const firstAbs = this.candles.indexOf(visible[0]);
+    if (firstAbs < 0) return;
+    const period = sp.period || 14;
+    const r = this._computeADX(period);
+    const yMin = 0;
+    const yMax = (sp.viewMax != null && sp.viewMax > 0) ? sp.viewMax : 50;
+    const yFor = (v) => sp.top + sp.height - ((v - yMin) / (yMax - yMin)) * sp.height;
+    // Reference line at 25 (trend threshold).
+    this.ctx.strokeStyle = this.palette.gridSoft || 'rgba(120,120,120,0.25)';
+    this.ctx.lineWidth = 0.5;
+    this.ctx.beginPath();
+    const y25 = yFor(25);
+    this.ctx.moveTo(sp.left, y25); this.ctx.lineTo(sp.right, y25);
+    this.ctx.stroke();
+    const series = [
+      { vals: r.plusDI, col: '#22C55E' },
+      { vals: r.minusDI, col: '#EF4444' },
+      { vals: r.adx, col: sp.color || '#3B82F6' },
+    ];
+    for (const s of series) {
+      this.ctx.strokeStyle = s.col;
+      this.ctx.lineWidth = 1.2;
+      this.ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < visible.length; i++) {
+        const a = firstAbs + i;
+        const v = s.vals[a];
+        if (v == null || !isFinite(v)) { started = false; continue; }
+        const x = this._candleXCenter(a, sp);
+        const y = yFor(Math.max(yMin, Math.min(yMax, v)));
+        if (!started) { this.ctx.moveTo(x, y); started = true; }
+        else this.ctx.lineTo(x, y);
+      }
+      this.ctx.stroke();
+    }
+    this.ctx.fillStyle = this.palette.axisText || '#94a3b8';
+    this.ctx.font = '500 9px Geist, sans-serif';
+    this.ctx.textAlign = 'left'; this.ctx.textBaseline = 'top';
+    this.ctx.fillText('ADX ' + period + '  +DI / -DI', sp.left + 4, sp.top + 2);
+  }
+
+  // Vortex Indicator — two lines (VI+ green, VI- red). Mirrors _drawAdxInPane.
+  _drawVortexInPane(sp) {
+    const visible = this._visibleCandles();
+    if (!visible.length) return;
+    const firstAbs = this.candles.indexOf(visible[0]);
+    if (firstAbs < 0) return;
+    const period = sp.period || 14;
+    const r = this._computeVortex(period);
+    let yMin = sp.viewMin, yMax = sp.viewMax;
+    if (yMin == null || yMax == null) {
+      let lo = Infinity, hi = -Infinity;
+      for (const arr of [r.viPlus, r.viMinus]) {
+        for (let i = 0; i < visible.length; i++) {
+          const v = arr[firstAbs + i];
+          if (v != null && isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+        }
+      }
+      if (!isFinite(lo) || !isFinite(hi)) return;
+      const pad = (hi - lo) * 0.1 || 0.1;
+      yMin = lo - pad; yMax = hi + pad;
+    }
+    if (yMax === yMin) yMax = yMin + 1;
+    const yFor = (v) => sp.top + sp.height - ((v - yMin) / (yMax - yMin)) * sp.height;
+    const series = [
+      { vals: r.viPlus, col: '#22C55E' },
+      { vals: r.viMinus, col: '#EF4444' },
+    ];
+    for (const s of series) {
+      this.ctx.strokeStyle = s.col;
+      this.ctx.lineWidth = 1.2;
+      this.ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < visible.length; i++) {
+        const a = firstAbs + i;
+        const v = s.vals[a];
+        if (v == null || !isFinite(v)) { started = false; continue; }
+        const x = this._candleXCenter(a, sp);
+        const y = yFor(v);
+        if (!started) { this.ctx.moveTo(x, y); started = true; }
+        else this.ctx.lineTo(x, y);
+      }
+      this.ctx.stroke();
+    }
+    this.ctx.fillStyle = this.palette.axisText || '#94a3b8';
+    this.ctx.font = '500 9px Geist, sans-serif';
+    this.ctx.textAlign = 'left'; this.ctx.textBaseline = 'top';
+    this.ctx.fillText('Vortex ' + period + '  VI+ / VI-', sp.left + 4, sp.top + 2);
+  }
+
+  // Volume-Weighted Moving Average: Σ(close·vol, n) / Σ(vol, n).
+  _computeVWMA(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const out = new Array(bars.length).fill(null);
+    if (bars.length < n) return out;
+    for (let i = n - 1; i < bars.length; i++) {
+      let pv = 0, vv = 0;
+      for (let k = 0; k < n; k++) {
+        const b = bars[i - k];
+        const v = b.v || 0;
+        pv += b.c * v;
+        vv += v;
+      }
+      out[i] = vv > 0 ? pv / vv : null;
+    }
+    return out;
+  }
+
+  // Parabolic SAR (classic Wilder). AF starts at `accel`, steps by `accel`
+  // on each new extreme up to `maxAccel`, flips when price penetrates the
+  // SAR. Returns { sar, dir } where dir 1 = SAR below price (uptrend).
+  _computePSAR(arg) {
+    const p = (arg && typeof arg === 'object') ? (arg.params || {}) : {};
+    const accel = +p.accel || 0.02;
+    const maxAccel = +p.maxAccel || 0.2;
+    const bars = this.candles;
+    const N = bars.length;
+    const sar = new Array(N).fill(null);
+    const dir = new Array(N).fill(null);
+    if (N < 2) return { sar, dir };
+    // Seed: assume uptrend, EP = first high, SAR = first low.
+    let up = true;
+    let af = accel;
+    let ep = bars[0].h;
+    let sarVal = bars[0].l;
+    sar[0] = sarVal;
+    dir[0] = 1;
+    for (let i = 1; i < N; i++) {
+      let next = sarVal + af * (ep - sarVal);
+      if (up) {
+        // SAR can't exceed prior two lows.
+        next = Math.min(next, bars[i - 1].l, bars[i >= 2 ? i - 2 : i - 1].l);
+        if (bars[i].l < next) {
+          // Flip to downtrend.
+          up = false;
+          sarVal = ep;
+          ep = bars[i].l;
+          af = accel;
+        } else {
+          sarVal = next;
+          if (bars[i].h > ep) { ep = bars[i].h; af = Math.min(maxAccel, af + accel); }
+        }
+      } else {
+        next = Math.max(next, bars[i - 1].h, bars[i >= 2 ? i - 2 : i - 1].h);
+        if (bars[i].h > next) {
+          // Flip to uptrend.
+          up = true;
+          sarVal = ep;
+          ep = bars[i].h;
+          af = accel;
+        } else {
+          sarVal = next;
+          if (bars[i].l < ep) { ep = bars[i].l; af = Math.min(maxAccel, af + accel); }
+        }
+      }
+      sar[i] = sarVal;
+      dir[i] = up ? 1 : -1;
+    }
+    return { sar, dir };
+  }
+
+  // TRIX: 100 · 1-bar %change of EMA(EMA(EMA(close, n), n), n).
+  _computeTRIX(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const N = bars.length;
+    const out = new Array(N).fill(null);
+    const ema = (src) => {
+      const res = new Array(N).fill(null);
+      const k = 2 / (n + 1);
+      let prev = null, seeded = -1;
+      for (let i = 0; i < N; i++) {
+        const v = src[i];
+        if (v == null || !isFinite(v)) continue;
+        if (prev == null) { prev = v; seeded = i; }
+        else prev = v * k + prev * (1 - k);
+        if (i - seeded >= n - 1) res[i] = prev;
+      }
+      return res;
+    };
+    const closes = bars.map((b) => b.c);
+    const e3 = ema(ema(ema(closes)));
+    for (let i = 1; i < N; i++) {
+      const prev = e3[i - 1];
+      if (e3[i] != null && prev != null && prev !== 0) {
+        out[i] = (e3[i] / prev - 1) * 100;
+      }
+    }
+    return out;
+  }
+
+  // Vortex Indicator. VI+ = Σ(VM+, n)/Σ(TR, n), VI- = Σ(VM-, n)/Σ(TR, n).
+  _computeVortex(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const N = bars.length;
+    const viPlus = new Array(N).fill(null);
+    const viMinus = new Array(N).fill(null);
+    if (N < n + 1) return { viPlus, viMinus };
+    const vmP = new Array(N).fill(0);
+    const vmM = new Array(N).fill(0);
+    const tr = new Array(N).fill(0);
+    for (let i = 1; i < N; i++) {
+      vmP[i] = Math.abs(bars[i].h - bars[i - 1].l);
+      vmM[i] = Math.abs(bars[i].l - bars[i - 1].h);
+      tr[i] = Math.max(
+          bars[i].h - bars[i].l,
+          Math.abs(bars[i].h - bars[i - 1].c),
+          Math.abs(bars[i].l - bars[i - 1].c));
+    }
+    for (let i = n; i < N; i++) {
+      let sP = 0, sM = 0, sT = 0;
+      for (let j = i - n + 1; j <= i; j++) { sP += vmP[j]; sM += vmM[j]; sT += tr[j]; }
+      if (sT > 0) { viPlus[i] = sP / sT; viMinus[i] = sM / sT; }
+    }
+    return { viPlus, viMinus };
+  }
+
+  // Ultimate Oscillator (Larry Williams). Weighted 7/14/28 BP/TR sums.
+  _computeUO() {
+    const bars = this.candles;
+    const N = bars.length;
+    const out = new Array(N).fill(null);
+    if (N < 29) return out;
+    const bp = new Array(N).fill(0);
+    const tr = new Array(N).fill(0);
+    for (let i = 1; i < N; i++) {
+      const prevC = bars[i - 1].c;
+      const minLC = Math.min(bars[i].l, prevC);
+      bp[i] = bars[i].c - minLC;
+      tr[i] = Math.max(bars[i].h, prevC) - minLC;
+    }
+    const sum = (arr, i, len) => { let s = 0; for (let j = i - len + 1; j <= i; j++) s += arr[j]; return s; };
+    for (let i = 28; i < N; i++) {
+      const t7 = sum(tr, i, 7), t14 = sum(tr, i, 14), t28 = sum(tr, i, 28);
+      if (t7 <= 0 || t14 <= 0 || t28 <= 0) continue;
+      const a7 = sum(bp, i, 7) / t7;
+      const a14 = sum(bp, i, 14) / t14;
+      const a28 = sum(bp, i, 28) / t28;
+      out[i] = 100 * (4 * a7 + 2 * a14 + a28) / 7;
+    }
+    return out;
+  }
+
+  // Detrended Price Oscillator: close[i-(n/2+1)] - SMA(close, n)[i].
+  _computeDPO(period) {
+    const n = Math.max(1, period | 0);
+    const bars = this.candles;
+    const N = bars.length;
+    const out = new Array(N).fill(null);
+    const sma = this._computeSMA(n);
+    const shift = Math.floor(n / 2) + 1;
+    for (let i = 0; i < N; i++) {
+      const j = i - shift;
+      if (j < 0 || sma[i] == null) continue;
+      out[i] = bars[j].c - sma[i];
+    }
+    return out;
+  }
+
+  // Price Volume Trend: cumulative prevPVT + ((close-prevClose)/prevClose)·vol.
+  _computePVT() {
+    const bars = this.candles;
+    const N = bars.length;
+    const out = new Array(N).fill(null);
+    if (N === 0) return out;
+    let cum = 0;
+    out[0] = 0;
+    for (let i = 1; i < N; i++) {
+      const prevC = bars[i - 1].c;
+      if (prevC !== 0) cum += ((bars[i].c - prevC) / prevC) * (bars[i].v || 0);
+      out[i] = cum;
+    }
+    return out;
+  }
+
+  // Accumulation/Distribution: cumulative MFV. Guards high==low (adds 0).
+  _computeAD() {
+    const bars = this.candles;
+    const N = bars.length;
+    const out = new Array(N).fill(null);
+    let cum = 0;
+    for (let i = 0; i < N; i++) {
+      const h = bars[i].h, l = bars[i].l, c = bars[i].c;
+      const range = h - l;
+      if (range > 0) cum += (((c - l) - (h - c)) / range) * (bars[i].v || 0);
+      out[i] = cum;
+    }
+    return out;
   }
 }

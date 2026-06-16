@@ -200,6 +200,42 @@
     return pop;
   }
 
+  // Flyout that opens to the RIGHT of an anchor (used by the left drawing
+  // rail). Same close/outside-click machinery as openPopover, but positioned
+  // beside the icon instead of below it.
+  function openFlyoutRight(anchorEl, content) {
+    const sameAnchorOpen = _openPopover != null && _openAnchor === anchorEl;
+    _closeOpenPopover();
+    if (sameAnchorOpen) return null;
+    const pop = document.createElement('div');
+    pop.className = 'tb-popover';
+    pop.appendChild(content);
+    pop.style.left = '-9999px';
+    pop.style.top = '0';
+    document.body.appendChild(pop);
+    const popW = pop.offsetWidth, popH = pop.offsetHeight;
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const margin = 8;
+    const rect = anchorEl.getBoundingClientRect();
+    let left = rect.right + 6;
+    if (left + popW + margin > vw) left = rect.left - popW - 6;
+    if (left < margin) left = margin;
+    let top = rect.top;
+    if (top + popH + margin > vh) top = Math.max(margin, vh - popH - margin);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    _openPopover = pop;
+    _openWrap = pop;
+    _openAnchor = anchorEl;
+    _openPopoverOutsideHandler = (e) => {
+      if (pop.contains(e.target) || anchorEl.contains(e.target)) return;
+      _closeOpenPopover();
+    };
+    document.addEventListener('mousedown', _openPopoverOutsideHandler, true);
+    return pop;
+  }
+
   // Centered modal — for popovers that are too large to anchor to a
   // single button without overflowing the viewport. Backdrop dims the
   // chart, click-outside or ESC closes. Returns the popover surface
@@ -386,6 +422,7 @@
   let symbolCurrent = null;          // {exch, token, tsym, dispName, ls, ti, instname}
   const symWrap = document.createElement('div');
   symWrap.className = 'tb-sym-wrap';
+  // (Exchange is shown in the on-chart header — no separate badge here.)
   const symInput = document.createElement('input');
   symInput.type = 'text';
   symInput.placeholder = 'Search symbol…';
@@ -681,6 +718,18 @@
     { id: 'line',        label: 'Line' },
     { id: 'area',        label: 'Area' },
     { id: 'heikin-ashi', label: 'Heikin Ashi' },
+    { id: 'baseline',    label: 'Baseline' },
+    { id: 'step',        label: 'Step line' },
+    { id: 'columns',     label: 'Columns' },
+    { id: 'hlcbars',     label: 'HLC bars' },
+    { id: 'highlow',     label: 'High-Low' },
+    { id: 'hlcarea',     label: 'HLC area' },
+    { id: 'volcandles',  label: 'Volume candles' },
+    { id: 'renko',       label: 'Renko' },
+    { id: 'linebreak',   label: 'Line Break' },
+    { id: 'kagi',        label: 'Kagi' },
+    { id: 'range',       label: 'Range' },
+    { id: 'pnf',         label: 'Point & Figure' },
   ];
   const styleBtn = document.createElement('button');
   styleBtn.className = 'tb-chip tb-style';
@@ -726,70 +775,9 @@
   });
   root.appendChild(styleBtn);
 
-  // ── Cursor mode picker (Crosshair / Cursor) ────────────────────────────
-  // Per-active-pane state. The chart's `showCrosshairLines` field controls
-  // whether the full-height/width crosshair guide lines are drawn under
-  // the cursor; "Cursor" mode shows only the floating LTP chip without
-  // the guides. Sub-50-line control, simple two-option popover.
-  const CURSOR_MODES = [
-    { value: true,  label: 'Crosshair', svg:
-        '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" '
-        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-        + 'stroke-linejoin="round"><path d="M12 3v18M3 12h18"/></svg>' },
-    { value: false, label: 'Cursor', svg:
-        '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" '
-        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-        + 'stroke-linejoin="round"><path d="M5 3l5 16 2-7 7-2z"/></svg>' },
-  ];
-  const cursorBtn = document.createElement('button');
-  cursorBtn.className = 'tb-chip tb-cursor';
-  cursorBtn.type = 'button';
-  cursorBtn.title = 'Cursor mode';
-  const cursorIconWrap = document.createElement('span');
-  cursorIconWrap.className = 'tb-cursor-icon';
-  cursorBtn.appendChild(cursorIconWrap);
-  cursorBtn.insertAdjacentHTML('beforeend',
-      '<svg viewBox="0 0 24 24" width="10" height="10" '
-      + 'fill="none" stroke="currentColor" stroke-width="2.5" '
-      + 'stroke-linecap="round" stroke-linejoin="round" '
-      + 'class="tb-chevron"><polyline points="6 9 12 15 18 9"/></svg>');
-  function repaintCursorButton() {
-    const mode = CURSOR_MODES.find(
-        (m) => m.value === activePaneState.showCrosshairLines)
-        || CURSOR_MODES[0];
-    cursorIconWrap.innerHTML = mode.svg;
-  }
-  repaintCursorButton();
-  activePaneSubs.push(repaintCursorButton);
-
-  cursorBtn.addEventListener('click', () => {
-    const content = document.createElement('div');
-    content.className = 'tb-list';
-    for (const m of CURSOR_MODES) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'tb-list-row';
-      if (m.value === activePaneState.showCrosshairLines) {
-        row.classList.add('tb-list-row--on');
-      }
-      row.innerHTML = '<span class="tb-list-row-icon">' + m.svg + '</span>'
-          + '<span class="tb-list-row-label">' + m.label + '</span>'
-          + '<span class="tb-list-row-check">'
-          + (m.value === activePaneState.showCrosshairLines ? '✓' : '')
-          + '</span>';
-      row.addEventListener('click', () => {
-        _closeOpenPopover();
-        if (m.value === activePaneState.showCrosshairLines) return;
-        activePaneState.showCrosshairLines = m.value;
-        repaintCursorButton();
-        bridge.post('setActiveShowCrosshairLines', { value: m.value });
-      });
-      content.appendChild(row);
-    }
-    const pop = openPopover(cursorBtn, content);
-    pop.classList.add('tb-cursor-popover');
-  });
-  root.appendChild(cursorBtn);
+  // Cursor mode (Crosshair / Cursor) moved into the drawing rail's first
+  // button — see buildDrawRail(). The chart's `showCrosshairLines` field is
+  // still driven from there via `setActiveShowCrosshairLines`.
 
   // ── Color picker control ────────────────────────────────────────────────
   // Wraps a native <input type="color"> so picking opens the browser's
@@ -851,6 +839,7 @@
     if (_openPopover && _openPopover.dataset.kind === 'settings') {
       _renderSettingsTab(_openPopover);
     }
+    repaintRail();
   });
   bridge.on('setKeyboardShortcutsState', (v) => {
     if (!v) return;
@@ -1338,26 +1327,136 @@
   // setDrawingsHidden via the diff-based _pushSession, so we just listen
   // here and post the same names back when the user clicks.
   const DRAW_TOOLS = [
-    { kind: 'trendline', label: 'Trendline' },
-    { kind: 'hline',     label: 'Horizontal line' },
-    { kind: 'hray',      label: 'Horizontal ray' },
-    { kind: 'rect',      label: 'Rectangle' },
-    { kind: 'fib',       label: 'Fib retracement' },
-    { kind: 'path',      label: 'Path (multi-point)' },
-    { kind: 'measure',   label: 'Measure' },
+    { kind: 'trendline', label: 'Trendline',        group: 'Lines' },
+    { kind: 'ray',       label: 'Ray',              group: 'Lines' },
+    { kind: 'xline',     label: 'Extended line',    group: 'Lines' },
+    { kind: 'hline',     label: 'Horizontal line',  group: 'Lines' },
+    { kind: 'hray',      label: 'Horizontal ray',   group: 'Lines' },
+    { kind: 'vline',     label: 'Vertical line',    group: 'Lines' },
+    { kind: 'crossline', label: 'Cross line',       group: 'Lines' },
+    { kind: 'infoline',  label: 'Info line',        group: 'Lines' },
+    { kind: 'trendangle', label: 'Trend angle',     group: 'Lines' },
+    { kind: 'channel',   label: 'Parallel channel', group: 'Channels' },
+    { kind: 'channelflat', label: 'Flat channel',   group: 'Channels' },
+    { kind: 'channeldisjoint', label: 'Disjoint channel', group: 'Channels' },
+    { kind: 'regression', label: 'Regression channel', group: 'Channels' },
+    { kind: 'pitchfork', label: 'Pitchfork',        group: 'Channels' },
+    { kind: 'pitchforkschiff', label: 'Schiff pitchfork', group: 'Channels' },
+    { kind: 'pitchforkmod', label: 'Modified Schiff', group: 'Channels' },
+    { kind: 'pitchforkinside', label: 'Inside pitchfork', group: 'Channels' },
+    { kind: 'gannfan',   label: 'Gann fan',         group: 'Gann' },
+    { kind: 'gannbox',   label: 'Gann box',         group: 'Gann' },
+    { kind: 'fib',       label: 'Fib retracement',  group: 'Fibonacci' },
+    { kind: 'fibext',    label: 'Fib extension',    group: 'Fibonacci' },
+    { kind: 'fibchannel', label: 'Fib channel',     group: 'Fibonacci' },
+    { kind: 'fibtimezone', label: 'Fib time zones', group: 'Fibonacci' },
+    { kind: 'fibfan',    label: 'Fib fan',          group: 'Fibonacci' },
+    { kind: 'fibcircle', label: 'Fib circles',      group: 'Fibonacci' },
+    { kind: 'xabcd',     label: 'XABCD',            group: 'Patterns' },
+    { kind: 'cypher',    label: 'Cypher',           group: 'Patterns' },
+    { kind: 'abcd',      label: 'ABCD',             group: 'Patterns' },
+    { kind: 'trianglepattern', label: 'Triangle pattern', group: 'Patterns' },
+    { kind: 'threedrives', label: 'Three drives',   group: 'Patterns' },
+    { kind: 'elliottimpulse', label: 'Elliott impulse (1-5)', group: 'Patterns' },
+    { kind: 'elliottcorrection', label: 'Elliott correction (ABC)', group: 'Patterns' },
+    { kind: 'headshoulders', label: 'Head & shoulders', group: 'Patterns' },
+    { kind: 'rect',      label: 'Rectangle',        group: 'Shapes' },
+    { kind: 'rotrect',   label: 'Rotated rectangle', group: 'Shapes' },
+    { kind: 'triangle',  label: 'Triangle',         group: 'Shapes' },
+    { kind: 'circle',    label: 'Circle',           group: 'Shapes' },
+    { kind: 'arc',       label: 'Arc',              group: 'Shapes' },
+    { kind: 'arrow',     label: 'Arrow',            group: 'Shapes' },
+    { kind: 'curve',     label: 'Curve',            group: 'Shapes' },
+    { kind: 'polyline',  label: 'Polyline',         group: 'Shapes' },
+    { kind: 'path',      label: 'Path (freehand)',  group: 'Shapes' },
+    { kind: 'forecast',  label: 'Forecast',         group: 'Projection' },
+    { kind: 'text',      label: 'Text',             group: 'Annotate' },
+    { kind: 'note',      label: 'Note',             group: 'Annotate' },
+    { kind: 'comment',   label: 'Comment',          group: 'Annotate' },
+    { kind: 'callout',   label: 'Callout',          group: 'Annotate' },
+    { kind: 'pricelabel', label: 'Price label',     group: 'Annotate' },
+    { kind: 'signpost',  label: 'Sign post',        group: 'Annotate' },
+    { kind: 'arrowup',   label: 'Arrow up',         group: 'Annotate' },
+    { kind: 'arrowdown', label: 'Arrow down',       group: 'Annotate' },
+    { kind: 'flag',      label: 'Flag',             group: 'Annotate' },
+    { kind: 'longpos',   label: 'Long position',    group: 'Smart' },
+    { kind: 'shortpos',  label: 'Short position',   group: 'Smart' },
+    { kind: 'avwap',     label: 'Anchored VWAP',    group: 'Smart' },
+    { kind: 'smartlevel', label: 'Smart level (S/R)', group: 'Smart' },
+    { kind: 'volxray',   label: 'Volume profile',   group: 'Smart' },
+    { kind: 'pricerange', label: 'Price range',     group: 'Measure' },
+    { kind: 'daterange', label: 'Date range',       group: 'Measure' },
+    { kind: 'dprange',   label: 'Date & price range', group: 'Measure' },
+    { kind: 'measure',   label: 'Measure',          group: 'Measure' },
   ];
   const DRAW_TOOL_SHORT = {
     trendline: 'Trendline',
+    ray: 'Ray',
+    xline: 'Ext. line',
     hline: 'HLine',
     hray: 'H.Ray',
-    rect: 'Rectangle',
+    vline: 'VLine',
+    crossline: 'Cross',
+    infoline: 'Info line',
+    trendangle: 'Trend angle',
+    channel: 'Channel',
+    channelflat: 'Flat channel',
+    channeldisjoint: 'Disjoint ch.',
+    regression: 'Regression',
+    pitchfork: 'Pitchfork',
+    pitchforkschiff: 'Schiff fork',
+    pitchforkmod: 'Mod. Schiff',
+    pitchforkinside: 'Inside fork',
+    gannfan: 'Gann fan',
+    gannbox: 'Gann box',
     fib: 'Fib',
+    fibext: 'Fib ext.',
+    fibchannel: 'Fib channel',
+    fibtimezone: 'Fib time',
+    fibfan: 'Fib fan',
+    fibcircle: 'Fib circle',
+    xabcd: 'XABCD',
+    cypher: 'Cypher',
+    abcd: 'ABCD',
+    trianglepattern: 'Triangle',
+    threedrives: '3 drives',
+    elliottimpulse: 'Elliott 1-5',
+    elliottcorrection: 'Elliott ABC',
+    headshoulders: 'H&S',
+    rect: 'Rectangle',
+    rotrect: 'Rot. rect',
+    triangle: 'Triangle',
+    circle: 'Circle',
+    arc: 'Arc',
+    arrow: 'Arrow',
+    curve: 'Curve',
+    polyline: 'Polyline',
     path: 'Path',
+    forecast: 'Forecast',
+    text: 'Text',
+    note: 'Note',
+    comment: 'Comment',
+    callout: 'Callout',
+    pricelabel: 'Price label',
+    signpost: 'Sign post',
+    arrowup: 'Arrow up',
+    arrowdown: 'Arrow down',
+    flag: 'Flag',
+    longpos: 'Long pos',
+    shortpos: 'Short pos',
+    avwap: 'aVWAP',
+    smartlevel: 'Smart level',
+    volxray: 'Vol profile',
+    pricerange: 'Price range',
+    daterange: 'Date range',
+    dprange: 'Date+price',
     measure: 'Measure',
   };
   let drawTool = null;
   let drawLocked = false;
   let drawHidden = false;
+  // Assigned by buildDrawRail(); no-op until the rail is built.
+  let repaintRail = () => {};
 
   const drawBtn = document.createElement('button');
   drawBtn.className = 'tb-chip tb-draw';
@@ -1387,6 +1486,7 @@
     if (next === drawTool) return;
     drawTool = next;
     repaintDrawButton();
+    repaintRail();
   });
   bridge.on('setDrawingsLocked', (v) => {
     const next = !!(v && v.locked);
@@ -1395,6 +1495,7 @@
     if (_openPopover && _openPopover.dataset.kind === 'draw') {
       _repaintDrawBottomToolbar();
     }
+    repaintRail();
   });
   bridge.on('setDrawingsHidden', (v) => {
     const next = !!(v && v.hidden);
@@ -1403,6 +1504,7 @@
     if (_openPopover && _openPopover.dataset.kind === 'draw') {
       _repaintDrawBottomToolbar();
     }
+    repaintRail();
   });
 
   function _repaintDrawBottomToolbar() {
@@ -1440,23 +1542,35 @@
     sub.textContent = 'Pick a tool, then click on the chart';
     content.appendChild(sub);
 
-    const section = document.createElement('div');
-    section.className = 'tb-popover-section-label';
-    section.textContent = 'Tools';
-    content.appendChild(section);
-
+    // Tools are grouped (Lines / Shapes / Fibonacci / …) so the picker stays
+    // legible as the catalogue grows past 60 tools. Group headers follow the
+    // order tools first appear in DRAW_TOOLS.
+    const _groupOrder = [];
+    const _byGroup = {};
     for (const t of DRAW_TOOLS) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'tb-list-row';
-      row.innerHTML = '<span class="tb-list-row-label">' + t.label + '</span>';
-      row.addEventListener('click', () => {
-        drawTool = t.kind;
-        repaintDrawButton();
-        _closeOpenPopover();
-        bridge.post('setActiveDrawTool', { kind: t.kind });
-      });
-      content.appendChild(row);
+      const grp = t.group || 'Tools';
+      if (!_byGroup[grp]) { _byGroup[grp] = []; _groupOrder.push(grp); }
+      _byGroup[grp].push(t);
+    }
+    const pickTool = (kind) => {
+      drawTool = kind;
+      repaintDrawButton();
+      _closeOpenPopover();
+      bridge.post('setActiveDrawTool', { kind });
+    };
+    for (const grp of _groupOrder) {
+      const section = document.createElement('div');
+      section.className = 'tb-popover-section-label';
+      section.textContent = grp;
+      content.appendChild(section);
+      for (const t of _byGroup[grp]) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'tb-list-row';
+        row.innerHTML = '<span class="tb-list-row-label">' + t.label + '</span>';
+        row.addEventListener('click', () => pickTool(t.kind));
+        content.appendChild(row);
+      }
     }
 
     const divider = document.createElement('div');
@@ -1503,7 +1617,363 @@
     pop.dataset.kind = 'draw';
   });
 
-  root.appendChild(drawBtn);
+  // The drawing tools now live in a floating left rail (buildDrawRail) instead
+  // of this top-bar dropdown — drawBtn is kept only so its repaint helpers stay
+  // valid, but it is no longer mounted in the top bar.
+
+  // ── Left drawing rail ────────────────────────────────────────────────────
+  // Full-height, flush-left, plain (TradingView-style) vertical toolbar. One
+  // button per tool group; the button shows the group's LAST-USED tool icon and
+  // a plain click re-arms it. A caret (revealed on hover) opens the group's
+  // flyout list. Hovering shows a tooltip. Below a divider: magnet, lock, hide,
+  // delete, collapse. Collapsed → a blue reopen tab. Replaces the top-bar Draw
+  // dropdown.
+  const _RAIL_ICONS = {
+    Lines: '<path d="M4 20 L20 4"/>',
+    Channels: '<path d="M3 17 L17 3" /><path d="M7 21 L21 7"/>',
+    Gann: '<path d="M5 19 H19 M5 19 L19 12 M5 19 L19 5 M5 19 L12 5"/>',
+    Fibonacci: '<path d="M4 6 H20 M4 10 H20 M4 14 H20 M4 18 H20"/>',
+    Patterns: '<path d="M3 18 L8 8 L13 15 L18 5"/>',
+    Shapes: '<rect x="4" y="6" width="15" height="13" rx="1"/>',
+    Annotate: '<path d="M5 5 H19 M12 5 V19"/>',
+    Projection: '<path d="M4 12 H17 M13 7 L18 12 L13 17"/>',
+    Measure: '<rect x="3" y="9" width="18" height="6" rx="1"/><path d="M7 9 v3 M11 9 v4 M15 9 v3"/>',
+    Smart: '<path d="M12 7 V20 M9 10 H15 M12 4 a2 2 0 1 0 0.01 0 M5 14 a7 7 0 0 0 14 0"/>',
+  };
+  const _ACT_ICONS = {
+    cursor: '<path d="M12 3 V21 M3 12 H21"/>',
+    magnet: '<path d="M6 4 v6 a6 6 0 0 0 12 0 V4 M6 4 h4 M14 4 h4"/>',
+    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11 V7 a4 4 0 0 1 8 0 v4"/>',
+    hide: '<path d="M2 12 s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    trash: '<path d="M4 7 h16 M9 7 V4 h6 v3 M6 7 l1 13 h10 l1-13"/>',
+    collapse: '<path d="M14 6 L8 12 L14 18"/>',
+    expand: '<path d="M10 6 L16 12 L10 18"/>',
+  };
+  // Per-tool icons so the group button can show whichever tool is selected
+  // (TradingView behaviour). Missing kinds fall back to the group icon.
+  const TOOL_ICONS = {
+    // Lines
+    trendline: '<path d="M4 20 L20 4"/>',
+    ray: '<circle cx="5" cy="19" r="1.6"/><path d="M5 19 L21 3"/>',
+    xline: '<path d="M2 22 L22 2"/>',
+    hline: '<path d="M3 12 H21"/>',
+    hray: '<circle cx="5" cy="12" r="1.6"/><path d="M5 12 H21"/>',
+    vline: '<path d="M12 3 V21"/>',
+    crossline: '<path d="M12 3 V21 M3 12 H21"/>',
+    infoline: '<path d="M4 20 L20 4"/><path d="M14 6 h6 v5"/>',
+    trendangle: '<path d="M4 20 H18 M4 20 L18 8"/>',
+    // Channels
+    channel: '<path d="M3 17 L17 3 M7 21 L21 7"/>',
+    channelflat: '<path d="M3 8 H21 M3 16 H21"/>',
+    channeldisjoint: '<path d="M3 16 L11 6 M13 18 L21 8"/>',
+    regression: '<path d="M3 18 L21 8 M3 14 L21 4 M3 22 L21 12"/>',
+    pitchfork: '<path d="M12 4 V20 M6 8 L12 4 L18 8 M6 8 V20 M18 8 V20"/>',
+    pitchforkschiff: '<path d="M9 6 V20 M6 8 L12 6 L18 8 M6 8 V20 M18 8 V20"/>',
+    pitchforkmod: '<path d="M10 7 V20 M6 8 L12 7 L18 8 M6 8 V20 M18 8 V20"/>',
+    pitchforkinside: '<path d="M12 5 V20 M8 9 V19 M16 9 V19"/>',
+    // Gann
+    gannfan: '<path d="M5 19 H19 M5 19 L19 12 M5 19 L19 5 M5 19 L12 5"/>',
+    gannbox: '<rect x="4" y="5" width="16" height="14"/><path d="M4 5 L20 19 M4 12 H20 M12 5 V19"/>',
+    // Fibonacci
+    fib: '<path d="M4 6 H20 M4 10 H20 M4 14 H20 M4 18 H20"/>',
+    fibext: '<path d="M4 7 H20 M4 12 H20 M4 17 H20"/><path d="M17 4 L20 7"/>',
+    fibchannel: '<path d="M4 8 L18 4 M5 13 L19 9 M6 18 L20 14"/>',
+    fibtimezone: '<path d="M5 4 V20 M9 4 V20 M14 4 V20 M20 4 V20"/>',
+    fibfan: '<path d="M5 19 L19 5 M5 19 L19 10 M5 19 L19 15"/>',
+    fibcircle: '<circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="8"/>',
+    // Patterns
+    xabcd: '<path d="M4 16 L9 6 L13 14 L17 7 L20 17"/>',
+    cypher: '<path d="M4 16 L9 6 L13 14 L17 7 L20 17"/>',
+    abcd: '<path d="M4 16 L9 6 L14 14 L20 5"/>',
+    trianglepattern: '<path d="M4 18 L20 14 M4 6 L20 14"/>',
+    threedrives: '<path d="M3 17 L7 9 L10 14 L14 7 L17 13 L21 5"/>',
+    elliottimpulse: '<path d="M3 18 L7 8 L9 12 L14 5 L16 9 L21 3"/>',
+    elliottcorrection: '<path d="M5 8 L10 16 L14 9 L19 15"/>',
+    headshoulders: '<path d="M3 18 L6 12 L9 15 L12 6 L15 15 L18 12 L21 18"/>',
+    // Shapes
+    rect: '<rect x="4" y="6" width="15" height="13" rx="1"/>',
+    rotrect: '<path d="M3 14 L10 5 L21 10 L14 19 Z"/>',
+    triangle: '<path d="M12 5 L20 19 H4 Z"/>',
+    circle: '<circle cx="12" cy="12" r="8"/>',
+    arc: '<path d="M4 18 a8 8 0 0 1 16 0"/>',
+    arrow: '<path d="M4 20 L20 4 M20 4 H14 M20 4 V10"/>',
+    curve: '<path d="M4 18 Q12 2 20 18"/>',
+    polyline: '<path d="M4 16 L9 8 L14 14 L20 6"/>',
+    path: '<path d="M4 16 q3 -10 7 -4 q3 5 9 -4"/>',
+    // Annotate
+    text: '<path d="M5 6 H19 M12 6 V19"/>',
+    note: '<rect x="4" y="6" width="16" height="12" rx="2"/><path d="M7 10 H17 M7 14 H13"/>',
+    comment: '<path d="M4 6 H20 V15 H13 L9 19 V15 H4 Z"/>',
+    callout: '<rect x="9" y="4" width="12" height="9" rx="2"/><path d="M11 13 L5 20"/>',
+    pricelabel: '<path d="M3 12 L7 8 H21 V16 H7 Z"/>',
+    signpost: '<path d="M12 21 V8 M6 5 H17 L20 8 L17 11 H6 Z"/>',
+    arrowup: '<path d="M12 4 V20 M6 10 L12 4 L18 10"/>',
+    arrowdown: '<path d="M12 4 V20 M6 14 L12 20 L18 14"/>',
+    flag: '<path d="M6 21 V4 M6 4 H18 L15 8 L18 12 H6"/>',
+    // Projection
+    forecast: '<path d="M3 16 L9 10 L15 14 L21 5"/>',
+    // Measure
+    pricerange: '<path d="M12 4 V20 M8 4 H16 M8 20 H16"/>',
+    daterange: '<path d="M4 12 H20 M4 8 V16 M20 8 V16"/>',
+    dprange: '<rect x="5" y="6" width="14" height="12"/><path d="M5 6 L19 18"/>',
+    measure: '<rect x="3" y="9" width="18" height="6" rx="1"/><path d="M7 9 v3 M11 9 v4 M15 9 v3"/>',
+    // Smart
+    longpos: '<rect x="5" y="5" width="14" height="6"/><rect x="5" y="13" width="14" height="6"/><path d="M9 8 H15"/>',
+    shortpos: '<rect x="5" y="5" width="14" height="6"/><rect x="5" y="13" width="14" height="6"/><path d="M9 16 H15"/>',
+    smartlevel: '<path d="M3 10 H21 M3 14 H21"/>',
+    volxray: '<path d="M4 6 H12 M4 10 H16 M4 14 H9 M4 18 H14"/>',
+    avwap: '<path d="M12 7 V20 M9 10 H15 M5 14 a7 7 0 0 0 14 0"/>',
+  };
+  function _railSvg(inner) {
+    return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" '
+      + 'stroke-linejoin="round">' + inner + '</svg>';
+  }
+  function buildDrawRail() {
+    const layout = document.getElementById('layout');
+    if (!layout) return;
+
+    // Group tools (preserve DRAW_TOOLS order); build kind→group, kind→label.
+    const order = [];
+    const byGroup = {};
+    const kindGroup = {};
+    const labelOf = {};
+    for (const t of DRAW_TOOLS) {
+      const grp = t.group || 'Tools';
+      if (!byGroup[grp]) { byGroup[grp] = []; order.push(grp); }
+      byGroup[grp].push(t);
+      kindGroup[t.kind] = grp;
+      labelOf[t.kind] = t.label;
+    }
+    const iconFor = (kind) =>
+        TOOL_ICONS[kind] || _RAIL_ICONS[kindGroup[kind]] || _RAIL_ICONS.Shapes;
+    // Last-used tool per group, defaulting to the group's first tool so each
+    // button shows a real tool icon and a plain click arms something sensible.
+    const lastTool = {};
+    for (const grp of order) lastTool[grp] = byGroup[grp][0].kind;
+
+    const rail = document.createElement('div');
+    rail.className = 'draw-rail';
+
+    // Shared hover tooltip (positioned to the right of the hovered button).
+    const tip = document.createElement('div');
+    tip.className = 'draw-rail-tip';
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    const showTip = (el, text) => {
+      if (!text) return;
+      tip.textContent = text;
+      tip.hidden = false;
+      const r = el.getBoundingClientRect();
+      tip.style.left = (r.right + 8) + 'px';
+      tip.style.top = (r.top + r.height / 2 - tip.offsetHeight / 2) + 'px';
+    };
+    const hideTip = () => { tip.hidden = true; };
+
+    const groupBtns = {};
+    const groupIcons = {};
+    const actBtns = {};
+
+    const setTool = (kind) => {
+      drawTool = kind;
+      if (kind && kindGroup[kind]) {
+        const grp = kindGroup[kind];
+        lastTool[grp] = kind;
+        if (groupIcons[grp]) groupIcons[grp].innerHTML = _railSvg(iconFor(kind));
+      }
+      repaintDrawButton();
+      _closeOpenPopover();
+      repaintRail();
+      bridge.post('setActiveDrawTool', { kind });
+    };
+
+    const openGroupFlyout = (grp, anchor) => {
+      const content = document.createElement('div');
+      content.className = 'tb-draw-popover-content';
+      const title = document.createElement('div');
+      title.className = 'tb-popover-section-label';
+      title.textContent = grp;
+      content.appendChild(title);
+      for (const t of byGroup[grp]) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'tb-list-row draw-rail-row'
+            + (t.kind === drawTool ? ' tb-list-row--active' : '');
+        row.innerHTML =
+            '<span class="draw-rail-row-ic">' + _railSvg(iconFor(t.kind)) + '</span>'
+            + '<span class="tb-list-row-label">' + t.label + '</span>';
+        row.addEventListener('click', () => setTool(t.kind));
+        content.appendChild(row);
+      }
+      const pop = openFlyoutRight(anchor, content);
+      if (pop) pop.dataset.kind = 'draw-rail';
+    };
+
+    // Crosshair / Cursor mode control at the top (replaces the old top-bar
+    // picker). The icon reflects the active pane's mode; clicking it leaves any
+    // drawing tool (back to interaction); the caret opens a Crosshair/Cursor
+    // flyout that toggles the chart's `showCrosshairLines`.
+    const CURSOR_MODES = [
+      { value: true, label: 'Crosshair', icon: '<path d="M12 3 V21 M3 12 H21"/>' },
+      { value: false, label: 'Cursor', icon: '<path d="M5 3 L10 19 L12 12 L19 10 Z"/>' },
+    ];
+    const _cursorMode = () => CURSOR_MODES.find(
+        (m) => m.value === activePaneState.showCrosshairLines) || CURSOR_MODES[0];
+    const cursorBtn2 = document.createElement('button');
+    cursorBtn2.type = 'button';
+    cursorBtn2.className = 'draw-rail-btn draw-rail-cursor';
+    const cursorIc = document.createElement('span');
+    cursorIc.className = 'draw-rail-ic';
+    cursorIc.innerHTML = _railSvg(_cursorMode().icon);
+    const cursorCaret = document.createElement('span');
+    cursorCaret.className = 'draw-rail-caret';
+    cursorCaret.innerHTML = '<svg viewBox="0 0 24 24" width="9" height="9" '
+        + 'fill="currentColor"><path d="M8 5 L15 12 L8 19 Z"/></svg>';
+    cursorBtn2.appendChild(cursorIc);
+    cursorBtn2.appendChild(cursorCaret);
+    const repaintCursorRail = () => { cursorIc.innerHTML = _railSvg(_cursorMode().icon); };
+    activePaneSubs.push(repaintCursorRail);
+    const openCursorFlyout = () => {
+      const content = document.createElement('div');
+      content.className = 'tb-draw-popover-content';
+      for (const m of CURSOR_MODES) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'tb-list-row draw-rail-row'
+            + (m.value === activePaneState.showCrosshairLines ? ' tb-list-row--active' : '');
+        row.innerHTML = '<span class="draw-rail-row-ic">' + _railSvg(m.icon) + '</span>'
+            + '<span class="tb-list-row-label">' + m.label + '</span>';
+        row.addEventListener('click', () => {
+          _closeOpenPopover();
+          if (m.value !== activePaneState.showCrosshairLines) {
+            activePaneState.showCrosshairLines = m.value;
+            repaintCursorRail();
+            bridge.post('setActiveShowCrosshairLines', { value: m.value });
+          }
+        });
+        content.appendChild(row);
+      }
+      const pop = openFlyoutRight(cursorBtn2, content);
+      if (pop) pop.dataset.kind = 'draw-rail';
+    };
+    cursorBtn2.addEventListener('click', (e) => {
+      if (e.target.closest('.draw-rail-caret')) { openCursorFlyout(); return; }
+      setTool(null);
+    });
+    cursorCaret.addEventListener('mouseenter', openCursorFlyout);
+    cursorBtn2.addEventListener('mouseenter', () => showTip(cursorBtn2, _cursorMode().label));
+    cursorBtn2.addEventListener('mouseleave', hideTip);
+    rail.appendChild(cursorBtn2);
+
+    // Scrollable group area.
+    const toolsWrap = document.createElement('div');
+    toolsWrap.className = 'draw-rail-tools';
+    for (const grp of order) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'draw-rail-btn draw-rail-group';
+      const ic = document.createElement('span');
+      ic.className = 'draw-rail-ic';
+      ic.innerHTML = _railSvg(iconFor(lastTool[grp]));
+      const caret = document.createElement('span');
+      caret.className = 'draw-rail-caret';
+      caret.innerHTML = '<svg viewBox="0 0 24 24" width="9" height="9" fill="currentColor">'
+          + '<path d="M8 5 L15 12 L8 19 Z"/></svg>';
+      btn.appendChild(ic);
+      btn.appendChild(caret);
+      btn.addEventListener('click', (e) => {
+        if (e.target.closest('.draw-rail-caret')) { openGroupFlyout(grp, btn); return; }
+        setTool(lastTool[grp]);
+      });
+      // Hovering the caret reveals the group's options (TradingView behaviour).
+      caret.addEventListener('mouseenter', () => openGroupFlyout(grp, btn));
+      btn.addEventListener('mouseenter', () => showTip(btn, labelOf[lastTool[grp]] || grp));
+      btn.addEventListener('mouseleave', hideTip);
+      groupBtns[grp] = btn;
+      groupIcons[grp] = ic;
+      toolsWrap.appendChild(btn);
+    }
+    rail.appendChild(toolsWrap);
+
+    const sep = document.createElement('div');
+    sep.className = 'draw-rail-sep';
+    rail.appendChild(sep);
+
+    const actBtn = (key, title, onClick, danger) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'draw-rail-btn' + (danger ? ' draw-rail-btn--danger' : '');
+      b.innerHTML = '<span class="draw-rail-ic">' + _railSvg(_ACT_ICONS[key]) + '</span>';
+      b.addEventListener('click', onClick);
+      b.addEventListener('mouseenter', () => showTip(b, title));
+      b.addEventListener('mouseleave', hideTip);
+      return b;
+    };
+    const magnetBtn = actBtn('magnet', 'Magnet snap', () => {
+      _patchView({ magnetEnabled: !viewState.magnetEnabled });
+      repaintRail();
+    });
+    const lockBtn = actBtn('lock', 'Lock drawings', () => {
+      drawLocked = !drawLocked;
+      repaintRail();
+      bridge.post('setDrawingsLocked', { value: drawLocked });
+    });
+    const hideBtn = actBtn('hide', 'Hide drawings', () => {
+      drawHidden = !drawHidden;
+      repaintRail();
+      bridge.post('setDrawingsHidden', { value: drawHidden });
+    });
+    const trashBtn = actBtn('trash', 'Delete all drawings', () => {
+      _closeOpenPopover();
+      bridge.post('clearDrawingsForActivePane', {});
+    }, true);
+    actBtns.magnet = magnetBtn; actBtns.lock = lockBtn; actBtns.hide = hideBtn;
+    rail.appendChild(magnetBtn);
+    rail.appendChild(lockBtn);
+    rail.appendChild(hideBtn);
+    rail.appendChild(trashBtn);
+
+    const setGutter = (px) => {
+      if (typeof window.__setChartLeftGutter === 'function') window.__setChartLeftGutter(px);
+    };
+    const collapseBtn = actBtn('collapse', 'Hide drawing toolbar', () => {
+      _closeOpenPopover();
+      hideTip();
+      rail.hidden = true;
+      reopen.hidden = false;
+      setGutter(0); // chart reclaims the rail's space
+    });
+    collapseBtn.classList.add('draw-rail-collapse');
+    rail.appendChild(collapseBtn);
+
+    // Collapsed state: a blue tab pinned to the left edge.
+    const reopen = document.createElement('button');
+    reopen.type = 'button';
+    reopen.className = 'draw-rail-reopen';
+    reopen.innerHTML = _railSvg(_ACT_ICONS.expand);
+    reopen.hidden = true;
+    reopen.addEventListener('click', () => {
+      rail.hidden = false; reopen.hidden = true; setGutter(46);
+    });
+    reopen.addEventListener('mouseenter', () => showTip(reopen, 'Show Drawings Toolbar'));
+    reopen.addEventListener('mouseleave', hideTip);
+
+    repaintRail = () => {
+      const grp = drawTool ? kindGroup[drawTool] : null;
+      for (const g of order) {
+        groupBtns[g].classList.toggle('draw-rail-btn--active', g === grp);
+      }
+      cursorBtn2.classList.toggle('draw-rail-btn--active', !drawTool);
+      actBtns.magnet.classList.toggle('draw-rail-btn--on', !!viewState.magnetEnabled);
+      actBtns.lock.classList.toggle('draw-rail-btn--on', drawLocked);
+      actBtns.hide.classList.toggle('draw-rail-btn--on', drawHidden);
+    };
+    repaintRail();
+
+    layout.appendChild(rail);
+    layout.appendChild(reopen);
+  }
+  buildDrawRail();
 
   // ── Indicators (fx) button + popover ────────────────────────────────────
   // Catalog is static client-side (matches the Flutter table). On pick we
@@ -1539,6 +2009,23 @@
     { kind: 'ob',       label: 'OB',     fullName: 'Order Block (ICT/SMC)',         category: 'momentum' },
     { kind: 'liqsweep', label: 'LIQ',    fullName: 'Liquidity Sweep (ICT)',         category: 'momentum' },
     { kind: 'mss',      label: 'MSS',    fullName: 'Market Structure (BOS/CHoCH/MSS)', category: 'momentum' },
+    { kind: 'supertrend', label: 'ST',   fullName: 'SuperTrend',                    category: 'trend' },
+    { kind: 'wma',      label: 'WMA',    fullName: 'Weighted Moving Average',       category: 'trend' },
+    { kind: 'hma',      label: 'HMA',    fullName: 'Hull Moving Average',           category: 'trend' },
+    { kind: 'keltner',  label: 'KC',     fullName: 'Keltner Channels',             category: 'trend' },
+    { kind: 'donchian', label: 'DC',     fullName: 'Donchian Channels',            category: 'trend' },
+    { kind: 'cci',      label: 'CCI',    fullName: 'Commodity Channel Index',      category: 'momentum' },
+    { kind: 'roc',      label: 'ROC',    fullName: 'Rate of Change',               category: 'momentum' },
+    { kind: 'adx',      label: 'ADX',    fullName: 'Average Directional Index (DMI)', category: 'momentum' },
+    { kind: 'cvd',      label: 'CVD',    fullName: 'Cumulative Volume Delta',       category: 'momentum' },
+    { kind: 'psar',     label: 'PSAR',   fullName: 'Parabolic SAR',                category: 'trend' },
+    { kind: 'vwma',     label: 'VWMA',   fullName: 'Volume-Weighted Moving Average', category: 'trend' },
+    { kind: 'trix',     label: 'TRIX',   fullName: 'TRIX',                         category: 'momentum' },
+    { kind: 'vortex',   label: 'VTX',    fullName: 'Vortex Indicator',            category: 'momentum' },
+    { kind: 'uo',       label: 'UO',     fullName: 'Ultimate Oscillator',         category: 'momentum' },
+    { kind: 'dpo',      label: 'DPO',    fullName: 'Detrended Price Oscillator',  category: 'momentum' },
+    { kind: 'pvt',      label: 'PVT',    fullName: 'Price Volume Trend',          category: 'momentum' },
+    { kind: 'ad',       label: 'A/D',    fullName: 'Accumulation/Distribution',   category: 'momentum' },
   ];
   const INDICATOR_CATEGORIES = [
     { value: 'all',        label: 'All' },
@@ -1721,6 +2208,501 @@
 
   root.appendChild(fxBtn);
 
+  // ── The Lab (experimental analysis) ─────────────────────────────────────
+  // A modal with three tools that run pure math (lab.js / window.CandlLab) on
+  // the ACTIVE pane's candles read live via window.__activePaneCandles():
+  //   • Echoes      — historical analogues of the recent shape + their base rate
+  //   • Oracle      — moving-block bootstrap projection + target odds
+  //   • Market Clock — per-UTC-hour / weekday activity profile
+  // Everything is descriptive (base rates / simulations), never a forecast.
+  const labBtn = document.createElement('button');
+  labBtn.className = 'tb-chip tb-lab';
+  labBtn.type = 'button';
+  labBtn.title = 'The Lab — experimental analysis';
+  labBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
+      + 'fill="none" stroke="currentColor" stroke-width="2" '
+      + 'stroke-linecap="round" stroke-linejoin="round">'
+      + '<path d="M9 3h6M10 3v6.2L4.6 18A2 2 0 0 0 6.3 21h11.4a2 2 0 0 0 1.7-2.8L14 9.2V3"/>'
+      + '<path d="M7.5 15h9"/></svg>'
+      + '<span>Lab</span>';
+
+  let labTab = 'echoes';   // 'echoes' | 'oracle' | 'clock'
+  let _labOracleResult = null;   // cached Oracle run so the target input is live
+
+  function _labFmtPct(v) {
+    if (v === null || v === undefined || !Number.isFinite(v)) return '–';
+    return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+  }
+
+  function _labSection(label) {
+    const el = document.createElement('div');
+    el.className = 'tb-popover-section-label';
+    el.textContent = label;
+    return el;
+  }
+
+  function _labNote(text) {
+    const el = document.createElement('div');
+    el.className = 'tb-lab-note';
+    el.textContent = text;
+    return el;
+  }
+
+  function _labStatCard(label, value, tone) {
+    const card = document.createElement('div');
+    card.className = 'tb-lab-stat' + (tone ? ' tb-lab-stat--' + tone : '');
+    card.innerHTML = '<div class="tb-lab-stat-val">' + _escape(value) + '</div>'
+        + '<div class="tb-lab-stat-lbl">' + _escape(label) + '</div>';
+    return card;
+  }
+
+  // ── Lab projection plumbing (push ghost paths to the active chart) ────────
+  let _labPanel = null;
+  let _echoWindow = 30, _echoHorizon = 24, _echoMatches = 20;
+  let _oracleHorizon = 48, _oraclePaths = 500;
+  let _clockMode = 'dir';   // 'vol' | 'dir' | 'volume'
+
+  function _labChart() {
+    return (typeof window.__activePaneChart === 'function')
+        ? window.__activePaneChart() : null;
+  }
+  function _labClearProjection() {
+    const ch = _labChart();
+    if (ch && typeof ch.setLabProjection === 'function') ch.setLabProjection(null);
+  }
+  function _labPushProjection(data) {
+    const ch = _labChart();
+    if (ch && typeof ch.setLabProjection === 'function') ch.setLabProjection(data);
+  }
+  const _UP = '#26a69a', _DOWN = '#ef5350', _BAND = 'rgba(59,130,246,1)';
+
+  // Build Oracle ghost lines (sample paths) + a p5–p95 band + median.
+  function _oracleProjection(res, anchor) {
+    const at = (pct) => anchor * (1 + pct / 100);
+    const band = { color: _BAND, opacity: 0.12,
+      upper: [{ barOffset: 0, price: anchor }], lower: [{ barOffset: 0, price: anchor }] };
+    for (let t = 0; t < res.horizon; t++) {
+      band.upper.push({ barOffset: t + 1, price: at(res.bandsPct[t].p95) });
+      band.lower.push({ barOffset: t + 1, price: at(res.bandsPct[t].p5) });
+    }
+    const lines = [];
+    for (let i = 0; i < res.samplePathsPct.length; i++) {
+      const path = res.samplePathsPct[i];
+      if (!path || !path.length) continue;
+      const up = path[path.length - 1] >= 0;
+      const pts = [{ barOffset: 0, price: anchor }];
+      for (let t = 0; t < path.length; t++) pts.push({ barOffset: t + 1, price: at(path[t]) });
+      lines.push({ id: 'op' + i, color: up ? _UP : _DOWN, opacity: 0.22, width: 0.75, points: pts });
+    }
+    const med = [{ barOffset: 0, price: anchor }];
+    for (let t = 0; t < res.horizon; t++) med.push({ barOffset: t + 1, price: at(res.bandsPct[t].p50) });
+    lines.push({ id: 'omed', color: '#3B82F6', opacity: 0.9, width: 1.5, dashed: true, points: med });
+    return { lines, band };
+  }
+
+  // Build Echoes ghost lines (each match's aftermath) + a 10–90% band.
+  function _echoProjection(scan, anchor) {
+    const at = (pct) => anchor * (1 + pct / 100);
+    const valid = scan.results.filter((r) =>
+        r.aftermathPct && r.aftermathPct.every((v) => v != null && Number.isFinite(v)));
+    const lines = [];
+    for (let i = 0; i < valid.length; i++) {
+      const a = valid[i].aftermathPct;
+      const up = a[a.length - 1] >= 0;
+      const pts = [{ barOffset: 0, price: anchor }];
+      for (let t = 0; t < a.length; t++) pts.push({ barOffset: t + 1, price: at(a[t]) });
+      lines.push({ id: 'ep' + i, color: up ? _UP : _DOWN, opacity: 0.4, width: 1, dashed: true, points: pts });
+    }
+    let band = null;
+    if (valid.length >= 3) {
+      const upper = [{ barOffset: 0, price: anchor }], lower = [{ barOffset: 0, price: anchor }];
+      for (let t = 0; t < scan.horizon; t++) {
+        const col = valid.map((r) => r.aftermathPct[t]).sort((x, y) => x - y);
+        const lo = col[Math.floor(col.length * 0.1)];
+        const hi = col[Math.floor(Math.min(col.length - 1, col.length * 0.9))];
+        upper.push({ barOffset: t + 1, price: at(hi) });
+        lower.push({ barOffset: t + 1, price: at(lo) });
+      }
+      band = { color: _BAND, opacity: 0.10, upper, lower };
+    }
+    return { lines, band };
+  }
+
+  // Tiny sparkline canvas of a normalized value series.
+  function _labSparkline(values, color) {
+    const w = 64, h = 22;
+    const cv = document.createElement('canvas');
+    cv.width = w * 2; cv.height = h * 2; cv.className = 'tb-lab-spark';
+    cv.style.width = w + 'px'; cv.style.height = h + 'px';
+    const ctx = cv.getContext('2d');
+    ctx.scale(2, 2);
+    const vals = values.filter((v) => v != null && Number.isFinite(v));
+    if (vals.length >= 2) {
+      let lo = Infinity, hi = -Infinity;
+      for (const v of vals) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      const rng = (hi - lo) || 1;
+      ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < vals.length; i++) {
+        const x = (i / (vals.length - 1)) * (w - 2) + 1;
+        const y = h - 2 - ((vals[i] - lo) / rng) * (h - 4);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    return cv;
+  }
+
+  function _labSelect(value, options, onChange) {
+    const sel = document.createElement('select');
+    sel.className = 'tb-lab-select';
+    for (const o of options) {
+      const opt = document.createElement('option');
+      opt.value = String(o); opt.textContent = String(o);
+      if (o === value) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => onChange(parseInt(sel.value, 10)));
+    return sel;
+  }
+
+  function _labField(label, control) {
+    const f = document.createElement('div');
+    f.className = 'tb-lab-field';
+    const l = document.createElement('div');
+    l.className = 'tb-lab-field-lbl';
+    l.textContent = label;
+    f.appendChild(l); f.appendChild(control);
+    return f;
+  }
+
+  function _renderLabTab(pop) {
+    const body = pop.querySelector('.tb-lab-body');
+    if (!body) return;
+    body.innerHTML = '';
+
+    const candles = (typeof window.__activePaneCandles === 'function')
+        ? window.__activePaneCandles() : [];
+    if (!candles || candles.length < 50) {
+      _labClearProjection();
+      const empty = document.createElement('div');
+      empty.className = 'tb-lab-empty';
+      empty.textContent = 'Not enough data — load more history on the active pane.';
+      body.appendChild(empty);
+      return;
+    }
+    const Lab = window.CandlLab;
+    if (!Lab) {
+      const err = document.createElement('div');
+      err.className = 'tb-lab-empty';
+      err.textContent = 'Lab module failed to load.';
+      body.appendChild(err);
+      return;
+    }
+
+    if (labTab === 'echoes') _renderLabEchoes(body, candles, Lab);
+    else if (labTab === 'oracle') _renderLabOracle(body, candles, Lab);
+    else if (labTab === 'clock') { _labClearProjection(); _renderLabClock(body, candles, Lab); }
+  }
+
+  function _renderLabEchoes(body, candles, Lab) {
+    const scan = Lab.buildEchoScan(candles, _echoWindow, _echoHorizon, _echoMatches);
+    // Controls row — Window / Horizon / Matches + Rescan.
+    const controls = document.createElement('div');
+    controls.className = 'tb-lab-controls';
+    controls.appendChild(_labField('Window',
+        _labSelect(_echoWindow, [20, 30, 48, 64, 96], (v) => { _echoWindow = v; _renderLabTab(_labPanel); })));
+    controls.appendChild(_labField('Horizon',
+        _labSelect(_echoHorizon, [12, 24, 48, 72], (v) => { _echoHorizon = v; _renderLabTab(_labPanel); })));
+    controls.appendChild(_labField('Matches',
+        _labSelect(_echoMatches, [10, 20, 30, 50], (v) => { _echoMatches = v; _renderLabTab(_labPanel); })));
+    const rescan = document.createElement('button');
+    rescan.type = 'button'; rescan.className = 'tb-lab-btn'; rescan.textContent = 'Rescan';
+    rescan.addEventListener('click', () => _renderLabTab(_labPanel));
+    controls.appendChild(rescan);
+    body.appendChild(controls);
+
+    if (!scan || !scan.results.length) {
+      _labClearProjection();
+      body.appendChild(_labNote('No similar historical windows found.'));
+      return;
+    }
+    const s = scan.stats;
+    const upRate = s.count > 0 ? (s.upCount / s.count) * 100 : 0;
+    body.appendChild(_labNote(
+        scan.results.length + ' echoes · ' + upRate.toFixed(0) + '% closed higher after '
+        + scan.horizon + ' bars · median ' + _labFmtPct(s.medianEndPct)
+        + ' · best ' + _labFmtPct(s.bestEndPct) + ' / worst ' + _labFmtPct(s.worstEndPct)));
+
+    // Push the ghost projection (each match's aftermath + envelope) to the chart.
+    const anchor = candles[candles.length - 1].c;
+    _labPushProjection(_echoProjection(scan, anchor));
+
+    const closes = candles.map((c) => c.c);
+    const list = document.createElement('div');
+    list.className = 'tb-lab-elist';
+    let rank = 0;
+    for (const r of scan.results) {
+      rank++;
+      const endPct = r.aftermathPct ? r.aftermathPct[scan.horizon - 1] : null;
+      const up = endPct != null && endPct >= 0;
+      const row = document.createElement('div');
+      row.className = 'tb-lab-erow';
+      const idxEl = document.createElement('span');
+      idxEl.className = 'tb-lab-erow-idx'; idxEl.textContent = String(rank);
+      // Sparkline of the matched window's shape.
+      const seg = closes.slice(r.match.startIndex, r.match.endIndex + 1);
+      const spark = _labSparkline(seg, up ? _UP : _DOWN);
+      const date = document.createElement('span');
+      date.className = 'tb-lab-erow-date';
+      date.textContent = new Date(r.matchTime * 1000).toLocaleDateString();
+      const val = document.createElement('span');
+      val.className = 'tb-lab-erow-val ' + (up ? 'tb-lab-up' : 'tb-lab-down');
+      // CandL shows the similarity as a closeness %; approximate from distance.
+      val.textContent = (endPct != null ? _labFmtPct(endPct) : '–');
+      row.appendChild(idxEl);
+      row.appendChild(spark);
+      row.appendChild(date);
+      row.appendChild(val);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+    body.appendChild(_labNote('Echoes is a historical base rate, not a forecast.'));
+  }
+
+  function _renderLabOracle(body, candles, Lab) {
+    const controls = document.createElement('div');
+    controls.className = 'tb-lab-controls';
+    controls.appendChild(_labField('Horizon',
+        _labSelect(_oracleHorizon, [24, 48, 96, 144], (v) => { _oracleHorizon = v; _renderLabTab(_labPanel); })));
+    controls.appendChild(_labField('Paths',
+        _labSelect(_oraclePaths, [250, 500, 1000, 2000], (v) => { _oraclePaths = v; _renderLabTab(_labPanel); })));
+    const resim = document.createElement('button');
+    resim.type = 'button'; resim.className = 'tb-lab-btn'; resim.textContent = 'Resimulate';
+    resim.addEventListener('click', () => _renderLabTab(_labPanel));
+    controls.appendChild(resim);
+    body.appendChild(controls);
+
+    _labOracleResult = Lab.buildOracle(candles, _oracleHorizon, _oraclePaths);
+    const res = _labOracleResult;
+    if (!res) {
+      _labClearProjection();
+      body.appendChild(_labNote('Need at least 200 candles to run a projection.'));
+      return;
+    }
+    const band = res.bandsPct[res.horizon - 1];
+    body.appendChild(_labNote(
+        'Median outcome: ' + _labFmtPct(res.medianEndPct) + ' · 90% of futures end between '
+        + _labFmtPct(band.p5) + ' and ' + _labFmtPct(band.p95)));
+
+    // Push the spaghetti + percentile cone to the chart.
+    const anchor = candles[candles.length - 1].c;
+    _labPushProjection(_oracleProjection(res, anchor));
+
+    // Target odds with quick ±5 / ±10 chips (price input like CandL).
+    body.appendChild(_labSection('Target'));
+    const tRow = document.createElement('div');
+    tRow.className = 'tb-lab-odds-row';
+    const input = document.createElement('input');
+    input.type = 'number'; input.step = '0.01';
+    input.value = (anchor * 1.0).toFixed(2);
+    input.className = 'tb-lab-target-input';
+    tRow.appendChild(input);
+    body.appendChild(tRow);
+    const quick = document.createElement('div');
+    quick.className = 'tb-lab-quick';
+    for (const q of [5, -5, 10, -10]) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'tb-lab-chip';
+      b.textContent = (q > 0 ? '+' : '') + q + '%';
+      b.addEventListener('click', () => { input.value = (anchor * (1 + q / 100)).toFixed(2); paintOdds(); });
+      quick.appendChild(b);
+    }
+    body.appendChild(quick);
+
+    const oddsOut = document.createElement('div');
+    oddsOut.className = 'tb-lab-odds-out';
+    body.appendChild(oddsOut);
+    const paintOdds = () => {
+      const targetPrice = parseFloat(input.value);
+      oddsOut.innerHTML = '';
+      if (!Number.isFinite(targetPrice) || anchor <= 0) return;
+      const targetPct = (targetPrice / anchor - 1) * 100;
+      const odds = Lab.targetOdds(res, targetPct);
+      const mk = (lbl, v) => {
+        const r = document.createElement('div');
+        r.className = 'tb-lab-odds-line';
+        r.innerHTML = '<span>' + lbl + '</span><span class="tb-lab-odds-pct">'
+            + v.toFixed(1) + '%</span>';
+        return r;
+      };
+      oddsOut.appendChild(mk('Ends above target', odds.endAbovePct));
+      oddsOut.appendChild(mk('Touches within ' + res.horizon + ' bars', odds.touchPct));
+    };
+    input.addEventListener('input', paintOdds);
+    paintOdds();
+
+    body.appendChild(_labNote(
+        'Resampled from this asset’s real return history — odds, not prophecy. '
+        + 'Not financial advice.'));
+  }
+
+  // Radial "Market Clock" — 24 hour wedges + weekday bars, with Volatility /
+  // Direction / Volume modes. Mirrors CandL's rose. Hours are LOCAL time.
+  function _renderLabClock(body, candles, Lab) {
+    const clock = Lab.computeMarketClock(candles);
+
+    const tabs = document.createElement('div');
+    tabs.className = 'tb-lab-modes';
+    const modes = [['vol', 'Volatility'], ['dir', 'Direction'], ['volume', 'Volume']];
+    for (const [id, label] of modes) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tb-lab-mode' + (id === _clockMode ? ' tb-lab-mode--on' : '');
+      b.textContent = label;
+      b.addEventListener('click', () => { _clockMode = id; _renderLabTab(_labPanel); });
+      tabs.appendChild(b);
+    }
+    body.appendChild(tabs);
+
+    const metric = (bk) => _clockMode === 'vol' ? bk.meanAbsReturnPct
+        : _clockMode === 'volume' ? bk.meanVolume
+        : Math.abs(bk.meanReturnPct);
+    const hours = clock.byHourUtc; // local-hour buckets (see lab.js)
+    let peak = 0;
+    for (const bk of hours) { const m = metric(bk); if (m > peak) peak = m; }
+    if (!(peak > 0)) peak = 1;
+
+    // ── Rose canvas ─────────────────────────────────────────────────────
+    const size = 300;
+    const cv = document.createElement('canvas');
+    cv.width = size * 2; cv.height = size * 2;
+    cv.style.width = size + 'px'; cv.style.height = size + 'px';
+    cv.className = 'tb-lab-rose';
+    const ctx = cv.getContext('2d');
+    ctx.scale(2, 2);
+    const cx = size / 2, cy = size / 2;
+    const inner = 26, outer = size / 2 - 30;
+    // Guide rings + cardinal labels (00 top, 06 right, 12 bottom, 18 left).
+    ctx.strokeStyle = 'rgba(148,163,184,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, outer, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(100,116,139,0.9)';
+    ctx.font = '11px Geist, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('00', cx, cy - outer - 12);
+    ctx.fillText('06', cx + outer + 14, cy);
+    ctx.fillText('12', cx, cy + outer + 12);
+    ctx.fillText('18', cx - outer - 14, cy);
+    const wedge = (Math.PI * 2 / 24) * 0.82;
+    for (let h = 0; h < 24; h++) {
+      const bk = hours[h];
+      const m = metric(bk);
+      const r = inner + (m / peak) * (outer - inner);
+      const a = (h / 24) * Math.PI * 2 - Math.PI / 2; // 00 at top, clockwise
+      const up = bk.meanReturnPct >= 0;
+      ctx.fillStyle = bk.samples === 0 ? 'rgba(148,163,184,0.25)'
+          : (up ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)');
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+      ctx.arc(cx, cy, r, a - wedge / 2, a + wedge / 2);
+      ctx.lineTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+      ctx.closePath();
+      ctx.fill();
+    }
+    body.appendChild(cv);
+
+    // ── Weekday bars ────────────────────────────────────────────────────
+    const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    let wpeak = 0;
+    for (const bk of clock.byWeekdayUtc) { const m = metric(bk); if (m > wpeak) wpeak = m; }
+    if (!(wpeak > 0)) wpeak = 1;
+    const wk = document.createElement('div');
+    wk.className = 'tb-lab-weekdays';
+    // Mon-first ordering, like the screenshot.
+    for (const d of [1, 2, 3, 4, 5, 6, 0]) {
+      const bk = clock.byWeekdayUtc[d];
+      const m = metric(bk);
+      const up = bk.meanReturnPct >= 0;
+      const col = document.createElement('div');
+      col.className = 'tb-lab-wd';
+      const barH = Math.max(3, (m / wpeak) * 54);
+      col.innerHTML = '<div class="tb-lab-wd-bar" style="height:' + barH.toFixed(0) + 'px;'
+          + 'background:' + (up ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)') + '"></div>'
+          + '<div class="tb-lab-wd-lbl">' + WD[d] + '</div>';
+      wk.appendChild(col);
+    }
+    body.appendChild(wk);
+
+    body.appendChild(_labNote('Based on ' + Math.round(clock.candleCount / 24)
+        + ' days of data · hours shown in your local time'));
+  }
+
+  function _closeLabPanel() {
+    if (!_labPanel) return;
+    _labClearProjection();
+    _labPanel.remove();
+    _labPanel = null;
+  }
+
+  function _openLabPanel() {
+    if (_labPanel) { _closeLabPanel(); return; } // toggle
+    const card = document.createElement('div');
+    card.className = 'tb-lab-panel';
+
+    const head = document.createElement('div');
+    head.className = 'tb-lab-head';
+    const titleWrap = document.createElement('div');
+    const title = document.createElement('span');
+    title.className = 'tb-lab-title';
+    title.textContent = labTab === 'echoes' ? 'Echoes'
+        : labTab === 'oracle' ? 'Oracle' : 'Market clock';
+    titleWrap.appendChild(title);
+    head.appendChild(titleWrap);
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button'; closeBtn.className = 'tb-lab-close'; closeBtn.innerHTML = '&times;';
+    closeBtn.addEventListener('click', _closeLabPanel);
+    head.appendChild(closeBtn);
+    card.appendChild(head);
+
+    const tabs = document.createElement('div');
+    tabs.className = 'tb-tabs tb-lab-tabs';
+    const tabSpecs = [
+      { id: 'echoes', label: 'Echoes' },
+      { id: 'oracle', label: 'Oracle' },
+      { id: 'clock', label: 'Market Clock' },
+    ];
+    for (const t of tabSpecs) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'tb-tab' + (t.id === labTab ? ' tb-tab--on' : '');
+      tab.textContent = t.label;
+      tab.addEventListener('click', () => {
+        if (t.id === labTab) return;
+        labTab = t.id;
+        for (const el of tabs.querySelectorAll('.tb-tab')) el.classList.remove('tb-tab--on');
+        tab.classList.add('tb-tab--on');
+        title.textContent = labTab === 'echoes' ? 'Echoes'
+            : labTab === 'oracle' ? 'Oracle' : 'Market clock';
+        _renderLabTab(_labPanel);
+      });
+      tabs.appendChild(tab);
+    }
+    card.appendChild(tabs);
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'tb-lab-body';
+    card.appendChild(bodyEl);
+
+    document.body.appendChild(card);
+    _labPanel = card;
+    _renderLabTab(card);
+  }
+
+  labBtn.addEventListener('click', _openLabPanel);
+
+  root.appendChild(labBtn);
+
   // ── Snap (screenshot) ───────────────────────────────────────────────────
   // Directly drives the active pane's takeScreenshot() — no Flutter round
   // trip to decide which pane (the iframe knows its own active state). The
@@ -1809,15 +2791,19 @@
 
   // ── Final layout pass ───────────────────────────────────────────────────
   // Reorder children to the canonical sequence per user spec:
-  //   [Symbol] [Timeframe] [Style] [fx] [Draw] [Cursor]
+  //   [Symbol] [Timeframe] [Style] [fx] [Cursor]
   //       ...flex spacer...
   //   [Layout] [INSTANT] [Order Defaults] [Snap] [Settings]
   // `appendChild` of an existing child MOVES it (doesn't create a duplicate);
   // the first right-group button gets `.tb-right-start` which applies
   // `margin-left: auto` for the flex spacer.
+  // NOTE: `drawBtn` and `cursorBtn` are intentionally omitted — drawing tools
+  // and the crosshair/cursor-mode picker both moved to the floating left rail
+  // (buildDrawRail). drawBtn stays constructed (its repaint helpers are still
+  // referenced) but is never mounted.
   const ORDER = [
-    symWrap, tfBtn, styleBtn, fxBtn, drawBtn, cursorBtn,
-    layoutBtn, badge, odBtn, snapBtn, settingsBtn, helpBtn,
+    symWrap, tfBtn, styleBtn, fxBtn,
+    layoutBtn, labBtn, badge, odBtn, snapBtn, settingsBtn, helpBtn,
   ];
   // Move the right-anchor class — Layout is now the first right-group
   // button instead of the INSTANT badge.
