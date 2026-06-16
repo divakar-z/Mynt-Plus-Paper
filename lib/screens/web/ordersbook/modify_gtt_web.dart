@@ -26,6 +26,19 @@ import 'package:pointer_interceptor/pointer_interceptor.dart';
 import '../market_watch/tv_chart/chart_iframe_guard.dart';
 import '../../../utils/overlay_manager.dart';
 
+
+/// Rejects a keystroke that would make a numeric field invalid, keeping the
+/// last valid value instead of clearing it. Empty is always allowed so the
+/// user can still backspace the field clear. Replaces the earlier anchored
+/// allow-filter, which wiped the whole field on any non-matching input
+/// (a letter, or a second decimal point) and then fired a spurious warning.
+TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
+    TextInputFormatter.withFunction((oldValue, newValue) =>
+        (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
+            ? newValue
+            : oldValue);
+
+
 // InheritedWidget to pass close callback to child widgets
 class _ModifyGttDialogCloseNotifier extends InheritedWidget {
   final VoidCallback onClose;
@@ -653,7 +666,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                               ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+              _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
             ],
           textStyle: WebTextStyles.formInput(
                                 isDarkTheme: theme.isDarkMode,
@@ -834,7 +847,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     : MyntColors.textPrimary,
                               ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   readOnly: orderInput.actPrcType == "Limit" ||
                       orderInput.actPrcType == "SL Limit"
@@ -902,7 +915,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                               ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+              _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
             ],
             textStyle: WebTextStyles.formInput(
                                 isDarkTheme: theme.isDarkMode,
@@ -1075,7 +1088,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     : MyntColors.textPrimary,
                               ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   readOnly: orderInput.actOcoPrcType == "Limit" ||
                       orderInput.actOcoPrcType == "SL Limit"
