@@ -90,15 +90,20 @@ class WebAuthApi {
     required String mobileOrClientId,
     required String source,
     required BuildContext context,
+    bool isTotp = false,
   }) async {
     try {
       final uri = Uri.parse('$_loginBaseUrl/otp_send');
-      
+
       final inputType = _getInputType(mobileOrClientId);
-      
+
       Map<String, dynamic> data = {
         'device': source,
         inputType: mobileOrClientId.toUpperCase(),
+        // Flags the OTP request as part of the TOTP-setup flow so the backend
+        // can handle it accordingly. Only sent during TOTP setup; regular
+        // login OTP requests keep the original payload.
+        if (isTotp) 'is_totp': true,
       };
 
       

@@ -350,6 +350,8 @@ class WebAuthProvider extends ChangeNotifier {
         mobileOrClientId: loginController.text.trim().toUpperCase(),
         source: _source,
         context: context,
+        // TOTP-setup flow → tell the backend this OTP is for TOTP setup.
+        isTotp: _topflow,
       );
 
       if (result != null && (result['stat'] == 'Ok' || (result['msg'] != null && result['msg'].toString().toLowerCase().contains('otp')))) {
