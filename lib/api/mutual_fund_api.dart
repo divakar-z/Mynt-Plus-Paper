@@ -991,11 +991,9 @@ mixin MutualFundApi on ApiCore {
   Future<MfDematHolding> getmfdemathldapi() async {
     try {
       final uri = Uri.parse(apiLinks.mfDematHoldingsApi);
-      // TODO(beta): temporary static client code for testing demat holdings.
-      // Revert to {"ClientCode": "${prefs.clientId}"} before release.
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
-          body: jsonEncode({"ClientCode": "Z68799"}));
+          body: jsonEncode({"ClientCode": "${prefs.clientId}"}));
 
       final json = jsonDecode((res.body));
 
