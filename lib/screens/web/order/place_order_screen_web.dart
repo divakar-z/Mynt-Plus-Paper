@@ -60,6 +60,20 @@ import 'package:mynt_plus/utils/overlay_manager.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
 
+
+/// Rejects a keystroke that would make a numeric field invalid, keeping the
+/// last valid value instead of clearing it. Empty is always allowed so the
+/// user can still backspace the field clear. Replaces the earlier anchored
+/// `FilteringTextInputFormatter.allow(RegExp(r'^...$'))`, which wiped the whole
+/// field on any non-matching input (a letter, or a 3rd decimal digit) and then
+/// fired a spurious "cannot be empty" warning.
+TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
+    TextInputFormatter.withFunction((oldValue, newValue) =>
+        (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
+            ? newValue
+            : oldValue);
+
+
 // InheritedWidget to pass close callback to child widgets
 class _PlaceOrderDialogCloseNotifier extends InheritedWidget {
   final VoidCallback onClose;
@@ -2300,8 +2314,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                     'trigger_price_input',
                                                 child: MyntTextField(
                                                     inputFormatters: [
-                                                      FilteringTextInputFormatter
-                                                          .allow(RegExp(
+                                                      _rejectIfNoMatch(RegExp(
                                                               r'^\d*\.?\d{0,2}$'))
                                                     ],
                                                     backgroundColor: theme.isDarkMode
@@ -2715,8 +2728,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         child:
                                                             MyntTextField(
                                                                 inputFormatters: [
-                                                              FilteringTextInputFormatter
-                                                                  .allow(RegExp(
+                                                              _rejectIfNoMatch(RegExp(
                                                                       r'^\d*\.?\d{0,2}$'))
                                                             ],
                                                                 backgroundColor: theme
@@ -3108,8 +3120,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                       'stoploss_trigger_price',
                                                   child: MyntTextField(
                                                       inputFormatters: [
-                                                        FilteringTextInputFormatter
-                                                            .allow(RegExp(
+                                                        _rejectIfNoMatch(RegExp(
                                                                 r'^\d*\.?\d{0,2}$'))
                                                       ],
                                                       backgroundColor:
@@ -3512,8 +3523,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                           child:
                                                               MyntTextField(
                                                                   inputFormatters: [
-                                                                FilteringTextInputFormatter
-                                                                    .allow(RegExp(
+                                                                _rejectIfNoMatch(RegExp(
                                                                         r'^\d*\.?\d{0,2}$'))
                                                               ],
                                                                   backgroundColor: theme.isDarkMode
@@ -4839,8 +4849,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         child:
                                                             MyntTextField(
                                                                 inputFormatters: [
-                                                              FilteringTextInputFormatter
-                                                                  .allow(RegExp(
+                                                              _rejectIfNoMatch(RegExp(
                                                                       r'^\d*\.?\d{0,2}$'))
                                                             ],
                                                                 backgroundColor: theme
@@ -7382,7 +7391,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                     identifier: "Stoploss Trigger",
                     child: MyntTextField(
                         inputFormatters: [
-                          FilteringTextInputFormatter.allow(
+                          _rejectIfNoMatch(
                               RegExp(r'^\d*\.?\d{0,2}$'))
                         ],
                         backgroundColor: theme.isDarkMode
@@ -7472,7 +7481,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 identifier: "Bracket Target Input",
                 child: MyntTextField(
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(
+                      _rejectIfNoMatch(
                           RegExp(r'^\d*\.?\d{0,2}$'))
                     ],
                     backgroundColor: theme.isDarkMode
@@ -7548,7 +7557,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 identifier: "Stoploss cover sl",
                 child: MyntTextField(
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(
+                      _rejectIfNoMatch(
                           RegExp(r'^\d*\.?\d{0,2}$'))
                     ],
                     backgroundColor: theme.isDarkMode
@@ -7621,7 +7630,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 identifier: "Trailing SL Input",
                 child: MyntTextField(
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(
+                      _rejectIfNoMatch(
                           RegExp(r'^\d*\.?\d{0,2}$'))
                     ],
                     backgroundColor: theme.isDarkMode
@@ -7772,7 +7781,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                           ? colors.darkGrey
                                           : const Color(0xffF1F3F8),
                                       inputFormatters: [
-                                        FilteringTextInputFormatter.allow(
+                                        _rejectIfNoMatch(
                                           RegExp(r'^(0|[1-9][0-9]{0,19})$'),
                                         ),
                                       ],

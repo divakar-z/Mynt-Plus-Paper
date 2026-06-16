@@ -37,6 +37,20 @@ import '../market_watch/tv_chart/chart_iframe_guard.dart';
 import '../../../utils/overlay_manager.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 
+
+/// Rejects a keystroke that would make a numeric field invalid, keeping the
+/// last valid value instead of clearing it. Empty is always allowed so the
+/// user can still backspace the field clear. Replaces the earlier anchored
+/// allow-filter, which wiped the whole field on any non-matching input
+/// (a letter, or a 3rd decimal digit) and then fired a spurious
+/// "cannot be empty" warning.
+TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
+    TextInputFormatter.withFunction((oldValue, newValue) =>
+        (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
+            ? newValue
+            : oldValue);
+
+
 // InheritedWidget to pass close callback to child widgets
 class _ModifyPlaceOrderDialogCloseNotifier extends InheritedWidget {
   final VoidCallback onClose;
@@ -1215,7 +1229,7 @@ class _ModifyPlaceOrderScreenState
                                                     ? colors.darkGrey
                                                     : const Color(0xffF1F3F8),
                                                 inputFormatters: [
-                                                  FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}$')),
+                                                  _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                                                 ],
                                                 onChanged: (value) {
                                                   double inputPrice =
@@ -2597,7 +2611,7 @@ class _ModifyPlaceOrderScreenState
                         : MyntColors.textSecondary,
                   ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   onChanged: (value) {
                     double inputPrice = double.tryParse(value) ?? 0;
@@ -2845,7 +2859,7 @@ class _ModifyPlaceOrderScreenState
                                           ? colors.darkGrey
                                           : const Color(0xffF1F3F8),
                                       inputFormatters: [
-                                        FilteringTextInputFormatter.allow(
+                                        _rejectIfNoMatch(
                                           RegExp(r'^(0|[1-9][0-9]{0,19})$'),
                                         ),
                                       ],
