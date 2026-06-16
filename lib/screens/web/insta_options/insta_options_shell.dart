@@ -39,9 +39,7 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
   Widget _buildActiveSubScreen() {
     switch (_active) {
       case InstaSubScreen.markets:
-        return MarketsDashboardScreen(
-          onOpenChain: () => _onSelect(InstaSubScreen.chain),
-        );
+        return const MarketsDashboardScreen();
       case InstaSubScreen.contributors:
         return const IndexContributorsScreen();
       case InstaSubScreen.chain:
