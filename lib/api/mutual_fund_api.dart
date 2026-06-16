@@ -5,6 +5,7 @@ import 'package:mynt_plus/models/mf_model/all_category_new_model.dart';
 import 'package:mynt_plus/models/mf_model/all_mf_holdings_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_bestnewapi_list_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_hold_singlepage_model.dart';
+import 'package:mynt_plus/models/mf_model/mf_demat_holding_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_holding_new_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_order_det_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_sip_cancel_mess_model.dart';
@@ -982,6 +983,21 @@ mixin MutualFundApi on ApiCore {
       // print("mflisttt Tmfholddddddype MF ==>$json.total_sip_amount");
 
       return mf_holdoing_new.fromJson(json);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<MfDematHolding> getmfdemathldapi() async {
+    try {
+      final uri = Uri.parse(apiLinks.mfDematHoldingsApi);
+      final res = await apiClient.post(uri,
+          headers: defaultHeaders,
+          body: jsonEncode({"ClientCode": "${prefs.clientId}"}));
+
+      final json = jsonDecode((res.body));
+
+      return MfDematHolding.fromJson(json);
     } catch (e) {
       rethrow;
     }
