@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
 // ignore: avoid_web_libraries_in_flutter
@@ -391,6 +392,9 @@ class _ChartEngineShellScreenState
       case 'chart-engine-ready':
         _iframeReady = true;
         _pushAll(force: true);
+        // Drop the branded load overlay now that the iframe is up and the
+        // chart's own symbol/loading state takes over.
+        if (mounted) setState(() {});
         break;
       case 'fetchHistory':
         _handleFetchHistory(msg['value']);
@@ -2778,20 +2782,60 @@ class _ChartEngineShellScreenState
             ChartEngineTopBar(
                 onPopupVisibilityChanged: _setIframePointerEvents),
           Expanded(
-            child: MouseRegion(
-              opaque: false,
-              // First cursor entry into the chart area forces a setState ->
-              // Flutter re-runs layout -> the HtmlElementView's platform-view
-              // hit region is recomputed with the iframe's actual geometry.
-              // This unblocks the "chart unresponsive until you click another
-              // widget" Flutter Web quirk without consuming any user click.
-              onEnter: (_) {
-                if (!_hitRegionPrimed) {
-                  _hitRegionPrimed = true;
-                  if (mounted) setState(() {});
-                }
-              },
-              child: HtmlElementView(viewType: _viewType),
+            child: Stack(
+              children: [
+                MouseRegion(
+                  opaque: false,
+                  // First cursor entry into the chart area forces a setState ->
+                  // Flutter re-runs layout -> the HtmlElementView's platform-view
+                  // hit region is recomputed with the iframe's actual geometry.
+                  // This unblocks the "chart unresponsive until you click another
+                  // widget" Flutter Web quirk without consuming any user click.
+                  onEnter: (_) {
+                    if (!_hitRegionPrimed) {
+                      _hitRegionPrimed = true;
+                      if (mounted) setState(() {});
+                    }
+                  },
+                  child: HtmlElementView(viewType: _viewType),
+                ),
+                // Opaque Mynt-logo loader covering the blank iframe flash until
+                // the chart engine signals it's up (`chart-engine-ready`). The
+                // chart's own symbol/candle loading takes over after that.
+                if (!_iframeReady)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: ColoredBox(
+                        color: bg,
+                        child: Center(
+                          child: SizedBox(
+                            width: 90,
+                            height: 90,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.all(8),
+                                  child: SvgPicture.asset(
+                                    'assets/icon/MYNT App Logo_v2.svg',
+                                    width: 72,
+                                    height: 72,
+                                  ),
+                                ),
+                                const SizedBox(
+                                  width: 90,
+                                  height: 90,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 5),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],

@@ -132,11 +132,6 @@ function applyLayout(spec) {
           typeof chart.setLiteMode === 'function') {
         chart.setLiteMode(true);
       }
-      // Inherit the current drawing-rail gutter so a pane created while the
-      // rail is collapsed doesn't render with a stale 46px inset.
-      if (window.__drawRailGutter != null && typeof chart.setLeftGutter === 'function') {
-        chart.setLeftGutter(window.__drawRailGutter);
-      }
       panes.set(id, chart);
       _attachPaneControls(container, id);
     }
@@ -144,6 +139,9 @@ function applyLayout(spec) {
 
   rebuildSplitters(layout);
   ensureLayoutResizeObserver(layout);
+  // Re-evaluate which pane is leftmost so only it carries the rail gutter
+  // (panes can be created/removed/reordered by a layout change).
+  applyRailGutters();
 }
 
 // ---------------------------------------------------------------------------
@@ -877,13 +875,27 @@ window.__activePaneChart = () => {
   return chart || null;
 };
 
-// The drawing rail (topbar.js) toggles the left gutter on every pane so the
-// chart content shifts as the rail expands/collapses. Remembered so panes
-// created later inherit the current state.
+// The drawing rail (topbar.js) toggles the left gutter so chart content shifts
+// as the rail expands/collapses. The rail only physically overlays the
+// LEFTMOST column, so only panes whose left edge sits at the layout's left
+// edge get the gutter — every other pane keeps a normal 8px left.
 window.__drawRailGutter = 46;
+function applyRailGutters() {
+  const layout = document.getElementById('layout');
+  if (!layout) return;
+  const lrect = layout.getBoundingClientRect();
+  const gut = window.__drawRailGutter || 0;
+  for (const [id, ch] of panes) {
+    if (!ch || typeof ch.setLeftGutter !== 'function') continue;
+    const el = document.getElementById('pane-' + id);
+    const isLeftmost = el
+        ? (el.getBoundingClientRect().left - lrect.left) < 4
+        : true;
+    ch.setLeftGutter(isLeftmost ? gut : 0);
+  }
+}
+window.__applyRailGutters = applyRailGutters;
 window.__setChartLeftGutter = (px) => {
   window.__drawRailGutter = Math.max(0, +px || 0);
-  for (const ch of panes.values()) {
-    if (ch && typeof ch.setLeftGutter === 'function') ch.setLeftGutter(window.__drawRailGutter);
-  }
+  applyRailGutters();
 };
