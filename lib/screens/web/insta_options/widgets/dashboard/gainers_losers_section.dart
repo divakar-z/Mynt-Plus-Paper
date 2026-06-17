@@ -5,6 +5,7 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dash_table.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/paginated_dash_table.dart';
 
 /// §5.8 Gainers / losers — two ranked lists of the day's top movers.
 class GainersLosersSection extends StatelessWidget {
@@ -59,9 +60,10 @@ class GainersLosersSection extends StatelessWidget {
         Expanded(
           child: DashSectionCard(
             title: 'Top Gainers',
-            child: DashTable<GainerLoserRow>(
+            child: PaginatedDashTable<GainerLoserRow>(
               columns: _cols(),
               rows: data.gainers,
+              emptyLabel: 'No gainers.',
             ),
           ),
         ),
@@ -69,9 +71,10 @@ class GainersLosersSection extends StatelessWidget {
         Expanded(
           child: DashSectionCard(
             title: 'Top Losers',
-            child: DashTable<GainerLoserRow>(
+            child: PaginatedDashTable<GainerLoserRow>(
               columns: _cols(),
               rows: data.losers,
+              emptyLabel: 'No losers.',
             ),
           ),
         ),

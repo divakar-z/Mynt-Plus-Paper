@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/provider/insta_options/dashboard/markets_dashboard_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/buildup_table_section.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_app_bar.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/gainers_losers_section.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/index_strip.dart';
@@ -10,7 +11,6 @@ import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/most_activ
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/sector_performance_section.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/sentiment_gauge.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/stock_pcr_section.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/summary_header.dart';
 
 /// Markets Dashboard (Screen 1) — date-based, one call per day. Composes the
 /// eight sections of INSTAOPTIONS dashboard v2 from [marketsDashboardProvider].
@@ -82,11 +82,11 @@ class _MarketsDashboardScreenState
             onRefresh: () => ref.read(marketsDashboardProvider).refresh(),
           ),
           const SizedBox(height: 16),
-          SummaryHeader(summary: p.summary),
-          gap,
           IndexStrip(indices: p.indices),
           gap,
           SentimentGauge(sentiment: p.sentiment),
+          gap,
+          BuildupTableSection(sentiment: p.sentiment),
           gap,
           StockPcrSection(stockPcr: p.stockPcr),
           gap,

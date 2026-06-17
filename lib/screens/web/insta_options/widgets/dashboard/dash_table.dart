@@ -34,12 +34,23 @@ class DashTable<T> extends StatefulWidget {
   final int? initialSortCol;
   final bool initialAscending;
 
+  /// Controlled sort: when [onSort] is set, the table does NOT sort internally
+  /// — it reports header taps via [onSort] and draws the arrow from
+  /// [sortColumn]/[ascending], while the parent sorts and supplies [rows].
+  /// Used by paginated tables so sorting applies across all pages.
+  final void Function(int columnIndex, bool ascending)? onSort;
+  final int? sortColumn;
+  final bool ascending;
+
   const DashTable({
     super.key,
     required this.columns,
     required this.rows,
     this.initialSortCol,
     this.initialAscending = false,
+    this.onSort,
+    this.sortColumn,
+    this.ascending = false,
   });
 
   @override
@@ -66,7 +77,12 @@ class _DashTableState<T> extends State<DashTable<T>> {
     super.dispose();
   }
 
+  bool get _controlled => widget.onSort != null;
+  int? get _activeCol => _controlled ? widget.sortColumn : _sortCol;
+  bool get _activeAsc => _controlled ? widget.ascending : _asc;
+
   List<T> get _sortedRows {
+    if (_controlled) return widget.rows; // parent sorts (and paginates)
     final col = _sortCol;
     if (col == null) return widget.rows;
     final key = widget.columns[col].sortKey;
@@ -81,6 +97,11 @@ class _DashTableState<T> extends State<DashTable<T>> {
 
   void _onSort(int i) {
     if (widget.columns[i].sortKey == null) return;
+    if (_controlled) {
+      final asc = widget.sortColumn == i ? !widget.ascending : true;
+      widget.onSort!(i, asc);
+      return;
+    }
     setState(() {
       if (_sortCol == i) {
         _asc = !_asc;
@@ -117,7 +138,7 @@ class _DashTableState<T> extends State<DashTable<T>> {
           final needsHScroll = totalW > constraints.maxWidth + 0.5;
 
           final table = shadcn.Table(
-            key: ValueKey('sort_${_sortCol}_$_asc'),
+            key: ValueKey('sort_${_activeCol}_$_activeAsc'),
             columnWidths: widths,
             defaultRowHeight: const shadcn.FixedTableSize(38),
             rows: [
@@ -160,7 +181,7 @@ class _DashTableState<T> extends State<DashTable<T>> {
   );
 
   shadcn.TableCell _headerCell(BuildContext context, DashCol<T> col, int i) {
-    final active = _sortCol == i;
+    final active = _activeCol == i;
     final sortable = col.sortKey != null;
     return shadcn.TableCell(
       theme: const shadcn.TableCellTheme(
@@ -193,7 +214,7 @@ class _DashTableState<T> extends State<DashTable<T>> {
               if (active) ...[
                 const SizedBox(width: 4),
                 Icon(
-                  _asc ? Icons.arrow_upward : Icons.arrow_downward,
+                  _activeAsc ? Icons.arrow_upward : Icons.arrow_downward,
                   size: 14,
                   color: resolveThemeColor(context,
                       dark: MyntColors.textSecondaryDark,

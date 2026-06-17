@@ -1,5 +1,37 @@
-/// Buildup summary counts shared by `GET /buildup-sentiment`, the `summary`
-/// block on `GET /fno-buildup`, and `buildup_sentiment` on `GET /overview`.
+import 'package:mynt_plus/models/insta_options/dashboard/dashboard_enums.dart';
+
+/// One per-stock row inside `buildup_sentiment.rows` — the detail behind the
+/// quadrant counts. `lastClose` / `priceChangePct` / `oiChangePct` nullable →
+/// render `—`.
+class BuildupRow {
+  final String symbol;
+  final double? lastClose;
+  final int oi;
+  final double? priceChangePct;
+  final double? oiChangePct;
+  final BuildupCategory category;
+
+  const BuildupRow({
+    required this.symbol,
+    required this.lastClose,
+    required this.oi,
+    required this.priceChangePct,
+    required this.oiChangePct,
+    required this.category,
+  });
+
+  factory BuildupRow.fromJson(Map<String, dynamic> json) => BuildupRow(
+        symbol: json['symbol'] as String? ?? '',
+        lastClose: (json['last_close'] as num?)?.toDouble(),
+        oi: (json['oi'] as num?)?.toInt() ?? 0,
+        priceChangePct: (json['price_change_pct'] as num?)?.toDouble(),
+        oiChangePct: (json['oi_change_pct'] as num?)?.toDouble(),
+        category: BuildupCategory.fromWire(json['category'] as String?),
+      );
+}
+
+/// Buildup summary shared by `buildup_sentiment` on `GET /dashboard`. Holds the
+/// quadrant counts plus the per-stock [rows].
 ///
 /// bullish = long_buildup + short_covering; bearish = short_buildup +
 /// long_covering (the backend pre-computes both).
@@ -12,6 +44,7 @@ class BuildupSentiment {
   final int total;
   final int bullish;
   final int bearish;
+  final List<BuildupRow> rows;
 
   const BuildupSentiment({
     required this.longBuildup,
@@ -22,6 +55,7 @@ class BuildupSentiment {
     required this.total,
     required this.bullish,
     required this.bearish,
+    required this.rows,
   });
 
   static const BuildupSentiment empty = BuildupSentiment(
@@ -33,9 +67,26 @@ class BuildupSentiment {
     total: 0,
     bullish: 0,
     bearish: 0,
+    rows: [],
   );
 
   bool get isEmpty => total == 0;
+
+  /// Count for a quadrant (drives the filter chips).
+  int countFor(BuildupCategory c) {
+    switch (c) {
+      case BuildupCategory.longBuildup:
+        return longBuildup;
+      case BuildupCategory.shortBuildup:
+        return shortBuildup;
+      case BuildupCategory.shortCovering:
+        return shortCovering;
+      case BuildupCategory.longCovering:
+        return longCovering;
+      case BuildupCategory.na:
+        return na;
+    }
+  }
 
   factory BuildupSentiment.fromJson(Map<String, dynamic> json) =>
       BuildupSentiment(
@@ -47,5 +98,8 @@ class BuildupSentiment {
         total: (json['total'] as num?)?.toInt() ?? 0,
         bullish: (json['bullish'] as num?)?.toInt() ?? 0,
         bearish: (json['bearish'] as num?)?.toInt() ?? 0,
+        rows: (json['rows'] as List<dynamic>? ?? const [])
+            .map((e) => BuildupRow.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
       );
 }

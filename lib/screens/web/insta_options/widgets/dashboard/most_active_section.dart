@@ -5,6 +5,7 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dash_table.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/paginated_dash_table.dart';
 
 /// §5.7 Most active — toggle between futures Volume and |OI change|.
 class MostActiveSection extends StatefulWidget {
@@ -99,11 +100,12 @@ class _MostActiveSectionState extends State<MostActiveSection> {
         by: _by,
         onSelect: (b) => setState(() => _by = b),
       ),
-      child: DashTable<MostActiveRow>(
+      child: PaginatedDashTable<MostActiveRow>(
         key: ValueKey(_by),
         columns: _by == MostActiveBy.volume ? _volumeCols() : _oiCols(),
         rows: rows,
         initialSortCol: 1,
+        emptyLabel: 'No symbols.',
       ),
     );
   }

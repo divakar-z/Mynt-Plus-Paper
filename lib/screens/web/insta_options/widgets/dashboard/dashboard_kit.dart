@@ -154,6 +154,55 @@ class DashSectionCard extends StatelessWidget {
   }
 }
 
+/// Compact "Search symbol" field used in the table-section toolbars.
+class DashSearchBox extends StatelessWidget {
+  final TextEditingController controller;
+  final String hint;
+
+  const DashSearchBox({
+    super.key,
+    required this.controller,
+    this.hint = 'Search symbol',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final border = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return SizedBox(
+      height: 34,
+      child: TextField(
+        controller: controller,
+        style: MyntWebTextStyles.bodySmall(context,
+            darkColor: MyntColors.textPrimaryDark,
+            lightColor: MyntColors.textPrimary),
+        cursorColor: accent,
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: hint,
+          hintStyle: MyntWebTextStyles.bodySmall(context, color: muted),
+          prefixIcon: Icon(Icons.search, size: 16, color: muted),
+          prefixIconConstraints:
+              const BoxConstraints(minWidth: 32, minHeight: 32),
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(6),
+            borderSide: BorderSide(color: border, width: 0.5),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(6),
+            borderSide: BorderSide(color: accent),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Advance / unchanged / decline proportion bar.
 class DashAdBar extends StatelessWidget {
   final int advances;
