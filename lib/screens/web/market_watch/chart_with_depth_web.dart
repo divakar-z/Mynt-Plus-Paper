@@ -1213,7 +1213,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
 
     final tradeFromChart = ref.watch(tradeFromChartModeProvider);
     final accent = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
+        dark: MyntColors.secondary, light: MyntColors.primary);
     // The Trade from Chart pill only makes sense when the chart area is
     // actually visible — Overview (0) and Chart (1) tabs. Hidden on
     // Options / Stock Report tabs where the chart isn't shown.

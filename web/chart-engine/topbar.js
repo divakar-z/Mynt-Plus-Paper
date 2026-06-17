@@ -379,8 +379,8 @@
         tile.className = 'tb-layout-tile';
         if (spec.id === activeLayoutId) tile.classList.add('tb-layout-tile--on');
         const tc = document.createElement('canvas');
-        tc.width = 32; tc.height = 22;
-        tc.style.width = '32px'; tc.style.height = '22px';
+        tc.width = 26; tc.height = 26;
+        tc.style.width = '26px'; tc.style.height = '26px';
         tile.appendChild(tc);
         tile.title = spec.id;
         tile.addEventListener('click', () => {
@@ -682,28 +682,74 @@
   repaintTimeframe();
   activePaneSubs.push(repaintTimeframe);
 
+  function longTimeframeLabel(min) {
+    if (min < 60) return min + (min === 1 ? ' minute' : ' minutes');
+    if (min < 1440) {
+      const h = Math.floor(min / 60);
+      return h + (h === 1 ? ' hour' : ' hours');
+    }
+    if (min === 10080) return '1 week';
+    if (min === 43200) return '1 month';
+    const d = Math.floor(min / 1440);
+    return d + (d === 1 ? ' day' : ' days');
+  }
+  const TF_GROUPS = [
+    { title: 'MINUTES', items: TIMEFRAMES.filter(t => t.minutes < 60) },
+    { title: 'HOURS',
+      items: TIMEFRAMES.filter(t => t.minutes >= 60 && t.minutes < 1440) },
+    { title: 'DAYS', items: TIMEFRAMES.filter(t => t.minutes >= 1440) },
+  ];
+  const tfSectionExpanded = {
+    MINUTES: true, HOURS: true, DAYS: true,
+  };
+
   tfBtn.addEventListener('click', () => {
     const content = document.createElement('div');
-    content.className = 'tb-list';
-    for (const t of TIMEFRAMES) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'tb-list-row';
-      if (t.minutes === activePaneState.timeframeMinutes) {
-        row.classList.add('tb-list-row--on');
+    content.className = 'tb-list tb-tf-list';
+    for (const g of TF_GROUPS) {
+      const header = document.createElement('button');
+      header.type = 'button';
+      header.className = 'tb-list-section';
+      const itemsWrap = document.createElement('div');
+      itemsWrap.className = 'tb-list-section-items';
+      function renderHeader() {
+        const expanded = tfSectionExpanded[g.title];
+        header.classList.toggle('tb-list-section--collapsed', !expanded);
+        itemsWrap.style.display = expanded ? '' : 'none';
+        const points = expanded ? '6 15 12 9 18 15' : '6 9 12 15 18 9';
+        header.innerHTML = '<span class="tb-list-section-title">' + g.title
+            + '</span><svg viewBox="0 0 24 24" width="12" height="12" '
+            + 'fill="none" stroke="currentColor" stroke-width="2.2" '
+            + 'stroke-linecap="round" stroke-linejoin="round" '
+            + 'class="tb-list-section-icon">'
+            + '<polyline points="' + points + '"/></svg>';
       }
-      row.innerHTML = '<span class="tb-list-row-label">' + t.label
-          + '</span><span class="tb-list-row-check">'
-          + (t.minutes === activePaneState.timeframeMinutes ? '✓' : '')
-          + '</span>';
-      row.addEventListener('click', () => {
+      header.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        tfSectionExpanded[g.title] = !tfSectionExpanded[g.title];
+        renderHeader();
+      });
+      renderHeader();
+      content.appendChild(header);
+      for (const t of g.items) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'tb-list-row tb-tf-row';
+        if (t.minutes === activePaneState.timeframeMinutes) {
+          row.classList.add('tb-list-row--on');
+        }
+        row.innerHTML = '<span class="tb-list-row-label">'
+            + longTimeframeLabel(t.minutes) + '</span>';
+        row.addEventListener('click', () => {
         _closeOpenPopover();
         if (t.minutes === activePaneState.timeframeMinutes) return;
         activePaneState.timeframeMinutes = t.minutes;
         repaintTimeframe();
         bridge.post('setActiveTimeframe', { minutes: t.minutes });
       });
-      content.appendChild(row);
+        itemsWrap.appendChild(row);
+      }
+      content.appendChild(itemsWrap);
     }
     const pop = openPopover(tfBtn, content);
     pop.classList.add('tb-timeframe-popover');
@@ -711,64 +757,137 @@
   root.appendChild(tfBtn);
 
   // ── Style picker (Candle / Hollow / Bars / Line / Area / Heikin Ashi) ──
+  const _styleIcon = (paths) =>
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">' + paths + '</svg>';
   const STYLES = [
-    { id: 'candles',     label: 'Candle' },
-    { id: 'hollow',      label: 'Hollow Candle' },
-    { id: 'bars',        label: 'OHLC Bars' },
-    { id: 'line',        label: 'Line' },
-    { id: 'area',        label: 'Area' },
-    { id: 'heikin-ashi', label: 'Heikin Ashi' },
-    { id: 'baseline',    label: 'Baseline' },
-    { id: 'step',        label: 'Step line' },
-    { id: 'columns',     label: 'Columns' },
-    { id: 'hlcbars',     label: 'HLC bars' },
-    { id: 'highlow',     label: 'High-Low' },
-    { id: 'hlcarea',     label: 'HLC area' },
-    { id: 'volcandles',  label: 'Volume candles' },
-    { id: 'renko',       label: 'Renko' },
-    { id: 'linebreak',   label: 'Line Break' },
-    { id: 'kagi',        label: 'Kagi' },
-    { id: 'range',       label: 'Range' },
-    { id: 'pnf',         label: 'Point & Figure' },
+    { id: 'bars',        label: 'Bars', group: 'bars', svg: _styleIcon(
+        '<path d="M7 5v14M7 9h3M7 14H4"/>'
+        + '<path d="M17 7v14M17 11h3M17 16h-3"/>') },
+    { id: 'candles',     label: 'Candles', group: 'bars', svg: _styleIcon(
+        '<path d="M8 4v4M8 14v6M16 4v8M16 18v2"/>'
+        + '<rect x="6" y="8" width="4" height="6" rx="1"/>'
+        + '<rect x="14" y="12" width="4" height="6" rx="1"/>') },
+    { id: 'hollow',      label: 'Hollow candles', group: 'bars',
+      svg: _styleIcon(
+        '<path d="M8 4v4M8 14v6M16 4v8M16 18v2"/>'
+        + '<rect x="6" y="8" width="4" height="6" rx="1" fill="none"/>'
+        + '<rect x="14" y="12" width="4" height="6" rx="1" fill="none"/>') },
+    { id: 'line',        label: 'Line', group: 'line', svg: _styleIcon(
+        '<path d="M4 16l5-6 4 3 7-8"/>') },
+    { id: 'area',        label: 'Area', group: 'area', svg: _styleIcon(
+        '<path d="M3 17l5-6 4 3 4-5 5 4v4H3z" fill="currentColor" '
+        + 'fill-opacity="0.18"/>'
+        + '<path d="M3 17l5-6 4 3 4-5 5 4"/>') },
+    { id: 'heikin-ashi', label: 'Heikin Ashi', group: 'other',
+      svg: _styleIcon(
+        '<path d="M8 4v4M8 14v6M16 4v8M16 18v2"/>'
+        + '<rect x="6" y="8" width="4" height="6" rx="1"/>'
+        + '<rect x="14" y="12" width="4" height="6" rx="1" fill="none"/>') },
+    { id: 'baseline',    label: 'Baseline', group: 'area', svg: _styleIcon(
+        '<path d="M3 17l5-6 4 3 4-5 5 4v4H3z" fill="currentColor" '
+        + 'fill-opacity="0.18"/>'
+        + '<path d="M3 17l5-6 4 3 4-5 5 4"/>'
+        + '<path d="M3 14h18" stroke-dasharray="2 2"/>') },
+    { id: 'step',        label: 'Step line', group: 'line', svg: _styleIcon(
+        '<path d="M3 18h4v-4h4v-3h4v-4h6"/>') },
+    { id: 'columns',     label: 'Columns', group: 'bars', svg: _styleIcon(
+        '<rect x="4" y="10" width="3" height="10" rx="0.5"/>'
+        + '<rect x="10" y="6" width="3" height="14" rx="0.5"/>'
+        + '<rect x="16" y="13" width="3" height="7" rx="0.5"/>') },
+    { id: 'hlcbars',     label: 'HLC bars', group: 'bars', svg: _styleIcon(
+        '<path d="M7 4v16M7 14h3"/>'
+        + '<path d="M17 6v14M17 16h3"/>') },
+    { id: 'highlow',     label: 'High-Low', group: 'bars', svg: _styleIcon(
+        '<path d="M7 5v14"/>'
+        + '<path d="M17 8v11"/>') },
+    { id: 'hlcarea',     label: 'HLC area', group: 'area', svg: _styleIcon(
+        '<path d="M3 16l5-5 4 2 4-4 5 3v6H3z" fill="currentColor" '
+        + 'fill-opacity="0.18"/>'
+        + '<path d="M3 8l5-3 4 2 4-3 5 2"/>'
+        + '<path d="M3 16l5-5 4 2 4-4 5 3"/>') },
+    { id: 'volcandles',  label: 'Volume candles', group: 'bars', svg: _styleIcon(
+        '<path d="M8 4v4M8 14v6M16 7v3M16 16v3"/>'
+        + '<rect x="5" y="8" width="6" height="6" rx="1"/>'
+        + '<rect x="13" y="10" width="6" height="6" rx="1"/>') },
+    { id: 'renko',       label: 'Renko', group: 'other', svg: _styleIcon(
+        '<rect x="3" y="13" width="4" height="4" rx="0.5"/>'
+        + '<rect x="8" y="10" width="4" height="4" rx="0.5"/>'
+        + '<rect x="13" y="7" width="4" height="4" rx="0.5" fill="none"/>'
+        + '<rect x="18" y="10" width="3" height="4" rx="0.5" fill="none"/>') },
+    { id: 'linebreak',   label: 'Line Break', group: 'other', svg: _styleIcon(
+        '<rect x="3" y="12" width="3" height="6" rx="0.5"/>'
+        + '<rect x="7.5" y="8" width="3" height="10" rx="0.5"/>'
+        + '<rect x="12" y="5" width="3" height="9" rx="0.5" fill="none"/>'
+        + '<rect x="16.5" y="9" width="3" height="9" rx="0.5" fill="none"/>') },
+    { id: 'kagi',        label: 'Kagi', group: 'other', svg: _styleIcon(
+        '<path d="M4 18v-6h4v-6h4v8h4v-4h4" stroke-width="2"/>') },
+    { id: 'range',       label: 'Range', group: 'other', svg: _styleIcon(
+        '<path d="M6 4v4M6 14v6M14 4v8M14 18v2"/>'
+        + '<rect x="4" y="8" width="4" height="6" rx="1"/>'
+        + '<rect x="12" y="12" width="4" height="6" rx="1"/>'
+        + '<path d="M20 6v12" stroke-dasharray="2 2"/>') },
+    { id: 'pnf',         label: 'Point & Figure', group: 'other', svg: _styleIcon(
+        '<path d="M4 6l3 3M7 6l-3 3"/>'
+        + '<path d="M10 12l3 3M13 12l-3 3"/>'
+        + '<circle cx="18" cy="8" r="1.6" fill="none"/>'
+        + '<circle cx="18" cy="14" r="1.6" fill="none"/>') },
   ];
   const styleBtn = document.createElement('button');
   styleBtn.className = 'tb-chip tb-style';
   styleBtn.type = 'button';
   styleBtn.title = 'Chart style';
-  // Compact "candlestick" SVG that doesn't change with style — same UX as
-  // the Flutter button. The popover surfaces the label per style.
-  styleBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
-      + 'fill="none" stroke="currentColor" stroke-width="1.8" '
-      + 'stroke-linecap="round" stroke-linejoin="round">'
-      + '<path d="M8 4v4M8 14v6M16 4v8M16 18v2"/>'
-      + '<rect x="6" y="8" width="4" height="6" rx="1"/>'
-      + '<rect x="14" y="12" width="4" height="6" rx="1"/></svg>'
-      + '<svg viewBox="0 0 24 24" width="10" height="10" '
+  // Icon reflects the currently selected style; falls back to the generic
+  // candle glyph if the active style has no icon. Chevron is appended after.
+  const _chevronSvg = '<svg viewBox="0 0 24 24" width="10" height="10" '
       + 'fill="none" stroke="currentColor" stroke-width="2.5" '
       + 'stroke-linecap="round" stroke-linejoin="round" '
       + 'class="tb-chevron"><polyline points="6 9 12 15 18 9"/></svg>';
+  const _defaultStyleSvg = _styleIcon(
+      '<path d="M8 4v4M8 14v6M16 4v8M16 18v2"/>'
+      + '<rect x="6" y="8" width="4" height="6" rx="1"/>'
+      + '<rect x="14" y="12" width="4" height="6" rx="1"/>');
+  const repaintStyleBtn = () => {
+    const cur = STYLES.find((s) => s.id === activePaneState.candleStyle);
+    styleBtn.innerHTML = (cur && cur.svg ? cur.svg : _defaultStyleSvg)
+        + _chevronSvg;
+  };
+  repaintStyleBtn();
+  activePaneSubs.push(repaintStyleBtn);
 
   styleBtn.addEventListener('click', () => {
     const content = document.createElement('div');
-    content.className = 'tb-list';
-    for (const s of STYLES) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'tb-list-row';
-      if (s.id === activePaneState.candleStyle) {
-        row.classList.add('tb-list-row--on');
+    content.className = 'tb-list tb-style-list';
+    const GROUP_ORDER = ['bars', 'line', 'area', 'other'];
+    let prevGroup = null;
+    for (const gid of GROUP_ORDER) {
+      const items = STYLES.filter((s) => s.group === gid);
+      if (!items.length) continue;
+      if (prevGroup !== null) {
+        const sep = document.createElement('div');
+        sep.className = 'tb-list-divider';
+        content.appendChild(sep);
       }
-      row.innerHTML = '<span class="tb-list-row-label">' + s.label
-          + '</span><span class="tb-list-row-check">'
-          + (s.id === activePaneState.candleStyle ? '✓' : '')
-          + '</span>';
-      row.addEventListener('click', () => {
-        _closeOpenPopover();
-        if (s.id === activePaneState.candleStyle) return;
-        activePaneState.candleStyle = s.id;
-        bridge.post('setActiveCandleStyle', { style: s.id });
-      });
-      content.appendChild(row);
+      prevGroup = gid;
+      for (const s of items) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'tb-list-row tb-style-row';
+        if (s.id === activePaneState.candleStyle) {
+          row.classList.add('tb-list-row--on');
+        }
+        row.innerHTML = '<span class="tb-list-row-icon">' + s.svg + '</span>'
+            + '<span class="tb-list-row-label">' + s.label + '</span>';
+        row.addEventListener('click', () => {
+          _closeOpenPopover();
+          if (s.id === activePaneState.candleStyle) return;
+          activePaneState.candleStyle = s.id;
+          repaintStyleBtn();
+          bridge.post('setActiveCandleStyle', { style: s.id });
+        });
+        content.appendChild(row);
+      }
     }
     const pop = openPopover(styleBtn, content);
     pop.classList.add('tb-style-popover');
@@ -968,16 +1087,30 @@
   settingsBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
       + 'fill="none" stroke="currentColor" stroke-width="2" '
       + 'stroke-linecap="round" stroke-linejoin="round">'
-      + '<circle cx="12" cy="12" r="3"/>'
-      + '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+      + '<path d="M3 9.11011V14.8801C3 17.0001 3 17.0001 5 18.3501L10.5 21.5301C11.33 22.0101 12.68 22.0101 13.5 21.5301L19 18.3501C21 17.0001 21 17.0001 21 14.8901V9.11011C21 7.00011 21 7.00011 19 5.65011L13.5 2.47011C12.68 1.99011 11.33 1.99011 10.5 2.47011L5 5.65011C3 7.00011 3 7.00011 3 9.11011Z"/>'
+      + '<path d="M12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12C9 13.6569 10.3431 15 12 15Z"/>'
+      + '</svg>';
 
   settingsBtn.addEventListener('click', () => {
     const content = document.createElement('div');
     content.className = 'tb-settings-popover-content';
+    const header = document.createElement('div');
+    header.className = 'tb-od-header';
     const title = document.createElement('div');
     title.className = 'tb-popover-title';
     title.textContent = 'Settings';
-    content.appendChild(title);
+    header.appendChild(title);
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'tb-od-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" '
+        + 'fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M6 6 L18 18 M18 6 L6 18"/></svg>';
+    closeBtn.addEventListener('click', () => _closeOpenPopover());
+    header.appendChild(closeBtn);
+    content.appendChild(header);
     const sub = document.createElement('div');
     sub.className = 'tb-popover-subtitle';
     sub.textContent = 'Chart appearance and on-chart overlays';
@@ -1112,10 +1245,6 @@
     }
     pop.style.left = left + 'px';
     pop.style.top = top + 'px';
-    pop.addEventListener('mouseenter', () => {
-      if (_helpCloseTimer) { clearTimeout(_helpCloseTimer); _helpCloseTimer = null; }
-    });
-    pop.addEventListener('mouseleave', _scheduleCloseHelp);
     _helpPop = pop;
   }
 
@@ -1127,9 +1256,6 @@
     }, 160);
   }
 
-  helpBtn.addEventListener('mouseenter', _openHelp);
-  helpBtn.addEventListener('mouseleave', _scheduleCloseHelp);
-  // Click toggles too — covers touch + keyboard-focus users.
   helpBtn.addEventListener('click', () => {
     if (_helpPop) _scheduleCloseHelp();
     else _openHelp();
@@ -1272,10 +1398,23 @@
     const content = document.createElement('div');
     content.className = 'tb-od-popover-content';
 
+    const header = document.createElement('div');
+    header.className = 'tb-od-header';
     const title = document.createElement('div');
     title.className = 'tb-popover-title';
     title.textContent = 'Order Defaults';
-    content.appendChild(title);
+    header.appendChild(title);
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'tb-od-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" '
+        + 'fill="none" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M6 6 L18 18 M18 6 L6 18"/></svg>';
+    closeBtn.addEventListener('click', () => _closeOpenPopover());
+    header.appendChild(closeBtn);
+    content.appendChild(header);
     const sub = document.createElement('div');
     sub.className = 'tb-popover-subtitle';
     sub.textContent = 'Applies to every new order placed from the chart';
@@ -1326,13 +1465,71 @@
   // drawingsHidden. Flutter already pushes setDrawMode / setDrawingsLocked /
   // setDrawingsHidden via the diff-based _pushSession, so we just listen
   // here and post the same names back when the user clicks.
-  const DRAW_TOOLS = [
-    { kind: 'trendline', label: 'Trendline',        group: 'Lines' },
+  // Tool icons rendered inline so the popover looks like a tool palette
+  // rather than a plain text list (matches the in-house chart's TradingView-
+  // inspired drawer).
+  const _ICON_SVG = {
+    trendline:
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'
+      + '<line x1="4" y1="20" x2="20" y2="4"/>'
+      + '<circle cx="4" cy="20" r="1.8" fill="currentColor"/>'
+      + '<circle cx="20" cy="4" r="1.8" fill="currentColor"/></svg>',
+    hline:
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round">'
+      + '<line x1="3" y1="12" x2="21" y2="12"/>'
+      + '<circle cx="12" cy="12" r="1.8" fill="currentColor"/></svg>',
+    hray:
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'
+      + '<line x1="4" y1="12" x2="21" y2="12"/>'
+      + '<circle cx="4" cy="12" r="1.8" fill="currentColor"/>'
+      + '<path d="M18 9l3 3-3 3"/></svg>',
+    rect:
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">'
+      + '<rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
+    fib:
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.5" stroke-linecap="round">'
+      + '<line x1="3" y1="5" x2="21" y2="5"/>'
+      + '<line x1="3" y1="10" x2="21" y2="10"/>'
+      + '<line x1="3" y1="14" x2="21" y2="14"/>'
+      + '<line x1="3" y1="19" x2="21" y2="19"/></svg>',
+    path:
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'
+      + '<polyline points="4,18 9,11 14,15 20,5"/>'
+      + '<circle cx="4" cy="18" r="1.5" fill="currentColor"/>'
+      + '<circle cx="9" cy="11" r="1.5" fill="currentColor"/>'
+      + '<circle cx="14" cy="15" r="1.5" fill="currentColor"/>'
+      + '<circle cx="20" cy="5" r="1.5" fill="currentColor"/></svg>',
+    measure:
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'
+      + '<path d="M3 14l7 7 11-11-7-7z"/>'
+      + '<path d="M8 9l2 2M11 6l2 2M14 12l2 2"/></svg>',
+  };
+  const DRAW_GROUPS = [
+    {
+      title: 'Lines',
+      tools: [
+        { kind: 'trendline', label: 'Trendline',        group: 'Lines' },
     { kind: 'ray',       label: 'Ray',              group: 'Lines' },
     { kind: 'xline',     label: 'Extended line',    group: 'Lines' },
-    { kind: 'hline',     label: 'Horizontal line',  group: 'Lines' },
-    { kind: 'hray',      label: 'Horizontal ray',   group: 'Lines' },
-    { kind: 'vline',     label: 'Vertical line',    group: 'Lines' },
+        { kind: 'hline',     label: 'Horizontal line',  group: 'Lines' },
+        { kind: 'hray',      label: 'Horizontal ray',   group: 'Lines' },
+      ],
+    },
+    {
+      title: 'Shapes',
+      tools: [
+        { kind: 'vline',     label: 'Vertical line',    group: 'Lines' },
     { kind: 'crossline', label: 'Cross line',       group: 'Lines' },
     { kind: 'infoline',  label: 'Info line',        group: 'Lines' },
     { kind: 'trendangle', label: 'Trend angle',     group: 'Lines' },
@@ -1343,11 +1540,16 @@
     { kind: 'pitchfork', label: 'Pitchfork',        group: 'Channels' },
     { kind: 'pitchforkschiff', label: 'Schiff pitchfork', group: 'Channels' },
     { kind: 'pitchforkmod', label: 'Modified Schiff', group: 'Channels' },
-    { kind: 'pitchforkinside', label: 'Inside pitchfork', group: 'Channels' },
+        { kind: 'pitchforkinside', label: 'Inside pitchfork', group: 'Channels' },
     { kind: 'gannfan',   label: 'Gann fan',         group: 'Gann' },
     { kind: 'gannbox',   label: 'Gann box',         group: 'Gann' },
     { kind: 'fib',       label: 'Fib retracement',  group: 'Fibonacci' },
-    { kind: 'fibext',    label: 'Fib extension',    group: 'Fibonacci' },
+      ],
+    },
+    {
+      title: 'Tools',
+      tools: [
+        { kind: 'fibext',    label: 'Fib extension',    group: 'Fibonacci' },
     { kind: 'fibchannel', label: 'Fib channel',     group: 'Fibonacci' },
     { kind: 'fibtimezone', label: 'Fib time zones', group: 'Fibonacci' },
     { kind: 'fibfan',    label: 'Fib fan',          group: 'Fibonacci' },
@@ -1359,7 +1561,7 @@
     { kind: 'threedrives', label: 'Three drives',   group: 'Patterns' },
     { kind: 'elliottimpulse', label: 'Elliott impulse (1-5)', group: 'Patterns' },
     { kind: 'elliottcorrection', label: 'Elliott correction (ABC)', group: 'Patterns' },
-    { kind: 'headshoulders', label: 'Head & shoulders', group: 'Patterns' },
+        { kind: 'headshoulders', label: 'Head & shoulders', group: 'Patterns' },
     { kind: 'rect',      label: 'Rectangle',        group: 'Shapes' },
     { kind: 'rotrect',   label: 'Rotated rectangle', group: 'Shapes' },
     { kind: 'triangle',  label: 'Triangle',         group: 'Shapes' },
@@ -1388,7 +1590,10 @@
     { kind: 'daterange', label: 'Date range',       group: 'Measure' },
     { kind: 'dprange',   label: 'Date & price range', group: 'Measure' },
     { kind: 'measure',   label: 'Measure',          group: 'Measure' },
+      ],
+    },
   ];
+  const DRAW_TOOLS = DRAW_GROUPS.flatMap((g) => g.tools);
   const DRAW_TOOL_SHORT = {
     trendline: 'Trendline',
     ray: 'Ray',
@@ -1529,7 +1734,8 @@
       bridge.post('setActiveDrawTool', { kind: null });
       return;
     }
-    // Otherwise open the picker popover.
+    // Otherwise open the picker popover. Layout mirrors the chart-style
+    // dropdown: flush rows grouped by thin dividers, no section labels.
     const content = document.createElement('div');
     content.className = 'tb-draw-popover-content';
 
@@ -1573,23 +1779,38 @@
       }
     }
 
-    const divider = document.createElement('div');
-    divider.className = 'tb-popover-divider';
-    content.appendChild(divider);
-
     const bottomBar = document.createElement('div');
     bottomBar.className = 'tb-draw-actions';
+    const _lockSvg =
+        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'
+      + '<rect x="5" y="11" width="14" height="9" rx="2"/>'
+      + '<path d="M8 11V8a4 4 0 018 0v3"/></svg>';
+    const _eyeSvg =
+        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'
+      + '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/>'
+      + '<circle cx="12" cy="12" r="3"/></svg>';
+    const _trashSvg =
+        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">'
+      + '<path d="M4 7h16"/>'
+      + '<path d="M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2"/>'
+      + '<path d="M6 7l1 13a2 2 0 002 2h6a2 2 0 002-2l1-13"/></svg>';
     bottomBar.innerHTML =
         '<button type="button" class="tb-draw-action" data-act="lock">'
-          + '<span class="tb-draw-action-icon">🔒</span>'
+          + '<span class="tb-draw-action-icon">' + _lockSvg + '</span>'
           + '<span class="tb-draw-action-label">' + (drawLocked ? 'Unlock' : 'Lock') + '</span>'
         + '</button>'
         + '<button type="button" class="tb-draw-action" data-act="hide">'
-          + '<span class="tb-draw-action-icon">👁</span>'
+          + '<span class="tb-draw-action-icon">' + _eyeSvg + '</span>'
           + '<span class="tb-draw-action-label">' + (drawHidden ? 'Show' : 'Hide') + '</span>'
         + '</button>'
         + '<button type="button" class="tb-draw-action tb-draw-action--danger" data-act="trash">'
-          + '<span class="tb-draw-action-icon">🗑</span>'
+          + '<span class="tb-draw-action-icon">' + _trashSvg + '</span>'
           + '<span class="tb-draw-action-label">Trash</span>'
         + '</button>';
     bottomBar.querySelector('[data-act="lock"]').addEventListener('click', () => {
@@ -1643,8 +1864,10 @@
   const _ACT_ICONS = {
     cursor: '<path d="M12 3 V21 M3 12 H21"/>',
     magnet: '<path d="M6 4 v6 a6 6 0 0 0 12 0 V4 M6 4 h4 M14 4 h4"/>',
-    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11 V7 a4 4 0 0 1 8 0 v4"/>',
+    unlock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11 V7 a4 4 0 0 1 8 0 v4"/>',
+    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11 V7 a4 4 0 0 1 7 -2"/>',
     hide: '<path d="M2 12 s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    unhide: '<path d="M3 3 L21 21"/><path d="M10.5 5.2 a10 10 0 0 1 11.5 6.8 a17 17 0 0 1 -3 4"/><path d="M6.5 6.5 a16 16 0 0 0 -4.5 5.5 a10 10 0 0 0 14 6"/><path d="M9.5 9.5 a3 3 0 0 0 4 4"/>',
     trash: '<path d="M4 7 h16 M9 7 V4 h6 v3 M6 7 l1 13 h10 l1-13"/>',
     collapse: '<path d="M14 6 L8 12 L14 18"/>',
     expand: '<path d="M10 6 L16 12 L10 18"/>',
@@ -1725,7 +1948,7 @@
     avwap: '<path d="M12 7 V20 M9 10 H15 M5 14 a7 7 0 0 0 14 0"/>',
   };
   function _railSvg(inner) {
-    return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" '
+    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
       + 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" '
       + 'stroke-linejoin="round">' + inner + '</svg>';
   }
@@ -1856,13 +2079,9 @@
       const pop = openFlyoutRight(cursorBtn2, content);
       if (pop) pop.dataset.kind = 'draw-rail';
     };
-    cursorBtn2.addEventListener('click', (e) => {
-      if (e.target.closest('.draw-rail-caret')) { openCursorFlyout(); return; }
-      setTool(null);
+    cursorBtn2.addEventListener('click', () => {
+      openCursorFlyout();
     });
-    cursorCaret.addEventListener('mouseenter', openCursorFlyout);
-    cursorBtn2.addEventListener('mouseenter', () => showTip(cursorBtn2, _cursorMode().label));
-    cursorBtn2.addEventListener('mouseleave', hideTip);
     rail.appendChild(cursorBtn2);
 
     // Scrollable group area.
@@ -1881,14 +2100,9 @@
           + '<path d="M8 5 L15 12 L8 19 Z"/></svg>';
       btn.appendChild(ic);
       btn.appendChild(caret);
-      btn.addEventListener('click', (e) => {
-        if (e.target.closest('.draw-rail-caret')) { openGroupFlyout(grp, btn); return; }
-        setTool(lastTool[grp]);
+      btn.addEventListener('click', () => {
+        openGroupFlyout(grp, btn);
       });
-      // Hovering the caret reveals the group's options (TradingView behaviour).
-      caret.addEventListener('mouseenter', () => openGroupFlyout(grp, btn));
-      btn.addEventListener('mouseenter', () => showTip(btn, labelOf[lastTool[grp]] || grp));
-      btn.addEventListener('mouseleave', hideTip);
       groupBtns[grp] = btn;
       groupIcons[grp] = ic;
       toolsWrap.appendChild(btn);
@@ -1918,6 +2132,7 @@
       repaintRail();
       bridge.post('setDrawingsLocked', { value: drawLocked });
     });
+    lockBtn.classList.add('draw-rail-btn--lock');
     const hideBtn = actBtn('hide', 'Hide drawings', () => {
       drawHidden = !drawHidden;
       repaintRail();
@@ -1953,10 +2168,8 @@
     reopen.innerHTML = _railSvg(_ACT_ICONS.expand);
     reopen.hidden = true;
     reopen.addEventListener('click', () => {
-      rail.hidden = false; reopen.hidden = true; setGutter(46);
+      rail.hidden = false; reopen.hidden = true; setGutter(48);
     });
-    reopen.addEventListener('mouseenter', () => showTip(reopen, 'Show Drawings Toolbar'));
-    reopen.addEventListener('mouseleave', hideTip);
 
     repaintRail = () => {
       const grp = drawTool ? kindGroup[drawTool] : null;
@@ -1967,6 +2180,10 @@
       actBtns.magnet.classList.toggle('draw-rail-btn--on', !!viewState.magnetEnabled);
       actBtns.lock.classList.toggle('draw-rail-btn--on', drawLocked);
       actBtns.hide.classList.toggle('draw-rail-btn--on', drawHidden);
+      const lockIc = actBtns.lock.querySelector('.draw-rail-ic');
+      if (lockIc) lockIc.innerHTML = _railSvg(_ACT_ICONS[drawLocked ? 'unlock' : 'lock']);
+      const hideIc = actBtns.hide.querySelector('.draw-rail-ic');
+      if (hideIc) hideIc.innerHTML = _railSvg(_ACT_ICONS[drawHidden ? 'unhide' : 'hide']);
     };
     repaintRail();
 
@@ -2079,12 +2296,17 @@
                 ? '<span class="tb-fx-active-period">' + ind.period + '</span>'
                 : '')
             + '<button type="button" class="tb-fx-remove" title="Remove">'
-            + '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" '
-            + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-            + 'stroke-linejoin="round">'
-            + '<polyline points="3 6 5 6 21 6"/>'
-            + '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>'
-            + '<path d="M10 11v6M14 11v6"/></svg></button>';
+            + '<svg viewBox="0 0 24 24" width="14" height="14" '
+            + 'fill="currentColor">'
+            + '<path fill-rule="evenodd" clip-rule="evenodd" d="'
+            + 'M20,5 C20.5523,5 21,5.44772 21,6 C21,6.55228 20.5523,7 20,7 L19.0001,7 '
+            + 'L18.9975,7.07129 L18.0638,20.1425 C17.9891,21.1891 17.1182,22 16.0689,22 '
+            + 'L7.93116,22 C6.88189,22 6.011,21.1891 5.93624,20.1425 L5.00258,7.07129 '
+            + 'C5.00088,7.04738 5.00002,7.02361 5,7 L4,7 C3.44772,7 3,6.55228 3,6 '
+            + 'C3,5.44772 3.44772,5 4,5 L20,5 Z M16.9975,7 L7.00259,7 L7.93116,20 '
+            + 'L16.0689,20 L16.9975,7 Z M14,2 C14.5523,2 15,2.44772 15,3 C15,3.55228 '
+            + '14.5523,4 14,4 L10,4 C9.44772,4 9,3.55228 9,3 C9,2.44772 9.44772,2 10,2 '
+            + 'L14,2 Z"/></svg></button>';
         row.querySelector('.tb-fx-remove').addEventListener('click', () => {
           bridge.post('removeIndicatorById', { id: ind.id });
         });

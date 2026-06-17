@@ -38,9 +38,12 @@ class PlusMenuPopup extends StatelessWidget {
     final border = resolveThemeColor(context,
         dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final long = resolveThemeColor(context,
-        dark: const Color(0xFF3B82F6), light: const Color(0xFF2563EB));
+        dark: MyntColors.secondary, light: MyntColors.primary);
     final short = resolveThemeColor(context,
-        dark: const Color(0xFFEF4444), light: const Color(0xFFDC2626));
+        dark: MyntColors.errorDark, light: MyntColors.tertiary);
+    final hoverBg = resolveThemeColor(context,
+        dark: Colors.white.withValues(alpha: 0.06),
+        light: Colors.black.withValues(alpha: 0.04));
 
     final screen = MediaQuery.of(context).size;
     const w = 340.0;
@@ -50,7 +53,8 @@ class PlusMenuPopup extends StatelessWidget {
     final priceStr = price.toStringAsFixed(2);
 
     Widget item(String label, IconData icon, Color color, VoidCallback onTap) {
-      return InkWell(
+      return _HoverRow(
+        hoverColor: hoverBg,
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -117,8 +121,8 @@ class PlusMenuPopup extends StatelessWidget {
                         Icons.arrow_downward, short,
                         () { onPick(OrderPrefillKind.sellStopLmt); }),
                   ],
-                  item('🔔  Set Alert at $priceStr',
-                      Icons.notifications_active_outlined,
+                  item('Set Alert at $priceStr',
+                       Icons.notifications_none_outlined,
                       resolveThemeColor(context,
                           dark: const Color(0xFFF59E0B),
                           light: const Color(0xFFD97706)),
@@ -137,5 +141,40 @@ class PlusMenuPopup extends StatelessWidget {
         ),
       ),
     ]);
+  }
+}
+
+class _HoverRow extends StatefulWidget {
+  final Color hoverColor;
+  final VoidCallback onTap;
+  final Widget child;
+  const _HoverRow({
+    required this.hoverColor,
+    required this.onTap,
+    required this.child,
+  });
+
+  @override
+  State<_HoverRow> createState() => _HoverRowState();
+}
+
+class _HoverRowState extends State<_HoverRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Container(
+          color: _hover ? widget.hoverColor : Colors.transparent,
+          child: widget.child,
+        ),
+      ),
+    );
   }
 }

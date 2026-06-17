@@ -177,11 +177,12 @@ class _ChartDrawingsMixin {
       //
       // Layout: [⠿ drag] [■ color ▾] [▬ stroke ▾] [⎘ dup] [🔒 lock] [✕ del]
       if (!isInProgress && isSelected) {
-        const tH = 28;                   // toolbar height
+        const tH = 28;                   // toolbar height (pill)
         const btn = 28;                  // square button hit area
         const inner = 4;                 // pad inside the toolbar card
         const btnCount = 6;
-        const toolbarW = inner * 2 + btn * btnCount;
+        const strokeBtnExtra = 14;       // extra width for "Npx" label
+        const toolbarW = inner * 2 + btn * btnCount + strokeBtnExtra;
         const chipW = 14;
         const rightAnchor = plot.right - 60;
         let tX = endX < rightAnchor
@@ -191,20 +192,42 @@ class _ChartDrawingsMixin {
         const tY = Math.max(plot.top + 4, endY - chipH / 2 - tH - 4);
         const isLocked = d.locked === true;
         const dThickness = (d.thickness && d.thickness > 0) ? d.thickness : 1;
+        const isLightTb = (this._basePalette && this._basePalette.bg === '#FFFFFF');
+        const tbBg = isLightTb ? '#FFFFFF' : '#1B2027';
+        const tbBorder = isLightTb ? '#E5E7EB' : 'rgba(255,255,255,0.10)';
+        const tbIcon = isLightTb ? '#1F2937' : 'rgba(255,255,255,0.88)';
+        const tbIconMute = isLightTb ? '#9CA3AF' : 'rgba(255,255,255,0.45)';
 
-        // ── Card background (1px border + subtle shadow via double-draw) ──
-        // Soft drop shadow first
-        ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.45)';
-        ctx.shadowBlur = 10;
-        ctx.shadowOffsetY = 2;
-        ctx.fillStyle = '#0F172A';
-        this._roundedRect(tX, tY, toolbarW, tH, 8);
-        ctx.fill();
-        ctx.restore();
-        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        const tbRadius = 4;
+        if (isLightTb) {
+          const shadowLayers = [
+            { blur: 1, offY: 1, alpha: 0.04 },
+            { blur: 4, offY: 2, alpha: 0.06 },
+            { blur: 16, offY: 8, alpha: 0.08 },
+          ];
+          for (const s of shadowLayers) {
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,' + s.alpha + ')';
+            ctx.shadowBlur = s.blur;
+            ctx.shadowOffsetY = s.offY;
+            ctx.fillStyle = tbBg;
+            this._roundedRect(tX, tY, toolbarW, tH, tbRadius);
+            ctx.fill();
+            ctx.restore();
+          }
+        } else {
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.45)';
+          ctx.shadowBlur = 10;
+          ctx.shadowOffsetY = 2;
+          ctx.fillStyle = tbBg;
+          this._roundedRect(tX, tY, toolbarW, tH, tbRadius);
+          ctx.fill();
+          ctx.restore();
+        }
+        ctx.strokeStyle = tbBorder;
         ctx.lineWidth = 1;
-        this._roundedRect(tX, tY, toolbarW, tH, 8);
+        this._roundedRect(tX, tY, toolbarW, tH, tbRadius);
         ctx.stroke();
 
         // ── Helpers ─────────────────────────────────────────────────────
@@ -213,19 +236,16 @@ class _ChartDrawingsMixin {
         const by = tY;
         const stepX = () => { const out = bx; bx += btn; return out; };
 
-        // 1) Drag handle — six dots in a 2x3 grid. Click+hold drags the
-        // drawing around the chart (proxy for the line's drag-band, useful
-        // for hlines/horizontals where there's no visible line region to
-        // grab without zooming in).
+        // 1) Drag handle — six dots in a 2x3 grid.
         {
           const ax = stepX();
-          ctx.fillStyle = 'rgba(255,255,255,0.75)';
+          ctx.fillStyle = tbIconMute;
           const cxg = ax + btn / 2;
           const cyg = by + tH / 2;
           for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx += 2) {
               ctx.beginPath();
-              ctx.arc(cxg + dx * 1.8, cyg + dy * 3.2, 1.3, 0, Math.PI * 2);
+              ctx.arc(cxg + dx * 2.2, cyg + dy * 4, 1.4, 0, Math.PI * 2);
               ctx.fill();
             }
           }
@@ -237,25 +257,18 @@ class _ChartDrawingsMixin {
           });
         }
 
-        // 2) Color square + dropdown chevron
+        // 2) Color square (no chevron — clicking opens the picker)
         {
           const ax = stepX();
           const swSize = 14;
-          const swX = ax + (btn - swSize) / 2 - 3;
+          const swX = ax + (btn - swSize) / 2;
           const swY = by + (tH - swSize) / 2;
           ctx.fillStyle = d.color || '#3B82F6';
           this._roundedRect(swX, swY, swSize, swSize, 3);
           ctx.fill();
-          ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+          ctx.strokeStyle = isLightTb ? 'rgba(15,23,42,0.18)' : 'rgba(255,255,255,0.18)';
           ctx.lineWidth = 1;
           this._roundedRect(swX, swY, swSize, swSize, 3);
-          ctx.stroke();
-          // Chevron
-          ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-          ctx.beginPath();
-          ctx.moveTo(swX + swSize + 3, by + tH / 2 - 1);
-          ctx.lineTo(swX + swSize + 6, by + tH / 2 + 2);
-          ctx.lineTo(swX + swSize + 9, by + tH / 2 - 1);
           ctx.stroke();
           buttons.push({
             rect: { x: ax, y: by, w: btn, h: tH },
@@ -264,89 +277,111 @@ class _ChartDrawingsMixin {
           });
         }
 
-        // 3) Stroke width + dropdown chevron
+        // 3) Stroke width preview — short line + "Npx" label
         {
           const ax = stepX();
-          // Tiny preview line at the indicator's color, thickness mirrored
-          const cxg = ax + btn / 2 - 3;
+          const sBtn = btn + strokeBtnExtra;
+          const lineX0 = ax + 5;
+          const lineX1 = ax + 16;
           const cyg = by + tH / 2;
-          ctx.strokeStyle = d.color || '#FFFFFF';
-          ctx.lineWidth = dThickness;
+          ctx.strokeStyle = tbIcon;
+          ctx.lineWidth = Math.max(dThickness, 1.5);
+          ctx.lineCap = 'round';
           ctx.beginPath();
-          ctx.moveTo(cxg - 6, cyg);
-          ctx.lineTo(cxg + 4, cyg);
+          ctx.moveTo(lineX0, cyg);
+          ctx.lineTo(lineX1, cyg);
           ctx.stroke();
-          ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(cxg + 6, cyg - 1);
-          ctx.lineTo(cxg + 9, cyg + 2);
-          ctx.lineTo(cxg + 12, cyg - 1);
-          ctx.stroke();
+          ctx.fillStyle = tbIcon;
+          ctx.font = '600 11px Geist, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(dThickness + 'px', lineX1 + 4, cyg + 0.5);
           buttons.push({
-            rect: { x: ax, y: by, w: btn, h: tH },
+            rect: { x: ax, y: by, w: sBtn, h: tH },
             action: 'openStroke',
             anchorX: ax,
           });
+          bx += strokeBtnExtra;
         }
 
-        // 4) Duplicate — two offset rounded squares
+        // 4) Duplicate — charm-icons clone glyph (stroked, viewBox 16)
         {
           const ax = stepX();
           const cxg = ax + btn / 2;
           const cyg = by + tH / 2;
-          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-          ctx.lineWidth = 1.2;
-          this._roundedRect(cxg - 4.5, cyg - 5, 7, 7, 1.5);
-          ctx.stroke();
-          this._roundedRect(cxg - 1.5, cyg - 2, 7, 7, 1.5);
-          ctx.stroke();
+          const iconPx = 16;
+          const cloneD = 'M11.25 4.25 V1.75 H1.75 V11.25 H4.25 M4.75 4.75 V14.25 H14.25 V4.75 Z';
+          ctx.save();
+          ctx.translate(cxg - iconPx / 2, cyg - iconPx / 2);
+          ctx.scale(iconPx / 16, iconPx / 16);
+          ctx.strokeStyle = tbIcon;
+          ctx.lineWidth = 1;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke(new Path2D(cloneD));
+          ctx.restore();
           buttons.push({
             rect: { x: ax, y: by, w: btn, h: tH },
             action: 'duplicate',
           });
         }
 
-        // 5) Lock / unlock — accent fill when locked
+        // 5) Lock / unlock — charm-icons style stroke (viewBox 16); black
+        //    active bg when locked
         {
           const ax = stepX();
+          const cxg = ax + btn / 2;
+          const cyg = by + tH / 2;
+          const iconPx = 16;
+          // Body rounded rect + shackle. Locked: full arc. Unlocked: left
+          // leg + partial arc that lifts away from the body.
+          const lockBodyD = 'M3.25 6.75 H12.75 V13.75 H3.25 Z';
+          const lockedShackleD =
+              'M4.75 6.75 V5.25 A3.25 3.25 0 0 1 11.25 5.25 V6.75';
+          const unlockedShackleD =
+              'M4.75 6.75 V5.25 A3.25 3.25 0 0 1 10.75 3.75';
+          const activeBg = isLightTb ? '#121212' : '#FFFFFF';
+          const activeFg = isLightTb ? '#FFFFFF' : '#121212';
           if (isLocked) {
-            ctx.fillStyle = 'rgba(124,58,237,0.22)';
+            ctx.fillStyle = activeBg;
             this._roundedRect(ax + 3, by + 3, btn - 6, tH - 6, 5);
             ctx.fill();
           }
-          const cxg = ax + btn / 2;
-          const cyg = by + tH / 2 + 1;
-          ctx.strokeStyle = isLocked ? '#C4B5FD' : 'rgba(255,255,255,0.85)';
-          ctx.lineWidth = 1.3;
-          // body
-          this._roundedRect(cxg - 3.5, cyg - 1, 7, 5.5, 1.4);
-          ctx.stroke();
-          // shackle
-          ctx.beginPath();
-          ctx.arc(cxg, cyg - 1, 2.6, Math.PI,
-              isLocked ? 0 : -Math.PI / 4);
-          ctx.stroke();
+          ctx.save();
+          ctx.translate(cxg - iconPx / 2, cyg - iconPx / 2);
+          ctx.scale(iconPx / 16, iconPx / 16);
+          ctx.strokeStyle = isLocked ? activeFg : tbIcon;
+          ctx.lineWidth = 1;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke(new Path2D(lockBodyD));
+          ctx.stroke(new Path2D(isLocked ? lockedShackleD : unlockedShackleD));
+          ctx.restore();
           buttons.push({
             rect: { x: ax, y: by, w: btn, h: tH },
             action: 'lockToggle',
           });
         }
 
-        // 6) Delete — destructive accent
+        // 6) Delete — MingCute trash, line/outline variant (viewBox 24)
         {
           const ax = stepX();
           const cxg = ax + btn / 2;
           const cyg = by + tH / 2;
-          ctx.strokeStyle = '#F87171';
-          ctx.lineWidth = 1.4;
-          const xs = 4;
-          ctx.beginPath();
-          ctx.moveTo(cxg - xs, cyg - xs);
-          ctx.lineTo(cxg + xs, cyg + xs);
-          ctx.moveTo(cxg + xs, cyg - xs);
-          ctx.lineTo(cxg - xs, cyg + xs);
-          ctx.stroke();
+          const iconPx = 16;
+          const trashPathD =
+              'M3 6 H21 '
+              + 'M8 6 V4 a2 2 0 0 1 2 -2 h4 a2 2 0 0 1 2 2 v2 '
+              + 'M19 6 l-1 14 a2 2 0 0 1 -2 2 H8 a2 2 0 0 1 -2 -2 L5 6';
+          ctx.save();
+          ctx.translate(cxg - iconPx / 2, cyg - iconPx / 2);
+          ctx.scale(iconPx / 24, iconPx / 24);
+          ctx.strokeStyle = tbIcon;
+          ctx.lineWidth = 1.5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke(new Path2D(trashPathD));
+          ctx.restore();
           buttons.push({
             rect: { x: ax, y: by, w: btn, h: tH },
             action: 'delete',
@@ -383,14 +418,14 @@ class _ChartDrawingsMixin {
             if (popX + popW > plot.right - 4) popX = plot.right - 4 - popW;
             // Card
             ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.5)';
-            ctx.shadowBlur = 12;
-            ctx.shadowOffsetY = 4;
-            ctx.fillStyle = '#0F172A';
+            ctx.shadowColor = isLightTb ? 'rgba(15,23,42,0.14)' : 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = isLightTb ? 22 : 12;
+            ctx.shadowOffsetY = isLightTb ? 6 : 4;
+            ctx.fillStyle = tbBg;
             this._roundedRect(popX, popY, popW, popH, 10);
             ctx.fill();
             ctx.restore();
-            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.strokeStyle = tbBorder;
             ctx.lineWidth = 1;
             this._roundedRect(popX, popY, popW, popH, 10);
             ctx.stroke();
@@ -399,19 +434,19 @@ class _ChartDrawingsMixin {
               const cxg = popX + swPad + col * (swSize + swGap);
               const cyg = popY + swPad + row * (swSize + swGap);
               ctx.fillStyle = colors[i];
-              this._roundedRect(cxg, cyg, swSize, swSize, 5);
+              this._roundedRect(cxg, cyg, swSize, swSize, 3);
               ctx.fill();
               const isCur = colors[i].toLowerCase() ===
                   (d.color || '').toLowerCase();
               if (isCur) {
-                ctx.strokeStyle = '#FFFFFF';
+                ctx.strokeStyle = isLightTb ? '#111827' : '#FFFFFF';
                 ctx.lineWidth = 2;
-                this._roundedRect(cxg - 1, cyg - 1, swSize + 2, swSize + 2, 6);
+                this._roundedRect(cxg - 1, cyg - 1, swSize + 2, swSize + 2, 4);
                 ctx.stroke();
               } else {
-                ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+                ctx.strokeStyle = isLightTb ? 'rgba(15,23,42,0.15)' : 'rgba(255,255,255,0.12)';
                 ctx.lineWidth = 1;
-                this._roundedRect(cxg, cyg, swSize, swSize, 5);
+                this._roundedRect(cxg, cyg, swSize, swSize, 3);
                 ctx.stroke();
               }
               this._colorSwatchHits.push({
@@ -421,46 +456,55 @@ class _ChartDrawingsMixin {
               });
             }
           } else if (this._toolbarPopup.kind === 'stroke') {
-            // Vertical 1/2/3/4 px list
+            // Vertical 1/2/3/4 px list — matches the chart-style dropdown UI
+            // (full-width inverted active row, no inset corners).
             const widths = [1, 2, 3, 4];
             const rowH = 28;
-            const popW = 96;
-            const popH = widths.length * rowH + 8;
+            const popW = 80;
+            const padY = 4;
+            const popH = widths.length * rowH + padY * 2;
             let popX = this._toolbarPopup.anchorX - 4;
             if (popX + popW > plot.right - 4) popX = plot.right - 4 - popW;
             ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.5)';
-            ctx.shadowBlur = 12;
-            ctx.shadowOffsetY = 4;
-            ctx.fillStyle = '#0F172A';
-            this._roundedRect(popX, popY, popW, popH, 10);
+            ctx.shadowColor = isLightTb ? 'rgba(15,23,42,0.14)' : 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = isLightTb ? 22 : 12;
+            ctx.shadowOffsetY = isLightTb ? 6 : 4;
+            ctx.fillStyle = tbBg;
+            this._roundedRect(popX, popY, popW, popH, 4);
             ctx.fill();
             ctx.restore();
-            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.strokeStyle = tbBorder;
             ctx.lineWidth = 1;
-            this._roundedRect(popX, popY, popW, popH, 10);
+            this._roundedRect(popX, popY, popW, popH, 4);
             ctx.stroke();
+            const activeRowBg = isLightTb ? '#111827' : '#FFFFFF';
+            const activeRowFg = isLightTb ? '#FFFFFF' : '#111827';
+            // Clip subsequent row paints to the popup's rounded shape so the
+            // full-width active row inherits the popup's outer corner radius.
+            ctx.save();
+            this._roundedRect(popX, popY, popW, popH, 4);
+            ctx.clip();
             for (let i = 0; i < widths.length; i++) {
-              const rowY = popY + 4 + i * rowH;
+              const rowY = popY + padY + i * rowH;
               const isCur = widths[i] === dThickness;
               if (isCur) {
-                ctx.fillStyle = 'rgba(124,58,237,0.18)';
-                this._roundedRect(popX + 4, rowY + 2, popW - 8, rowH - 4, 6);
-                ctx.fill();
+                ctx.fillStyle = activeRowBg;
+                ctx.fillRect(popX, rowY, popW, rowH);
               }
               // Line preview
-              ctx.strokeStyle = isCur ? '#FFFFFF' : 'rgba(255,255,255,0.8)';
+              ctx.strokeStyle = isCur ? activeRowFg : tbIcon;
               ctx.lineWidth = widths[i];
+              ctx.lineCap = 'round';
               ctx.beginPath();
-              ctx.moveTo(popX + 14, rowY + rowH / 2);
-              ctx.lineTo(popX + 50, rowY + rowH / 2);
+              ctx.moveTo(popX + 10, rowY + rowH / 2);
+              ctx.lineTo(popX + 34, rowY + rowH / 2);
               ctx.stroke();
               // Label
-              ctx.fillStyle = isCur ? '#FFFFFF' : 'rgba(255,255,255,0.7)';
+              ctx.fillStyle = isCur ? activeRowFg : tbIcon;
               ctx.font = '600 11px Geist, sans-serif';
               ctx.textBaseline = 'middle';
               ctx.textAlign = 'left';
-              ctx.fillText(widths[i] + 'px', popX + 62, rowY + rowH / 2);
+              ctx.fillText(widths[i] + 'px', popX + 44, rowY + rowH / 2);
               this._drawingHits.push({
                 rect: { x: popX, y: rowY, w: popW, h: rowH },
                 drawingId: d.id,
@@ -468,6 +512,7 @@ class _ChartDrawingsMixin {
                 thickness: widths[i],
               });
             }
+            ctx.restore();
           }
         }
       }

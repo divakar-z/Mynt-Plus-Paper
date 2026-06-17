@@ -209,6 +209,9 @@ class Chart {
     // suppress the chart crosshair when over any chip area.
     this._indicatorRowRects = []; // [{ rect, indicatorId }]
     this._hoveredIndicatorRowId = null;
+    // Symbol chip (top-left SYMBOL · TF · EXCH) hover state 
+    this._symbolChipRect = null;
+    this._hoveredSymbolChip = false;
     // Collapse state for the indicator chip stack — persisted per pane id.
     // When collapsed only the header chip is shown so the chart area isn't
     // eaten by a tall column of chips when many indicators are active.
@@ -2281,6 +2284,38 @@ class Chart {
           const headerStripH = this.scrip ? 84 : (this.candles.length > 0 ? 40 : 24);
           const headerStripW = 300; // covers symbol + OHLC + bid/ask widths
           if (y < headerStripH && x >= 8 && x < 8 + headerStripW) {
+            // Pointer cursor when hovering interactive bid/ask/qty chips
+            // inside the header strip — everything else stays default.
+            let headerInteractiveHover = false;
+            let headerHoverKind = null;
+            for (const h of this._headerHits) {
+              const r = h.rect;
+              if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+                headerInteractiveHover = true;
+                headerHoverKind = h.kind;
+                break;
+              }
+            }
+            // Symbol chip hover — same translucent backing as indicator rows.
+            let symbolChipHover = false;
+            if (this._symbolChipRect) {
+              const r = this._symbolChipRect;
+              if (x >= r.x && x <= r.x + r.w &&
+                  y >= r.y && y <= r.y + r.h) {
+                symbolChipHover = true;
+              }
+            }
+            if (this._hoveredSymbolChip !== symbolChipHover) {
+              this._hoveredSymbolChip = symbolChipHover;
+              this.scheduleRedraw();
+            }
+            wrap.style.cursor = (headerInteractiveHover || symbolChipHover)
+                ? 'pointer'
+                : 'default';
+            if (this._hoveredHeaderKind !== headerHoverKind) {
+              this._hoveredHeaderKind = headerHoverKind;
+              this.scheduleRedraw();
+            }
             if (this.hover.inside) {
               this.hover.inside = false;
               this.hover.x = null;
@@ -2288,6 +2323,12 @@ class Chart {
               this.scheduleRedraw();
             }
             return;
+          } else if (this._hoveredHeaderKind) {
+            this._hoveredHeaderKind = null;
+            this.scheduleRedraw();
+          } else if (this._hoveredSymbolChip) {
+            this._hoveredSymbolChip = false;
+            this.scheduleRedraw();
           }
           // Phase 7 — delete-chip cursor + in-progress trendline tracking.
           let drawingChipHover = false;
@@ -2519,6 +2560,16 @@ class Chart {
       // recalculation that would otherwise nil this out).
       if (this._hoveredIndicatorRowId != null) {
         this._hoveredIndicatorRowId = null;
+        this.scheduleRedraw();
+      }
+      // Same for the bid/ask header chips — clear their hover overlay.
+      if (this._hoveredHeaderKind) {
+        this._hoveredHeaderKind = null;
+        this.scheduleRedraw();
+      }
+      // Symbol chip hover too.
+      if (this._hoveredSymbolChip) {
+        this._hoveredSymbolChip = false;
         this.scheduleRedraw();
       }
       // Phase 19.2 — cancel rect drag if the cursor leaves the chart.
@@ -3059,28 +3110,30 @@ class Chart {
   }
 
   _drawChip(x, y, text) {
-    this.ctx.font = '700 10px Geist, sans-serif';
+    this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
-    const tw = this.ctx.measureText(text).width + 10;
+    const tw = this.ctx.measureText(text).width + 24;
+    const chipH = 22;
     this.ctx.fillStyle = this.palette.crosshairChip;
-    this._roundedRect(x, y - 8, Math.min(tw, 60), 16, 3);
+    this._roundedRect(x, y - chipH / 2, Math.min(tw, 84), chipH, 3);
     this.ctx.fill();
     this.ctx.fillStyle = this.palette.chipText;
     this.ctx.textAlign = 'center';
-    this.ctx.fillText(text, x + Math.min(tw, 60) / 2, y);
+    this.ctx.fillText(text, x + Math.min(tw, 84) / 2, y);
   }
 
   _drawTimeChip(x, yTop, text) {
-    this.ctx.font = '700 10px Geist, sans-serif';
+    this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
-    const tw = this.ctx.measureText(text).width + 12;
+    const tw = this.ctx.measureText(text).width + 22;
     const left = x - tw / 2;
+    const chipH = 22;
     this.ctx.fillStyle = this.palette.crosshairChip;
-    this._roundedRect(left, yTop, tw, 16, 3);
+    this._roundedRect(left, yTop, tw, chipH, 3);
     this.ctx.fill();
     this.ctx.fillStyle = this.palette.chipText;
     this.ctx.textAlign = 'center';
-    this.ctx.fillText(text, x, yTop + 8);
+    this.ctx.fillText(text, x, yTop + chipH / 2);
   }
 
   _fmtHoverTime(ts) {
@@ -3196,31 +3249,42 @@ class Chart {
     const dp = this._priceDecimals();
 
     // Layout: bid (left, tall)   center-column (spread top, qty bottom)   ask (right, tall)
-    const stripY = 40;
-    const tallH = 38;        // bid/ask chip height — large, button-shaped
-    const halfH = 18;        // each row of the centre column
+    const stripY = 44;
+    const tallH = 42;        // bid/ask chip height — large, button-shaped
+    const halfH = 20;        // each row of the centre column
     const halfGap = 2;       // vertical gap between spread row and qty row
-    const padX = 12;         // bid/ask inner padding
-    const innerPadX = 8;     // centre-column inner padding
-    const gap = 8;           // gap between bid|centre|ask
+    const padX = 10;         // bid/ask inner padding (tight, button-like)
+    const innerPadX = 12;    // centre-column inner padding
+    const gap = 10;          // gap between bid|centre|ask
+    const hovered = this._hoveredHeaderKind || null;
 
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
 
-    let x = plot.left + 4;
+    let x = plot.left + 12;
 
     // --- Bid chip (tall) ---
     ctx.font = '700 14px Geist, sans-serif';
     const bidText = bid != null ? bid.toFixed(dp) : '—';
-    const bidW = Math.max(80, ctx.measureText(bidText).width + padX * 2);
-    // Use lighter alpha for non-tradable so the chip reads as informational only.
+    const bidW = Math.max(82, ctx.measureText(bidText).width + padX * 2);
+    // Solid red fill matching the global "S" (sell) button color pattern.
+    // Disabled (non-tradable / index): flat solid color
     ctx.fillStyle = isNonTradable
-        ? this._withAlpha(this.palette.short, 0.30)
+        ? (this.palette.shortDisabled || this.palette.short)
         : this.palette.short;
-    this._roundedRect(x, stripY, bidW, tallH, 5);
+    this._roundedRect(x, stripY, bidW, tallH, 6);
     ctx.fill();
-    ctx.fillStyle = isNonTradable ? this.palette.axisText : '#FFFFFF';
-    ctx.fillText(bidText, x + bidW / 2, stripY + tallH / 2);
+    // Hover overlay — white wash so the button visibly reacts to the cursor.
+    if (!isNonTradable && hovered === 'bid') {
+      ctx.fillStyle = 'rgba(255,255,255,0.14)';
+      this._roundedRect(x, stripY, bidW, tallH, 6);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '600 14px Geist, sans-serif';
+    ctx.fillText(bidText, x + bidW / 2, stripY + tallH / 2 - 6);
+    ctx.font = '600 11px Geist, sans-serif';
+    ctx.fillText('SELL', x + bidW / 2, stripY + tallH / 2 + 10);
     if (bid != null && !isNonTradable) {
       this._headerHits.push({
         rect: { x, y: stripY, w: bidW, h: tallH },
@@ -3260,6 +3324,9 @@ class Chart {
       if (centreW < 56) centreW = 56;
 
       if (spreadText) {
+        ctx.fillStyle = this._withAlpha(this.palette.bg, 0.8);
+        this._roundedRect(x, stripY, centreW, halfH, 4);
+        ctx.fill();
         ctx.font = '500 11px Geist, sans-serif';
         ctx.fillStyle = (ask - bid) < 0
             ? this.palette.short
@@ -3269,15 +3336,16 @@ class Chart {
       }
 
       const qtyY = stripY + halfH + halfGap;
-      ctx.fillStyle = this.palette.crosshairChip;
+      // White (theme bg) qty chip with a subtle border 
+      ctx.fillStyle = this.palette.bg;
       this._roundedRect(x, qtyY, centreW, halfH, 4);
       ctx.fill();
-      ctx.strokeStyle = this.palette.axisText;
+      ctx.strokeStyle = this._withAlpha(this.palette.axisText, 0.55);
       ctx.lineWidth = 1;
       this._roundedRect(x, qtyY, centreW, halfH, 4);
       ctx.stroke();
       ctx.font = '600 12px Geist, sans-serif';
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = this.palette.axisTextStrong;
       ctx.fillText(qtyText, x + centreW / 2, qtyY + halfH / 2);
       this._headerHits.push({
         rect: { x, y: qtyY, w: centreW, h: halfH },
@@ -3289,14 +3357,25 @@ class Chart {
     // --- Ask chip (tall) ---
     ctx.font = '700 14px Geist, sans-serif';
     const askText = ask != null ? ask.toFixed(dp) : '—';
-    const askW = Math.max(80, ctx.measureText(askText).width + padX * 2);
+    const askW = Math.max(82, ctx.measureText(askText).width + padX * 2);
+    // Solid blue fill matching the global "B" (buy) button color pattern.
+    // Disabled (non-tradable / index): flat solid color
     ctx.fillStyle = isNonTradable
-        ? this._withAlpha(this.palette.long, 0.30)
+        ? (this.palette.longDisabled || this.palette.long)
         : this.palette.long;
-    this._roundedRect(x, stripY, askW, tallH, 5);
+    this._roundedRect(x, stripY, askW, tallH, 6);
     ctx.fill();
-    ctx.fillStyle = isNonTradable ? this.palette.axisText : '#FFFFFF';
-    ctx.fillText(askText, x + askW / 2, stripY + tallH / 2);
+    // Hover overlay — white wash so the button visibly reacts to the cursor.
+    if (!isNonTradable && hovered === 'ask') {
+      ctx.fillStyle = 'rgba(255,255,255,0.14)';
+      this._roundedRect(x, stripY, askW, tallH, 6);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '600 14px Geist, sans-serif';
+    ctx.fillText(askText, x + askW / 2, stripY + tallH / 2 - 6);
+    ctx.font = '600 11px Geist, sans-serif';
+    ctx.fillText('BUY', x + askW / 2, stripY + tallH / 2 + 10);
     if (ask != null && !isNonTradable) {
       this._headerHits.push({
         rect: { x, y: stripY, w: askW, h: tallH },
@@ -3335,7 +3414,7 @@ class Chart {
     }
     const ctx = this.ctx;
     ctx.fillStyle = this.palette.long; // accent fill so it stands out on candles
-    this._roundedRect(x, top, size, size, 3);
+    this._roundedRect(x, top, size, size, 1000);
     ctx.fill();
     ctx.strokeStyle = '#FFFFFF';
     ctx.lineWidth = 1.4;
@@ -3355,17 +3434,83 @@ class Chart {
   _drawPaneChip(plot) {
     if (!this.scrip) return 0;
     const tf = this._formatTimeframeLabel(this.timeframeMinutes);
-    const exch = this.scrip.exch ? ' · ' + this.scrip.exch : '';
-    const text = (this.scrip.dispName || this.scrip.tsym || '') + ' · ' + tf + exch;
+    const name = this.scrip.dispName || this.scrip.tsym || '';
+    const exch = this.scrip.exch || '';
     // 14px bold for the symbol — visual anchor of the chart. Sits over
     // transparent background; render-order is fine because OHLC line 2
     // is below it.
     this.ctx.font = '700 14px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
-    this.ctx.fillStyle = this.palette.axisTextStrong;
     this.ctx.textAlign = 'left';
-    this.ctx.fillText(text, plot.left + 4, 16);
-    return this.ctx.measureText(text).width + 12;
+    const padLeft = 12;
+    const chipY = 18;
+    const gap = 5;
+    const dotColor = this._withAlpha(this.palette.axisText, 0.55);
+    const mutedColor = this._withAlpha(this.palette.axisText, 0.75);
+    const segments = [
+      { font: '500 14px Geist, sans-serif',
+        color: this.palette.axisTextStrong, text: name },
+      { font: '600 14px Geist, sans-serif',
+        color: this.palette.axisTextStrong, text: '·' },
+      { font: '500 14px Geist, sans-serif',
+        color: this.palette.axisTextStrong, text: tf },
+    ];
+    if (exch) {
+      segments.push({ font: '600 14px Geist, sans-serif',
+        color: this.palette.axisTextStrong, text: '·' });
+      segments.push({ font: '500 14px Geist, sans-serif',
+        color: this.palette.axisTextStrong, text: exch });
+    }
+    let totalW = 0;
+    for (const s of segments) {
+      this.ctx.font = s.font;
+      s.w = this.ctx.measureText(s.text).width;
+      totalW += s.w;
+    }
+    totalW += gap * (segments.length - 1);
+    // Solid background pad so candles don't bleed through the chip text.
+    // On hover the chip switches to the same translucent backing + border
+    // used by the indicator legend rows.
+    const bgPadX = 6;
+    const bgH = 22;
+    const bgY = chipY - bgH / 2;
+    const bgX = plot.left + padLeft - bgPadX;
+    const bgW = totalW + bgPadX * 2;
+    this._symbolChipRect = { x: bgX, y: bgY, w: bgW, h: bgH };
+    const isLight = (this._basePalette && this._basePalette.bg === '#FFFFFF');
+    const hovered = this._hoveredSymbolChip;
+    const chipBgHover = isLight
+        ? 'rgba(248,250,252,0.85)'
+        : 'rgba(33,38,45,0.96)';
+    const chipBorderHover = isLight
+        ? '#E2E8F0'
+        : '#30363D';
+    this.ctx.fillStyle = hovered
+        ? (isLight ? '#FFFFFF' : '#21262D')
+        : this._withAlpha(this.palette.bg, 0.8);
+    if (this.ctx.roundRect) {
+      this.ctx.beginPath();
+      this.ctx.roundRect(bgX, bgY, bgW, bgH, 4);
+      this.ctx.fill();
+      if (hovered) {
+        this.ctx.strokeStyle = chipBorderHover;
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.roundRect(bgX, bgY, bgW, bgH, 4);
+        this.ctx.stroke();
+      }
+    } else {
+      this.ctx.fillRect(bgX, bgY, bgW, bgH);
+    }
+    let x = plot.left + padLeft;
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
+      this.ctx.font = s.font;
+      this.ctx.fillStyle = s.color;
+      this.ctx.fillText(s.text, x, chipY);
+      x += s.w + (i < segments.length - 1 ? gap : 0);
+    }
+    return (x - (plot.left + padLeft)) + padLeft + 4;
   }
 
   _formatTimeframeLabel(m) {
@@ -3376,8 +3521,8 @@ class Chart {
 
   _drawOhlc(plot) {
     this.ctx.textBaseline = 'middle';
-    const chipY = 16;   // Line 1 — SYMBOL · TIMEFRAME (bumped to match larger font)
-    const ohlcY = 30;   // Line 2 — O H L C V — tucked just under the bigger symbol
+    const chipY = 18;   // Single header row — SYMBOL · TF · O H L C V
+    const ohlcY = 18;   // OHLC drawn inline next to the symbol chip
 
     // No opaque background strip anymore — text reads directly over the
     // candles, TradingView-style. Symbol bumped to 14px so it's the
@@ -3414,23 +3559,52 @@ class Chart {
 
     if (!chipText && !haveCandles) return;
 
-    // Line 1 — symbol chip (the existing helper handles tinted pill)
-    this._drawPaneChip(plot);
+    // Single header row — symbol chip first, then OHLC inline right after.
+    const chipW = this._drawPaneChip(plot);
 
     if (!haveCandles) return;
 
-    // Line 2 — OHLC segments. Tighter spacing + a subtle alpha so they
-    // don't dominate the chart but stay readable over busy candle areas.
-    let x = plot.left + 4;
-    this.ctx.font = '600 11px Geist, sans-serif';
+    // OHLC segments — placed inline next to the symbol on the same row.
+    // `chipW` already includes the 12px left inset + a 4px trailing margin,
+    // so we just add a small extra gap so OHLC reads as a separate cluster.
+    const ohlcStartX = plot.left + chipW + 8;
+    this.ctx.textAlign = 'left';
+    // Pre-measure each segment so we can pad a solid background behind the
+    // whole cluster (keeps candles from bleeding through the values).
+    let ohlcTotalW = 0;
+    const ohlcLaid = [];
     for (const [label, value, color] of segs) {
-      this.ctx.fillStyle = this._withAlpha(this.palette.ohlcLabel, 0.85);
-      this.ctx.textAlign = 'left';
-      this.ctx.fillText(label, x, ohlcY);
-      x += this.ctx.measureText(label).width + 4;
-      this.ctx.fillStyle = color;
-      this.ctx.fillText(value, x, ohlcY);
-      x += this.ctx.measureText(value).width + 12;
+      this.ctx.font = '500 11px Geist, sans-serif';
+      const lw = this.ctx.measureText(label).width;
+      this.ctx.font = '600 11px Geist, sans-serif';
+      const vw = this.ctx.measureText(value).width;
+      ohlcLaid.push({ label, value, color, lw, vw });
+      ohlcTotalW += lw + 5 + vw + 14;
+    }
+    if (ohlcLaid.length) ohlcTotalW -= 14;  // trailing gap shouldn't pad bg
+    const ohlcBgPadX = 6;
+    const ohlcBgH = 22;
+    const ohlcBgY = ohlcY - ohlcBgH / 2;
+    const ohlcBgX = ohlcStartX - ohlcBgPadX;
+    const ohlcBgW = ohlcTotalW + ohlcBgPadX * 2;
+    this.ctx.fillStyle = this._withAlpha(this.palette.bg, 0.8);
+    if (this.ctx.roundRect) {
+      this.ctx.beginPath();
+      this.ctx.roundRect(ohlcBgX, ohlcBgY, ohlcBgW, ohlcBgH, 3);
+      this.ctx.fill();
+    } else {
+      this.ctx.fillRect(ohlcBgX, ohlcBgY, ohlcBgW, ohlcBgH);
+    }
+    let x = ohlcStartX;
+    for (const seg of ohlcLaid) {
+      this.ctx.font = '500 11px Geist, sans-serif';
+      this.ctx.fillStyle = this._withAlpha(this.palette.ohlcLabel, 0.95);
+      this.ctx.fillText(seg.label, x, ohlcY);
+      x += seg.lw + 5;
+      this.ctx.font = '600 11px Geist, sans-serif';
+      this.ctx.fillStyle = seg.color;
+      this.ctx.fillText(seg.value, x, ohlcY);
+      x += seg.vw + 14;
     }
     // Bid/ask/qty strip is for active trading — and on a non-tradable
     // pseudo-scrip (explain mode) it falls into the "INDEX" placeholder
@@ -3454,6 +3628,41 @@ class Chart {
     return k;
   }
 
+  // Inline params string: any numeric values from ind.params, space-separated.
+  _indicatorParamsLabel(ind) {
+    const parts = [];
+    const p = ind.params || {};
+    for (const key of Object.keys(p)) {
+      const v = p[key];
+      if (typeof v === 'number' && Number.isFinite(v)) parts.push(String(v));
+    }
+    return parts.join(' ');
+  }
+
+  // Latest computed value for indicators that draw a single overlay line.
+  // Returns null for indicators whose value isn't easily a single number
+  // (RSI/MACD/BB/etc.) — those just show kind+params in the legend.
+  _indicatorLastValue(ind) {
+    if (!this.candles.length) return null;
+    if (ind.kind === 'sma') {
+      const v = this._computeSMA(ind.period);
+      return v && v.length ? v[v.length - 1] : null;
+    }
+    if (ind.kind === 'ema') {
+      const v = this._computeEMA(ind.period);
+      return v && v.length ? v[v.length - 1] : null;
+    }
+    if (ind.kind === 'zlema') {
+      const v = this._computeZLEMA(ind.period);
+      return v && v.length ? v[v.length - 1] : null;
+    }
+    if (ind.kind === 'mcginley') {
+      const v = this._computeMcGinley(ind.period);
+      return v && v.length ? v[v.length - 1] : null;
+    }
+    return null;
+  }
+
   _drawIndicatorChips(plot) {
     this._indicatorChipHits = [];
     this._indicatorRowRects = [];
@@ -3474,35 +3683,60 @@ class Chart {
     // where the chart bg is pure white. These resolve to readable
     // contrasts in either mode.
     const isLight = (this._basePalette && this._basePalette.bg === '#FFFFFF');
-    const chipBg = isLight ? 'rgba(248,250,252,0.96)' : 'rgba(15,23,42,0.78)';
-    const chipBgHover = isLight ? '#F1F5F9' : 'rgba(15,23,42,0.97)';
-    const chipBorder = isLight ? '#E2E8F0' : 'rgba(148,163,184,0.28)';
-    const chipBorderHover = isLight ? '#94A3B8' : 'rgba(148,163,184,0.55)';
+    // Dark-mode palette mirrors the scalper tab — listItemBg #161B22
+    // (with ~92% alpha so the chart doesn't bleed through), dividerDark
+    // #30363D for borders, and a slightly raised #21262D for hover.
+    const chipBg = isLight ? 'rgba(248,250,252,0.96)' : 'rgba(22,27,34,0.92)';
+    const chipBgHover = isLight ? 'rgba(248,250,252,0.85)' : 'rgba(33,38,45,0.96)';
+    const chipBorder = isLight ? '#E2E8F0' : '#30363D';
+    const chipBorderHover = isLight ? '#E2E8F0' : '#30363D';
+    const surfaceFill = isLight ? '#FFFFFF' : '#161B22';
+    const surfaceFillHover = isLight ? '#FFFFFF' : '#21262D';
+    const chevronStroke = isLight ? '#475569' : '#C9D1D9';
     const textActive = this.palette.axisTextStrong;
     const textMuted = this.palette.axisText;
-    const iconActive = isLight ? '#475569' : '#CBD5E1';
-    const iconDim = isLight ? '#94A3B8' : '#6B7280';
+    const iconActive = isLight ? '#475569' : '#FFFFFF';
+    const iconDim = isLight ? '#94A3B8' : '#9CA3AF';
 
-    let y = stripH + 6;
+    // Extra gap below the SELL/BID-ASK strip so the legend doesn't crowd
+    // the trading chips. Larger when the trading strip is present.
+    const headerGap = this.scrip ? 22 : 10;
+    let y = stripH + headerGap;
 
     // ── Collapsed pill — TradingView-style "˅ N" minimal button ─────────
     // Default state. Click to expand.
     if (this._indicatorChipsCollapsed) {
-      const label = '˅ ' + this._indicators.length;
+      const countLabel = String(this._indicators.length);
       ctx.font = '600 11px Geist, sans-serif';
-      const labelW = ctx.measureText(label).width;
-      const w = labelW + 16;
-      const h = 22;
+      const numW = ctx.measureText(countLabel).width;
+      const chevW = 10;
+      const gap = 6;
+      const padX = 8;
+      const w = padX + chevW + gap + numW + padX;
+      const h = 24;
       const x = plot.left + 6;
-      ctx.fillStyle = chipBg;
+      ctx.fillStyle = surfaceFill;
       this._roundedRect(x, y, w, h, 4);
       ctx.fill();
       ctx.strokeStyle = chipBorder;
       ctx.lineWidth = 1;
       this._roundedRect(x, y, w, h, 4);
       ctx.stroke();
-      ctx.fillStyle = textActive;
-      ctx.fillText(label, x + 8, y + h / 2);
+      // Chevron-down icon — matches indicator-row icon weight (1.4, round)
+      const chevCx = x + padX + chevW / 2;
+      const chevCy = y + h / 2;
+      ctx.strokeStyle = chevronStroke;
+      ctx.lineWidth = 1.4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(chevCx - 4, chevCy - 2);
+      ctx.lineTo(chevCx, chevCy + 2);
+      ctx.lineTo(chevCx + 4, chevCy - 2);
+      ctx.stroke();
+      // Count text
+      ctx.fillStyle = chevronStroke;
+      ctx.fillText(countLabel, x + padX + chevW + gap, y + h / 2);
       this._indicatorChipHits.push({
         rect: { x, y, w, h },
         action: 'toggleCollapse',
@@ -3512,48 +3746,44 @@ class Chart {
     }
 
     // ── Expanded — clean text list per TradingView ──────────────────────
-    // Each row: [color dot] [name + period] [eye] [gear] [×]. Icons
-    // appear only on row hover.
-    const rowH = 18;
+    // Each row: [color dot] [name + period + value] [eye] [target]
+    // [trash]. Icons appear only on row hover. The collapse header is
+    // rendered AFTER the rows so it sits at the bottom of the strip.
+    const rowH = 24;
     const dotSize = 8;
     const labelGap = 8;
-    const iconW = 16;
-    const iconGap = 2;
-
-    // Header "˄ Indicators" — click to collapse back.
-    {
-      const label = '˄ Indicators';
-      ctx.font = '600 11px Geist, sans-serif';
-      const lw = ctx.measureText(label).width;
-      const hw = lw + 16;
-      const hx = plot.left + 6;
-      ctx.fillStyle = chipBg;
-      this._roundedRect(hx, y, hw, 22, 4);
-      ctx.fill();
-      ctx.strokeStyle = chipBorder;
-      ctx.lineWidth = 1;
-      this._roundedRect(hx, y, hw, 22, 4);
-      ctx.stroke();
-      ctx.fillStyle = textActive;
-      ctx.fillText(label, hx + 8, y + 11);
-      this._indicatorChipHits.push({
-        rect: { x: hx, y, w: hw, h: 22 },
-        action: 'toggleCollapse',
-      });
-      y += 22 + 4;
-    }
+    const iconW = 18;
+    const iconGap = 4;
+    const rowPadX = 8;
 
     ctx.font = '500 11px Geist, sans-serif';
 
     for (const ind of this._indicators) {
-      const label = this._indicatorLabel(ind);
+      const kindLabel = (ind.kind || '').toUpperCase();
+      const paramsLabel = ind.period && ind.period > 0
+          ? String(ind.period)
+          : this._indicatorParamsLabel(ind);
+      const lastVal = this._indicatorLastValue(ind);
+      const valLabel = lastVal != null ? this._fmtPrice(lastVal) : '';
       const indColor = ind.color || '#3B82F6';
       const textColor = ind.hidden ? textMuted : textActive;
+      const paramsColor = ind.hidden ? iconDim : textMuted;
+      const valColor = ind.hidden ? iconDim : indColor;
+
+      // Inline measurement — kind + " " + params + " " + value
+      const kindW = ctx.measureText(kindLabel).width;
+      const sp = 5;
+      const paramsW = paramsLabel
+          ? ctx.measureText(paramsLabel).width + sp
+          : 0;
+      const valW = valLabel
+          ? ctx.measureText(valLabel).width + sp
+          : 0;
+      const labelW = kindW + paramsW + valW;
 
       const x = plot.left + 6;
-      const labelW = ctx.measureText(label).width;
-      const rowRight = x + dotSize + labelGap + labelW + labelGap +
-          iconW * 3 + iconGap * 2 + 8;
+      const rowRight = x + rowPadX + dotSize + labelGap + labelW + labelGap +
+          iconW * 3 + iconGap * 2 + rowPadX;
       const rowW = rowRight - x;
       const rowHovered = this._hoveredIndicatorRowId === ind.id;
       this._indicatorRowRects.push({
@@ -3561,38 +3791,54 @@ class Chart {
         indicatorId: ind.id,
       });
 
-      // Row backdrop — only painted on hover. At rest the row is just
-      // dot + label over the chart (TradingView style). Hover gets a
-      // solid backing + border so the icons have a clean surface to
-      // target against.
+      // Row backdrop — at rest, a solid chart-bg pad sits behind just the
+      // dot + label cluster so candles don't bleed through the text. On
+      // hover the full row (including icons) gets the chip backing + border.
       if (rowHovered) {
-        ctx.fillStyle = chipBgHover;
+        ctx.fillStyle = surfaceFillHover;
         this._roundedRect(x, y, rowW, rowH, 4);
         ctx.fill();
         ctx.strokeStyle = chipBorderHover;
         ctx.lineWidth = 1;
         this._roundedRect(x, y, rowW, rowH, 4);
         ctx.stroke();
+      } else {
+        const labelBgW = rowPadX + dotSize + labelGap + labelW + rowPadX;
+        ctx.fillStyle = chipBg;
+        this._roundedRect(x, y, labelBgW, rowH, 4);
+        ctx.fill();
       }
 
       // Color dot — keeps the indicator's own color even when hidden
       // (dimmed to a slate so the row still reads as "this is the row
       // for indicator X" even after toggling visibility off).
-      const dotX = x + 6;
+      const dotX = x + rowPadX;
       const dotY = y + (rowH - dotSize) / 2;
       ctx.fillStyle = ind.hidden ? iconDim : indColor;
       ctx.beginPath();
       ctx.roundRect(dotX, dotY, dotSize, dotSize, 2);
       ctx.fill();
 
-      // Label
-      const labelX = dotX + dotSize + labelGap;
+      // Inline label: KIND (strong) + params (muted) + value (indicator color)
+      let lx = dotX + dotSize + labelGap;
       ctx.fillStyle = textColor;
-      ctx.fillText(label, labelX, y + rowH / 2);
+      ctx.fillText(kindLabel, lx, y + rowH / 2);
+      lx += kindW;
+      if (paramsLabel) {
+        lx += sp;
+        ctx.fillStyle = paramsColor;
+        ctx.fillText(paramsLabel, lx, y + rowH / 2);
+        lx += paramsW - sp;
+      }
+      if (valLabel) {
+        lx += sp;
+        ctx.fillStyle = valColor;
+        ctx.fillText(valLabel, lx, y + rowH / 2);
+      }
 
       // Icons render only on row hover — high contrast against the
       // solidified hover backing.
-      const iconsStartX = labelX + labelW + labelGap;
+      const iconsStartX = (dotX + dotSize + labelGap) + labelW + labelGap;
       const iconY = y;
       const iconColor = ind.hidden ? iconDim : iconActive;
 
@@ -3603,73 +3849,76 @@ class Chart {
       };
 
       const eyeX = iconsStartX;
-      const gearX = eyeX + iconW + iconGap;
-      const xIconX = gearX + iconW + iconGap;
+      const targetX = eyeX + iconW + iconGap;
+      const trashX = targetX + iconW + iconGap;
 
       if (rowHovered) {
-        // Eye
-        drawIcon(eyeX, (cx, cy) => {
-          ctx.strokeStyle = iconColor;
-          ctx.lineWidth = 1.4;
-          if (ind.hidden) {
-            ctx.beginPath();
-            ctx.ellipse(cx, cy, 5, 3, 0, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(cx - 6, cy + 4);
-            ctx.lineTo(cx + 6, cy - 4);
-            ctx.stroke();
-          } else {
-            ctx.beginPath();
-            ctx.ellipse(cx, cy, 5.5, 3, 0, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.fillStyle = iconColor;
-            ctx.beginPath();
-            ctx.arc(cx, cy, 1.4, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        });
-        // Gear
-        drawIcon(gearX, (cx, cy) => {
-          ctx.strokeStyle = iconColor;
-          ctx.fillStyle = iconColor;
-          ctx.lineWidth = 1.4;
-          const inner = 2.6;
-          const outer = 4.6;
-          for (let i = 0; i < 8; i++) {
-            const a = (i * Math.PI) / 4;
-            const dx = Math.cos(a);
-            const dy = Math.sin(a);
-            ctx.beginPath();
-            ctx.moveTo(cx + dx * inner, cy + dy * inner);
-            ctx.lineTo(cx + dx * outer, cy + dy * outer);
-            ctx.stroke();
-          }
-          ctx.beginPath();
-          ctx.arc(cx, cy, inner, 0, Math.PI * 2);
-          ctx.fill();
+        // Lucide SVG icons rendered via Path2D on a 24-unit viewBox, scaled
+        // to a 16px glyph centered in the 18px icon cell.
+        const iconPx = 16;
+        const drawSvg = (cx, cy, paths, color) => {
           ctx.save();
-          ctx.globalCompositeOperation = 'destination-out';
-          ctx.beginPath();
-          ctx.arc(cx, cy, 1.2, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.translate(cx - iconPx / 2, cy - iconPx / 2);
+          ctx.scale(iconPx / 24, iconPx / 24);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          for (const d of paths) ctx.stroke(new Path2D(d));
+          ctx.restore();
+        };
+
+        // Eye — teenyicons (filled, 15×15 viewBox). Inline Path2D so the
+        // color follows the theme and there's no async asset load.
+        const eyePathD =
+          'M0.5 7.5L0.0357612 7.31431C-0.0119204 7.43351 -0.0119204 7.56649 0.0357612 7.68569L0.5 7.5ZM14.5 7.5L14.9642 7.6857C15.0119 7.56649 15.0119 7.43351 14.9642 7.3143L14.5 7.5ZM7.49998 12C5.18597 12 3.56111 10.8483 2.49664 9.66552C1.96405 9.07375 1.57811 8.48029 1.32563 8.03474C1.19968 7.81247 1.10772 7.62838 1.04797 7.50164C1.01811 7.4383 0.996349 7.3894 0.98246 7.35735C0.975517 7.34133 0.970545 7.32953 0.967517 7.32225C0.966003 7.31861 0.964975 7.3161 0.96443 7.31477C0.964157 7.3141 0.964005 7.31372 0.963973 7.31364C0.963958 7.3136 0.963972 7.31364 0.964016 7.31375C0.964038 7.31381 0.964094 7.31394 0.964105 7.31397C0.964168 7.31413 0.964239 7.31431 0.5 7.5C0.0357612 7.68569 0.0358471 7.68591 0.0359408 7.68614C0.0359823 7.68625 0.036084 7.6865 0.0361671 7.68671C0.0363335 7.68712 0.0365311 7.68761 0.0367599 7.68818C0.0372175 7.68931 0.0377999 7.69075 0.0385076 7.69248C0.0399231 7.69595 0.0418401 7.70062 0.0442628 7.70644C0.0491078 7.71808 0.0559773 7.73436 0.0649031 7.75495C0.0827516 7.79614 0.108844 7.85467 0.143439 7.92805C0.212592 8.07474 0.315944 8.28128 0.455611 8.52776C0.734381 9.01971 1.16093 9.67625 1.75334 10.3345C2.93886 11.6517 4.814 13 7.49998 13V12ZM0.5 7.5C0.964239 7.68569 0.964168 7.68587 0.964105 7.68603C0.964094 7.68606 0.964038 7.68619 0.964016 7.68625C0.963972 7.68636 0.963958 7.6864 0.963973 7.68636C0.964005 7.68628 0.964157 7.6859 0.96443 7.68523C0.964975 7.6839 0.966003 7.68139 0.967517 7.67775C0.970545 7.67047 0.975517 7.65867 0.98246 7.64265C0.996349 7.6106 1.01811 7.5617 1.04797 7.49836C1.10772 7.37162 1.19968 7.18753 1.32563 6.96526C1.57811 6.51971 1.96405 5.92625 2.49664 5.33448C3.56111 4.15173 5.18597 3 7.49998 3V2C4.814 2 2.93886 3.34827 1.75334 4.66552C1.16093 5.32375 0.734381 5.98029 0.455611 6.47224C0.315944 6.71872 0.212592 6.92526 0.143439 7.07195C0.108844 7.14533 0.0827516 7.20386 0.0649031 7.24505C0.0559773 7.26564 0.0491078 7.28192 0.0442628 7.29356C0.0418401 7.29938 0.0399231 7.30405 0.0385076 7.30752C0.0377999 7.30925 0.0372175 7.31069 0.0367599 7.31182C0.0365311 7.31239 0.0363335 7.31288 0.0361671 7.31329C0.036084 7.3135 0.0359823 7.31375 0.0359408 7.31386C0.0358471 7.31409 0.0357612 7.31431 0.5 7.5ZM7.49998 3C9.814 3 11.4389 4.15173 12.5033 5.33448C13.0359 5.92625 13.4219 6.51971 13.6744 6.96526C13.8003 7.18754 13.8923 7.37162 13.952 7.49837C13.9819 7.5617 14.0037 7.6106 14.0175 7.64265C14.0245 7.65868 14.0295 7.67048 14.0325 7.67775C14.034 7.68139 14.035 7.6839 14.0356 7.68524C14.0358 7.6859 14.036 7.68628 14.036 7.68636C14.036 7.6864 14.036 7.68636 14.036 7.68625C14.036 7.6862 14.0359 7.68606 14.0359 7.68603C14.0358 7.68587 14.0358 7.6857 14.5 7.5C14.9642 7.3143 14.9642 7.31409 14.9641 7.31385C14.964 7.31375 14.9639 7.3135 14.9638 7.31329C14.9637 7.31288 14.9635 7.31239 14.9632 7.31182C14.9628 7.31069 14.9622 7.30925 14.9615 7.30752C14.9601 7.30405 14.9582 7.29938 14.9557 7.29356C14.9509 7.28192 14.944 7.26564 14.9351 7.24504C14.9172 7.20385 14.8912 7.14533 14.8566 7.07195C14.7874 6.92526 14.6841 6.71871 14.5444 6.47224C14.2656 5.98029 13.8391 5.32375 13.2466 4.66552C12.0611 3.34827 10.186 2 7.49998 2V3ZM14.5 7.5C14.0358 7.3143 14.0358 7.31413 14.0359 7.31397C14.0359 7.31394 14.036 7.3138 14.036 7.31375C14.036 7.31364 14.036 7.3136 14.036 7.31364C14.036 7.31372 14.0358 7.3141 14.0356 7.31476C14.035 7.3161 14.034 7.31861 14.0325 7.32225C14.0295 7.32952 14.0245 7.34132 14.0175 7.35735C14.0037 7.3894 13.9819 7.4383 13.952 7.50163C13.8923 7.62838 13.8003 7.81246 13.6744 8.03474C13.4219 8.48029 13.0359 9.07375 12.5033 9.66552C11.4389 10.8483 9.814 12 7.49998 12V13C10.186 13 12.0611 11.6517 13.2466 10.3345C13.8391 9.67625 14.2656 9.01971 14.5444 8.52776C14.6841 8.28129 14.7874 8.07474 14.8566 7.92805C14.8912 7.85467 14.9172 7.79615 14.9351 7.75496C14.944 7.73436 14.9509 7.71808 14.9557 7.70644C14.9582 7.70062 14.9601 7.69595 14.9615 7.69248C14.9622 7.69075 14.9628 7.68931 14.9632 7.68818C14.9635 7.68761 14.9637 7.68712 14.9638 7.68671C14.9639 7.6865 14.964 7.68625 14.9641 7.68615C14.9642 7.68591 14.9642 7.6857 14.5 7.5ZM7.5 9C6.67157 9 6 8.32843 6 7.5H5C5 8.88071 6.11929 10 7.5 10V9ZM9 7.5C9 8.32843 8.32843 9 7.5 9V10C8.88071 10 10 8.88071 10 7.5H9ZM7.5 6C8.32843 6 9 6.67157 9 7.5H10C10 6.11929 8.88071 5 7.5 5V6ZM7.5 5C6.11929 5 5 6.11929 5 7.5H6C6 6.67157 6.67157 6 7.5 6V5Z';
+        drawIcon(eyeX, (cx, cy) => {
+          ctx.save();
+          ctx.translate(cx - iconPx / 2, cy - iconPx / 2);
+          ctx.scale(iconPx / 15, iconPx / 15);
+          ctx.fillStyle = iconColor;
+          ctx.fill(new Path2D(eyePathD));
+          if (ind.hidden) {
+            ctx.strokeStyle = iconColor;
+            ctx.lineWidth = 1.5;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(2, 2);
+            ctx.lineTo(13, 13);
+            ctx.stroke();
+          }
           ctx.restore();
         });
-        // × — destructive accent. Theme-aware: red-600 in light mode for
-        // strong contrast on white, lighter red in dark mode.
-        drawIcon(xIconX, (cx, cy) => {
-          const deleteColor = ind.hidden
-              ? iconDim
-              : (isLight ? '#DC2626' : '#F87171');
-          ctx.strokeStyle = deleteColor;
-          ctx.lineWidth = 1.6;
-          const xs = 4;
-          ctx.beginPath();
-          ctx.moveTo(cx - xs, cy - xs);
-          ctx.lineTo(cx + xs, cy + xs);
-          ctx.moveTo(cx + xs, cy - xs);
-          ctx.lineTo(cx - xs, cy + xs);
-          ctx.stroke();
+
+        // Settings — Iconsax (hex shield + center circle). Stroke 1.5 in
+        // the 24-viewBox to match the original asset.
+        const settingsPaths = [
+          'M3 9.11011V14.8801C3 17.0001 3 17.0001 5 18.3501L10.5 21.5301C11.33 22.0101 12.68 22.0101 13.5 21.5301L19 18.3501C21 17.0001 21 17.0001 21 14.8901V9.11011C21 7.00011 21 7.00011 19 5.65011L13.5 2.47011C12.68 1.99011 11.33 1.99011 10.5 2.47011L5 5.65011C3 7.00011 3 7.00011 3 9.11011Z',
+          'M12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12C9 13.6569 10.3431 15 12 15Z',
+        ];
+        drawIcon(targetX, (cx, cy) => {
+          ctx.save();
+          ctx.translate(cx - iconPx / 2, cy - iconPx / 2);
+          ctx.scale(iconPx / 24, iconPx / 24);
+          ctx.strokeStyle = iconColor;
+          ctx.lineWidth = 1.5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          for (const d of settingsPaths) ctx.stroke(new Path2D(d));
+          ctx.restore();
+        });
+
+        // Trash — MingCute "delete" (filled, evenodd). Uses iconColor so
+        // it matches the eye + settings glyphs.
+        const trashPathD =
+          'M20,5 C20.5523,5 21,5.44772 21,6 C21,6.55228 20.5523,7 20,7 L19.0001,7 L18.9975,7.07129 L18.0638,20.1425 C17.9891,21.1891 17.1182,22 16.0689,22 L7.93116,22 C6.88189,22 6.011,21.1891 5.93624,20.1425 L5.00258,7.07129 C5.00088,7.04738 5.00002,7.02361 5,7 L4,7 C3.44772,7 3,6.55228 3,6 C3,5.44772 3.44772,5 4,5 L20,5 Z M16.9975,7 L7.00259,7 L7.93116,20 L16.0689,20 L16.9975,7 Z M14,2 C14.5523,2 15,2.44772 15,3 C15,3.55228 14.5523,4 14,4 L10,4 C9.44772,4 9,3.55228 9,3 C9,2.44772 9.44772,2 10,2 L14,2 Z';
+        drawIcon(trashX, (cx, cy) => {
+          ctx.save();
+          ctx.translate(cx - iconPx / 2, cy - iconPx / 2);
+          ctx.scale(iconPx / 24, iconPx / 24);
+          ctx.fillStyle = iconColor;
+          ctx.fill(new Path2D(trashPathD), 'evenodd');
+          ctx.restore();
         });
       }
       // Hit rects pushed regardless — keeps clicks reliable even if the
@@ -3680,17 +3929,48 @@ class Chart {
         action: 'toggleHide',
       });
       this._indicatorChipHits.push({
-        rect: { x: gearX, y: iconY, w: iconW, h: rowH },
+        rect: { x: targetX, y: iconY, w: iconW, h: rowH },
         indicatorId: ind.id,
         action: 'openSettings',
       });
       this._indicatorChipHits.push({
-        rect: { x: xIconX, y: iconY, w: iconW, h: rowH },
+        rect: { x: trashX, y: iconY, w: iconW, h: rowH },
         indicatorId: ind.id,
         action: 'delete',
       });
 
       y += rowH;
+    }
+
+    // ── Footer chevron-up chip — sits BELOW the rows. Click to collapse.
+    {
+      y += 4;
+      const hw = 24;
+      const hh = 24;
+      const hx = plot.left + 6;
+      ctx.fillStyle = surfaceFill;
+      this._roundedRect(hx, y, hw, hh, 4);
+      ctx.fill();
+      ctx.strokeStyle = chipBorder;
+      ctx.lineWidth = 1;
+      this._roundedRect(hx, y, hw, hh, 4);
+      ctx.stroke();
+      // Chevron-up icon — matches indicator-row icon weight (1.4, round)
+      const cx = hx + hw / 2;
+      const cy = y + hh / 2;
+      ctx.strokeStyle = chevronStroke;
+      ctx.lineWidth = 1.4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx - 4, cy + 2);
+      ctx.lineTo(cx, cy - 2);
+      ctx.lineTo(cx + 4, cy + 2);
+      ctx.stroke();
+      this._indicatorChipHits.push({
+        rect: { x: hx, y, w: hw, h: hh },
+        action: 'toggleCollapse',
+      });
     }
     ctx.restore();
   }
@@ -4351,28 +4631,30 @@ class Chart {
     // below (used to overlap with sub-pane axis labels / value chips).
     const up = last.c >= last.o;
     const color = up ? this.palette.bull : this.palette.bear;
-    this.ctx.font = '700 10px Geist, sans-serif';
+    this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
     const text = ltp.toFixed(this._priceDecimals());
-    const tw = this.ctx.measureText(text).width + 10;
-    const chipW = Math.min(tw, 60);
+    const tw = this.ctx.measureText(text).width + 24;
+    const chipW = Math.min(tw, 84);
+    const chipH = 22;
     // Reserve enough vertical room for the chip + 1px gap + countdown
-    // sub-chip (13px) when it's enabled, so the whole LTP block stays
+    // sub-chip when it's enabled, so the whole LTP block stays
     // above plot.bottom.
     const cdEnabled = this.showBarCountdown &&
         this.candles.length > 0 &&
         typeof this.timeframeMinutes === 'number' &&
         this.timeframeMinutes > 0;
-    const blockH = 16 + (cdEnabled ? 14 : 0);
+    const subH = 16;
+    const blockH = chipH + (cdEnabled ? subH : 0);
     const cy = Math.max(plot.top + 8,
-        Math.min(plot.bottom - 8 - (blockH - 16), y));
+        Math.min(plot.bottom - 8 - (blockH - chipH), y));
     this.ctx.fillStyle = color;
-    this._roundedRect(plot.right + 2, cy - 8, chipW, 16, 3);
+    this._roundedRect(plot.right + 2, cy - chipH / 2, chipW, chipH, 3);
     this.ctx.fill();
     this.ctx.fillStyle = '#FFFFFF';
     this.ctx.textAlign = 'center';
     this.ctx.fillText(text, plot.right + 2 + chipW / 2, cy);
-    this._registerAxisChipSlot(cy, 16);
+    this._registerAxisChipSlot(cy, chipH);
 
     // Phase 18 — bar-close countdown directly under the LTP value, in a
     // continuous sub-chip below the existing one. Same fill colour so it
@@ -4385,13 +4667,12 @@ class Chart {
       const mins = Math.floor(left / 60);
       const secs = left % 60;
       const cdText = mins + ':' + String(secs).padStart(2, '0');
-      const subH = 13;
-      const subY = cy - 8 + 16 + 1; // chip bottom + 1px gap
+      const subY = cy - chipH / 2 + chipH - 3; // overlap rounded corners so the two chips read as one
       this.ctx.fillStyle = color;
       this._roundedRect(plot.right + 2, subY, chipW, subH, 3);
       this.ctx.fill();
       this.ctx.fillStyle = '#FFFFFF';
-      this.ctx.font = '500 9px Geist, sans-serif';
+      this.ctx.font = '500 10px Geist, sans-serif';
       this.ctx.textAlign = 'center';
       this.ctx.textBaseline = 'middle';
       this.ctx.fillText(cdText, plot.right + 2 + chipW / 2, subY + subH / 2);

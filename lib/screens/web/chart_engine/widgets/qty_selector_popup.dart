@@ -66,7 +66,7 @@ class _QtySelectorPopupState extends State<QtySelectorPopup> {
     final border = resolveThemeColor(context,
         dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final accent = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
+        dark: MyntColors.secondary, light: MyntColors.primary);
     final mute = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
 
@@ -168,9 +168,15 @@ class _QtySelectorPopupState extends State<QtySelectorPopup> {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: SizedBox(
+                      child: Container(
                         height: 32,
-                        child: TextField(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: border),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: TextField(
                           controller: _ctl,
                           autofocus: true,
                           keyboardType: TextInputType.number,
@@ -179,29 +185,22 @@ class _QtySelectorPopupState extends State<QtySelectorPopup> {
                           ],
                           textAlign: TextAlign.center,
                           style: MyntWebTextStyles.body(context,
-                              fontWeight: MyntFonts.semiBold),
-                          decoration: InputDecoration(
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 6),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6),
-                              borderSide: BorderSide(color: border),
+                              fontWeight: MyntFonts.semiBold)
+                                .copyWith(height: 1.0),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 0),
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
                             ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6),
-                              borderSide: BorderSide(color: border),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(6),
-                              borderSide: BorderSide(color: accent),
-                            ),
-                          ),
                           onSubmitted: (s) {
                             final v = int.tryParse(s) ?? _qty;
                             _set(v);
                             widget.onDismiss();
                           },
+                          ),
                         ),
                       ),
                     ),

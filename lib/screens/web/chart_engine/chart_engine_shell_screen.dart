@@ -2244,7 +2244,8 @@ class _ChartEngineShellScreenState
     return null;
   }
 
-  void _handleOverlayCloseRequested(int paneIndex, String overlayId) {
+  Future<void> _handleOverlayCloseRequested(
+      int paneIndex, String overlayId) async {
     final session = ref.read(chartEngineSessionProvider);
     if (paneIndex < 0 || paneIndex >= session.panes.length) return;
     final scrip = session.panes[paneIndex].scrip;
@@ -2331,7 +2332,11 @@ class _ChartEngineShellScreenState
         }
       }
       if (alert != null) {
-        showAlertCancelDialog(context: context, ref: ref, alert: alert);
+        final cancelled = await showAlertCancelDialog(
+            context: context, ref: ref, alert: alert);
+        if (cancelled && mounted) {
+          ResponsiveSnackBar.showSuccess(context, 'Alert Cancelled');
+        }
       }
       return;
     }
@@ -3023,15 +3028,16 @@ class _IndicatorSettingsDialogState
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final surface = isDark ? const Color(0xFF111827) : Colors.white;
-    final border = isDark ? const Color(0xFF1F2937) : const Color(0xFFE5E7EB);
-    final divider =
-        isDark ? const Color(0xFF1F2937) : const Color(0xFFF1F5F9);
+    final surface = resolveThemeColor(context,
+        dark: MyntColors.overlayBgDark, light: MyntColors.overlayBg);
+    final border = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final divider = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final accent = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
+        dark: MyntColors.secondary, light: MyntColors.primary);
 
     final schema = schemaFor(cfg.kind);
     final params = schema?.params ?? const <IndicatorParam>[];
@@ -3056,7 +3062,7 @@ class _IndicatorSettingsDialogState
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: surface,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(color: border, width: 1),
             boxShadow: [
               BoxShadow(
@@ -3071,19 +3077,10 @@ class _IndicatorSettingsDialogState
             children: [
               Padding(
                 padding:
-                    const EdgeInsets.fromLTRB(20, 18, 12, 16),
+                    const EdgeInsets.fromLTRB(20, 18, 16, 16),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    InkWell(
-                      onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(6),
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: Icon(Icons.arrow_back, size: 18, color: muted),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3145,7 +3142,6 @@ class _IndicatorSettingsDialogState
                       onChanged: (v) => setState(() => _values[p.key] = v),
                     ),
                   ),
-                  Divider(height: 1, color: divider, thickness: 1),
                 ]
               else if (useGenericPeriod) ...[
                 _SettingsRow(
@@ -3161,7 +3157,6 @@ class _IndicatorSettingsDialogState
                     onChanged: (v) => setState(() => _values['period'] = v),
                   ),
                 ),
-                Divider(height: 1, color: divider, thickness: 1),
               ],
 
               _SettingsRow(
@@ -3181,7 +3176,6 @@ class _IndicatorSettingsDialogState
                     _colorOpen = false;
                   }),
                 ),
-              Divider(height: 1, color: divider, thickness: 1),
 
               _SettingsRow(
                 label: 'Thickness',
@@ -3196,35 +3190,55 @@ class _IndicatorSettingsDialogState
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
                 child: Row(children: [
-                  // Destructive secondary — text-only, red, clearly labeled
-                  // so it's never confused with "close". Sits left so the
-                  // visual weight matches the primary Done on the right.
-                  TextButton.icon(
-                    onPressed: _delete,
-                    icon: Icon(Icons.delete_outline,
-                        size: 16,
-                        color: resolveThemeColor(context,
-                            dark: MyntColors.lossDark,
-                            light: MyntColors.loss)),
-                    label: Text('Remove',
-                        style: TextStyle(
-                          color: resolveThemeColor(context,
-                              dark: MyntColors.lossDark,
-                              light: MyntColors.loss),
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        )),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 12),
-                      minimumSize: const Size(0, 48),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
+                  // Expanded(
+                  //   child: ElevatedButton(
+                  //     onPressed: _delete,
+                  //     style: ElevatedButton.styleFrom(
+                  //       backgroundColor: resolveThemeColor(context,
+                  //           dark: MyntColors.errorDark,
+                  //           light: MyntColors.tertiary),
+                  //       foregroundColor: Colors.white,
+                  //       elevation: 0,
+                  //       minimumSize: const Size.fromHeight(48),
+                  //       shape: RoundedRectangleBorder(
+                  //         borderRadius: BorderRadius.circular(8),
+                  //       ),
+                  //     ),
+                  //     child: const Text(
+                  //       'Delete',
+                  //       style: TextStyle(
+                  //         color: Colors.white,
+                  //         fontWeight: FontWeight.w700,
+                  //         fontSize: 14,
+                  //         letterSpacing: 0.4,
+                  //       ),
+                  //     ),
+                  //   ),
+                  // ),
+                  // const SizedBox(width: 12),
                   Expanded(
-                    child: _GradientPrimaryButton(
-                      label: 'Done',
+                    child: ElevatedButton(
                       onPressed: _save,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: resolveThemeColor(context,
+                            dark: MyntColors.secondary,
+                            light: MyntColors.primary),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        minimumSize: const Size.fromHeight(48),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: const Text(
+                        'Save',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
                     ),
                   ),
                 ]),
@@ -3284,7 +3298,7 @@ class _SettingsRow extends StatelessWidget {
   }
 }
 
-class _ParamStepper extends StatelessWidget {
+class _ParamStepper extends StatefulWidget {
   final num value;
   final IndicatorParam param;
   final ValueChanged<num> onChanged;
@@ -3294,32 +3308,85 @@ class _ParamStepper extends StatelessWidget {
     required this.onChanged,
   });
 
+  @override
+  State<_ParamStepper> createState() => _ParamStepperState();
+}
+
+class _ParamStepperState extends State<_ParamStepper> {
+  late final TextEditingController _ctrl;
+  late final FocusNode _focus;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: _format(widget.value));
+    _focus = FocusNode();
+    _focus.addListener(_onFocusChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ParamStepper oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_focus.hasFocus && oldWidget.value != widget.value) {
+      final txt = _format(widget.value);
+      if (_ctrl.text != txt) _ctrl.text = txt;
+    }
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() {
+    if (!_focus.hasFocus) _commit(_ctrl.text);
+  }
+
   num _clamp(num v) {
-    if (v < param.min) return param.min;
-    if (v > param.max) return param.max;
+    if (v < widget.param.min) return widget.param.min;
+    if (v > widget.param.max) return widget.param.max;
     return v;
   }
 
   num _normalize(num v) {
-    if (param.isInt) return v.toInt();
-    // Round to step precision to avoid float drift (0.1 + 0.1 + … = 0.30000004).
-    final stepInv = 1 / param.step;
+    if (widget.param.isInt) return v.toInt();
+    final stepInv = 1 / widget.param.step;
     return (v * stepInv).round() / stepInv;
   }
 
   String _format(num v) {
-    if (param.isInt) return v.toInt().toString();
-    // Show one decimal for typical 0.1-step floats; strip trailing zero.
+    if (widget.param.isInt) return v.toInt().toString();
     final fixed = v.toStringAsFixed(1);
     return fixed.endsWith('.0') ? fixed.substring(0, fixed.length - 2) : fixed;
   }
 
+  void _commit(String raw) {
+    final parsed = num.tryParse(raw.trim());
+    if (parsed == null) {
+      _ctrl.text = _format(widget.value);
+      return;
+    }
+    final next = _normalize(_clamp(parsed));
+    _ctrl.text = _format(next);
+    if (next != widget.value) widget.onChanged(next);
+  }
+
+  void _bump(num delta) {
+    final base = num.tryParse(_ctrl.text.trim()) ?? widget.value;
+    final next = _normalize(_clamp(base + delta));
+    _ctrl.text = _format(next);
+    widget.onChanged(next);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF1A2030) : const Color(0xFFF8FAFC);
-    final stroke =
-        isDark ? const Color(0xFF2A3142) : const Color(0xFFE2E8F0);
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.inputBgDark, light: MyntColors.inputBg);
+    final stroke = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final iconColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     return Container(
@@ -3335,19 +3402,31 @@ class _ParamStepper extends StatelessWidget {
           _StepButton(
             icon: Icons.remove,
             color: iconColor,
-            onTap: () => onChanged(_normalize(_clamp(value - param.step))),
+            onTap: () => _bump(-widget.param.step),
           ),
           Expanded(
             child: Center(
-              child: Text(_format(value),
-                  style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.semiBold)),
+              child: TextField(
+                controller: _ctrl,
+                focusNode: _focus,
+                textAlign: TextAlign.center,
+                keyboardType: TextInputType.numberWithOptions(
+                    decimal: !widget.param.isInt),
+                style: MyntWebTextStyles.body(context,
+                    fontWeight: MyntFonts.semiBold),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                onSubmitted: _commit,
+              ),
             ),
           ),
           _StepButton(
             icon: Icons.add,
             color: iconColor,
-            onTap: () => onChanged(_normalize(_clamp(value + param.step))),
+            onTap: () => _bump(widget.param.step),
           ),
         ],
       ),
@@ -3388,9 +3467,8 @@ class _ColorButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final stroke =
-        isDark ? const Color(0xFF2A3142) : const Color(0xFFE2E8F0);
+    final stroke = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Material(
@@ -3473,8 +3551,8 @@ class _SwatchTileState extends State<_SwatchTile> {
   bool _hover = false;
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final ringIdle = isDark ? const Color(0xFF2A3142) : const Color(0xFFE2E8F0);
+    final ringIdle = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final size = 28.0;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -3525,10 +3603,10 @@ class _ThicknessSegmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF1A2030) : const Color(0xFFF8FAFC);
-    final stroke =
-        isDark ? const Color(0xFF2A3142) : const Color(0xFFE2E8F0);
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.inputBgDark, light: MyntColors.inputBg);
+    final stroke = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
 
     Widget seg(int v) {
       final sel = v == value;
@@ -3598,6 +3676,8 @@ class _GradientPrimaryButtonState extends State<_GradientPrimaryButton> {
 
   @override
   Widget build(BuildContext context) {
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -3611,18 +3691,12 @@ class _GradientPrimaryButtonState extends State<_GradientPrimaryButton> {
           duration: const Duration(milliseconds: 140),
           height: 48,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [Color(0xFF7C3AED), Color(0xFFEC4899), Color(0xFFF59E0B)],
-              stops: [0.0, 0.55, 1.0],
-            ),
-            borderRadius: BorderRadius.circular(10),
+            color: primary,
+            borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF7C3AED)
-                    .withValues(alpha: _hover ? 0.45 : 0.28),
-                blurRadius: _hover ? 22 : 14,
+                color: primary.withValues(alpha: _hover ? 0.32 : 0.18),
+                blurRadius: _hover ? 18 : 12,
                 offset: const Offset(0, 6),
               ),
             ],

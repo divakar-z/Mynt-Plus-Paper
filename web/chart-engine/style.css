@@ -23,27 +23,27 @@
 
 :root {
   --bg: #0B0F14;
-  --text: #D1D5DB;
-  --text-soft: #9CA3AF;
-  --text-mute: #6B7280;
-  --grid-soft: #111827;
+  --text: #C9D1D9;
+  --text-soft: #8B949E;
+  --text-mute: #6E7681;
+  --grid-soft: #171C22;
   --grid-strong: #1F2937;
   --overlay-bg: rgba(11,15,20,0.94);
-  --card-bg: #111827;
-  --card-border: #1F2937;
-  --accent: #3B82F6;
+  --card-bg: #161B22;
+  --card-border: #30363D;
+  --accent: #58A6FF;
 }
 html.light {
   --bg: #FFFFFF;
-  --text: #0F172A;
-  --text-soft: #475569;
-  --text-mute: #64748B;
-  --grid-soft: #F1F5F9;
+  --text: #121212;
+  --text-soft: #4A4A4A;
+  --text-mute: #6B6B6B;
+  --grid-soft: #F9F9F9;
   --grid-strong: #CBD5E1;
   --overlay-bg: rgba(248,250,252,0.94);
-  --card-bg: #F1F5F9;
-  --card-border: #E2E8F0;
-  --accent: #2563EB;
+  --card-bg: #FFFFFF;
+  --card-border: #E1E4E8;
+  --accent: #0037B7;
 }
 
 * { box-sizing: border-box; }
@@ -115,7 +115,7 @@ html.light #top-bar {
   gap: 6px;
   font-family: inherit;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0.01em;
   color: var(--text-soft);
   background: var(--card-bg);
@@ -200,7 +200,7 @@ html.light .tb-chip.tb-instant--on:hover {
   position: absolute;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 8px;
+  border-radius: 4px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
   z-index: 1000;
   padding: 8px 6px;
@@ -210,7 +210,7 @@ html.light .tb-chip.tb-instant--on:hover {
    entire chart UI. */
 html.light .tb-popover {
   background: #FFFFFF;
-  border-color: #E2E8F0;
+  border-color: #E1E4E8;
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
 }
 
@@ -220,7 +220,7 @@ html.light .tb-popover {
 .tb-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.55);
+  background: transparent;
   z-index: 2000;
   display: flex;
   align-items: center;
@@ -228,7 +228,7 @@ html.light .tb-popover {
   padding: 24px;
 }
 html.light .tb-modal-backdrop {
-  background: rgba(15, 23, 42, 0.45);
+  background: transparent;
 }
 .tb-modal {
   position: relative;        /* override .tb-popover absolute positioning */
@@ -239,45 +239,86 @@ html.light .tb-modal-backdrop {
 html.light .tb-modal {
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.20);
 }
-.tb-layout-popover { width: 280px; }
+.tb-layout-popover {
+  width: 300px;
+  padding: 10px 10px 12px;
+  border-radius: 10px;
+}
 .tb-layout-row {
   display: flex;
   align-items: center;
-  padding: 4px;
+  padding: 6px 4px;
 }
 .tb-layout-row-label {
-  width: 16px;
+  display: none;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
+  font-weight: 600;
   color: var(--text-mute);
+  background: var(--grid-soft);
+  border-radius: 999px;
   text-align: center;
+  flex: 0 0 auto;
+}
+html.light .tb-layout-row-label {
+  background: #F1F5F9;
+  color: #64748B;
 }
 .tb-layout-row-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-left: 4px;
+  gap: 6px;
+  margin-left: 10px;
   flex: 1;
 }
 .tb-layout-tile {
-  width: 36px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
+  background: var(--card-bg);
+  border: none;
+  border-radius: 6px;
   cursor: pointer;
-  color: var(--text);
-  padding: 2px;
+  color: var(--text-soft);
+  padding: 3px;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+html.light .tb-layout-tile {
+  background: #FFFFFF;
+  color: #475569;
 }
 .tb-layout-tile:hover {
   background: var(--grid-soft);
+  color: var(--text);
+}
+html.light .tb-layout-tile:hover {
+  background: #F8FAFC;
+  color: #0F172A;
 }
 .tb-layout-tile--on {
-  background: rgba(59, 130, 246, 0.18);
-  border-color: var(--accent);
-  color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--card-border);
+  color: var(--text);
+}
+html.light .tb-layout-tile--on {
+  background: #E2E8F0;
+  border-color: #CBD5E1;
+  color: #0F172A;
+}
+.tb-layout-tile--on:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--text-mute);
+  color: var(--text);
+}
+html.light .tb-layout-tile--on:hover {
+  background: #CBD5E1;
+  border-color: #94A3B8;
+  color: #0F172A;
 }
 
 /* Timeframe + Style buttons — same chip shape, chevron on the right. */
@@ -309,6 +350,40 @@ html.light .tb-modal {
 }
 .tb-list-row:hover { background: var(--grid-soft); }
 .tb-list-row--on { color: var(--accent); font-weight: 600; }
+
+/* Timeframe popover — grouped sections with inverted selection. */
+.tb-timeframe-popover { padding: 0; overflow: hidden; }
+.tb-tf-list { min-width: 200px; padding: 0; }
+.tb-list-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--text-mute);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  user-select: none;
+  border: none;
+  border-top: 1px solid var(--card-border);
+  border-bottom: 1px solid var(--card-border);
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+.tb-list-section:hover { color: var(--text); }
+.tb-list-section-items { display: flex; flex-direction: column; }
+.tb-list-section-icon { opacity: 0.7; }
+.tb-tf-row { border-radius: 0; padding: 9px 16px; font-size: 12.5px; }
+.tb-tf-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-tf-row.tb-list-row--on:hover { background: var(--text); }
 .tb-list-row-check {
   font-size: 11px;
   margin-left: 12px;
@@ -325,9 +400,55 @@ html.light .tb-modal {
 .tb-list-row--on .tb-list-row-icon { color: var(--accent); }
 .tb-list-row-label { flex: 1; }
 
+/* Style popover — grouped, inverted-selection rows like Timeframe. */
+.tb-style-popover { padding: 0; overflow: hidden; }
+.tb-style-list { min-width: 220px; padding: 4px 0; }
+.tb-style-row {
+  border-radius: 0;
+  padding: 0 12px;
+  height: 36px;
+  font-size: 13px;
+  gap: 0;
+}
+.tb-style-row .tb-list-row-icon { margin-right: 10px; }
+.tb-style-row .tb-list-row-icon svg { width: 20px; height: 20px; }
+.tb-style-popover .tb-list-divider { display: none; }
+.tb-style-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-style-row.tb-list-row--on:hover { background: var(--text); }
+.tb-style-row.tb-list-row--on .tb-list-row-icon { color: var(--bg); }
+.tb-list-divider {
+  height: 1px;
+  background: var(--card-border);
+  margin: 6px 0;
+}
+
 /* Cursor mode button — icon only with chevron, like Style. */
 .tb-cursor { gap: 4px; padding: 0 8px; }
 .tb-cursor-icon { display: inline-flex; align-items: center; color: inherit; }
+
+/* Cursor mode popover — mirrors Style popover row UI. */
+.tb-cursor-popover { padding: 0; overflow: hidden; }
+.tb-cursor-popover .tb-list { min-width: 200px; padding: 4px 0; }
+.tb-cursor-popover .tb-list-row {
+  border-radius: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  gap: 0;
+}
+.tb-cursor-popover .tb-list-row .tb-list-row-icon { margin-right: 10px; }
+.tb-cursor-popover .tb-list-row .tb-list-row-icon svg { width: 20px; height: 20px; }
+.tb-cursor-popover .tb-list-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-cursor-popover .tb-list-row.tb-list-row--on:hover { background: var(--text); }
+.tb-cursor-popover .tb-list-row.tb-list-row--on .tb-list-row-icon { color: var(--bg); }
+.tb-cursor-popover .tb-list-row-check { display: none; }
 
 /* Draw button — when a tool is active, the button fills with accent and
    the label switches to "Drawing: <name>". Same visual contract as the
@@ -362,23 +483,34 @@ html.light .tb-modal {
 }
 
 /* Keyboard-shortcuts help popover (the "?" chip). */
-.tb-help-popover { width: 290px; padding-bottom: 8px; }
+.tb-help-popover { width: 290px; padding-bottom: 8px; border-radius: 12px; }
+.tb-help-popover .tb-popover-title {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 14px 18px 2px;
+}
+.tb-help-popover .tb-popover-subtitle {
+  font-size: 12px;
+  color: var(--text-mute);
+  padding: 0 18px 12px;
+}
 .tb-shortcuts-group {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-mute);
-  padding: 10px 14px 4px;
+  padding: 10px 18px 4px;
 }
 .tb-shortcuts-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 4px 14px;
+  padding: 6px 18px;
 }
 .tb-shortcuts-label {
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--text);
   flex: 1;
 }
@@ -388,15 +520,15 @@ html.light .tb-modal {
   color: var(--text);
   background: var(--grid-soft);
   border: 1px solid var(--card-border);
-  border-radius: 4px;
-  padding: 2px 7px;
+  border-radius: 6px;
+  padding: 3px 8px;
   min-width: 64px;
   text-align: center;
   white-space: nowrap;
 }
 html.light .tb-kbd {
-  background: #F1F5F9;
-  border-color: #E2E8F0;
+  background: #F9F9F9;
+  border-color: #E1E4E8;
 }
 .tb-popover-section-label {
   font-size: 10px;
@@ -412,13 +544,36 @@ html.light .tb-kbd {
   margin: 8px 0;
 }
 
-/* Draw popover specifics — width matches the Flutter dialog. */
-.tb-draw-popover { width: 280px; }
+/* Draw popover — mirrors the chart-style dropdown UI: flush full-width
+   rows, no inner padding, groups separated by a thin divider. */
+.tb-draw-popover { padding: 0; overflow: hidden; }
+.tb-draw-list { min-width: 220px; padding: 4px 0; }
+.tb-draw-row {
+  border-radius: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  gap: 0;
+}
+.tb-draw-row .tb-list-row-icon {
+  margin-right: 10px;
+  color: var(--text-mute);
+}
+.tb-draw-row .tb-list-row-icon svg { width: 20px; height: 20px; }
+.tb-draw-row:hover .tb-list-row-icon { color: var(--text); }
+.tb-draw-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-draw-row.tb-list-row--on:hover { background: var(--text); }
+.tb-draw-row.tb-list-row--on .tb-list-row-icon { color: var(--bg); }
 
 .tb-draw-actions {
   display: flex;
   gap: 8px;
-  padding: 4px 12px 12px;
+  padding: 8px 12px 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--card-border);
 }
 .tb-draw-action {
   flex: 1;
@@ -434,11 +589,22 @@ html.light .tb-kbd {
   font: inherit;
   font-size: 11px;
 }
-.tb-draw-action:hover { background: var(--grid-strong); }
-.tb-draw-action-icon { font-size: 14px; line-height: 1; }
-.tb-draw-action-label { font-size: 10px; font-weight: 600; }
-.tb-draw-action--danger { color: #EF4444; }
-.tb-draw-action--danger:hover { color: #DC2626; }
+/* .tb-draw-action:hover { background: var(--grid-strong); } */
+.tb-draw-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: var(--text-mute);
+}
+.tb-draw-action:hover .tb-draw-action-icon { color: var(--text); }
+.tb-draw-action-label { font-size: 10px; font-weight: 600; color: var(--text-soft); }
+.tb-draw-action:hover .tb-draw-action-label { color: var(--text); }
+/* Trash keeps the muted icon style but retains a red label as a subtle
+   destructive cue. */
+/* .tb-draw-action--danger .tb-draw-action-label { color: #EF4444; }
+.tb-draw-action--danger:hover .tb-draw-action-icon { color: #EF4444; }
+.tb-draw-action--danger:hover .tb-draw-action-label { color: #DC2626; } */
 
 /* Indicators (fx) button + popover. */
 .tb-fx { padding: 0 10px; }
@@ -449,11 +615,18 @@ html.light .tb-kbd {
   font-size: 13px;
   letter-spacing: -0.02em;
 }
-.tb-fx-popover { width: 440px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column; }
+.tb-fx-popover {
+  width: 360px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
 .tb-fx-popover-content { display: flex; flex-direction: column; min-height: 0; }
 
 /* Search input — clean, dark-friendly, no native shadow. */
-.tb-fx-search-wrap { padding: 0 16px 10px; }
+.tb-fx-search-wrap { padding: 10px 12px 8px; }
 .tb-fx-search {
   width: 100%;
   height: 32px;
@@ -474,7 +647,7 @@ html.light .tb-kbd {
 .tb-fx-categories {
   display: flex;
   gap: 6px;
-  padding: 0 16px 10px;
+  padding: 0 12px 8px;
 }
 .tb-fx-cat-chip {
   padding: 5px 12px;
@@ -485,12 +658,18 @@ html.light .tb-kbd {
   border: 1px solid var(--card-border);
   border-radius: 6px;
 }
-.tb-fx-cat-chip:hover { color: var(--accent); border-color: var(--accent); }
 .tb-fx-cat-chip--on {
   background: var(--accent);
   border-color: var(--accent);
   color: #FFFFFF;
   font-weight: 700;
+}
+/* Dark mode — MyntColors.secondaryDark for the selected category chip
+   (All / Trend / Momentum / Volatility in the Indicators popover). */
+html:not(.light) .tb-fx-cat-chip--on {
+  background: #0052CC;
+  border-color: #0052CC;
+  color: #FFFFFF;
 }
 
 /* Active indicators list. */
@@ -503,8 +682,9 @@ html.light .tb-kbd {
 .tb-fx-active-row {
   display: flex;
   align-items: center;
-  padding: 6px 20px 6px 16px;
+  padding: 6px 12px;
   gap: 10px;
+  font-size: 13px;
 }
 .tb-fx-active-row:hover { background: var(--grid-soft); }
 .tb-fx-swatch {
@@ -527,16 +707,17 @@ html.light .tb-kbd {
 }
 .tb-fx-remove {
   margin-left: auto;
-  width: 24px; height: 24px;
+  width: 28px; height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: none;
-  color: #EF4444;
+  color: var(--text-mute);
   border-radius: 4px;
 }
-.tb-fx-remove:hover { background: rgba(239, 68, 68, 0.12); }
+.tb-fx-remove svg { width: 18px; height: 18px; }
+.tb-fx-remove:hover { color: var(--text); background: var(--grid-soft); }
 
 /* Catalog list — scrollable. */
 .tb-fx-catalog {
@@ -549,22 +730,24 @@ html.light .tb-kbd {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 16px 8px 20px;
+  padding: 6px 12px;
   background: transparent;
   border: none;
+  border-radius: 0;
   color: var(--text);
   text-align: left;
+  font-size: 13px;
 }
 .tb-fx-catalog-row:hover { background: var(--grid-soft); }
 .tb-fx-catalog-text { flex: 1; min-width: 0; }
 .tb-fx-catalog-label {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 .tb-fx-catalog-full {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-mute);
   margin-top: 1px;
   white-space: nowrap;
@@ -575,22 +758,22 @@ html.light .tb-kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px; height: 22px;
-  border-radius: 11px;
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--accent);
+  width: 20px; height: 20px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-mute);
   font-size: 14px;
   font-weight: 700;
   line-height: 1;
 }
 .tb-fx-catalog-row:hover .tb-fx-catalog-add {
-  background: var(--accent);
-  color: #FFFFFF;
+  background: var(--text);
+  color: var(--bg);
 }
 .tb-fx-empty {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-mute);
-  padding: 8px 20px 20px;
+  padding: 8px 12px 14px;
 }
 
 /* ── Shared form controls (Order Defaults, future Settings popover) ─── */
@@ -666,6 +849,8 @@ html.light .tb-kbd {
 }
 .tb-switch--on { background: var(--accent); }
 .tb-switch--on .tb-switch-thumb { left: 16px; }
+/* Dark mode — use MyntColors.secondaryDark (#0052CC) for the switch on-state. */
+html:not(.light) .tb-switch--on { background: #0052CC; }
 
 /* Segmented — pill group of mutually-exclusive options. */
 .tb-segmented {
@@ -687,6 +872,12 @@ html.light .tb-kbd {
 .tb-segmented-opt:hover { color: var(--text); }
 .tb-segmented-opt--on {
   background: var(--accent);
+  color: #FFFFFF;
+}
+/* Dark mode — MyntColors.secondaryDark for the selected segmented option
+   (Delivery/Intraday, Normal/Intraday in Order Defaults). */
+html:not(.light) .tb-segmented-opt--on {
+  background: #0052CC;
   color: #FFFFFF;
 }
 
@@ -727,7 +918,33 @@ html.light .tb-kbd {
 
 /* Order Defaults popover specifics. */
 .tb-od-popover { width: 420px; max-height: 80vh; overflow: hidden;
-  display: flex; flex-direction: column; }
+  display: flex; flex-direction: column;
+  border-radius: 12px; }
+.tb-od-popover .tb-form-row + .tb-form-row,
+.tb-settings-popover .tb-form-row + .tb-form-row { border-top: none; }
+.tb-od-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tb-od-header .tb-popover-title { flex: 1; }
+.tb-od-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  cursor: pointer !important;
+  padding: 6px;
+  margin: 8px 8px 0 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, color 120ms ease;
+}
+.tb-od-close * { cursor: pointer !important; }
+.tb-od-close:hover { background: var(--grid-soft); color: var(--text); }
 .tb-od-popover-content { display: flex; flex-direction: column; min-height: 0; }
 .tb-od-body {
   overflow-y: auto;
@@ -735,14 +952,159 @@ html.light .tb-kbd {
   padding-bottom: 8px;
 }
 
+/* Order Defaults + Settings — app-theme overrides (scoped). Removes hover
+   affordances and aligns typography / radii with the in-app dialog style. */
+.tb-od-popover .tb-popover-title,
+.tb-settings-popover .tb-popover-title,
+.tb-fx-popover .tb-popover-title {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 14px 13px 2px;
+}
+.tb-od-popover .tb-popover-subtitle,
+.tb-settings-popover .tb-popover-subtitle,
+.tb-fx-popover .tb-popover-subtitle {
+  font-size: 12px;
+  color: var(--text-mute);
+  padding: 4px 13px 5px;
+}
+.tb-fx-popover .tb-fx-search-wrap { padding: 4px 12px 18px; }
+
+/* Indicators (fx) popover — app-theme overrides. Removes hover affordance on
+   category chips and aligns radii / sizing with the in-app dialog style. */
+.tb-fx-popover { border-radius: 8px; }
+.tb-fx-popover .tb-popover-section-label { padding: 6px 12px 4px; }
+.tb-fx-popover .tb-popover-divider { margin: 4px 0; }
+.tb-fx-popover .tb-fx-cat-chip { transition: none; }
+.tb-fx-popover .tb-fx-cat-chip:hover {
+  color: var(--text-soft);
+  background: var(--grid-soft);
+  border-color: var(--card-border);
+}
+.tb-fx-popover .tb-fx-cat-chip--on,
+.tb-fx-popover .tb-fx-cat-chip--on:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+}
+html:not(.light) .tb-fx-popover .tb-fx-cat-chip--on,
+html:not(.light) .tb-fx-popover .tb-fx-cat-chip--on:hover {
+  background: #0052CC;
+  border-color: #0052CC;
+  color: #FFFFFF;
+}
+.tb-od-popover .tb-tabs,
+.tb-settings-popover .tb-tabs {
+  gap: 8px;
+  padding: 0 18px 0;
+  margin-bottom: 8px;
+}
+.tb-od-popover .tb-tab,
+.tb-settings-popover .tb-tab {
+  padding: 10px 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-mute);
+}
+.tb-od-popover .tb-tab:hover,
+.tb-settings-popover .tb-tab:hover { color: var(--text-mute); }
+.tb-od-popover .tb-tab--on,
+.tb-od-popover .tb-tab--on:hover,
+.tb-settings-popover .tb-tab--on,
+.tb-settings-popover .tb-tab--on:hover {
+  color: var(--accent);
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent);
+}
+.tb-od-popover .tb-form-row-label,
+.tb-settings-popover .tb-form-row-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tb-od-popover .tb-form-row-desc,
+.tb-settings-popover .tb-form-row-desc {
+  font-size: 11px;
+}
+.tb-od-popover .tb-segmented,
+.tb-settings-popover .tb-segmented {
+  border-radius: 8px;
+}
+.tb-od-popover .tb-segmented-opt,
+.tb-settings-popover .tb-segmented-opt {
+  font-size: 12px;
+  font-weight: 600;
+}
+.tb-od-popover .tb-segmented-opt:hover,
+.tb-settings-popover .tb-segmented-opt:hover { color: var(--text-mute); }
+.tb-od-popover .tb-segmented-opt--on,
+.tb-od-popover .tb-segmented-opt--on:hover,
+.tb-settings-popover .tb-segmented-opt--on,
+.tb-settings-popover .tb-segmented-opt--on:hover { color: #FFFFFF; }
+.tb-od-popover .tb-stepper,
+.tb-settings-popover .tb-stepper {
+  border-radius: 8px;
+}
+.tb-od-popover .tb-stepper-btn:hover,
+.tb-settings-popover .tb-stepper-btn:hover { color: var(--text-soft); }
+.tb-od-popover .tb-stepper-input:focus,
+.tb-settings-popover .tb-stepper-input:focus { color: var(--text); }
+
 /* Settings popover specifics. */
 .tb-settings-popover { width: 380px; max-height: 80vh; overflow: hidden;
-  display: flex; flex-direction: column; }
+  display: flex; flex-direction: column;
+  border-radius: 12px; }
 .tb-settings-popover-content { display: flex; flex-direction: column; min-height: 0; }
 .tb-settings-body {
   overflow-y: auto;
   max-height: 60vh;
   padding-bottom: 8px;
+}
+
+/* Slim scrollbar — mirrors the basket-order / "Trade from Chart" dialog
+   styling. Applied to every scrollable child of the chart-engine
+   popovers (Settings body, Indicators active + catalog lists). */
+.tb-settings-body,
+.tb-fx-active,
+.tb-fx-catalog {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+.tb-settings-body::-webkit-scrollbar,
+.tb-fx-active::-webkit-scrollbar,
+.tb-fx-catalog::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.tb-settings-body::-webkit-scrollbar-track,
+.tb-fx-active::-webkit-scrollbar-track,
+.tb-fx-catalog::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tb-settings-body::-webkit-scrollbar-thumb,
+.tb-fx-active::-webkit-scrollbar-thumb,
+.tb-fx-catalog::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+}
+.tb-settings-body::-webkit-scrollbar-thumb:hover,
+.tb-fx-active::-webkit-scrollbar-thumb:hover,
+.tb-fx-catalog::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+}
+html.light .tb-settings-body,
+html.light .tb-fx-active,
+html.light .tb-fx-catalog {
+  scrollbar-color: rgba(100, 116, 139, 0.30) transparent;
+}
+html.light .tb-settings-body::-webkit-scrollbar-thumb,
+html.light .tb-fx-active::-webkit-scrollbar-thumb,
+html.light .tb-fx-catalog::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.30);
+}
+html.light .tb-settings-body::-webkit-scrollbar-thumb:hover,
+html.light .tb-fx-active::-webkit-scrollbar-thumb:hover,
+html.light .tb-fx-catalog::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.50);
 }
 .tb-settings-body .tb-popover-section-label {
   margin-top: 6px;
@@ -948,7 +1310,7 @@ html.light .tb-sym-input:focus {
   bottom: calc(var(--main-chart-bottom, 0px) + 50px);
   transform: translateX(-50%);
   display: flex;
-  gap: 6px;
+  gap: 8px;
   z-index: 6;
   user-select: none;
   opacity: 0;
@@ -967,24 +1329,31 @@ html.light .tb-sym-input:focus {
   align-items: center;
   justify-content: center;
   background: #FFFFFF;
-  border: 1px solid #E2E8F0;
-  border-radius: 6px;
-  color: #475569;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+  color: #1F2937;
   cursor: pointer;
   padding: 0;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  outline: none;
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.04),
+    0 2px 4px rgba(0, 0, 0, 0.219);
   transition: color 100ms ease, border-color 100ms ease,
               background 100ms ease, box-shadow 100ms ease;
 }
 .pane-ctrl-btn:hover {
   color: var(--accent);
-  border-color: var(--accent);
-  background: #F8FAFC;
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.18);
+  border-color: #D1D5DB;
+  background: #F9FAFB;
 }
+.pane-ctrl-btn:focus-visible,
 .pane-ctrl-btn:active {
-  transform: translateY(0.5px);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 4px 10px rgba(37, 99, 235, 0.25);
 }
 /* Dark-mode override — keep the same white-on-floating-shadow feel but
    tinted for OLED comfort. Buttons still read as a distinct cluster
@@ -992,14 +1361,22 @@ html.light .tb-sym-input:focus {
 html:not(.light) .pane-ctrl-btn {
   background: #1F2937;
   border-color: #374151;
-  color: #CBD5E1;
+  color: #E5E7EB;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.30);
 }
 html:not(.light) .pane-ctrl-btn:hover {
   background: #111827;
-  border-color: var(--accent);
+  border-color: #4B5563;
   color: var(--accent);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.30);
+}
+html:not(.light) .pane-ctrl-btn:focus-visible,
+html:not(.light) .pane-ctrl-btn:active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.30),
+    0 4px 10px rgba(37, 99, 235, 0.35);
 }
 .pane.dragging { cursor: grabbing; }
 .pane.zoom-y { cursor: ns-resize; }
@@ -1047,12 +1424,12 @@ html:not(.light) .pane-ctrl-btn:hover {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 44px;
+  width: 36px;
   z-index: 30;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4px 0;
+  padding: 2px 0;
   background: var(--bg);
   border-right: 1px solid var(--card-border);
 }
@@ -1063,7 +1440,7 @@ html:not(.light) .pane-ctrl-btn:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1072,37 +1449,51 @@ html:not(.light) .pane-ctrl-btn:hover {
 }
 .draw-rail-tools::-webkit-scrollbar { width: 4px; }
 .draw-rail-tools::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 2px; }
-.draw-rail-sep { width: 26px; height: 1px; background: var(--card-border); margin: 5px auto; flex-shrink: 0; }
+.draw-rail-sep { width: 20px; height: 1px; background: var(--card-border); margin: 4px auto; flex-shrink: 0; }
 .draw-rail-btn {
   position: relative;
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  margin: 1px 0;
+  margin: 0;
   border: none;
   background: transparent;
   color: var(--text-soft);
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
 }
 .draw-rail-ic { display: flex; align-items: center; justify-content: center; }
 .draw-rail-btn:hover { background: var(--grid-soft); color: var(--text); }
-.draw-rail-btn--active { background: rgba(59, 130, 246, 0.16); color: var(--accent); }
-.draw-rail-btn--active:hover { background: rgba(59, 130, 246, 0.20); color: var(--accent); }
+.draw-rail-btn--active { background: rgba(120, 120, 120, 0.18); color: var(--text); }
+.draw-rail-btn--active:hover { background: rgba(120, 120, 120, 0.24); color: var(--text); }
 .draw-rail-btn--on { color: var(--accent); }
+.draw-rail-btn--lock.draw-rail-btn--on {
+  background: #FFFFFF;
+  color: #121212;
+}
+.draw-rail-btn--lock.draw-rail-btn--on:hover { background: #FFFFFF; color: #121212; }
+html:not(.light) .draw-rail-btn { color: #FFFFFF; }
+html:not(.light) .draw-rail-btn:hover,
+html:not(.light) .draw-rail-btn--active { color: #FFFFFF; }
+html:not(.light) .draw-rail-btn--on { color: var(--accent); }
+html:not(.light) .draw-rail-btn--lock.draw-rail-btn--on { color: #121212; }
+html:not(.light) .tb-chip { color: #D1D5DB; }
+html:not(.light) .tb-chip:hover { color: #FFFFFF; }
 .draw-rail-btn--danger:hover { background: rgba(239, 68, 68, 0.14); color: #EF4444; }
 .draw-rail-collapse { color: var(--text-mute); }
-/* Caret revealed on hover; hovering it opens the group's options. */
+/* Caret sits just outside the right edge of the icon, vertically centered.
+   Small dark filled triangle, visible only on hover. */
 .draw-rail-caret {
   position: absolute;
-  right: 1px;
-  bottom: 3px;
+  right: -3px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
-  color: var(--text-mute);
+  color: var(--text);
   opacity: 0;
   transition: opacity 0.08s ease;
 }
@@ -1131,6 +1522,8 @@ html:not(.light) .pane-ctrl-btn:hover {
 }
 .draw-rail-reopen[hidden] { display: none; }
 .draw-rail-reopen svg { width: 13px; height: 13px; }
+html:not(.light) .draw-rail-reopen { background: #0052CC; color: #FFFFFF; }
+.draw-rail-reopen svg { color: #FFFFFF; stroke: #FFFFFF; }
 
 /* Floating tooltip for rail buttons. */
 .draw-rail-tip {
@@ -1148,12 +1541,40 @@ html:not(.light) .pane-ctrl-btn:hover {
 }
 .draw-rail-tip[hidden] { display: none; }
 
-/* Flyout list rows with a leading tool icon. */
-.draw-rail-row { display: flex; align-items: center; gap: 9px; }
+/* Draw-rail flyout popover — mirrors the chart-style dropdown UI (image 2):
+   220px min width, padded list, flush rows, dark active row. */
+.tb-popover[data-kind="draw-rail"] {
+  padding: 0;
+  overflow: hidden;
+}
+.tb-popover[data-kind="draw-rail"] .tb-draw-popover-content {
+  padding: 4px 0;
+  white-space: nowrap;
+}
+.draw-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: 0;
+  padding: 0 12px;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  font-size: 13px;
+}
+.draw-rail-row .draw-rail-row-ic { margin-right: 10px; }
 .draw-rail-row-ic { display: inline-flex; color: var(--text-soft); flex-shrink: 0; }
-.tb-list-row--active { background: var(--accent); color: #FFFFFF; }
+.draw-rail-row-ic svg { width: 20px; height: 20px; }
+.draw-rail-row:hover .draw-rail-row-ic { color: var(--text); }
+.tb-list-row--active {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-list-row--active:hover { background: var(--text); }
 .tb-list-row--active .tb-list-row-label,
-.tb-list-row--active .draw-rail-row-ic { color: #FFFFFF; }
+.tb-list-row--active .draw-rail-row-ic { color: var(--bg); }
 
 /* Lab ---------------------------------------------------------------------- */
 .tb-lab > span { font-size: 12px; }

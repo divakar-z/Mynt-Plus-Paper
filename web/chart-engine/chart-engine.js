@@ -426,8 +426,8 @@ function _attachPaneControls(container, paneId) {
   };
   bar.appendChild(mk(ICONS.minus, 'Zoom out',          chartCall('zoomOut')));
   bar.appendChild(mk(ICONS.plus,  'Zoom in',           chartCall('zoomIn')));
-  bar.appendChild(mk(ICONS.fit,   'Maximize / restore pane',
-                                                       () => _maximizePane(paneId)));
+  // bar.appendChild(mk(ICONS.fit,   'Maximize / restore pane',
+  //                                                      () => _maximizePane(paneId)));
   bar.appendChild(mk(ICONS.left,  'Pan left',          chartCall('panLeft')));
   bar.appendChild(mk(ICONS.right, 'Pan right',         chartCall('panRight')));
   bar.appendChild(mk(ICONS.reset, 'Reset view',        chartCall('resetView')));
@@ -879,7 +879,7 @@ window.__activePaneChart = () => {
 // as the rail expands/collapses. The rail only physically overlays the
 // LEFTMOST column, so only panes whose left edge sits at the layout's left
 // edge get the gutter — every other pane keeps a normal 8px left.
-window.__drawRailGutter = 46;
+window.__drawRailGutter = 48;
 function applyRailGutters() {
   const layout = document.getElementById('layout');
   if (!layout) return;
