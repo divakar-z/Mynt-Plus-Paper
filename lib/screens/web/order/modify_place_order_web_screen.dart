@@ -445,7 +445,7 @@ class _ModifyPlaceOrderScreenState
         price = priceCtrl.text;
       }
 
-      _isMarketOrder = prcType == "MKT";
+      _isMarketOrder = prcType == "MKT" || prcType == "SL-MKT";
       _isStoplossOrder = prcType == "SL-LMT" || prcType == "SL-MKT";
       _isBOCOOrderEnabled = widget.modifyOrderArgs.sPrdtAli == "BO" ||
           widget.modifyOrderArgs.sPrdtAli == "CO";
