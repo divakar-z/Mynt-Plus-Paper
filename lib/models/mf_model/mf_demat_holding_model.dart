@@ -45,6 +45,8 @@ class MfDematHoldingData {
   String? iSIN;
   String? scripName;
   String? planType;
+  String? schemeCode;
+  String? minimumPurchaseAmount;
   String? totalUnits;
   String? avgNav;
   String? curNav;
@@ -60,6 +62,8 @@ class MfDematHoldingData {
     this.iSIN,
     this.scripName,
     this.planType,
+    this.schemeCode,
+    this.minimumPurchaseAmount,
     this.totalUnits,
     this.avgNav,
     this.curNav,
@@ -76,6 +80,8 @@ class MfDematHoldingData {
     iSIN = json['ISIN']?.toString();
     scripName = json['SCRIP_NAME']?.toString();
     planType = json['PlanType']?.toString();
+    schemeCode = json['Scheme_Code']?.toString();
+    minimumPurchaseAmount = json['Minimum_Purchase_Amount']?.toString();
     totalUnits = json['total_units']?.toString();
     avgNav = json['avg_nav']?.toString();
     curNav = json['Cur_Nav']?.toString();
@@ -98,6 +104,8 @@ class MfDematHoldingData {
     json['ISIN'] = iSIN;
     json['SCRIP_NAME'] = scripName;
     json['PlanType'] = planType;
+    json['Scheme_Code'] = schemeCode;
+    json['Minimum_Purchase_Amount'] = minimumPurchaseAmount;
     json['total_units'] = totalUnits;
     json['avg_nav'] = avgNav;
     json['Cur_Nav'] = curNav;

@@ -2,6 +2,7 @@ class MfPlaceOrderResponces {
   String? clientCode;
   String? orderNumber;
   String? responseMessage;
+  String? emsg;
   String? stat;
   String? transactionCode;
   String? transactionNumber;
@@ -47,6 +48,7 @@ class MfPlaceOrderResponces {
       this.dPFolioNo, 
       this.orderNumber,
       this.responseMessage,
+      this.emsg,
       this.stat,
       this.transactionCode,
       this.transactionNumber});
@@ -73,6 +75,7 @@ class MfPlaceOrderResponces {
     clientCode = json['client_code'] ?? json['ClientCode'].toString();
     orderNumber = json['order_number'].toString();
     responseMessage = json['response_message'].toString();
+    emsg = json['emsg']?.toString();
      
     transactionCode = json['transaction_code'].toString();
     transactionNumber = json['transaction_number'].toString();
@@ -83,6 +86,7 @@ class MfPlaceOrderResponces {
     data['client_code'] = clientCode;
     data['order_number'] = orderNumber;
     data['response_message'] = responseMessage;
+    data['emsg'] = emsg;
     data['stat'] = stat;
     data['transaction_code'] = transactionCode;
     data['transaction_number'] = transactionNumber;
