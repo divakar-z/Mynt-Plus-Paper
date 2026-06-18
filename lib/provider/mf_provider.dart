@@ -463,6 +463,14 @@ class MFProvider extends DefaultChangeNotifier {
     redemptionQty.text = _holssinglelist![0].avgQty!;
   }
 
+  /// Sets the single-holding list directly from a caller-supplied item.
+  /// Used by the Mutual Fund Beta tab, which already has its own holding object
+  /// (with scheme code) rather than one looked up from [mfholdingnew].
+  void setHoldSingleListItem(dynamic item) {
+    _holssinglelist = [item];
+    notifyListeners();
+  }
+
   String _paymentName = "UPI";
 
   String get paymentName => _paymentName;
@@ -2715,7 +2723,16 @@ class MFProvider extends DefaultChangeNotifier {
         _investloader = false;
         _loadingMessage = null;
         notifyListeners();
-        warningMessage(context, "${_mfPlaceOrderResponces?.remarks}");
+        // Show the backend error (emsg) in a toast; fall back to remarks /
+        // response_message so the regular MF tab's existing messages still work.
+        final res = _mfPlaceOrderResponces;
+        final candidates = [res?.emsg, res?.remarks, res?.responseMessage];
+        final errMsg = candidates.firstWhere(
+          (m) => m != null && m.isNotEmpty && m != 'null',
+          orElse: () => 'Unable to place the order.',
+        )!;
+        warningMessage(
+            context, "$errMsg\nPlease contact our support team.");
       }
       //     // showModalBottomSheet(
       //     //     context: context,

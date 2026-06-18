@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart'
     show
         InkWell,
         Icons,
+        IconData,
         Icon,
         TextPainter,
         TextSpan,
@@ -37,24 +39,46 @@ import 'package:flutter/material.dart'
         ValueListenableBuilder,
         RawScrollbar,
         Radius,
-        Builder;
+        Builder,
+        GestureDetector,
+        HitTestBehavior,
+        BoxDecoration,
+        BorderRadius,
+        BoxShadow,
+        Offset,
+        Padding,
+        MediaQuery,
+        showDialog,
+        Dialog,
+        RoundedRectangleBorder;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+
+import 'package:mynt_plus/models/mf_model/mf_demat_holding_model.dart';
+import 'package:mynt_plus/models/mf_model/mf_holding_new_model.dart';
+import 'package:mynt_plus/models/mf_model/mutual_fundmodel.dart';
+import 'package:mynt_plus/provider/thems.dart';
+import 'package:mynt_plus/screens/web/holdings/mf_holding_detail_screen_web.dart';
+import 'package:mynt_plus/screens/web/ordersbook/mf/redeem_bottom_sheet_web.dart';
+import 'package:mynt_plus/screens/web/mutual_fund/mf_order_screen_web.dart';
 
 import '../../../provider/mf_provider.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../sharedWidget/mynt_loader.dart';
 
-/// Read-only holdings table for the "Mutual Fund Beta" tab.
+/// Holdings table for the "Mutual Fund Beta" tab.
 ///
 /// Visually mirrors [MfTableExample] (same 8 columns, sortable headers, hover
 /// highlight, scrollbars, tooltips, P&L coloring) but is backed by the demat
-/// holdings model ([MfDematHolding]). Row-tap detail and the Redeem/Add menu
-/// are intentionally omitted: the demat endpoint doesn't carry the scheme code /
-/// minimum purchase amount / transactions those flows require.
+/// holdings model ([MfDematHolding]).
+///
+/// The demat response carries the scheme code and minimum purchase amount, so
+/// each Beta row is mapped directly to a regular MF [Data] object via
+/// [_resolveHolding] and that drives the Redeem / Add / Info flows unchanged —
+/// no lookup against the regular MF holdings is needed.
 class MfDematTableExample extends ConsumerStatefulWidget {
   final String? searchQuery;
 
@@ -70,6 +94,12 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
   bool _sortAscending = true;
   final ValueNotifier<int?> _hoveredRowIndex = ValueNotifier<int?>(null);
 
+  // Popover state (mirrors MfTableExample so the action menu behaves identically)
+  shadcn.PopoverController? _activePopoverController;
+  int? _popoverRowIndex;
+  bool _isHoveringDropdown = false;
+  Timer? _popoverCloseTimer;
+
   @override
   void initState() {
     super.initState();
@@ -77,12 +107,63 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(mfProvider).fetchmfdematholding();
     });
+
+    _hoveredRowIndex.addListener(_onHoverChanged);
   }
 
   @override
   void dispose() {
+    _cancelPopoverCloseTimer();
+    _hoveredRowIndex.removeListener(_onHoverChanged);
     _hoveredRowIndex.dispose();
     super.dispose();
+  }
+
+  // Close popover when hover state changes
+  void _onHoverChanged() {
+    if (_activePopoverController != null) {
+      final currentHover = _hoveredRowIndex.value;
+      if (currentHover == _popoverRowIndex) {
+        _cancelPopoverCloseTimer();
+        return;
+      }
+      if (_isHoveringDropdown) {
+        _cancelPopoverCloseTimer();
+        return;
+      }
+      _startPopoverCloseTimer();
+    }
+  }
+
+  void _startPopoverCloseTimer() {
+    _cancelPopoverCloseTimer();
+    _popoverCloseTimer = Timer(const Duration(milliseconds: 150), () {
+      if (!_isHoveringDropdown && _hoveredRowIndex.value != _popoverRowIndex) {
+        _closePopover();
+      }
+    });
+  }
+
+  void _cancelPopoverCloseTimer() {
+    _popoverCloseTimer?.cancel();
+    _popoverCloseTimer = null;
+  }
+
+  void _closePopover() {
+    _cancelPopoverCloseTimer();
+    try {
+      _activePopoverController?.close();
+    } catch (_) {
+      // Overlay might already be closed, ignore
+    }
+    final needsRebuild =
+        _activePopoverController != null || _popoverRowIndex != null;
+    _activePopoverController = null;
+    _popoverRowIndex = null;
+    _isHoveringDropdown = false;
+    if (needsRebuild && mounted) {
+      setState(() {});
+    }
   }
 
   // Helper method to get appropriate text style for table cells
@@ -123,12 +204,37 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
   }
 
-  // Builds a cell with hover highlight covering the entire cell including padding
+  /// Maps a Beta (demat) holding to a regular MF [Data] object so the proven
+  /// Redeem / Add / Info flows can run unchanged. The demat response now carries
+  /// the scheme code and minimum purchase amount, so this is built entirely from
+  /// the Beta fields — no lookup against the regular MF holdings.
+  Data _resolveHolding(MfDematHoldingData beta) {
+    final d = Data(
+      iSIN: beta.iSIN,
+      name: beta.scripName,
+      avgQty: beta.totalUnits,
+      avgNav: beta.avgNav,
+      curNav: beta.curNav,
+      investedValue: beta.investedValue,
+      currentValue: beta.currentValue,
+      changeprofitLoss: beta.changeprofitLoss,
+      profitLoss: beta.profitLoss,
+    );
+    // Scheme code / min purchase aren't in the Data constructor — set directly.
+    d.sCHEMECODE = beta.schemeCode;
+    d.minimumPurchaseAmount = beta.minimumPurchaseAmount;
+    return d;
+  }
+
+  // Builds a cell with hover detection that covers the entire cell including
+  // padding. When [holding] is provided, the cell becomes tappable (opens the
+  // holding detail), matching the MF tab.
   shadcn.TableCell buildCellWithHover({
     required Widget child,
     required int rowIndex,
     required int columnIndex,
     bool alignRight = false,
+    dynamic holding,
   }) {
     final isFirstColumn = columnIndex == 0; // Fund Name column
     final isLastColumn = columnIndex == 7; // Chg column
@@ -154,14 +260,28 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
         ),
       ),
       child: MouseRegion(
-        onEnter: (_) => _hoveredRowIndex.value = rowIndex,
-        onExit: (_) => _hoveredRowIndex.value = null,
+        onEnter: (_) {
+          _hoveredRowIndex.value = rowIndex;
+          if (_activePopoverController != null &&
+              _popoverRowIndex == rowIndex) {
+            _cancelPopoverCloseTimer();
+          }
+        },
+        onExit: (_) {
+          _hoveredRowIndex.value = null;
+          if (_activePopoverController != null && !_isHoveringDropdown) {
+            _startPopoverCloseTimer();
+          }
+        },
         child: ValueListenableBuilder<int?>(
           valueListenable: _hoveredRowIndex,
           child: child,
           builder: (context, hoveredIndex, cachedChild) {
-            final isRowHovered = hoveredIndex == rowIndex;
-            return Container(
+            final isRowHovered = hoveredIndex == rowIndex ||
+                (_activePopoverController != null &&
+                    _popoverRowIndex == rowIndex);
+
+            final container = Container(
               padding: cellPadding,
               color: isRowHovered
                   ? resolveThemeColor(context,
@@ -172,6 +292,18 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
               alignment: alignRight ? Alignment.topRight : null,
               child: cachedChild,
             );
+
+            if (holding != null) {
+              return GestureDetector(
+                onTap: () {
+                  _hoveredRowIndex.value = null;
+                  _showHoldingDetail(holding);
+                },
+                behavior: HitTestBehavior.opaque,
+                child: container,
+              );
+            }
+            return container;
           },
         ),
       ),
@@ -347,6 +479,251 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
     }
 
     return minWidths;
+  }
+
+  // Handler: Show holding detail sheet (operates on the resolved MF [Data])
+  void _showHoldingDetail(dynamic holding) {
+    shadcn.openSheet(
+      context: context,
+      barrierColor: Colors.transparent,
+      builder: (sheetContext) {
+        final screenWidth = MediaQuery.of(sheetContext).size.width;
+        final sheetWidth = screenWidth < 1300 ? screenWidth * 0.3 : 480.0;
+        return Container(
+          width: sheetWidth,
+          decoration: BoxDecoration(
+            color: resolveThemeColor(
+              context,
+              dark: MyntColors.backgroundColorDark,
+              light: MyntColors.backgroundColor,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.1),
+                blurRadius: 5,
+                offset: const Offset(-2, 0),
+              ),
+            ],
+          ),
+          child: MfHoldingDetailScreenWeb(
+            holding: holding,
+          ),
+        );
+      },
+      position: shadcn.OverlayPosition.end,
+    );
+  }
+
+  // Handler: Redeem mutual fund. The Beta holding ([Data] built from demat data)
+  // already carries scheme code + units, so it's pushed straight into the
+  // provider's single-holding list, which the redeem sheet reads from.
+  Future<void> _handleRedeem(dynamic holding) async {
+    final mfData = ref.read(mfProvider);
+    mfData.setHoldSingleListItem(holding);
+    mfData.recdemevalu();
+    showDialog(
+      context: context,
+      builder: (context) => const RedemptionBottomSheetWeb(),
+    );
+  }
+
+  // Handler: Add (place order) for mutual fund
+  Future<void> _handleAdd(dynamic holding) async {
+    final mf = ref.read(mfProvider);
+
+    MutualFundList mfItem = MutualFundList(
+      iSIN: holding.iSIN,
+      schemeCode: holding.sCHEMECODE,
+      schemeName: holding.name,
+      name: holding.name,
+      minimumPurchaseAmount: holding.minimumPurchaseAmount,
+      sIPFLAG: 'Y',
+    );
+
+    String amt = holding.minimumPurchaseAmount ?? '500';
+    mf.invAmt.text = amt.split('.').first;
+    mf.installmentAmt.text = amt.split('.').first;
+
+    mf.chngOrderType('One-time');
+    mf.orderchangetitle('One-time');
+
+    final screenSize = MediaQuery.of(context).size;
+    final dialogWidth = (screenSize.width * 0.30).clamp(380.0, 500.0);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final isDark = ref.read(themeProvider).isDarkMode;
+        return Dialog(
+          backgroundColor: isDark
+              ? MyntColors.backgroundColorDark
+              : MyntColors.backgroundColor,
+          elevation: 0,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          child: SizedBox(
+            width: dialogWidth,
+            child: MFOrderScreenWeb(mfData: mfItem, isAdditional: true),
+          ),
+        );
+      },
+    );
+  }
+
+  // Build styled menu button matching the MF tab dropdown
+  shadcn.MenuButton _buildMenuButton({
+    required IconData icon,
+    required String title,
+    required void Function(BuildContext) onPressed,
+    required Color iconColor,
+    required Color textColor,
+  }) {
+    return shadcn.MenuButton(
+      onPressed: onPressed,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: iconColor),
+            const SizedBox(width: 10),
+            Text(
+              title,
+              style: MyntWebTextStyles.body(
+                context,
+                fontWeight: MyntFonts.medium,
+                color: textColor,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Build the 3-dot options menu button with shadcn dropdown
+  Widget _buildOptionsMenuButton(
+    dynamic holding,
+    int rowIndex,
+    double units,
+  ) {
+    return Builder(
+      builder: (buttonContext) {
+        return GestureDetector(
+          onTap: () {
+            _closePopover();
+
+            List<shadcn.MenuItem> menuItems = [];
+            final iconColor = resolveThemeColor(context,
+                dark: MyntColors.textPrimaryDark,
+                light: MyntColors.textPrimary);
+            final textColor = resolveThemeColor(context,
+                dark: MyntColors.textPrimaryDark,
+                light: MyntColors.textPrimary);
+
+            // Redeem option (only when there are units to redeem)
+            if (units > 0) {
+              menuItems.add(
+                _buildMenuButton(
+                  icon: shadcn.LucideIcons.gift,
+                  title: 'Redeem',
+                  iconColor: iconColor,
+                  textColor: textColor,
+                  onPressed: (ctx) {
+                    _closePopover();
+                    _hoveredRowIndex.value = null;
+                    _handleRedeem(holding);
+                  },
+                ),
+              );
+            }
+
+            // Add (place order) option
+            menuItems.add(
+              _buildMenuButton(
+                icon: Icons.add,
+                title: 'Add',
+                iconColor: iconColor,
+                textColor: textColor,
+                onPressed: (ctx) {
+                  _closePopover();
+                  _hoveredRowIndex.value = null;
+                  _handleAdd(holding);
+                },
+              ),
+            );
+
+            if (menuItems.isNotEmpty) {
+              menuItems.add(const shadcn.MenuDivider());
+            }
+
+            // Info option (always available)
+            menuItems.add(
+              _buildMenuButton(
+                icon: Icons.info_outline,
+                title: 'Info',
+                iconColor: iconColor,
+                textColor: textColor,
+                onPressed: (ctx) {
+                  _closePopover();
+                  _hoveredRowIndex.value = null;
+                  _showHoldingDetail(holding);
+                },
+              ),
+            );
+
+            final controller = shadcn.PopoverController();
+            _activePopoverController = controller;
+            _popoverRowIndex = rowIndex;
+
+            controller.show(
+              context: buttonContext,
+              alignment: Alignment.topRight,
+              offset: const Offset(0, 4),
+              builder: (ctx) {
+                return MouseRegion(
+                  onEnter: (_) {
+                    _isHoveringDropdown = true;
+                    _cancelPopoverCloseTimer();
+                  },
+                  onExit: (_) {
+                    _isHoveringDropdown = false;
+                    _startPopoverCloseTimer();
+                  },
+                  child: shadcn.DropdownMenu(
+                    children: menuItems,
+                  ),
+                );
+              },
+            );
+
+            setState(() {});
+          },
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textWhite, light: MyntColors.textWhite),
+              borderRadius: BorderRadius.circular(4),
+              boxShadow: [
+                BoxShadow(
+                  color: resolveThemeColor(context,
+                      dark: Colors.transparent, light: Colors.grey),
+                  blurRadius: 2,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Icon(
+              Icons.more_vert,
+              size: 16,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textPrimary, light: MyntColors.textPrimary),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -572,25 +949,65 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                           ...displayHoldings.asMap().entries.map((entry) {
                             final index = entry.key;
                             final holding = entry.value;
+                            // Map to the MF model so the action flows work.
+                            final resolved = _resolveHolding(holding);
+                            final units =
+                                double.tryParse(holding.totalUnits ?? '0') ??
+                                    0.0;
 
                             return shadcn.TableRow(
                               cells: [
-                                // Fund Name
+                                // Fund Name with 3-dot action menu on hover
                                 buildCellWithHover(
                                   rowIndex: index,
                                   columnIndex: 0,
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Tooltip(
-                                      message: holding.scripName ?? 'N/A',
-                                      child: Text(
-                                        holding.scripName ?? 'N/A',
-                                        overflow: TextOverflow.ellipsis,
-                                        maxLines: 1,
-                                        softWrap: false,
-                                        style: _getTextStyle(context),
-                                      ),
-                                    ),
+                                  holding: resolved,
+                                  child: ValueListenableBuilder<int?>(
+                                    valueListenable: _hoveredRowIndex,
+                                    builder: (context, hoveredIndex, _) {
+                                      final isRowHovered =
+                                          hoveredIndex == index;
+                                      return SizedBox(
+                                        width: double.infinity,
+                                        height: double.infinity,
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Align(
+                                                alignment:
+                                                    Alignment.centerLeft,
+                                                child: Tooltip(
+                                                  message:
+                                                      holding.scripName ??
+                                                          'N/A',
+                                                  child: Text(
+                                                    holding.scripName ?? 'N/A',
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    maxLines: 1,
+                                                    softWrap: false,
+                                                    style:
+                                                        _getTextStyle(context),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            if (isRowHovered ||
+                                                (_activePopoverController !=
+                                                        null &&
+                                                    _popoverRowIndex ==
+                                                        index)) ...[
+                                              const SizedBox(width: 8),
+                                              _buildOptionsMenuButton(
+                                                resolved,
+                                                index,
+                                                units,
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      );
+                                    },
                                   ),
                                 ),
                                 // Units
@@ -598,6 +1015,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   rowIndex: index,
                                   columnIndex: 1,
                                   alignRight: true,
+                                  holding: resolved,
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
@@ -620,6 +1038,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   rowIndex: index,
                                   columnIndex: 2,
                                   alignRight: true,
+                                  holding: resolved,
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
@@ -642,6 +1061,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   rowIndex: index,
                                   columnIndex: 3,
                                   alignRight: true,
+                                  holding: resolved,
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
@@ -664,6 +1084,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   rowIndex: index,
                                   columnIndex: 4,
                                   alignRight: true,
+                                  holding: resolved,
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
@@ -687,6 +1108,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   rowIndex: index,
                                   columnIndex: 5,
                                   alignRight: true,
+                                  holding: resolved,
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
@@ -710,6 +1132,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   rowIndex: index,
                                   columnIndex: 6,
                                   alignRight: true,
+                                  holding: resolved,
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
@@ -735,6 +1158,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   rowIndex: index,
                                   columnIndex: 7,
                                   alignRight: true,
+                                  holding: resolved,
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
