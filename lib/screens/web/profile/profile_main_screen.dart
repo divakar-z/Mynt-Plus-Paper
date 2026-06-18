@@ -533,7 +533,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   OrdQtyPref QtyPrefer = OrdQtyPref.mktqty;
 
   // Text controllers for editable fields
-  TextEditingController mktProtCtrl = TextEditingController(text: "1");
+  TextEditingController mktProtCtrl = TextEditingController(text: "5");
   TextEditingController qtyCtrl = TextEditingController(text: "1");
 
   // Additional web-specific settings
@@ -598,7 +598,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
             ? OrdQtyPref.mktlot
             : OrdQtyPref.mktqty;
         qtyCtrl = TextEditingController(text: "${userSavedOrderPreference['qty'] ?? '1'}");
-        mktProtCtrl = TextEditingController(text: "${userSavedOrderPreference['mrkprot'] ?? '1'}");
+        mktProtCtrl = TextEditingController(text: "${userSavedOrderPreference['mrkprot'] ?? '5'}");
         expriceType = ["Limit", "Market"].contains(userSavedOrderPreference['expos'])
             ? userSavedOrderPreference['expos']
             : 'Market';
@@ -1415,7 +1415,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
       priceType = "Limit";
       orderType = "Delivery";
       validity = "DAY";
-      mktProtCtrl.text = "1";
+      mktProtCtrl.text = "5";
       qtyCtrl.text = "1";
       QtyPrefer = OrdQtyPref.mktqty;
       expriceType = "Market";
