@@ -103,6 +103,10 @@ Map<String, dynamic> buildOrderScreenArgs({
   final defaultPrd = resolveProduct(scrip, orderDefaults);
   final raw = <String, dynamic>{
     if (prctyp != null) 'prctyp': prctyp,
+    // PlaceOrderScreenWeb reads `raw['trantype']` to seed its Buy/Sell toggle
+    // ('S' → sell, anything else → buy). Without it the screen always lands on
+    // Buy regardless of which side (bid/ask, or the +-menu pick) was chosen.
+    'trantype': isBuy ? 'B' : 'S',
     'qty': qty.toString(),
     if (prc != null) 'prc': prc.toStringAsFixed(2),
     if (trgprc != null) 'trgprc': trgprc.toStringAsFixed(2),

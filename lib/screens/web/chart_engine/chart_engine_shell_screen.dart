@@ -101,6 +101,12 @@ class _ChartEngineShellScreenState
   // without first initializing `storeQuotes[token] = {}`, so the assignment
   // silently no-ops when the map entry doesn't exist).
   final Map<String, bool> _tradableCache = {};
+  // Per-shell cache of the scrip's lot size + tick size from GetSecurityInfo,
+  // keyed by `exch|token`. Re-applied on every symbol switch (even a cache hit)
+  // so the lot-multiplied qty self-heals each time — not just the first time we
+  // see the scrip. Without this, re-selecting a futures/commodity with a
+  // lot-less scrip left qty=1 and the order was rejected.
+  final Map<String, ({int? ls, double? ti, int? frz})> _scripMetaCache = {};
   final Map<int, int> _pushedTimeframe = {};
   final Map<int, String> _pushedOverlaysJson = {};
   final Map<int, String> _pushedPaneOverlaysJson = {};
@@ -269,6 +275,7 @@ class _ChartEngineShellScreenState
     final nowConnected = ws.wsConnected;
     if (nowConnected && !_lastWsConnected) {
       _resubscribeAll();
+      _post(encodeWsReconnected());
     }
     _lastWsConnected = nowConnected;
     final data = ws.socketDatas;
@@ -1803,6 +1810,18 @@ class _ChartEngineShellScreenState
     final cached = _tradableCache[key];
     if (cached != null) {
       _pushTradable(paneIndex, key, cached);
+      // Re-apply the cached lot/tick metadata so the qty self-heals on EVERY
+      // switch back to this symbol, not just the first time. (This used to
+      // early-return, skipping the backfill — so a futures/commodity
+      // re-selected with a lot-less scrip kept qty=1 and got rejected.)
+      final meta = _scripMetaCache[key];
+      if (meta != null &&
+          ((meta.ls != null && meta.ls! > 0) ||
+              (meta.ti != null && meta.ti! > 0))) {
+        ref
+            .read(chartEngineSessionProvider.notifier)
+            .backfillPaneScripMetadata(paneIndex, ls: meta.ls, ti: meta.ti);
+      }
       return;
     }
     // Call the API directly. GetSecurityInfo reports tradable status via
@@ -1822,6 +1841,8 @@ class _ChartEngineShellScreenState
       // at 1 even for option/future contracts.
       final lotSize = int.tryParse(info.ls ?? '');
       final tickSize = double.tryParse(info.ti ?? '');
+      final freezeQty = int.tryParse(info.frzqty ?? '');
+      _scripMetaCache[key] = (ls: lotSize, ti: tickSize, frz: freezeQty);
       if ((lotSize != null && lotSize > 0) ||
           (tickSize != null && tickSize > 0)) {
         ref
@@ -1830,6 +1851,30 @@ class _ChartEngineShellScreenState
                 ls: lotSize, ti: tickSize);
       }
     }).catchError((_) {});
+  }
+
+  /// Freeze quantity (in units) for a scrip, from the GetSecurityInfo cache,
+  /// fetched on demand if not already known. Returns 0 when unknown (caller
+  /// then skips slicing and places a single order). Used by instant orders to
+  /// split large quantities into freeze-qty-bounded child orders.
+  Future<int> _freezeQtyFor(ChartScrip scrip) async {
+    final key = '${scrip.exch}|${scrip.token}';
+    final cached = _scripMetaCache[key];
+    if (cached != null && cached.frz != null && cached.frz! > 0) {
+      return cached.frz!;
+    }
+    try {
+      final info = await locator<ApiExporter>().getScripInfo(
+          scrip.token, scrip.exch);
+      if (info.stat == 'Ok') {
+        final frz = int.tryParse(info.frzqty ?? '');
+        final ls = int.tryParse(info.ls ?? '');
+        final ti = double.tryParse(info.ti ?? '');
+        _scripMetaCache[key] = (ls: ls, ti: ti, frz: frz);
+        if (frz != null && frz > 0) return frz;
+      }
+    } catch (_) {}
+    return 0;
   }
 
   void _pushTradable(int paneIndex, String key, bool tradable) {
@@ -1864,6 +1909,47 @@ class _ChartEngineShellScreenState
         kind != OrderPrefillKind.blank &&
         price != null) {
       final deviceInfo = ref.read(authProvider).deviceInfo;
+      final defaults = ref.read(orderDefaultsProvider);
+      // Freeze-qty slicing: the exchange rejects an order whose quantity
+      // exceeds the instrument's freeze qty unless it is split into child
+      // orders of <= freeze qty. The normal popup path already slices; instant
+      // mode must do the same headlessly. Per-slice qty is lot-aligned and
+      // bounded by the freeze qty (same formula the popup uses).
+      final lot = scrip.ls > 0 ? scrip.ls : 1;
+      final freeze = await _freezeQtyFor(scrip);
+      if (!mounted) return;
+      int perSlice = freeze > 1 ? (freeze ~/ lot) * lot : 0;
+      if (perSlice < lot) perSlice = lot;
+      if (freeze > 0 && qty > perSlice) {
+        final full = qty ~/ perSlice;
+        final rem = qty % perSlice;
+        final sliceCount = full + (rem > 0 ? 1 : 0);
+        final maxSlices = ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
+        if (sliceCount > maxSlices) {
+          ResponsiveSnackBar.showWarning(
+              context,
+              'Order needs $sliceCount slices (max $maxSlices). '
+              'Reduce quantity or use the order window.');
+          return;
+        }
+        final sliceQtys = <int>[
+          for (var i = 0; i < full; i++) perSlice,
+          if (rem > 0) rem,
+        ];
+        final inputs = [
+          for (final q in sliceQtys)
+            buildPlaceOrderInput(
+              scrip: scrip,
+              qty: q,
+              kind: kind,
+              price: price,
+              deviceInfo: deviceInfo,
+              orderDefaults: defaults,
+            ),
+        ];
+        await ref.read(orderProvider).placeInstantSlices(context, inputs);
+        return;
+      }
       final input = buildPlaceOrderInput(
         scrip: scrip,
         qty: qty,
@@ -1872,7 +1958,7 @@ class _ChartEngineShellScreenState
         deviceInfo: deviceInfo,
         // Honor the user's Product Type default (intraday/delivery/normal)
         // instead of always firing CNC/NRML.
-        orderDefaults: ref.read(orderDefaultsProvider),
+        orderDefaults: defaults,
       );
       await ref.read(orderProvider).fetchPlaceOrder(context, input, false);
       return;
@@ -2039,12 +2125,16 @@ class _ChartEngineShellScreenState
     // For SL-LMT trigger drag, preserve the limit/trigger offset.
     double? newTrigger;
     double finalNewPrice = newPrice;
-    if (kindPrefix == 'sl' && (order.prctyp == 'SL-LMT')) {
-      final oldTrg = double.tryParse(order.trgprc ?? '0') ?? 0;
-      final oldLim = double.tryParse(order.prc ?? '0') ?? 0;
-      final offset = oldLim - oldTrg;
+    if (kindPrefix == 'sl' && order.prctyp == 'SL-LMT') {
+      // Dragging the TRIGGER line of an SL-LMT — move ONLY the trigger; keep
+      // the limit (`prc`) where it was so the other (sl-l) line stays put.
       newTrigger = newPrice;
-      finalNewPrice = newPrice + offset;
+      finalNewPrice = double.tryParse(order.prc ?? '0') ?? newPrice;
+    } else if (kindPrefix == 'sl-l' && order.prctyp == 'SL-LMT') {
+      // Dragging the LIMIT line — move ONLY the limit; keep the original
+      // trigger so the sl (trigger) line stays put.
+      newTrigger = double.tryParse(order.trgprc ?? '0') ?? newPrice;
+      finalNewPrice = newPrice;
     } else if (kindPrefix == 'sl' && order.prctyp == 'SL-MKT') {
       // SL-MKT: only trgprc changes.
       newTrigger = newPrice;
@@ -2052,9 +2142,8 @@ class _ChartEngineShellScreenState
       // requires `prc`; copy the existing.
       finalNewPrice = double.tryParse(order.prc ?? '0') ?? 0;
     }
-    // kindPrefix == 'ord' (LMT) and kindPrefix == 'sl-l' (SL-LMT limit only):
-    // only `prc` changes; newTrigger stays null → dialog body shows the
-    // simpler "from→to" copy and ModifyOrderInput.trgprc falls back to prc.
+    // kindPrefix == 'ord' (LMT): only `prc` changes; newTrigger stays null →
+    // ModifyOrderInput.trgprc falls back to prc.
 
     if (session.effectiveInstantFor(paneIndex)) {
       // Same ModifyOrderInput construction as showModifyOrderDialog.

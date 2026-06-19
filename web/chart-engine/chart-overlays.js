@@ -35,22 +35,22 @@ class _ChartOverlaysMixin {
           dragLivePrice != null) {
         effectivePrice = dragLivePrice;
       }
-      const onScreen = effectivePrice >= lo && effectivePrice <= hi;
-      const y = onScreen ? priceToY(effectivePrice)
-          : (effectivePrice > hi ? plot.top + chipH / 2 : plot.bottom - chipH / 2);
-      placements.push({ ov, y, onScreen, effectivePrice });
+      // Off-screen orders are NOT shown as a clamped chip floating at the top/
+      // bottom edge — skip them so a line/chip appears only when its price is
+      // actually in view. Scroll to the level to see (and act on) the order.
+      if (effectivePrice < lo || effectivePrice > hi) continue;
+      const y = priceToY(effectivePrice);
+      placements.push({ ov, y, onScreen: true, effectivePrice });
     }
     // Sort by y so vertical-stack collision logic is deterministic.
     placements.sort((a, b) => a.y - b.y);
 
-    // Resolve label-chip vertical overlaps greedily.
-    // Seed prevBottom at the top header strip's bottom so any chip whose
-    // natural y would put it under the scrip/OHLC/bid-ask header gets
-    // pushed down to sit just below the strip. The horizontal line itself
-    // is still drawn at the true price `y` — only the chip moves.
-    const haveCandles = this.candles.length > 0;
-    const headerStripH = this.scrip ? 84 : (haveCandles ? 40 : 24);
-    let prevBottom = headerStripH + 4;
+    // Resolve label-chip vertical overlaps greedily. Seed at the plot top (NOT
+    // below the header) so a chip whose line sits near the top still renders ON
+    // its line instead of floating down into open space below the OHLC strip.
+    // Only genuine chip-to-chip overlaps are nudged; the line is always drawn
+    // at the true price `y`.
+    let prevBottom = plot.top;
     for (const p of placements) {
       const top = p.y - chipH / 2;
       const bottom = p.y + chipH / 2;
@@ -132,6 +132,11 @@ class _ChartOverlaysMixin {
           plot.left + 8,
           plot.right - chipW - plot.width * rightGapPct);
       const chipTop = chipY - chipH / 2;
+      // Remember chip geometry so the parent/child connector pass (below) can
+      // link paired lines (e.g. an SL-LMT's trigger + limit chips).
+      p.chipLeft = chipLeft;
+      p.chipW = chipW;
+      p.color = color;
       const accent = this._overlayLabelAccent(ov);
 
       // Chip background — solid line colour (TradingView convention) so the
@@ -226,6 +231,33 @@ class _ChartOverlaysMixin {
       }
     }
 
+    // Connector: link a child overlay to its parent (e.g. an SL-LMT's limit
+    // line to its trigger line) with a thin vertical bracket on the LEFT of
+    // their two chips, so the pair reads as one order rather than two
+    // unrelated lines.
+    if (placements.length >= 2) {
+      const byId = new Map();
+      for (const p of placements) byId.set(p.ov.id, p);
+      for (const p of placements) {
+        const parent = p.ov.parentId ? byId.get(p.ov.parentId) : null;
+        if (!parent) continue;
+        if (!Number.isFinite(p.chipY) || !Number.isFinite(parent.chipY)) continue;
+        if (p.chipLeft == null || parent.chipLeft == null) continue;
+        const x = Math.min(p.chipLeft, parent.chipLeft) - 4;
+        ctx.strokeStyle = p.color || this._overlayLineColor(p.ov);
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(x, p.chipY);
+        ctx.lineTo(x, parent.chipY);
+        ctx.moveTo(x, p.chipY);
+        ctx.lineTo(p.chipLeft, p.chipY);
+        ctx.moveTo(x, parent.chipY);
+        ctx.lineTo(parent.chipLeft, parent.chipY);
+        ctx.stroke();
+      }
+    }
+
     // Phase 13: visual grouping bracket. When 2+ overlays sit in this pane
     // (always the same scrip), draw a thin vertical bar in the gutter
     // connecting all chip y-positions with small horizontal legs from each
@@ -314,8 +346,10 @@ class _ChartOverlaysMixin {
     // Deeper violet so the right-axis price chip's white text stays readable
     // (the previous #A78BFA was too light — text-on-chip contrast washed out).
     if (ov.kind === 'optionStrike') return '#8B5CF6';
-    if (ov.kind === 'tp' || ov.kind === 'ocoTp') return this.palette.bull;
-    if (ov.kind === 'sl' || ov.kind === 'sl-l' || ov.kind === 'ocoSl') return this.palette.short;
+    // Colour every tradable line by its ORDER SIDE — buy = long/blue, sell =
+    // short/red. A buy order (e.g. an SL/TP covering a short position) must
+    // read blue, not red. The TP/SL role is shown by the label + dash style,
+    // not the colour.
     return ov.side === 'buy' ? this.palette.long : this.palette.short;
   }
 
@@ -338,9 +372,10 @@ class _ChartOverlaysMixin {
   }
 
   _formatOverlayQty(qty) {
-    // Unsigned — direction is conveyed by the chip colour (blue=long/buy,
-    // red=short/sell), matching TradingView's convention.
-    return String(Math.abs(Math.trunc(qty)));
+    // Signed — a short / sell shows a leading minus (e.g. "-1250") so the
+    // direction is explicit in the label, not only conveyed by colour.
+    const n = Math.trunc(qty);
+    return (n < 0 ? '-' : '') + Math.abs(n);
   }
 
   _formatOverlayPnl(pnl) {

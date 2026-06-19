@@ -669,6 +669,10 @@ function handleMessage(d) {
       for (const chart of panes.values()) chart.onHistoryError(requestId, message);
       break;
     }
+    case 'wsReconnected': {
+      for (const chart of panes.values()) chart.onWsReconnected();
+      break;
+    }
     case 'tick': {
       const { token, packet } = d.value || {};
       if (!token || !packet) return;
@@ -879,7 +883,7 @@ window.__activePaneChart = () => {
 // as the rail expands/collapses. The rail only physically overlays the
 // LEFTMOST column, so only panes whose left edge sits at the layout's left
 // edge get the gutter — every other pane keeps a normal 8px left.
-window.__drawRailGutter = 48;
+window.__drawRailGutter = 40;
 function applyRailGutters() {
   const layout = document.getElementById('layout');
   if (!layout) return;

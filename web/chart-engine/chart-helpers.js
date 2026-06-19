@@ -364,6 +364,69 @@ function _forkPartial(g, an) {
   return null;
 }
 
+// ── Session clock (pure) ─────────────────────────────────────────────────
+// IST = UTC + 5:30. Convert epoch seconds to IST calendar parts via UTC
+// getters on a shifted Date so there is no host-timezone dependence.
+function _istParts(tsSec) {
+  const d = new Date(tsSec * 1000 + 5.5 * 3600 * 1000);
+  return {
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth(),          // 0-11
+    date: d.getUTCDate(),
+    dow: d.getUTCDay(),              // 0 = Sun .. 6 = Sat
+    minuteOfDay: d.getUTCHours() * 60 + d.getUTCMinutes(),
+  };
+}
+
+// IST calendar-day key for same-day comparisons (not for display).
+function _istDayKey(tsSec) {
+  const p = _istParts(tsSec);
+  return p.year + '-' + p.month + '-' + p.date;
+}
+
+// Day-of-month (1-31) of the nth Sunday of a month. monthIndex is 0-11.
+function _nthSundayOfMonth(year, monthIndex, n) {
+  const firstDow = new Date(Date.UTC(year, monthIndex, 1)).getUTCDay();
+  const firstSunday = 1 + ((7 - firstDow) % 7);
+  return firstSunday + (n - 1) * 7;
+}
+
+// US daylight saving: 2nd Sunday of March → 1st Sunday of November.
+// Day granularity in IST is plenty (MCX's two closes differ by 25 min).
+function _usInDst(tsSec) {
+  const p = _istParts(tsSec);
+  if (p.month < 2 || p.month > 10) return false;        // Jan, Feb, Dec
+  if (p.month > 2 && p.month < 10) return true;          // Apr..Oct
+  if (p.month === 2) return p.date >= _nthSundayOfMonth(p.year, 2, 2);
+  if (p.month === 10) return p.date < _nthSundayOfMonth(p.year, 10, 1);
+  return false;
+}
+
+// Session bounds (IST minutes from midnight). closeMin is EXCLUSIVE.
+// nulls => unmapped exchange => always-on (never gated, never "closed").
+function _sessionBoundsFor(exch, tsSec) {
+  if (exch === 'NSE' || exch === 'NFO' || exch === 'BSE' || exch === 'BFO') {
+    return { openMin: 555, closeMin: 930 };              // 09:15–15:30
+  }
+  if (exch === 'CDS' || exch === 'BCD') {
+    return { openMin: 540, closeMin: 1020 };             // 09:00–17:00
+  }
+  if (exch === 'MCX') {
+    return { openMin: 540, closeMin: _usInDst(tsSec) ? 1410 : 1435 }; // 23:30 / 23:55
+  }
+  return { openMin: null, closeMin: null };
+}
+
+// True when tsSec is inside the exchange session window (weekday + open<=m<close).
+// Unmapped exchanges are always "in session".
+function _isSessionWindowPure(exch, tsSec) {
+  const b = _sessionBoundsFor(exch, tsSec);
+  if (b.openMin == null) return true;
+  const p = _istParts(tsSec);
+  if (p.dow === 0 || p.dow === 6) return false;
+  return p.minuteOfDay >= b.openMin && p.minuteOfDay < b.closeMin;
+}
+
 // Dual-mode export — browser global (script tag) AND node require() for tests.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -373,5 +436,7 @@ if (typeof module !== 'undefined' && module.exports) {
     _FIB_RETR, _FIB_EXT, _FIB_TIME, _FIB_COLORS, _SMART_RED, _SMART_GREEN,
     _drawArrowHead, _drawNodeLabel, _drawText, _renderPolyPattern,
     _positionExpand, _positionRender, _forkAnchors, _drawForkInChart, _forkPartial,
+    _istParts, _istDayKey, _nthSundayOfMonth, _usInDst,
+    _sessionBoundsFor, _isSessionWindowPure,
   };
 }

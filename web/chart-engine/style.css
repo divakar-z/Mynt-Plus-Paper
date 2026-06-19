@@ -827,6 +827,24 @@ html:not(.light) .tb-fx-cat-chip--on {
 }
 .tb-form-row-ctl { flex: 0 0 auto; }
 
+/* A control cell that holds an info icon next to the main control. */
+.tb-row-ctl-group { display: flex; align-items: center; gap: 8px; }
+.tb-row-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-mute);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.08s ease, background 0.08s ease;
+}
+.tb-row-info:hover { color: var(--accent); background: var(--grid-soft); }
+
 /* Switch — 32×18 pill toggle, accent when on. */
 .tb-switch {
   position: relative;
@@ -1424,7 +1442,7 @@ html:not(.light) .pane-ctrl-btn:active {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 36px;
+  width: 44px;
   z-index: 30;
   display: flex;
   flex-direction: column;
@@ -1452,8 +1470,8 @@ html:not(.light) .pane-ctrl-btn:active {
 .draw-rail-sep { width: 20px; height: 1px; background: var(--card-border); margin: 4px auto; flex-shrink: 0; }
 .draw-rail-btn {
   position: relative;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -1467,6 +1485,7 @@ html:not(.light) .pane-ctrl-btn:active {
   cursor: pointer;
 }
 .draw-rail-ic { display: flex; align-items: center; justify-content: center; }
+.draw-rail-ic svg { width: 20px; height: 20px; }
 .draw-rail-btn:hover { background: var(--grid-soft); color: var(--text); }
 .draw-rail-btn--active { background: rgba(120, 120, 120, 0.18); color: var(--text); }
 .draw-rail-btn--active:hover { background: rgba(120, 120, 120, 0.24); color: var(--text); }
@@ -1485,20 +1504,31 @@ html:not(.light) .tb-chip { color: #D1D5DB; }
 html:not(.light) .tb-chip:hover { color: #FFFFFF; }
 .draw-rail-btn--danger:hover { background: rgba(239, 68, 68, 0.14); color: #EF4444; }
 .draw-rail-collapse { color: var(--text-mute); }
-/* Caret sits just outside the right edge of the icon, vertically centered.
-   Small dark filled triangle, visible only on hover. */
+/* Caret on the RIGHT edge of the icon button, vertically centred, pointing
+   right (the flyout opens to the right). Always faintly visible so the "opens
+   a list" affordance is obvious, brightening to the accent on hover. Hovering
+   the button (not just this caret) opens the group's flyout, so the caret is a
+   hint rather than a tiny click target. */
 .draw-rail-caret {
   position: absolute;
-  right: -3px;
+  right: -1px;
   top: 50%;
   transform: translateY(-50%);
   display: flex;
-  color: var(--text);
-  opacity: 0;
-  transition: opacity 0.08s ease;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 18px;
+  color: var(--text-mute);
+  opacity: 0.7;
+  border-radius: 4px;
+  transition: opacity 0.08s ease, color 0.08s ease, background 0.08s ease;
+  pointer-events: auto;
+  cursor: pointer;
 }
-.draw-rail-btn:hover .draw-rail-caret { opacity: 1; }
-.draw-rail-caret:hover { color: var(--accent); }
+.draw-rail-btn:hover .draw-rail-caret,
+.draw-rail-btn--active .draw-rail-caret { opacity: 1; }
+.draw-rail-caret:hover { color: var(--accent); background: var(--grid-soft); }
 
 /* Collapsed → a slim blue tab pinned to the left edge. */
 .draw-rail-reopen {
@@ -1575,6 +1605,12 @@ html:not(.light) .draw-rail-reopen { background: #0052CC; color: #FFFFFF; }
 .tb-list-row--active:hover { background: var(--text); }
 .tb-list-row--active .tb-list-row-label,
 .tb-list-row--active .draw-rail-row-ic { color: var(--bg); }
+/* The active row has a dark (var(--text)) background, so its icon must stay
+   light (var(--bg)) even on hover — otherwise the generic
+   `.draw-rail-row:hover .draw-rail-row-ic` rule (higher specificity) repaints
+   it dark and it vanishes against the dark row. Specificity (0,4,0) wins. */
+.draw-rail-row.tb-list-row--active:hover .draw-rail-row-ic,
+.draw-rail-row.tb-list-row--active:hover .tb-list-row-label { color: var(--bg); }
 
 /* Lab ---------------------------------------------------------------------- */
 .tb-lab > span { font-size: 12px; }

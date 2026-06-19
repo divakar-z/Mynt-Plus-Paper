@@ -122,6 +122,9 @@ class Chart {
     // pan-triggered extend can't be cancelled by the full-load arrival check.
     this._pendingExtendId = null;
     this._extendBlockedUntil = 0;
+    // Recent-window refresh bookkeeping (tab-visible / WS-reconnect heal).
+    this._pendingRefreshId = null;
+    this._refreshBlockedUntil = 0;
     // Set to true when the server returns an empty page for an extend — there
     // is no more history before our earliest loaded candle, so stop pestering.
     this._noMoreHistory = false;
@@ -200,7 +203,7 @@ class Chart {
     // Phase 30 — left gutter reserved for the floating drawing rail. The rail
     // toggles this (46 when shown, 0 when collapsed) so the header + candles
     // reclaim the space. Lite mode always uses 0 (no rail there).
-    this._leftGutter = 46;
+    this._leftGutter = 40;
     this._drawingHits = [];         // [{ rect, drawingId, action: 'delete'|'drag', kind }]
     this._indicatorChipHits = [];   // [{ rect, indicatorId, action: 'toggleHide'|'delete' }]
     // Full-row rects for each indicator chip — used to (a) keep the row
@@ -280,9 +283,16 @@ class Chart {
     // synthesised current bar via the existing aggregator path.
     this._advanceBarsTicker = setInterval(() => {
       this._advanceEmptyBarsIfNeeded();
+      this._updateSecondTimer();
     }, 2000);
 
     this._updateSecondTimer();
+
+    // Heal the candle stream when the tab comes back to the foreground.
+    this._onVisibility = () => {
+      if (document.visibilityState === 'visible') this._refreshRecent('visible');
+    };
+    document.addEventListener('visibilitychange', this._onVisibility);
   }
 
   // Wraps every heavy indicator compute method on this instance with a
@@ -987,8 +997,9 @@ class Chart {
   }
 
   _updateSecondTimer() {
-    // Only the countdown needs 1Hz redraws — OI data updates via Flutter push.
-    const needsTimer = this.showBarCountdown;
+    // The 1Hz redraw drives the bar countdown — only needed while the session
+    // is live (after close the countdown is hidden, so the timer can stop).
+    const needsTimer = this.showBarCountdown && this._isSessionLive();
     if (needsTimer && !this._secondTimer) {
       this._secondTimer = setInterval(() => this.scheduleRedraw(), 1000);
     } else if (!needsTimer && this._secondTimer) {
@@ -1047,11 +1058,15 @@ class Chart {
     if (this.tickState.ft == null) {
       this.tickState.ft = Math.floor(Date.now() / 1000);
     }
-    // Skip ticks outside the exchange's trading hours so no out-of-session
-    // candle is formed (pre-open, lunch, post-close, weekends). Bid/ask was
-    // already updated above so the header strip still reflects the latest
-    // book even when we're skipping aggregation.
-    if (!this._isWithinTradingHours(this.tickState.ft)) return;
+    // Build/advance bars ONLY within the exchange's trading window. Outside it
+    // — post-close heartbeats (indices keep ticking the closing value), the
+    // post-market session (trades at the close price), depth-only updates, or
+    // any after-hours print — ticks must NOT touch candles. The header LTP/bid/
+    // ask above already updated, so the last price still shows. Special-session
+    // (Muhurat / budget) bars are backfilled from the server by _refreshRecent,
+    // not formed live.
+    const _ftSec = this.tickState.ft;
+    if (!this._isSessionWindow(_ftSec)) return;
     const targetMs = this.timeframeMinutes * 60_000;
     const result = ingestTickIntoBucket(
         this.candles, this.tickState, this.aggState, targetMs);
@@ -1072,6 +1087,27 @@ class Chart {
   }
 
   onHistoryResult(requestId, candles) {
+    // Recent-window refresh — merge-replace the tail (incl. synth bars) with
+    // server data. Pan/zoom preserved (xCenter is position-from-right; we only
+    // touch the tail). Server bars are authoritative — no session filtering.
+    if (requestId === this._pendingRefreshId) {
+      this._pendingRefreshId = null;
+      if (!Array.isArray(candles) || candles.length === 0) return;
+      const fresh = bucketCandles(candles, this.timeframeMinutes);
+      if (fresh.length === 0) return;
+      const firstTs = fresh[0].ts;
+      const head = this.candles.filter((c) => c.ts < firstTs);
+      this.candles = head.concat(fresh);
+      this._noMoreHistory = false;
+      if (this.candleStyle === 'renko') {
+        this._rebuildRenko();
+        this._notifyBrickSize(this._renkoBrickSize);
+      } else if (this._isRebinnedStyle(this.candleStyle)) {
+        this._rebuildRebinned();
+      }
+      this.scheduleRedraw();
+      return;
+    }
     // Extend reply — prepend instead of replace. Empty page = no more history.
     if (requestId === this._pendingExtendId) {
       this._pendingExtendId = null;
@@ -1079,9 +1115,7 @@ class Chart {
         this._noMoreHistory = true;
         return;
       }
-      const inSession = candles.filter(
-          (c) => this._isWithinTradingHours(c.ts));
-      const fresh = bucketCandles(inSession, this.timeframeMinutes);
+      const fresh = bucketCandles(candles, this.timeframeMinutes);
       if (fresh.length === 0) {
         this._noMoreHistory = true;
         return;
@@ -1118,13 +1152,9 @@ class Chart {
       this._showOverlay('No history available');
       return;
     }
-    // Filter out-of-session candles BEFORE bucketing — if the historical
-    // feed returned any (rare for tpseries, common for some brokers), they'd
-    // create gaps and confuse the time axis. Bucketing then collapses any
-    // remaining same-bucket candles correctly.
-    const inSession = candles.filter(
-        (c) => this._isWithinTradingHours(c.ts));
-    this.candles = bucketCandles(inSession, this.timeframeMinutes);
+    // Trust server bars directly — special-session / Muhurat history survives.
+    // Bucketing collapses same-bucket candles correctly.
+    this.candles = bucketCandles(candles, this.timeframeMinutes);
     this._noMoreHistory = false;  // fresh series — extend is allowed again
     if (this.candleStyle === 'renko') {
       this._rebuildRenko();
@@ -1179,7 +1209,46 @@ class Chart {
     });
   }
 
+  // Refetch the recent window after the tab was backgrounded or the socket
+  // reconnected, replacing locally-synthesized/approximated tail bars with the
+  // server's real OHLC. Correlated by request id (like the extend path), so no
+  // bridge changes are needed. Throttled + single-in-flight.
+  _refreshRecent(reason) {
+    if (!this.scrip) return;
+    if (this.timeframeMinutes >= 1440) return;     // daily+: extend covers it
+    if (this.candles.length === 0) return;
+    if (this._pendingRefreshId != null) return;
+    if (this._pendingRequestId != null) return;    // initial load in flight
+    if (Date.now() < this._refreshBlockedUntil) return;
+    // Anchor at the last REAL (non-synth) candle so synth bars get replaced.
+    let i = this.candles.length - 1;
+    while (i > 0 && this.candles[i]._synth) i--;
+    const startTs = this.candles[i].ts;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec - startTs < this.timeframeMinutes * 60) return; // nothing new yet
+    this._pendingRefreshId = _newRequestId();
+    this._refreshBlockedUntil = Date.now() + 3000;
+    this.requestHistory({
+      requestId: this._pendingRefreshId,
+      exch: this.scrip.exch,
+      token: this.scrip.token,
+      tsym: this.scrip.tsym,
+      interval: SOURCE_INTERVAL_FOR_MINUTES(this.timeframeMinutes),
+      start: startTs,
+      end: nowSec,
+      targetMinutes: this.timeframeMinutes,
+    });
+  }
+
+  onWsReconnected() {
+    this._refreshRecent('reconnect');
+  }
+
   onHistoryError(requestId, message) {
+    if (requestId === this._pendingRefreshId) {
+      this._pendingRefreshId = null;
+      return; // a refresh failing is non-fatal — next trigger retries
+    }
     if (requestId !== this._pendingRequestId) return;
     this._pendingRequestId = null;
     const name = this.scrip ? this.scrip.dispName : 'symbol';
@@ -1198,6 +1267,10 @@ class Chart {
     this._ro.disconnect();
     clearInterval(this._stalenessTicker);
     clearInterval(this._advanceBarsTicker);
+    if (this._onVisibility) {
+      document.removeEventListener('visibilitychange', this._onVisibility);
+      this._onVisibility = null;
+    }
     if (this._secondTimer) { clearInterval(this._secondTimer); this._secondTimer = null; }
     if (this._loadHistoryScheduled) {
       clearTimeout(this._loadHistoryScheduled);
@@ -2281,9 +2354,24 @@ class Chart {
           // when the cursor is over this strip so the dashed lines don't
           // bleed through the text/buttons. Header always starts at the
           // left of the plot area.
-          const headerStripH = this.scrip ? 84 : (this.candles.length > 0 ? 40 : 24);
+          const headerStripH = this.scrip ? 88 : (this.candles.length > 0 ? 40 : 24);
           const headerStripW = 300; // covers symbol + OHLC + bid/ask widths
-          if (y < headerStripH && x >= 8 && x < 8 + headerStripW) {
+          // Also treat a hover directly over any interactive header chip
+          // (bid/ask/qty buttons or the symbol chip) as "in the header". Their
+          // widths/positions shift with price magnitude and the left gutter, so
+          // the fixed strip box above can miss the BUY/SELL buttons — which left
+          // them showing the crosshair cursor instead of a clickable pointer.
+          const _overHeaderChip =
+              (this._headerHits || []).some((h) => h.rect &&
+                  x >= h.rect.x && x <= h.rect.x + h.rect.w &&
+                  y >= h.rect.y && y <= h.rect.y + h.rect.h) ||
+              (!!this._symbolChipRect &&
+                  x >= this._symbolChipRect.x &&
+                  x <= this._symbolChipRect.x + this._symbolChipRect.w &&
+                  y >= this._symbolChipRect.y &&
+                  y <= this._symbolChipRect.y + this._symbolChipRect.h);
+          if ((y < headerStripH && x >= 8 && x < 8 + headerStripW) ||
+              _overHeaderChip) {
             // Pointer cursor when hovering interactive bid/ask/qty chips
             // inside the header strip — everything else stays default.
             let headerInteractiveHover = false;
@@ -2741,7 +2829,7 @@ class Chart {
     // on-canvas header (symbol / OHLC) and candles aren't hidden underneath
     // it. Toggled by the rail (collapsed → 0). Lite mode has no rail.
     const railGutter = this._liteMode ? 0
-        : (this._leftGutter != null ? this._leftGutter : 46);
+        : (this._leftGutter != null ? this._leftGutter : 40);
     const plot = {
       left: 8 + railGutter, top: topPad,
       right: w - rightGutter,
@@ -3032,7 +3120,7 @@ class Chart {
         this.ctx.setLineDash([]);
       }
       if (snappedPrice > 0 && !inSubArea) {
-        this._drawChip(plot.right + 2, chy,
+        this._drawChip(plot.right, chy,
             snappedPrice.toFixed(this._priceDecimals()));
       }
     }
@@ -3069,7 +3157,8 @@ class Chart {
     // the read-only explain view.
     if (!this._liteMode) {
       this._drawIndicatorChips(plot);
-      this._drawStalePill(plot);
+      if (this._isClosed()) this._drawMarketClosedChip(plot);
+      else this._drawStalePill(plot);
     }
 
     // Reset alpha and draw the loading banner on top, full-opacity.
@@ -3109,17 +3198,23 @@ class Chart {
     return Math.max(2, tiDp);
   }
 
-  _drawChip(x, y, text) {
+  // `gutterLeft` is plot.right (the price-axis gutter's left edge). The chip is
+  // capped to the gutter width and centred within it so it never overflows /
+  // clips against the canvas edge.
+  _drawChip(gutterLeft, y, text) {
     this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
-    const tw = this.ctx.measureText(text).width + 24;
+    const gutter = Math.max(0, this.canvas.clientWidth - gutterLeft);
+    const tw = this.ctx.measureText(text).width + 20;
+    const chipW = Math.min(tw, Math.max(40, gutter - 6));
+    const x = gutterLeft + Math.max(2, (gutter - chipW) / 2);
     const chipH = 22;
     this.ctx.fillStyle = this.palette.crosshairChip;
-    this._roundedRect(x, y - chipH / 2, Math.min(tw, 84), chipH, 3);
+    this._roundedRect(x, y - chipH / 2, chipW, chipH, 3);
     this.ctx.fill();
     this.ctx.fillStyle = this.palette.chipText;
     this.ctx.textAlign = 'center';
-    this.ctx.fillText(text, x + Math.min(tw, 84) / 2, y);
+    this.ctx.fillText(text, x + chipW / 2, y);
   }
 
   _drawTimeChip(x, yTop, text) {
@@ -3976,6 +4071,7 @@ class Chart {
   }
 
   _drawStalePill(plot) {
+    if (this._isClosed()) return;   // "closed" is shown by _drawMarketClosedChip
     if (!this._lastTickAt) return;
     const ageSec = (Date.now() - this._lastTickAt) / 1000;
     if (ageSec < 120) return;
@@ -3989,6 +4085,23 @@ class Chart {
     this._roundedRect(x, 6, tw, 16, 8);
     this.ctx.fill();
     this.ctx.fillStyle = this.palette.bg;
+    this.ctx.textAlign = 'center';
+    this.ctx.fillText(text, x + tw / 2, 14);
+  }
+
+  // Small unobtrusive chip in the same top-right spot as the stale pill,
+  // shown only when the session is closed and we have candles to freeze on.
+  _drawMarketClosedChip(plot) {
+    if (this.candles.length === 0) return;
+    const text = 'Market closed';
+    this.ctx.font = '700 10px Geist, sans-serif';
+    this.ctx.textBaseline = 'middle';
+    const tw = this.ctx.measureText(text).width + 14;
+    const x = this.canvas.clientWidth - 64 - tw - 8;
+    this.ctx.fillStyle = this._withAlpha(this.palette.axisText, 0.16);
+    this._roundedRect(x, 6, tw, 16, 8);
+    this.ctx.fill();
+    this.ctx.fillStyle = this.palette.axisText;
     this.ctx.textAlign = 'center';
     this.ctx.fillText(text, x + tw / 2, 14);
   }
@@ -4232,32 +4345,45 @@ class Chart {
     } catch (_) {}
   }
 
-  /// Returns true if the given epoch-seconds timestamp falls within the
-  /// scrip's exchange trading window. Used to suppress out-of-session candle
-  /// formation (pre-market, lunch break, post-close, weekends).
-  ///   NSE / NFO / BSE / BFO  → 09:15–15:30 IST, Mon–Fri
-  ///   MCX                    → 09:00–23:30 IST, Mon–Fri
-  /// All others default to "always in session" (safer than silently dropping
-  /// data for unknown exchanges).
-  _isWithinTradingHours(tsSec) {
+  // ── Session clock (instance wrappers over the pure helpers) ───────────────
+  // True when tsSec is inside this scrip's exchange session window
+  // (weekday, open<=m<close, EXCLUSIVE close). Unmapped exchanges → always-on.
+  _isSessionWindow(tsSec) {
     if (!Number.isFinite(tsSec) || tsSec <= 0) return true;
-    if (!this.scrip) return true;
-    const ist = new Date(tsSec * 1000 + 5.5 * 3600 * 1000);
-    const dow = ist.getUTCDay(); // 0 = Sun, 6 = Sat
-    if (dow === 0 || dow === 6) return false;
-    const minutesIst = ist.getUTCHours() * 60 + ist.getUTCMinutes();
-    const exch = this.scrip.exch;
-    if (exch === 'MCX') {
-      // 09:00 → 540, 23:30 → 1410
-      return minutesIst >= 540 && minutesIst <= 1410;
-    }
-    if (exch === 'NSE' || exch === 'NFO' ||
-        exch === 'BSE' || exch === 'BFO') {
-      // 09:15 → 555, 15:30 → 930
-      return minutesIst >= 555 && minutesIst <= 930;
-    }
+    const exch = this.scrip ? this.scrip.exch : null;
+    if (!exch) return true;
+    return _isSessionWindowPure(exch, tsSec);
+  }
+
+  // Has the server/feed given us data for *today* (IST)? Distinguishes a real
+  // trading day (incl. special/Muhurat/budget sessions) from a holiday/weekend.
+  _hasSessionDataToday() {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const todayKey = _istDayKey(nowSec);
+    if (this._lastTickAt &&
+        _istDayKey(Math.floor(this._lastTickAt / 1000)) === todayKey) return true;
+    const n = this.candles.length;
+    if (n > 0 && _istDayKey(this.candles[n - 1].ts) === todayKey) return true;
+    return false;
+  }
+
+  // "Closed" decision — strict trading-window timings.
+  //  - within the session window: closed only on a weekday holiday (no data
+  //    for today at all).
+  //  - outside the session window: closed. Candles never form/update outside
+  //    the window; any special-session (Muhurat / budget) bars are backfilled
+  //    by the server refetch (_refreshRecent), not formed live.
+  // Unmapped exchanges are never "closed" (always-on).
+  _isClosed() {
+    const exch = this.scrip ? this.scrip.exch : null;
+    if (!exch) return false;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (_sessionBoundsFor(exch, nowSec).openMin == null) return false;
+    if (this._isSessionWindow(nowSec)) return !this._hasSessionDataToday();
     return true;
   }
+
+  _isSessionLive() { return !this._isClosed(); }
 
   // Periodic check (driven by _advanceBarsTicker). When the latest candle's
   // bucket has fully elapsed but no tick arrived to roll into the next one,
@@ -4268,8 +4394,8 @@ class Chart {
     if (!this.scrip) return;
     if (this.timeframeMinutes >= 1440) return; // daily/weekly/monthly
     if (this.candles.length === 0) return;
+    if (!this._isSessionLive()) return;        // closed/holiday → never fabricate
     const nowSec = Math.floor(Date.now() / 1000);
-    if (!this._isWithinTradingHours(nowSec)) return;
     const targetSec = this.timeframeMinutes * 60;
     const currentBucket = nowSec - (nowSec % targetSec);
     const last = this.candles[this.candles.length - 1];
@@ -4280,10 +4406,13 @@ class Chart {
     let appended = 0;
     let lastClose = last.c;
     while (nextBucket <= currentBucket && appended < 200) {
-      if (this._isWithinTradingHours(nextBucket)) {
+      // EXCLUSIVE close: _isSessionWindow blocks the post-close bucket
+      // (e.g. the 15:30 bucket on NSE), so no stale bar forms after close.
+      if (this._isSessionWindow(nextBucket)) {
         this.candles.push({
           ts: nextBucket,
           o: lastClose, h: lastClose, l: lastClose, c: lastClose, v: 0,
+          _synth: true,
         });
         appended++;
       }
@@ -4634,13 +4763,19 @@ class Chart {
     this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
     const text = ltp.toFixed(this._priceDecimals());
-    const tw = this.ctx.measureText(text).width + 24;
-    const chipW = Math.min(tw, 84);
+    // Keep the chip inside the right price-axis gutter and centred within it,
+    // instead of left-anchoring at plot.right with a fixed 84px width — that
+    // overflowed the 64px gutter and clipped the chip against the canvas edge.
+    const gutter = Math.max(0, this.canvas.clientWidth - plot.right);
+    const tw = this.ctx.measureText(text).width + 20;
+    const chipW = Math.min(tw, Math.max(40, gutter - 6));
+    const chipX = plot.right + Math.max(2, (gutter - chipW) / 2);
     const chipH = 22;
     // Reserve enough vertical room for the chip + 1px gap + countdown
     // sub-chip when it's enabled, so the whole LTP block stays
     // above plot.bottom.
     const cdEnabled = this.showBarCountdown &&
+        this._isSessionLive() &&
         this.candles.length > 0 &&
         typeof this.timeframeMinutes === 'number' &&
         this.timeframeMinutes > 0;
@@ -4649,33 +4784,37 @@ class Chart {
     const cy = Math.max(plot.top + 8,
         Math.min(plot.bottom - 8 - (blockH - chipH), y));
     this.ctx.fillStyle = color;
-    this._roundedRect(plot.right + 2, cy - chipH / 2, chipW, chipH, 3);
+    this._roundedRect(chipX, cy - chipH / 2, chipW, chipH, 3);
     this.ctx.fill();
     this.ctx.fillStyle = '#FFFFFF';
     this.ctx.textAlign = 'center';
-    this.ctx.fillText(text, plot.right + 2 + chipW / 2, cy);
+    this.ctx.fillText(text, chipX + chipW / 2, cy);
     this._registerAxisChipSlot(cy, chipH);
 
     // Phase 18 — bar-close countdown directly under the LTP value, in a
     // continuous sub-chip below the existing one. Same fill colour so it
     // reads as a single 2-row chip.
-    if (cdEnabled) {
-      const lastBar = this.candles[this.candles.length - 1];
-      const closeSec = (lastBar.ts || 0) + this.timeframeMinutes * 60;
-      const nowSec = Math.floor(Date.now() / 1000);
-      const left = Math.max(0, closeSec - nowSec);
+    // Skip the countdown once the last bar's own close time has passed — a
+    // frozen "0:00" must never linger (e.g. just after close, before the chart
+    // flips to the "Market closed" state).
+    const _cdLeft = cdEnabled
+        ? ((this.candles[this.candles.length - 1].ts || 0) +
+            this.timeframeMinutes * 60) - Math.floor(Date.now() / 1000)
+        : 0;
+    if (cdEnabled && _cdLeft > 0) {
+      const left = _cdLeft;
       const mins = Math.floor(left / 60);
       const secs = left % 60;
       const cdText = mins + ':' + String(secs).padStart(2, '0');
       const subY = cy - chipH / 2 + chipH - 3; // overlap rounded corners so the two chips read as one
       this.ctx.fillStyle = color;
-      this._roundedRect(plot.right + 2, subY, chipW, subH, 3);
+      this._roundedRect(chipX, subY, chipW, subH, 3);
       this.ctx.fill();
       this.ctx.fillStyle = '#FFFFFF';
       this.ctx.font = '500 10px Geist, sans-serif';
       this.ctx.textAlign = 'center';
       this.ctx.textBaseline = 'middle';
-      this.ctx.fillText(cdText, plot.right + 2 + chipW / 2, subY + subH / 2);
+      this.ctx.fillText(cdText, chipX + chipW / 2, subY + subH / 2);
       this._registerAxisChipSlot(subY + subH / 2, subH);
     }
   }

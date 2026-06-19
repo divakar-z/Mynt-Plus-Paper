@@ -1042,12 +1042,32 @@
           'Below-chart volume bars',
           _switch(v.volume,
               (x) => _patchView({ volume: x }))));
+      // Info icon → hover (or click) reveals the full shortcuts list. Lives
+      // here instead of a standalone "?" chip on the bar.
+      const ksInfo = document.createElement('button');
+      ksInfo.type = 'button';
+      ksInfo.className = 'tb-row-info';
+      ksInfo.setAttribute('aria-label', 'View keyboard shortcuts');
+      ksInfo.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
+          + 'fill="none" stroke="currentColor" stroke-width="2" '
+          + 'stroke-linecap="round" stroke-linejoin="round">'
+          + '<circle cx="12" cy="12" r="10"/>'
+          + '<line x1="12" y1="16" x2="12" y2="12"/>'
+          + '<line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+      ksInfo.addEventListener('mouseenter', () => _openShortcutsPopover(ksInfo));
+      ksInfo.addEventListener('mouseleave', _scheduleCloseHelp);
+      ksInfo.addEventListener('click', () => {
+        if (_helpPop) _scheduleCloseHelp(); else _openShortcutsPopover(ksInfo);
+      });
+      const ksCtl = document.createElement('div');
+      ksCtl.className = 'tb-row-ctl-group';
+      ksCtl.appendChild(ksInfo);
+      ksCtl.appendChild(_switch(keyboardShortcuts, (x) => {
+        keyboardShortcuts = x;
+        bridge.post('setKeyboardShortcutsState', { value: x });
+      }));
       body.appendChild(_row('Keyboard shortcuts',
-          'Alt+B/S, 1/5/H/D and more',
-          _switch(keyboardShortcuts, (x) => {
-            keyboardShortcuts = x;
-            bridge.post('setKeyboardShortcutsState', { value: x });
-          })));
+          'Alt+B/S, 1/5/H/D and more', ksCtl));
     } else if (settingsTab === 'customize') {
       const p = paletteState;
       const d = paletteState.defaults || {};
@@ -1151,21 +1171,12 @@
   });
   root.appendChild(settingsBtn);
 
-  // ── Keyboard shortcuts help (?) ─────────────────────────────────────────
-  // Icon-only "?" chip. On hover (or click) shows a popover listing every
-  // chart keyboard shortcut, grouped. Hover-bridge: a short close delay so
-  // moving the cursor from the button into the popover doesn't dismiss it.
-  const helpBtn = document.createElement('button');
-  helpBtn.className = 'tb-chip tb-help';
-  helpBtn.type = 'button';
-  helpBtn.title = 'Keyboard shortcuts';
-  helpBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
-      + 'fill="none" stroke="currentColor" stroke-width="2" '
-      + 'stroke-linecap="round" stroke-linejoin="round">'
-      + '<circle cx="12" cy="12" r="10"/>'
-      + '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>'
-      + '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
-
+  // ── Keyboard shortcuts help ─────────────────────────────────────────────
+  // No longer a standalone "?" chip on the bar. The shortcuts list now lives
+  // behind a small info button next to the "Keyboard shortcuts" toggle in
+  // Settings (see _renderSettingsTab). _openShortcutsPopover(anchor) shows the
+  // grouped list on hover, anchored to whatever element asked for it; a short
+  // close delay lets the cursor travel from the icon into the popover.
   let _helpPop = null;
   let _helpCloseTimer = null;
 
@@ -1219,30 +1230,39 @@
     return wrap;
   }
 
-  function _openHelp() {
+  function _openShortcutsPopover(anchorEl) {
     if (_helpCloseTimer) { clearTimeout(_helpCloseTimer); _helpCloseTimer = null; }
     if (_helpPop) return;
     const pop = document.createElement('div');
     pop.className = 'tb-popover tb-help-popover';
     pop.appendChild(_buildShortcutsContent());
-    // Measure off-screen, then right-align to the button (it lives at the
-    // right edge of the bar) and clamp inside the viewport.
+    // Keep it open while the cursor is over the popover itself.
+    pop.addEventListener('mouseenter', () => {
+      if (_helpCloseTimer) { clearTimeout(_helpCloseTimer); _helpCloseTimer = null; }
+    });
+    pop.addEventListener('mouseleave', _scheduleCloseHelp);
+    // Measure off-screen, then place beside the anchor and clamp to viewport.
+    // Prefer opening to the LEFT of the anchor (Settings sits at the right
+    // edge, so its body's info icon has more room on the left); fall back to
+    // the right / below as needed.
     pop.style.left = '-9999px';
     pop.style.top = '0';
     document.body.appendChild(pop);
-    const rect = helpBtn.getBoundingClientRect();
+    const rect = anchorEl.getBoundingClientRect();
     const popW = pop.offsetWidth;
     const popH = pop.offsetHeight;
     const vw = document.documentElement.clientWidth;
     const vh = document.documentElement.clientHeight;
     const margin = 8;
-    let left = rect.right - popW;
-    if (left + popW + margin > vw) left = vw - popW - margin;
-    if (left < margin) left = margin;
-    let top = rect.bottom + 4;
-    if (top + popH + margin > vh && rect.top - popH - 4 >= margin) {
-      top = rect.top - popH - 4;
-    }
+    let left = rect.left - popW - 8;
+    if (left < margin) left = rect.right + 8;
+    if (left + popW + margin > vw) left = Math.max(margin, vw - popW - margin);
+    // The info icon sits low in the Settings panel, so grow the popover UPWARD
+    // (align its bottom near the icon) instead of centring on the icon — that
+    // kept it from dangling past the bottom of the Settings card.
+    let top = rect.bottom - popH;
+    if (top < margin) top = margin;
+    if (top + popH + margin > vh) top = Math.max(margin, vh - popH - margin);
     pop.style.left = left + 'px';
     pop.style.top = top + 'px';
     _helpPop = pop;
@@ -1255,12 +1275,6 @@
       _helpCloseTimer = null;
     }, 160);
   }
-
-  helpBtn.addEventListener('click', () => {
-    if (_helpPop) _scheduleCloseHelp();
-    else _openHelp();
-  });
-  root.appendChild(helpBtn);
 
   // ── Order Defaults button + tabbed popover ──────────────────────────────
   // Flutter pushes the full bag via `setOrderDefaults`. Each field change
@@ -1997,6 +2011,52 @@
     const groupIcons = {};
     const actBtns = {};
 
+    // Hover-intent flyout control. Opening a group's tool list on hover (not
+    // just a precise click on the tiny caret) makes the list easy to reach; a
+    // short open delay avoids flicker while sweeping past buttons, and a short
+    // close delay lets the cursor travel from the button into the flyout.
+    // Leaving the rail/flyout — or the whole iframe (e.g. onto the watchlist) —
+    // dismisses it so a flyout can't get stuck open.
+    let _railOpenTimer = null;
+    let _railCloseTimer = null;
+    const _cancelRailOpen = () => {
+      if (_railOpenTimer) { clearTimeout(_railOpenTimer); _railOpenTimer = null; }
+    };
+    const _cancelRailClose = () => {
+      if (_railCloseTimer) { clearTimeout(_railCloseTimer); _railCloseTimer = null; }
+    };
+    const _isRailFlyoutOpen = (anchor) =>
+        _openPopover != null && _openAnchor === anchor;
+    const _scheduleRailOpen = (anchor, openFn) => {
+      _cancelRailClose();
+      if (_isRailFlyoutOpen(anchor)) return;
+      _cancelRailOpen();
+      _railOpenTimer = setTimeout(() => { _railOpenTimer = null; openFn(); }, 120);
+    };
+    const _scheduleRailClose = () => {
+      _cancelRailOpen();
+      _cancelRailClose();
+      _railCloseTimer = setTimeout(() => {
+        _railCloseTimer = null;
+        if (_openPopover && _openPopover.dataset &&
+            _openPopover.dataset.kind === 'draw-rail') _closeOpenPopover();
+      }, 220);
+    };
+    const _attachFlyoutHover = (pop) => {
+      if (!pop) return;
+      pop.addEventListener('mouseenter', _cancelRailClose);
+      pop.addEventListener('mouseleave', _scheduleRailClose);
+    };
+    // Moving the cursor out of the iframe (onto the Flutter watchlist / app
+    // chrome) fires mouseleave on the document — close any open rail flyout.
+    document.addEventListener('mouseleave', _scheduleRailClose);
+    window.addEventListener('blur', () => {
+      _cancelRailOpen();
+      _cancelRailClose();
+      if (_openPopover && _openPopover.dataset &&
+          _openPopover.dataset.kind === 'draw-rail') _closeOpenPopover();
+    });
+
     const setTool = (kind) => {
       drawTool = kind;
       if (kind && kindGroup[kind]) {
@@ -2029,7 +2089,8 @@
         content.appendChild(row);
       }
       const pop = openFlyoutRight(anchor, content);
-      if (pop) pop.dataset.kind = 'draw-rail';
+      if (pop) { pop.dataset.kind = 'draw-rail'; _attachFlyoutHover(pop); }
+      return pop;
     };
 
     // Crosshair / Cursor mode control at the top (replaces the old top-bar
@@ -2050,8 +2111,8 @@
     cursorIc.innerHTML = _railSvg(_cursorMode().icon);
     const cursorCaret = document.createElement('span');
     cursorCaret.className = 'draw-rail-caret';
-    cursorCaret.innerHTML = '<svg viewBox="0 0 24 24" width="9" height="9" '
-        + 'fill="currentColor"><path d="M8 5 L15 12 L8 19 Z"/></svg>';
+    cursorCaret.innerHTML = '<svg viewBox="0 0 24 24" width="10" height="10" '
+        + 'fill="currentColor"><path d="M9 6 L15 12 L9 18 Z"/></svg>';
     cursorBtn2.appendChild(cursorIc);
     cursorBtn2.appendChild(cursorCaret);
     const repaintCursorRail = () => { cursorIc.innerHTML = _railSvg(_cursorMode().icon); };
@@ -2077,9 +2138,24 @@
         content.appendChild(row);
       }
       const pop = openFlyoutRight(cursorBtn2, content);
-      if (pop) pop.dataset.kind = 'draw-rail';
+      if (pop) { pop.dataset.kind = 'draw-rail'; _attachFlyoutHover(pop); }
+      return pop;
     };
-    cursorBtn2.addEventListener('click', () => {
+    // Body click → leave any drawing tool (back to interaction/cursor mode).
+    // The caret opens the Crosshair/Cursor picker — same model as the groups.
+    cursorBtn2.addEventListener('click', (e) => {
+      if (cursorCaret.contains(e.target)) return;
+      _cancelRailOpen();
+      _closeOpenPopover();
+      if (drawTool) setTool(null);
+    });
+    cursorCaret.addEventListener('mouseenter',
+        () => _scheduleRailOpen(cursorBtn2, openCursorFlyout));
+    cursorCaret.addEventListener('mouseleave', _scheduleRailClose);
+    cursorCaret.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _cancelRailOpen();
+      if (_isRailFlyoutOpen(cursorBtn2)) { _closeOpenPopover(); return; }
       openCursorFlyout();
     });
     rail.appendChild(cursorBtn2);
@@ -2096,11 +2172,27 @@
       ic.innerHTML = _railSvg(iconFor(lastTool[grp]));
       const caret = document.createElement('span');
       caret.className = 'draw-rail-caret';
-      caret.innerHTML = '<svg viewBox="0 0 24 24" width="9" height="9" fill="currentColor">'
-          + '<path d="M8 5 L15 12 L8 19 Z"/></svg>';
+      caret.innerHTML = '<svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor">'
+          + '<path d="M9 6 L15 12 L9 18 Z"/></svg>';
       btn.appendChild(ic);
       btn.appendChild(caret);
-      btn.addEventListener('click', () => {
+      // Click the icon body → re-arm this group's last-used tool directly (no
+      // list). The caret is the only thing that opens the full list.
+      btn.addEventListener('click', (e) => {
+        if (caret.contains(e.target)) return;
+        _cancelRailOpen();
+        _closeOpenPopover();
+        setTool(lastTool[grp]);
+      });
+      // Caret = list opener: hover (intent) or click reveals the group's tools;
+      // picking one there re-arms it and becomes the new last-used.
+      caret.addEventListener('mouseenter',
+          () => _scheduleRailOpen(btn, () => openGroupFlyout(grp, btn)));
+      caret.addEventListener('mouseleave', _scheduleRailClose);
+      caret.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _cancelRailOpen();
+        if (_isRailFlyoutOpen(btn)) { _closeOpenPopover(); return; }
         openGroupFlyout(grp, btn);
       });
       groupBtns[grp] = btn;
@@ -2168,7 +2260,7 @@
     reopen.innerHTML = _railSvg(_ACT_ICONS.expand);
     reopen.hidden = true;
     reopen.addEventListener('click', () => {
-      rail.hidden = false; reopen.hidden = true; setGutter(48);
+      rail.hidden = false; reopen.hidden = true; setGutter(40);
     });
 
     repaintRail = () => {
@@ -3025,7 +3117,7 @@
   // referenced) but is never mounted.
   const ORDER = [
     symWrap, tfBtn, styleBtn, fxBtn,
-    layoutBtn, labBtn, badge, odBtn, snapBtn, settingsBtn, helpBtn,
+    layoutBtn, labBtn, badge, odBtn, snapBtn, settingsBtn,
   ];
   // Move the right-anchor class — Layout is now the first right-group
   // button instead of the INSTANT badge.

@@ -176,6 +176,9 @@ List<Map<String, Object?>> overlaysForPane({
         out.add({
           'id': 'sl-l-$id',
           'kind': 'sl-l',
+          // Pairs this limit line with its trigger line (same SL-LMT order) so
+          // the chart can draw a thin connector linking the two chips.
+          'parentId': 'sl-$id',
           'side': isBuy ? 'buy' : 'sell',
           'qty': signedQty,
           'price': lim,

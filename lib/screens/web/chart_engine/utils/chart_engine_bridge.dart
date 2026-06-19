@@ -26,6 +26,9 @@ String encodeHistoryError(String requestId, String message) =>
 String encodeTick(String token, Map<String, dynamic> packet) =>
     jsonEncode({'type': 'tick', 'value': {'token': token, 'packet': packet}});
 
+String encodeWsReconnected() =>
+    jsonEncode({'type': 'wsReconnected'});
+
 String encodeSetLayout({
   required String id,
   required String areas,

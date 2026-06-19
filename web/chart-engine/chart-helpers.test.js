@@ -47,5 +47,47 @@ t('too little history → undefined', () => {
   assert.strictEqual(h._wilderATR(few, 4, 14), undefined);
 });
 
+// Helper: epoch seconds for an IST wall-clock time (IST = UTC+5:30).
+const ist = (y, mo, d, h, mi) => Math.floor(Date.UTC(y, mo, d, h, mi) / 1000) - 19800;
+
+console.log('_nthSundayOfMonth');
+t('2nd Sunday of March 2026 = 8', () => assert.strictEqual(h._nthSundayOfMonth(2026, 2, 2), 8));
+t('1st Sunday of Nov 2026 = 1', () => assert.strictEqual(h._nthSundayOfMonth(2026, 10, 1), 1));
+
+console.log('_usInDst (2026: DST = Mar 8 .. Nov 1)');
+t('July is DST', () => assert.strictEqual(h._usInDst(ist(2026, 6, 15, 12, 0)), true));
+t('January is not DST', () => assert.strictEqual(h._usInDst(ist(2026, 0, 15, 12, 0)), false));
+t('Mar 7 not yet DST', () => assert.strictEqual(h._usInDst(ist(2026, 2, 7, 12, 0)), false));
+t('Mar 8 is DST', () => assert.strictEqual(h._usInDst(ist(2026, 2, 8, 12, 0)), true));
+t('Oct 31 still DST', () => assert.strictEqual(h._usInDst(ist(2026, 9, 31, 12, 0)), true));
+t('Nov 1 DST over', () => assert.strictEqual(h._usInDst(ist(2026, 10, 1, 12, 0)), false));
+
+console.log('_sessionBoundsFor');
+t('NSE equity 555-930', () => assert.deepStrictEqual(
+    h._sessionBoundsFor('NSE', ist(2026, 5, 18, 12, 0)), { openMin: 555, closeMin: 930 }));
+t('CDS currency 540-1020', () => assert.deepStrictEqual(
+    h._sessionBoundsFor('CDS', ist(2026, 5, 18, 12, 0)), { openMin: 540, closeMin: 1020 }));
+t('MCX July close 23:30 (1410)', () => assert.strictEqual(
+    h._sessionBoundsFor('MCX', ist(2026, 6, 18, 12, 0)).closeMin, 1410));
+t('MCX January close 23:55 (1435)', () => assert.strictEqual(
+    h._sessionBoundsFor('MCX', ist(2026, 0, 18, 12, 0)).closeMin, 1435));
+t('unknown exchange -> nulls', () => assert.deepStrictEqual(
+    h._sessionBoundsFor('XYZ', ist(2026, 5, 18, 12, 0)), { openMin: null, closeMin: null }));
+
+console.log('_isSessionWindowPure (2026-06-18 is a Thursday; 06-20 a Saturday)');
+t('NSE 09:14 before open', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 9, 14)), false));
+t('NSE 09:15 open', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 9, 15)), true));
+t('NSE 15:25 last valid', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 15, 25)), true));
+t('NSE 15:29 still in', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 15, 29)), true));
+t('NSE 15:30 EXCLUSIVE close', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 15, 30)), false));
+t('NSE Saturday closed', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 20, 12, 0)), false));
+t('CDS 16:59 in', () => assert.strictEqual(h._isSessionWindowPure('CDS', ist(2026, 5, 18, 16, 59)), true));
+t('CDS 17:00 EXCLUSIVE close', () => assert.strictEqual(h._isSessionWindowPure('CDS', ist(2026, 5, 18, 17, 0)), false));
+t('MCX July 23:29 in', () => assert.strictEqual(h._isSessionWindowPure('MCX', ist(2026, 6, 16, 23, 29)), true));
+t('MCX July 23:30 out', () => assert.strictEqual(h._isSessionWindowPure('MCX', ist(2026, 6, 16, 23, 30)), false));
+t('MCX January 23:54 in', () => assert.strictEqual(h._isSessionWindowPure('MCX', ist(2026, 0, 16, 23, 54)), true));
+t('MCX January 23:55 out', () => assert.strictEqual(h._isSessionWindowPure('MCX', ist(2026, 0, 16, 23, 55)), false));
+t('unmapped always in session', () => assert.strictEqual(h._isSessionWindowPure('XYZ', ist(2026, 5, 20, 3, 0)), true));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
