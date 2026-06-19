@@ -55,13 +55,36 @@ t('passes daily through unchanged', () => {
 });
 
 console.log('ingestTickIntoBucket');
-t('primes on first tick', () => {
+t('first tick forms the bar (v=0) and sets the volume baseline', () => {
   const candles = [];
   const state = { prevCumVol: null, prevPrice: null, prevMs: null };
   const r = ingestTickIntoBucket(candles, { lp: 100, v: 1000, ft: 60 }, state, 60_000);
-  assert.strictEqual(r, 'primed');
-  assert.strictEqual(candles.length, 0);
+  // The first tick now forms today's bar immediately (volume delta is 0) so the
+  // candle appears without waiting for the next tick. Volume accrues from #2.
+  assert.strictEqual(r, 'applied');
+  assert.strictEqual(candles.length, 1);
+  assert.strictEqual(candles[0].o, 100);
+  assert.strictEqual(candles[0].c, 100);
+  assert.strictEqual(candles[0].v, 0);
   assert.strictEqual(state.prevCumVol, 1000);
+});
+
+t('daily bar seeds OHLC from the WS day fields, not the tick lp', () => {
+  const candles = [];
+  const state = { prevCumVol: null, prevPrice: null, prevMs: null };
+  // Daily timeframe (1440 min). lp=270 but the day opened at 278.15 with a
+  // 281.5 high / 274.65 low — the bar must use those, not lp, for o/h/l.
+  const r = ingestTickIntoBucket(
+      candles,
+      { lp: 270, v: 1000, ft: 1781840700, dayOpen: 278.15, dayHigh: 281.5, dayLow: 274.65 },
+      state,
+      1440 * 60_000);
+  assert.strictEqual(r, 'applied');
+  assert.strictEqual(candles.length, 1);
+  assert.strictEqual(candles[0].o, 278.15); // session open, not lp
+  assert.strictEqual(candles[0].h, 281.5);  // day high
+  assert.strictEqual(candles[0].l, 270);    // min(dayLow 274.65, lp 270) = 270
+  assert.strictEqual(candles[0].c, 270);    // close = lp
 });
 
 t('applies a normal tick', () => {

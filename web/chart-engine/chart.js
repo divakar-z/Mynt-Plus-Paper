@@ -1095,11 +1095,12 @@ class Chart {
   onHistoryResult(requestId, candles) {
     // Recent-window refresh — merge-replace the tail (incl. synth bars) with
     // server data. Pan/zoom preserved (xCenter is position-from-right; we only
-    // touch the tail). Server bars are authoritative — no session filtering.
+    // touch the tail).
     if (requestId === this._pendingRefreshId) {
       this._pendingRefreshId = null;
       if (!Array.isArray(candles) || candles.length === 0) return;
-      const fresh = bucketCandles(candles, this.timeframeMinutes);
+      const fresh = bucketCandles(
+          this._sessionFilterIntraday(candles), this.timeframeMinutes);
       if (fresh.length === 0) return;
       const firstTs = fresh[0].ts;
       const head = this.candles.filter((c) => c.ts < firstTs);
@@ -1121,7 +1122,8 @@ class Chart {
         this._noMoreHistory = true;
         return;
       }
-      const fresh = bucketCandles(candles, this.timeframeMinutes);
+      const fresh = bucketCandles(
+          this._sessionFilterIntraday(candles), this.timeframeMinutes);
       if (fresh.length === 0) {
         this._noMoreHistory = true;
         return;
@@ -1155,26 +1157,27 @@ class Chart {
     this._pendingRequestId = null;
     this._hideOverlay();
     if (!Array.isArray(candles) || candles.length === 0) {
-      // Daily/weekly/monthly with no EOD history (e.g. some index series like
-      // SENSEX): don't block with "No history available". Start empty and let
-      // the live WS day-OHLC tick build TODAY's bar — same as TradingView,
-      // which shows just today's candle for day/week/month when history is
-      // absent. Still subscribe so ticks arrive.
-      if (this.timeframeMinutes >= 1440) {
-        this.candles = [];
-        this._noMoreHistory = true; // nothing older to fetch
-        this.scheduleRedraw();
-        if (this.scrip) {
-          this.subscribe({ exch: this.scrip.exch, token: this.scrip.token });
-        }
-        return;
+      // No history from the API — for ANY timeframe (daily+ index series like
+      // SENSEX, OR intraday when the feed returns an empty window). Don't block
+      // with "No history available": start empty and let live WS ticks build
+      // the current bar. Daily/weekly/monthly seed it from the WS day-OHLC;
+      // intraday forms the current 1/5-min bucket from incoming ticks. Matches
+      // TradingView, which shows just the forming bar when history is absent.
+      // A later _refreshRecent (tab-return / reconnect) backfills real bars once
+      // at least one live candle exists. Still subscribe so ticks arrive.
+      this.candles = [];
+      this._noMoreHistory = true; // nothing older to fetch
+      this.scheduleRedraw();
+      if (this.scrip) {
+        this.subscribe({ exch: this.scrip.exch, token: this.scrip.token });
       }
-      this._showOverlay('No history available');
       return;
     }
-    // Trust server bars directly — special-session / Muhurat history survives.
-    // Bucketing collapses same-bucket candles correctly.
-    this.candles = bucketCandles(candles, this.timeframeMinutes);
+    // Drop pre-open / post-close intraday bars (e.g. a 09:10 pre-open candle)
+    // so the series starts at the real session open; daily+ bars pass through.
+    // Bucketing then collapses any same-bucket candles correctly.
+    this.candles = bucketCandles(
+        this._sessionFilterIntraday(candles), this.timeframeMinutes);
     this._noMoreHistory = false;  // fresh series — extend is allowed again
     if (this.candleStyle === 'renko') {
       this._rebuildRenko();
@@ -2666,6 +2669,11 @@ class Chart {
     });
     wrap.addEventListener('mouseleave', () => {
       if (this.hover.inside) { this.hover.inside = false; this.scheduleRedraw(); }
+      // Leaving the chart must always drop the crosshair — including a pinned
+      // one. The pin (set by a `+` order-at-price click) is only useful while a
+      // popup is open over the chart; in instant mode there's no popup, so it
+      // would otherwise linger at the click point after the cursor moves away.
+      if (this._pinnedHover) { this._pinnedHover = null; this.scheduleRedraw(); }
       // Clear indicator-row hover too so icons fade out cleanly when
       // the cursor exits the pane (mouseleave skips the mousemove
       // recalculation that would otherwise nil this out).
@@ -2725,7 +2733,14 @@ class Chart {
     const N = this._seriesLength();
     const W = this.view.cellW;
     const O = this.view.offsetX;
-    const left = 8;                              // plot.left
+    // plot.left MUST include the drawing-rail gutter (Phase 30) — otherwise the
+    // visible slice starts at x=8, under the open rail, and the leftmost 2-3
+    // candles (and their high/low) render hidden beneath it. Mirror the same
+    // railGutter computation used to build `plot` in draw().
+    const railGutter = this._liteMode
+        ? 0
+        : (this._leftGutter != null ? this._leftGutter : 40);
+    const left = 8 + railGutter;                 // plot.left (incl. rail gutter)
     const right = this.canvas.clientWidth - 64;  // plot.right
     // Solve xCenter(i) >= left and xCenter(i) <= right + cellW (a bit of
     // overshoot for partial-edge candles).
@@ -2956,6 +2971,17 @@ class Chart {
     const priceToY = (p) => plot.top + plot.height * (hi - p) / (hi - lo);
     const yToPrice = (y) => hi - (y - plot.top) * (hi - lo) / plot.height;
 
+    // Clip every series-area paint (gridlines, candles, volume) to x ≥ plot.left
+    // so a boundary candle/wick/volume bar whose body half-width extends left of
+    // plot.left can't render under the open drawing rail. Full canvas height +
+    // right side stay untouched (axis labels live at x > plot.right). Restored
+    // after the volume block; later overlays are positioned at xCenter ≥ plot.left.
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(plot.left, 0, this.canvas.clientWidth - plot.left,
+        this.canvas.clientHeight);
+    this.ctx.clip();
+
     // Optional gridlines.
     if (this.overlays.gridlines) {
       this.ctx.strokeStyle = this.palette.gridSoft;
@@ -3031,6 +3057,9 @@ class Chart {
             'Vol ' + this._fmtVol(maxV), plot.left + 4, volPlot.top + 2);
       }
     }
+
+    // End of the series-area left-clip (gridlines + candles + volume).
+    this.ctx.restore();
 
     // Visible-range High/Low markers (Phase 16 F3). Drawn after candle bodies
     // so markers appear on top, but before LTP / overlay chips / crosshair so
@@ -4402,11 +4431,31 @@ class Chart {
     if (!exch) return false;
     const nowSec = Math.floor(Date.now() / 1000);
     if (_sessionBoundsFor(exch, nowSec).openMin == null) return false;
-    if (this._isSessionWindow(nowSec)) return !this._hasSessionDataToday();
+    if (this._isSessionWindow(nowSec)) {
+      // Within market hours: "closed" only means a weekday holiday — we HAVE
+      // prior candles but none for today. With NO data loaded yet (empty
+      // history + no tick), the chart is just loading today's bar from the
+      // live feed; don't flash "Market closed".
+      if (this.candles.length === 0 && !this._lastTickAt) return false;
+      return !this._hasSessionDataToday();
+    }
     return true;
   }
 
   _isSessionLive() { return !this._isClosed(); }
+
+  // Drop out-of-session INTRADAY candles (pre-open like 09:10, post-close, or
+  // weekend) from server history so the chart starts exactly at the session
+  // open. Daily/weekly/monthly bars are day-boundary stamped, so the intraday
+  // session-window check doesn't apply — return them unchanged.
+  _sessionFilterIntraday(candles) {
+    if (!Array.isArray(candles)) return candles;
+    if (this.timeframeMinutes >= 1440) return candles;
+    // Keep only in-session buckets (drops pre-open like 09:10, post-close and
+    // weekend bars). `_isSessionWindow` returns true for unmapped exchanges so
+    // those pass through untouched.
+    return candles.filter((c) => this._isSessionWindow(c.ts));
+  }
 
   // Periodic check (driven by _advanceBarsTicker). When the latest candle's
   // bucket has fully elapsed but no tick arrived to roll into the next one,
@@ -4710,15 +4759,21 @@ class Chart {
     // % in brackets, e.g. "2.2Cr  +12.3L (+0.6%)". When poi is unknown (0) the
     // change is omitted rather than reported as the whole OI.
     const sgn = (n) => (n >= 0 ? '+' : '-') + this._fmtOi(Math.abs(n));
-    const chgText = (oi, poi) => {
-      if (!(poi > 0)) return '';
-      const chg = (oi || 0) - poi;
-      return `  ${sgn(chg)} ${this._fmtPct((chg / poi) * 100)}`;
+    const chgText = (oi, poi, pctFallback) => {
+      if (poi > 0) {
+        const chg = (oi || 0) - poi;
+        return `  ${sgn(chg)} ${this._fmtPct((chg / poi) * 100)}`;
+      }
+      // No previous-day OI available — at least show the server's % change.
+      if (typeof pctFallback === 'number' && pctFallback !== 0) {
+        return `  ${this._fmtPct(pctFallback)}`;
+      }
+      return '';
     };
     const lines = [
       `Strike:   ${this._fmtStrike(s.strike)}`,
-      `Call OI:  ${this._fmtOi(s.callOi)}${chgText(s.callOi, s.callPoi)}`,
-      `Put OI:   ${this._fmtOi(s.putOi)}${chgText(s.putOi, s.putPoi)}`,
+      `Call OI:  ${this._fmtOi(s.callOi)}${chgText(s.callOi, s.callPoi, s.callOiChgPct)}`,
+      `Put OI:   ${this._fmtOi(s.putOi)}${chgText(s.putOi, s.putPoi, s.putOiChgPct)}`,
     ];
     this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';

@@ -129,18 +129,22 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
 
   if (!lpOnly) {
     if (aggState.prevCumVol == null) {
+      // First tick: set the volume baseline but DON'T skip the bar. Fall
+      // through to form/update the candle now — the volume delta is 0 on this
+      // tick, but OHLC comes from price + the day fields, so today's bar
+      // appears immediately (from the cached WS open/high/low + LTP at chart
+      // open) instead of waiting for the next tick. Volume accrues from the
+      // 2nd tick onward.
       aggState.prevCumVol = cumVol;
-      aggState.prevPrice = raw;
-      aggState.prevMs = tickMs;
-      return 'primed';
-    }
-    const dv = cumVol - aggState.prevCumVol;
-    if (dv <= 0) return 'skipped';        // late delivery — don't touch aggState
-    if (dv > 50000) {                     // huge jump — reset baseline
-      aggState.prevCumVol = cumVol;
-      aggState.prevPrice = raw;
-      aggState.prevMs = tickMs;
-      return 'skipped';
+    } else {
+      const dv = cumVol - aggState.prevCumVol;
+      if (dv <= 0) return 'skipped';      // late delivery — don't touch aggState
+      if (dv > 50000) {                   // huge jump — reset baseline
+        aggState.prevCumVol = cumVol;
+        aggState.prevPrice = raw;
+        aggState.prevMs = tickMs;
+        return 'skipped';
+      }
     }
   }
 

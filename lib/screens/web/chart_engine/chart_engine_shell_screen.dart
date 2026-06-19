@@ -163,14 +163,26 @@ class _ChartEngineShellScreenState
   Timer? _tickPollTimer;
   // Phase 18 — periodic OI fetch timer.
   Timer? _oiFetchTimer;
-  // Expiry (getLinkedScrip) fetch control, keyed by scrip 'exch|token':
-  // - `_linkedScripCheckedAt`: last attempt (ms) → throttle re-fetches to once
-  //   per 5 min (live OI flows via WS, so frequent expiry re-fetch is wasteful).
-  // - `_noOptionChainScrips`: scrips that returned NO chain — never re-queried.
+  // TEMP diagnostic — set true to trace the OI fetch path (toggle/scrip per
+  // pane + getLinkedScrip outcome) in the browser console. Remove once the
+  // SENSEX/SILVER no-OI cause is confirmed.
+  static const bool _kOiDebug = false;
+  // Expiry (getLinkedScrip) fetch control, keyed by scrip 'exch|token'.
+  // `_linkedScripCheckedAt`: last attempt (ms) → throttle re-fetches to once
+  // per 5 min (live OI flows via WS, so frequent expiry re-fetch is wasteful).
   final Map<String, int> _linkedScripCheckedAt = {};
-  final Set<String> _noOptionChainScrips = {};
+  // Scrips whose getLinkedScrip returned NO chain, with WHEN (epoch ms). Skipped
+  // for a long TTL (15 min) rather than forever, so a transient empty (e.g. an
+  // index like SENSEX queried before its chain is available) doesn't disable OI
+  // permanently — while still not spamming the server.
+  final Map<String, int> _noOptionChainAt = {};
   // Task 3 — per-pane option-token subscription map for WS-based OI delivery.
   final Map<int, Map<String, _OiTokenInfo>> _oiSubs = {};
+  // Last OI scripKey seen per pane. Detects a symbol switch in a pane so we can
+  // wipe the previous symbol's stale OI state (strikes, fetch timestamp, expiry,
+  // throttles) — otherwise the prior symbol's recent fetch timestamp makes Step 2
+  // think the new symbol's chain is still "fresh" and it never refetches.
+  final Map<int, String> _oiPaneScripKey = {};
   OverlayEntry? _overlayDetailEntry;
   OverlayEntry? _qtyPopupEntry;
   OverlayEntry? _plusMenuEntry;
@@ -330,16 +342,22 @@ class _ChartEngineShellScreenState
         final info = t.value;
         final socketEntry = ws.socketDatas[token];
         double oi = info.poi; // fall back to snapshot if no tick yet
+        double poi = info.poi; // previous-day OI — prefer the live WS value
         if (socketEntry is Map) {
-          final raw = socketEntry['oi'];
-          if (raw is num) {
-            oi = raw.toDouble();
-          } else if (raw is String) {
-            oi = double.tryParse(raw) ?? oi;
+          final rawOi = socketEntry['oi'];
+          if (rawOi is num) {
+            oi = rawOi.toDouble();
+          } else if (rawOi is String) {
+            oi = double.tryParse(rawOi) ?? oi;
+          }
+          final rawPoi = socketEntry['poi'];
+          if (rawPoi is num) {
+            poi = rawPoi.toDouble();
+          } else if (rawPoi is String) {
+            poi = double.tryParse(rawPoi) ?? poi;
           }
         }
-        final chgPct =
-            info.poi > 0 ? ((oi - info.poi) / info.poi) * 100 : 0.0;
+        final chgPct = poi > 0 ? ((oi - poi) / poi) * 100 : 0.0;
         final prev = byStrike[info.strike];
         byStrike[info.strike] = ChartOiStrike(
           strike: info.strike,
@@ -349,8 +367,8 @@ class _ChartEngineShellScreenState
               info.isCe ? chgPct : (prev?.callOiChgPct ?? 0),
           putOiChgPct:
               info.isCe ? (prev?.putOiChgPct ?? 0) : chgPct,
-          callPoi: info.isCe ? info.poi : (prev?.callPoi ?? 0),
-          putPoi: info.isCe ? (prev?.putPoi ?? 0) : info.poi,
+          callPoi: info.isCe ? poi : (prev?.callPoi ?? 0),
+          putPoi: info.isCe ? (prev?.putPoi ?? 0) : poi,
         );
       }
       final list = byStrike.values.toList()
@@ -2614,11 +2632,37 @@ class _ChartEngineShellScreenState
       // GOLD as well as the original index spots.
 
       final scripKey = '${scrip.exch}|${scrip.token}';
+
+      // Symbol switched in this pane since the last cycle? Wipe the prior
+      // symbol's stale OI state so the new symbol fetches immediately. Without
+      // this, `fetchedAtByPane[i]` still holds the previous symbol's recent
+      // timestamp, so Step 2 reports "chain-fresh" and never refetches — the
+      // pane keeps showing the old symbol's strikes (off-screen at the new
+      // price), i.e. no OI after a switch.
+      if (_oiPaneScripKey[i] != scripKey) {
+        _oiPaneScripKey[i] = scripKey;
+        oiNotifier.clearForPane(i);        // drop stale strikes + fetchedAt
+        expiryNotifier.clearForPane(i);    // force Step 1 to re-resolve expiry
+        _linkedScripCheckedAt.remove(scripKey); // allow an immediate re-link
+        _noOptionChainAt.remove(scripKey); // re-check; don't inherit stale "no chain"
+        _oiSubs.remove(i);                 // drop old option-token WS subs
+        if (_kOiDebug) debugPrint('[OI] pane=$i $scripKey symbol-change reset');
+        continue; // next cycle (ms away) proceeds with clean state
+      }
+
       final cachedExpiry = expiryCache.nearestByPane[i];
       final cachedScripKey = expiryCache.scripKeyByPane[i];
 
-      // Scrips already known to have no option chain are never re-queried.
-      if (_noOptionChainScrips.contains(scripKey)) continue;
+      // Skip scrips recently found to have no chain — but re-check after the
+      // TTL so a transient empty doesn't disable OI forever (e.g. SENSEX).
+      final noChainAt = _noOptionChainAt[scripKey];
+      if (noChainAt != null && now - noChainAt < 900000) {
+        if (_kOiDebug) {
+          debugPrint('[OI] pane=$i $scripKey SKIP no-chain TTL '
+              '(${((now - noChainAt) / 1000).round()}s ago)');
+        }
+        continue;
+      }
 
       // ── Step 1: fetch expiry list if not cached for this scrip ─────────
       // Fire-and-continue; the next tick sees the cache and proceeds to Step 2.
@@ -2629,17 +2673,25 @@ class _ChartEngineShellScreenState
         final lastLinkedAt = _linkedScripCheckedAt[scripKey] ?? 0;
         if (now - lastLinkedAt < 300000) continue;
         _linkedScripCheckedAt[scripKey] = now;
+        if (_kOiDebug) {
+          debugPrint('[OI] pane=$i $scripKey -> getLinkedScrip(...)');
+        }
         // ignore: discarded_futures
         locator<ApiExporter>()
             .getLinkedScrip(scrip.token, scrip.exch)
             .then((linked) {
           if (!mounted) return;
+          if (_kOiDebug) {
+            debugPrint('[OI] pane=$i $scripKey getLinkedScrip <- '
+                'stat=${linked.stat} optExp=${linked.optExp?.length ?? -1}');
+          }
           if (linked.stat != 'Ok' ||
               linked.optExp == null ||
               linked.optExp!.isEmpty) {
-            // No option chain for this scrip — remember it so we never ask
-            // again (until the app restarts).
-            _noOptionChainScrips.add(scripKey);
+            // No option chain right now — remember WHEN so we re-check after
+            // the TTL (handles indices whose chain wasn't ready on first ask)
+            // instead of disabling OI permanently.
+            _noOptionChainAt[scripKey] = now;
             return;
           }
           final sorted = [...linked.optExp!]
@@ -2660,7 +2712,9 @@ class _ChartEngineShellScreenState
           // fetchedAtByPane is intentionally NOT stamped here — leave it at 0
           // so the next cycle fires the chain fetch immediately after the expiry
           // cache is populated.
-        }).catchError((_) {});
+        }).catchError((e) {
+          if (_kOiDebug) debugPrint('[OI] pane=$i $scripKey getLinkedScrip ERR $e');
+        });
         continue;
       }
 
@@ -2668,7 +2722,18 @@ class _ChartEngineShellScreenState
       final lastAt = oiData.fetchedAtByPane[i] ?? 0;
       if (now - lastAt < refreshMs) continue;
       final spotLtp = _currentSpotLtp(scrip);
-      if (spotLtp == null) continue;
+      if (spotLtp == null) {
+        if (_kOiDebug) {
+          debugPrint('[OI] pane=$i $scripKey Step2 SKIP spotLtp==null '
+              '(token=${scrip.token} not in socketDatas or no lp)');
+        }
+        continue;
+      }
+      if (_kOiDebug) {
+        debugPrint('[OI] pane=$i $scripKey Step2 -> getOptionChain '
+            'strPrc=${spotLtp.toStringAsFixed(0)} tsym=${cachedExpiry.tsym} '
+            'exch=${cachedExpiry.exch}');
+      }
 
       // Stamp fetched-at NOW so concurrent ticks don't re-fire.
       oiNotifier.setForPane(
@@ -2684,6 +2749,11 @@ class _ChartEngineShellScreenState
               numofStrike: '25')
           .then((res) {
         if (!mounted) return;
+        if (_kOiDebug) {
+          debugPrint('[OI] pane=$i $scripKey getOptionChain <- '
+              'res=${res == null ? 'null' : 'stat=${res.stat} '
+                  'optValue=${res.optValue?.length ?? -1}'}');
+        }
         if (res == null || res.stat != 'Ok' || res.optValue == null) return;
         // Build initial snapshot and subscribe each option token via WS.
         final ws = ref.read(websocketProvider);
@@ -2726,8 +2796,9 @@ class _ChartEngineShellScreenState
         ref
             .read(chartOiDataProvider.notifier)
             .setForPane(i, parsed, DateTime.now().millisecondsSinceEpoch);
-      }).catchError((_) {
+      }).catchError((e) {
         // Silent — retry on the next 10-min cycle.
+        if (_kOiDebug) debugPrint('[OI] pane=$i $scripKey getOptionChain ERR $e');
       });
     }
   }
