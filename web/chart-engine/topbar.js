@@ -2860,10 +2860,16 @@
         + 'Not financial advice.'));
   }
 
-  // Radial "Market Clock" — 24 hour wedges + weekday bars, with Volatility /
-  // Direction / Volume modes. Mirrors CandL's rose. Hours are LOCAL time.
+  // Radial "Market Clock" — trading-hour wedges + weekday bars, with
+  // Volatility / Direction / Volume modes. Hours are LOCAL time. Only hours
+  // that actually traded (samples > 0) are shown, stretched evenly around the
+  // full ring, and only Mon–Fri weekdays — so non-market hours and weekends
+  // don't clutter it. Every wedge/bar reports its stats on hover.
   function _renderLabClock(body, candles, Lab) {
     const clock = Lab.computeMarketClock(candles);
+
+    // Drop any stale tooltip left over from a previous render.
+    document.querySelectorAll('.tb-lab-clock-tip').forEach((e) => e.remove());
 
     const tabs = document.createElement('div');
     tabs.className = 'tb-lab-modes';
@@ -2881,9 +2887,54 @@
     const metric = (bk) => _clockMode === 'vol' ? bk.meanAbsReturnPct
         : _clockMode === 'volume' ? bk.meanVolume
         : Math.abs(bk.meanReturnPct);
-    const hours = clock.byHourUtc; // local-hour buckets (see lab.js)
+
+    // Shared cursor tooltip (rose wedges + weekday bars). Previously hovering
+    // showed nothing; now each bucket reports its stats.
+    const fmtVol = (v) => {
+      if (!(v > 0)) return '0';
+      if (v >= 1e7) return (v / 1e7).toFixed(2) + 'Cr';
+      if (v >= 1e5) return (v / 1e5).toFixed(2) + 'L';
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+      return Math.round(v).toString();
+    };
+    const tip = document.createElement('div');
+    tip.className = 'tb-lab-clock-tip';
+    tip.style.cssText = 'position:fixed;z-index:3000;pointer-events:none;display:none;'
+      + 'background:var(--bg,#fff);color:var(--text,#111);'
+      + 'border:1px solid var(--card-border,#ccc);border-radius:6px;padding:6px 8px;'
+      + 'font:500 11px Geist,sans-serif;line-height:1.5;'
+      + 'box-shadow:0 4px 12px rgba(0,0,0,0.18);white-space:nowrap;';
+    document.body.appendChild(tip);
+    const showTip = (e, label, bk) => {
+      let html = '<b>' + label + '</b>';
+      if (!bk || bk.samples === 0) {
+        html += '<br>No data';
+      } else {
+        const dir = bk.meanReturnPct >= 0 ? '▲' : '▼';
+        const sgn = bk.meanReturnPct >= 0 ? '+' : '';
+        html += '<br>Avg move: ' + bk.meanAbsReturnPct.toFixed(2) + '%'
+          + '<br>Bias: ' + dir + ' ' + sgn + bk.meanReturnPct.toFixed(2) + '%'
+          + '<br>Avg vol: ' + fmtVol(bk.meanVolume)
+          + '<br>' + bk.samples + ' samples';
+      }
+      tip.innerHTML = html;
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY + 12) + 'px';
+    };
+    const hideTip = () => { tip.style.display = 'none'; };
+
+    // Trading hours only (buckets with samples), stretched evenly around the
+    // full ring so there are no empty non-market-hour gaps.
+    const activeHours = [];
+    for (let h = 0; h < 24; h++) {
+      if (clock.byHourUtc[h].samples > 0) {
+        activeHours.push({ hour: h, bk: clock.byHourUtc[h] });
+      }
+    }
+    const N = activeHours.length;
     let peak = 0;
-    for (const bk of hours) { const m = metric(bk); if (m > peak) peak = m; }
+    for (const a of activeHours) { const m = metric(a.bk); if (m > peak) peak = m; }
     if (!(peak > 0)) peak = 1;
 
     // ── Rose canvas ─────────────────────────────────────────────────────
@@ -2896,44 +2947,65 @@
     ctx.scale(2, 2);
     const cx = size / 2, cy = size / 2;
     const inner = 26, outer = size / 2 - 30;
-    // Guide rings + cardinal labels (00 top, 06 right, 12 bottom, 18 left).
     ctx.strokeStyle = 'rgba(148,163,184,0.25)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(cx, cy, outer, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = 'rgba(100,116,139,0.9)';
+
+    const angFor = (i) => (i / N) * Math.PI * 2 - Math.PI / 2; // first hour at top
+    const wedge = N > 0 ? (Math.PI * 2 / N) * 0.82 : 0;
     ctx.font = '11px Geist, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('00', cx, cy - outer - 12);
-    ctx.fillText('06', cx + outer + 14, cy);
-    ctx.fillText('12', cx, cy + outer + 12);
-    ctx.fillText('18', cx - outer - 14, cy);
-    const wedge = (Math.PI * 2 / 24) * 0.82;
-    for (let h = 0; h < 24; h++) {
-      const bk = hours[h];
+    for (let i = 0; i < N; i++) {
+      const bk = activeHours[i].bk;
       const m = metric(bk);
       const r = inner + (m / peak) * (outer - inner);
-      const a = (h / 24) * Math.PI * 2 - Math.PI / 2; // 00 at top, clockwise
+      const a = angFor(i);
       const up = bk.meanReturnPct >= 0;
-      ctx.fillStyle = bk.samples === 0 ? 'rgba(148,163,184,0.25)'
-          : (up ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)');
+      ctx.fillStyle = up ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)';
       ctx.beginPath();
       ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
       ctx.arc(cx, cy, r, a - wedge / 2, a + wedge / 2);
       ctx.lineTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
       ctx.closePath();
       ctx.fill();
+      // Hour label just outside the ring.
+      ctx.fillStyle = 'rgba(100,116,139,0.95)';
+      ctx.fillText(String(activeHours[i].hour).padStart(2, '0'),
+          cx + Math.cos(a) * (outer + 12), cy + Math.sin(a) * (outer + 12));
+    }
+    if (N === 0) {
+      ctx.fillStyle = 'rgba(100,116,139,0.9)';
+      ctx.fillText('No data', cx, cy);
     }
     body.appendChild(cv);
 
-    // ── Weekday bars ────────────────────────────────────────────────────
+    // Rose hover → tooltip for the wedge under the cursor.
+    cv.addEventListener('mousemove', (e) => {
+      if (N === 0) { hideTip(); return; }
+      const rect = cv.getBoundingClientRect();
+      const dx = (e.clientX - rect.left) - cx;
+      const dy = (e.clientY - rect.top) - cy;
+      const dist = Math.hypot(dx, dy);
+      if (dist < inner - 6 || dist > outer + 10) { hideTip(); return; }
+      let ang = Math.atan2(dy, dx) + Math.PI / 2;
+      ang = ((ang % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      const idx = Math.round(ang / (Math.PI * 2 / N)) % N;
+      const a = activeHours[idx];
+      showTip(e, String(a.hour).padStart(2, '0') + ':00', a.bk);
+    });
+    cv.addEventListener('mouseleave', hideTip);
+
+    // ── Weekday bars (Mon–Fri only) ─────────────────────────────────────
     const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const TRADING_DAYS = [1, 2, 3, 4, 5];
     let wpeak = 0;
-    for (const bk of clock.byWeekdayUtc) { const m = metric(bk); if (m > wpeak) wpeak = m; }
+    for (const d of TRADING_DAYS) {
+      const m = metric(clock.byWeekdayUtc[d]); if (m > wpeak) wpeak = m;
+    }
     if (!(wpeak > 0)) wpeak = 1;
     const wk = document.createElement('div');
     wk.className = 'tb-lab-weekdays';
-    // Mon-first ordering, like the screenshot.
-    for (const d of [1, 2, 3, 4, 5, 6, 0]) {
+    for (const d of TRADING_DAYS) {
       const bk = clock.byWeekdayUtc[d];
       const m = metric(bk);
       const up = bk.meanReturnPct >= 0;
@@ -2943,17 +3015,21 @@
       col.innerHTML = '<div class="tb-lab-wd-bar" style="height:' + barH.toFixed(0) + 'px;'
           + 'background:' + (up ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)') + '"></div>'
           + '<div class="tb-lab-wd-lbl">' + WD[d] + '</div>';
+      col.addEventListener('mousemove', (e) => showTip(e, WD[d], bk));
+      col.addEventListener('mouseleave', hideTip);
       wk.appendChild(col);
     }
     body.appendChild(wk);
 
-    body.appendChild(_labNote('Based on ' + Math.round(clock.candleCount / 24)
-        + ' days of data · hours shown in your local time'));
+    body.appendChild(_labNote('Trading hours only · times in your local zone · '
+        + clock.candleCount + ' bars'));
   }
 
   function _closeLabPanel() {
     if (!_labPanel) return;
     _labClearProjection();
+    // Remove the Market Clock's floating tooltip (lives on document.body).
+    document.querySelectorAll('.tb-lab-clock-tip').forEach((e) => e.remove());
     _labPanel.remove();
     _labPanel = null;
   }

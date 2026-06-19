@@ -1114,9 +1114,15 @@ class Chart {
       const fresh = bucketCandles(
           this._sessionFilterIntraday(candles), this.timeframeMinutes);
       if (fresh.length === 0) return;
-      const firstTs = fresh[0].ts;
-      const head = this.candles.filter((c) => c.ts < firstTs);
-      this.candles = head.concat(fresh);
+      // Union merge by ts: keep EVERY existing candle and overlay the fetched
+      // ones (server wins for overlapping buckets). A plain head+fresh splice
+      // dropped any candle past fresh's last ts — so a short/stale refetch on
+      // tab-return wiped bars we already had, leaving a gap. Union can't lose
+      // candles and fills any hole inside the refetched span.
+      const byTs = new Map();
+      for (const c of this.candles) byTs.set(c.ts, c);
+      for (const c of fresh) byTs.set(c.ts, c);
+      this.candles = Array.from(byTs.values()).sort((a, b) => a.ts - b.ts);
       this._noMoreHistory = false;
       if (this.candleStyle === 'renko') {
         this._rebuildRenko();
@@ -1261,13 +1267,18 @@ class Chart {
     let startTs = this.candles[i].ts;
     const nowSec = Math.floor(Date.now() / 1000);
     const bucketSec = this.timeframeMinutes * 60;
-    // Healing a hidden-tab / reconnect gap: a later bucket may have formed
-    // while an earlier one was missed, leaving a HOLE below the last real
-    // candle. The last-real-candle anchor would never re-pull it, so back the
-    // window up to before the gap began. The merge (head + fresh) then replaces
-    // every bucket from there to now, refilling the hole and correcting bars.
+    // Healing a hidden-tab / reconnect gap: while away, bars are missed (and a
+    // partial refetch left holes). Re-pull the ENTIRE current trading day so the
+    // union merge refills everything. If we were away since before today's open
+    // (e.g. overnight), reach back to when we went hidden instead.
     if (this._healFromSec != null) {
-      startTs = Math.min(startTs, this._healFromSec - bucketSec);
+      const sessOpen = this._sessionOpenTodaySec(nowSec);
+      let healStart =
+          (sessOpen != null) ? sessOpen : (this._healFromSec - bucketSec);
+      if (this._healFromSec - bucketSec < healStart) {
+        healStart = this._healFromSec - bucketSec;
+      }
+      startTs = Math.min(startTs, healStart);
       this._healFromSec = null;
     }
     if (startTs <= 0) return;
@@ -4509,6 +4520,20 @@ class Chart {
   }
 
   _isSessionLive() { return !this._isClosed(); }
+
+  // Epoch sec of TODAY's session open (IST) for this scrip's exchange, or null
+  // for an unmapped/always-on exchange. Used by the heal refresh to re-pull the
+  // full trading day after the tab was backgrounded.
+  _sessionOpenTodaySec(nowSec) {
+    const exch = this.scrip ? this.scrip.exch : null;
+    if (!exch) return null;
+    const b = _sessionBoundsFor(exch, nowSec);
+    if (b.openMin == null) return null;
+    const p = _istParts(nowSec);
+    const secWithinMin = nowSec % 60;
+    const istMidnight = nowSec - p.minuteOfDay * 60 - secWithinMin;
+    return istMidnight + b.openMin * 60;
+  }
 
   // Drop out-of-session INTRADAY candles (pre-open like 09:10, post-close, or
   // weekend) from server history so the chart starts exactly at the session
