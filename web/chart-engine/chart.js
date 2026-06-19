@@ -125,6 +125,10 @@ class Chart {
     // Recent-window refresh bookkeeping (tab-visible / WS-reconnect heal).
     this._pendingRefreshId = null;
     this._refreshBlockedUntil = 0;
+    // Epoch sec to re-pull FROM on the next heal refresh. Set when the tab goes
+    // hidden / the socket reconnects so the refetch covers the whole gap (incl.
+    // a hole BELOW the newest candle, which a last-real-candle anchor misses).
+    this._healFromSec = null;
     // Set to true when the server returns an empty page for an extend — there
     // is no more history before our earliest loaded candle, so stop pestering.
     this._noMoreHistory = false;
@@ -290,7 +294,15 @@ class Chart {
 
     // Heal the candle stream when the tab comes back to the foreground.
     this._onVisibility = () => {
-      if (document.visibilityState === 'visible') this._refreshRecent('visible');
+      if (document.visibilityState === 'hidden') {
+        // Record when we lost the foreground. Background tabs throttle timers
+        // and may drop ticks, so bars can be missed — including a hole below
+        // the newest bar. On return we re-pull FROM here so the merge refills
+        // the whole gap, not just the tail.
+        this._healFromSec = Math.floor(Date.now() / 1000);
+      } else if (document.visibilityState === 'visible') {
+        this._refreshRecent('visible');
+      }
     };
     document.addEventListener('visibilitychange', this._onVisibility);
   }
@@ -1246,9 +1258,20 @@ class Chart {
     // Anchor at the last REAL (non-synth) candle so synth bars get replaced.
     let i = this.candles.length - 1;
     while (i > 0 && this.candles[i]._synth) i--;
-    const startTs = this.candles[i].ts;
+    let startTs = this.candles[i].ts;
     const nowSec = Math.floor(Date.now() / 1000);
-    if (nowSec - startTs < this.timeframeMinutes * 60) return; // nothing new yet
+    const bucketSec = this.timeframeMinutes * 60;
+    // Healing a hidden-tab / reconnect gap: a later bucket may have formed
+    // while an earlier one was missed, leaving a HOLE below the last real
+    // candle. The last-real-candle anchor would never re-pull it, so back the
+    // window up to before the gap began. The merge (head + fresh) then replaces
+    // every bucket from there to now, refilling the hole and correcting bars.
+    if (this._healFromSec != null) {
+      startTs = Math.min(startTs, this._healFromSec - bucketSec);
+      this._healFromSec = null;
+    }
+    if (startTs <= 0) return;
+    if (nowSec - startTs < bucketSec) return; // nothing new yet
     this._pendingRefreshId = _newRequestId();
     this._refreshBlockedUntil = Date.now() + 3000;
     this.requestHistory({
@@ -1264,6 +1287,11 @@ class Chart {
   }
 
   onWsReconnected() {
+    // A reconnect implies a dropped-tick gap of unknown length — heal a
+    // generous recent window (30 min) so any holes from the outage refill.
+    const back = Math.floor(Date.now() / 1000) - 30 * 60;
+    this._healFromSec =
+        this._healFromSec == null ? back : Math.min(this._healFromSec, back);
     this._refreshRecent('reconnect');
   }
 
