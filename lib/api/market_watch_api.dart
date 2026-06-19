@@ -242,6 +242,28 @@ mixin MarketWatchApi on ApiCore {
     }
   }
 
+  // Reorder scrips within a watchlist — vendor endpoint that takes the full
+  // ordered list and atomically updates positions on the backend. Replaces
+  // the older delete-all + add-all dance which always tripped the "at least
+  // 1 stock must remain" rule on the delete step.
+  Future<AddDeleteScripModel> getReorderMWScrips({
+    required String wlname,
+    required String scripToken,
+  }) async {
+    try {
+      final uri = Uri.parse(apiLinks.reorderMWScrips);
+      final res = await apiClient.post(uri,
+          headers: defaultHeaders,
+          body:
+              '''jData={"uid":"${prefs.clientId}","wlname":"$wlname","scrips":"$scripToken"}&jKey=${prefs.clientSession}''');
+
+      final json = jsonDecode(res.body);
+      return AddDeleteScripModel.fromJson(json as Map<String, dynamic>);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
 // Get Trade symbol wise search from kambala
 
   Future<SearchScripModel> getSearchScrip({required String searchText}) async {

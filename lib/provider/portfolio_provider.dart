@@ -711,7 +711,8 @@ changeHoldingsTabIndex(int index) {
                     max(int.parse("${element.dpQty ?? 0}"),
                             int.parse("${element.npoadqty ?? 0}")) +
                         int.parse("${element.holdqty ?? 0}") +
-                        int.parse("${element.btstqty ?? 0}")) -
+                        int.parse("${element.btstqty ?? 0}")  +
+                        int.parse("${element.npoadt1qty ?? 0}")) -
                 int.parse("${element.trdqty ?? 0}");
             element.currentQty = qty;
             // FIX: Update holdQty without wiping existing socket data
@@ -729,7 +730,7 @@ changeHoldingsTabIndex(int index) {
                 "${element.upldprc == "0.00" ? element.exchTsym![0].close ?? 0.0 : element.upldprc ?? 0.00}");
 
             element.avgPrc = "$avgCost";
-            element.invested = ((qty + int.parse(element.npoadt1qty ?? "0")) * avgCost).toStringAsFixed(2);
+            element.invested = (qty * avgCost).toStringAsFixed(2);
 
             invest += double.parse("${element.invested}");
             if (element.npoadqty.toString() != "null" ||
@@ -2099,7 +2100,7 @@ changeHoldingsTabIndex(int index) {
     if (lpDouble <= 0) return; // Can't calculate with invalid price
 
     // Update current value
-    holding.currentValue = ((qty + int.parse(holding.npoadt1qty ?? "0"))  * lpDouble).toStringAsFixed(2);
+    holding.currentValue = (qty * lpDouble).toStringAsFixed(2);
 
     // Get average cost with fallback to closing price
     final closeVal =
@@ -2113,7 +2114,7 @@ changeHoldingsTabIndex(int index) {
 
     if (avgCost <= 0) return; // Can't calculate with invalid cost
 
-    holding.invested = ((qty + int.parse(holding.npoadt1qty ?? "0")) * avgCost).toStringAsFixed(2);
+    holding.invested = (qty * avgCost).toStringAsFixed(2);
     final investedValue = double.tryParse(holding.invested ?? '0.00') ?? 0.00;
 
     // Calculate profit/loss
@@ -2135,9 +2136,9 @@ changeHoldingsTabIndex(int index) {
     }
 
     // Calculate one day change if close value is valid
-    if (closeVal > 0) {
+  if (closeVal > 0) {
       holding.exchTsym![0].oneDayChg =
-          ((lpDouble - closeVal) * (qty+ int.parse(holding.npoadt1qty ?? "0"))).toStringAsFixed(2);
+          ((lpDouble - closeVal) * qty).toStringAsFixed(2);
     }
 
     // Update totals

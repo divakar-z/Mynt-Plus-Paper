@@ -152,7 +152,12 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
         case 4: // Basket
           await orderBook.getBasketName();
           break;
-        case 5: // Pending Alerts
+        case 5: // SIP — previous code wrongly fetched pending alerts here
+          // because the case was mislabeled. Tab 5 is the SIP screen
+          // (see _buildTabContent at the bottom of this file).
+          await orderBook.fetchSipOrderHistory(context);
+          break;
+        case 6: // Pending Alerts — Alerts is tab index 6, not 5.
           await ref.read(marketWatchProvider).fetchPendingAlert(context);
           await ref.read(notificationprovider).fetchbrokermsg(context);
           break;

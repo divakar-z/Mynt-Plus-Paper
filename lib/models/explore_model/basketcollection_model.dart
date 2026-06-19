@@ -190,6 +190,7 @@ class SchemaValues {
 class FundListModel {
   final String name;
   final String type;
+  final double oneYearCAGR;
   final double fiveYearCAGR;
   final double threeYearCAGR;
   final double aum;
@@ -206,6 +207,7 @@ class FundListModel {
   FundListModel({
     required this.name,
     required this.type,
+    this.oneYearCAGR = 0.0,
     required this.fiveYearCAGR,
     required this.threeYearCAGR,
     required this.aum,

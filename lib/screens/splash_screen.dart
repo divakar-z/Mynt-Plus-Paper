@@ -16,6 +16,8 @@ import '../routes/web_router.dart';
 import '../sharedWidget/internet_widget.dart';
 import '../sharedWidget/snack_bar.dart';
 import '../sharedWidget/splash_loader.dart';
+import '../utils/auto_login_handoff.dart';
+import '../utils/responsive_snackbar.dart';
 
 class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
@@ -61,13 +63,40 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     try {
       print(
           "Device  Name  ${pref.deviceName!} - ${pref.clientSession} ----  ${ref.read(networkStateProvider).connectionStatus} ");
+
+      // Ensure device details exist before any login path (initialLoadMethods
+      // relies on them, e.g. for a brand-new browser).
+      if (pref.deviceName!.isEmpty) {
+        await ref.read(authProvider).getDeviceDetails();
+      }
+
+      // URL token-based auto-login. main.dart stashed the uid/token from the
+      // launch URL. Validate them BEFORE touching any stored session so a
+      // wrong/expired link can't log out the current user — a real session is
+      // committed only on success. On failure we fall through and the existing
+      // session (if any) resumes normally below.
+      if (AutoLoginHandoff.hasPending) {
+        final uid = AutoLoginHandoff.uid!;
+        final token = AutoLoginHandoff.token!;
+        AutoLoginHandoff.clear();
+        final ok = await ref
+            .read(webAuthProvider)
+            .tryUrlAutoLogin(context, uid, token);
+        if (ok) return; // validated, session committed, navigated to home
+
+        // Invalid/expired link — tell the user which login failed. Uses the
+        // app's global toast so it survives the screen we fall through to
+        // (the login page, or the already-logged-in user's dashboard).
+        ResponsiveSnackBar.showError(
+          context,
+          'Login link for $uid is invalid or has expired.',
+        );
+      }
+
       ref.read(authProvider).loginMethCtrl.text = pref.clientId!;
       ref
           .read(authProvider)
           .switchMobToClinent(pref.clientId!.isEmpty ? false : true);
-      if (pref.deviceName!.isEmpty) {
-        await ref.read(authProvider).getDeviceDetails();
-      }
       if (pref.clientSession!.isEmpty && pref.clientId!.isNotEmpty) {
         pref.setMobileLogin(false);
         pref.setHideLoginOptBtn(false);

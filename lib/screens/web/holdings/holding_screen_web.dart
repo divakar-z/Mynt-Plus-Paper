@@ -8,6 +8,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/screens/web/holdings/hold_table.dart';
 import 'package:mynt_plus/screens/web/holdings/mf_hold_table.dart';
+import 'package:mynt_plus/screens/web/holdings/mf_demat_hold_table.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
 import '../../../../provider/portfolio_provider.dart';
@@ -62,8 +63,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
       ValueNotifier<String>('All'); // Filter options: All, Stocks, Bonds
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   final ValueNotifier<String> _mfSearchQuery = ValueNotifier<String>('');
+  final ValueNotifier<String> _mfDematSearchQuery = ValueNotifier<String>('');
   final TextEditingController _stocksSearchController = TextEditingController();
   final TextEditingController _mfSearchController = TextEditingController();
+  final TextEditingController _mfDematSearchController = TextEditingController();
 
   final ValueNotifier<String?> _hoveredRowToken = ValueNotifier<String?>(null);
   final ValueNotifier<int?> _hoveredColumnIndex = ValueNotifier<int?>(null);
@@ -88,6 +91,12 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     _mfSearchController.addListener(() {
       if (_mfSearchController.text != _mfSearchQuery.value) {
         _mfSearchQuery.value = _mfSearchController.text;
+      }
+    });
+
+    _mfDematSearchController.addListener(() {
+      if (_mfDematSearchController.text != _mfDematSearchQuery.value) {
+        _mfDematSearchQuery.value = _mfDematSearchController.text;
       }
     });
 
@@ -141,8 +150,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     _hoveredColumnIndex.dispose();
     _searchQuery.dispose();
     _mfSearchQuery.dispose();
+    _mfDematSearchQuery.dispose();
     _stocksSearchController.dispose();
     _mfSearchController.dispose();
+    _mfDematSearchController.dispose();
     _selectedFilter.dispose();
 
     super.dispose();
@@ -153,8 +164,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     final portfolioData = ref.read(portfolioProvider);
     if (_selectedTabIndex == 0) {
       await portfolioData.fetchHoldings(context, "Refresh", isRefresh: true);
-    } else {
+    } else if (_selectedTabIndex == 1) {
       await ref.read(mfProvider).fetchmfholdingnew();
+    } else {
+      await ref.read(mfProvider).fetchmfdematholding();
     }
   }
 
@@ -208,9 +221,12 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     if (selectedTab == 0) {
       // Stocks tab - show stocks summary
       return _buildStocksSummaryCards(context, theme, portfolioData);
-    } else {
+    } else if (selectedTab == 1) {
       // Mutual Funds tab - show mutual funds summary
       return _buildMutualFundsSummaryCards(theme);
+    } else {
+      // Mutual Fund Beta tab - show demat holdings summary
+      return _buildMfDematSummaryCards(theme);
     }
   }
 
@@ -498,6 +514,120 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     );
   }
 
+  Widget _buildMfDematSummaryCards(ThemesProvider theme) {
+    return Consumer(
+      builder: (context, ref, _) {
+        final mfData = ref.watch(mfProvider);
+        final summary = mfData.mfDematHolding?.summary;
+        final holdings = mfData.mfDematHolding?.data ?? [];
+
+        // Prefer the API summary when present; otherwise compute totals from
+        // the demat holdings rows (the demat endpoint may omit a summary block).
+        double invested;
+        double currentValue;
+        double returns;
+        if (summary != null) {
+          invested = double.tryParse(summary.invested ?? '0') ?? 0.0;
+          currentValue = double.tryParse(summary.currentValue ?? '0') ?? 0.0;
+          returns = double.tryParse(summary.absReturnValue ?? '0') ??
+              (currentValue - invested);
+        } else {
+          invested = 0.0;
+          currentValue = 0.0;
+          for (final h in holdings) {
+            invested += double.tryParse(h.investedValue ?? '0') ?? 0.0;
+            currentValue += double.tryParse(h.currentValue ?? '0') ?? 0.0;
+          }
+          returns = currentValue - invested;
+        }
+
+        final returnsPercent =
+            invested != 0 ? (returns / invested) * 100 : 0.0;
+
+        final investedStr = invested.toStringAsFixed(2);
+        final currentStr = currentValue.toStringAsFixed(2);
+        final returnsStr = returns.toStringAsFixed(2);
+        final returnsPercentStr = returnsPercent.toStringAsFixed(2);
+
+        final cards = [
+          _buildStatCard(
+            label: 'Invested',
+            value: investedStr.toIndianRupee(),
+            valueColor: resolveThemeColor(
+              context,
+              dark: MyntColors.textPrimaryDark,
+              light: MyntColors.textPrimary,
+            ),
+            theme: theme,
+          ),
+          _buildStatCard(
+            label: 'Current Value',
+            value: currentStr.toIndianRupee(),
+            valueColor: resolveThemeColor(
+              context,
+              dark: MyntColors.textPrimaryDark,
+              light: MyntColors.textPrimary,
+            ),
+            theme: theme,
+          ),
+          _buildStatCard(
+            label: 'Returns',
+            value: returnsStr.toIndianRupee(),
+            percentage: returnsPercentStr,
+            valueColor: getValueColor(context, returnsStr),
+            theme: theme,
+          ),
+        ];
+
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth >= 800;
+
+            if (isWide) {
+              return IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (int i = 0; i < cards.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 12),
+                      Expanded(child: cards[i]),
+                    ],
+                  ],
+                ),
+              );
+            } else {
+              return Column(
+                children: [
+                  IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: cards[0]),
+                        const SizedBox(width: 12),
+                        Expanded(child: cards[1]),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: cards[2]),
+                        const SizedBox(width: 12),
+                        Expanded(child: Container()),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildMainContent(
       ThemesProvider theme, PortfolioProvider portfolioData) {
     return Column(
@@ -535,6 +665,13 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                         return MfTableExample(searchQuery: searchQuery);
                       },
                     ),
+                    // Mutual Fund Beta tab - Using MfDematTableExample from mf_demat_hold_table.dart with search
+                    ValueListenableBuilder<String>(
+                      valueListenable: _mfDematSearchQuery,
+                      builder: (context, searchQuery, child) {
+                        return MfDematTableExample(searchQuery: searchQuery);
+                      },
+                    ),
             ],
           ),
         ),
@@ -548,6 +685,8 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     final stocksCount = widget.listofHolding.length;
     final mutualFundsCount =
         ref.read(mfProvider).mfholdingnew?.data?.length ?? 0;
+    final mfDematCount =
+        ref.read(mfProvider).mfDematHolding?.data?.length ?? 0;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -569,6 +708,8 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                         _selectedTabIndex = 0;
                         _mfSearchController.clear();
                         _mfSearchQuery.value = '';
+                        _mfDematSearchController.clear();
+                        _mfDematSearchQuery.value = '';
                       });
                     }
                   },
@@ -644,6 +785,8 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                         _selectedTabIndex = 1;
                         _stocksSearchController.clear();
                         _searchQuery.value = '';
+                        _mfDematSearchController.clear();
+                        _mfDematSearchQuery.value = '';
                       });
                     }
                   },
@@ -708,6 +851,99 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                   ),
                 ),
               ),
+              const SizedBox(width: 8),
+              // Mutual Fund Beta tab
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () {
+                    if (mounted && _selectedTabIndex != 2) {
+                      setState(() {
+                        _selectedTabIndex = 2;
+                        _stocksSearchController.clear();
+                        _searchQuery.value = '';
+                        _mfSearchController.clear();
+                        _mfSearchQuery.value = '';
+                      });
+                    }
+                  },
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _selectedTabIndex == 2
+                          ? (theme.isDarkMode
+                              ? Colors.white.withOpacity(0.1)
+                              : Colors.black.withOpacity(0.05))
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                      border: null,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text.rich(
+                          TextSpan(
+                            style: MyntWebTextStyles.body(
+                              context,
+                              fontWeight: _selectedTabIndex == 2
+                                  ? MyntFonts.semiBold
+                                  : MyntFonts.medium,
+                            ).copyWith(
+                              color: _selectedTabIndex == 2
+                                  ? shadcn.Theme.of(context)
+                                      .colorScheme
+                                      .foreground
+                                  : shadcn.Theme.of(context)
+                                      .colorScheme
+                                      .mutedForeground,
+                            ),
+                            children: [
+                              const TextSpan(text: 'Mutual Fund '),
+                              TextSpan(
+                                text: 'BETA',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: MyntFonts.bold,
+                                  color: resolveThemeColor(
+                                    context,
+                                    dark: MyntColors.primaryDark,
+                                    light: MyntColors.primary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (mfDematCount > 0) ...[
+                          const SizedBox(width: 4),
+                          Transform.translate(
+                            offset: const Offset(0, -6),
+                            child: Text(
+                              '$mfDematCount',
+                              style: MyntWebTextStyles.bodySmall(
+                                context,
+                                fontWeight: _selectedTabIndex == 2
+                                    ? MyntFonts.semiBold
+                                    : MyntFonts.medium,
+                              ).copyWith(
+                                fontSize: 13,
+                                color: _selectedTabIndex == 2
+                                    ? shadcn.Theme.of(context)
+                                        .colorScheme
+                                        .foreground
+                                    : shadcn.Theme.of(context)
+                                        .colorScheme
+                                        .mutedForeground,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ],
           );
         }
@@ -737,7 +973,7 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 onClear: () => _stocksSearchController.clear(),
               ),
             );
-          } else {
+          } else if (_selectedTabIndex == 1) {
             return SizedBox(
               width: useCompactLayout ? null : searchWidth,
               child: MyntSearchTextField.withSmartClear(
@@ -745,6 +981,16 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 placeholder: 'Search on mutual funds',
                 leadingIcon: assets.searchIcon,
                 onClear: () => _mfSearchController.clear(),
+              ),
+            );
+          } else {
+            return SizedBox(
+              width: useCompactLayout ? null : searchWidth,
+              child: MyntSearchTextField.withSmartClear(
+                controller: _mfDematSearchController,
+                placeholder: 'Search on mutual funds',
+                leadingIcon: assets.searchIcon,
+                onClear: () => _mfDematSearchController.clear(),
               ),
             );
           }

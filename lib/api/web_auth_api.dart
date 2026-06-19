@@ -90,15 +90,20 @@ class WebAuthApi {
     required String mobileOrClientId,
     required String source,
     required BuildContext context,
+    bool isTotp = false,
   }) async {
     try {
       final uri = Uri.parse('$_loginBaseUrl/otp_send');
-      
+
       final inputType = _getInputType(mobileOrClientId);
-      
+
       Map<String, dynamic> data = {
         'device': source,
         inputType: mobileOrClientId.toUpperCase(),
+        // Flags the OTP request as part of the TOTP-setup flow so the backend
+        // can handle it accordingly. Only sent during TOTP setup; regular
+        // login OTP requests keep the original payload.
+        if (isTotp) 'is_totp': true,
       };
 
       
@@ -245,6 +250,41 @@ class WebAuthApi {
     );
   }
 
+  /// Invalidate QR Session API
+  ///
+  /// Tells the backend to mark the given QR session UUID as abandoned so
+  /// that a subsequent mobile-side confirmation for the same UUID is
+  /// rejected. Called whenever the user moves away from an active QR
+  /// session — clicks Scan QR again (new UUID), clicks Reload icon, or
+  /// the app boots and finds a stale UUID left over from a previous
+  /// session (e.g., browser crash where beforeunload didn't fire).
+  ///
+  /// Best-effort: failures are swallowed silently because the next entry
+  /// (or backend's own session timeout) will eventually clean up.
+  static Future<void> invalidateQrSession({
+    required String uniqueId,
+  }) async {
+    try {
+      // Backend expects only { unique_id } in the body.
+      // Response shape: { "detail": "QR invalid" } on success.
+      // Endpoint URL is repointed to the local dev server during integration
+      // testing — update to prod URL before release.
+      final uri = Uri.parse('https://ws.mynt.in/login/QRInvalidate');
+
+      final data = {
+        'unique_id': uniqueId,
+      };
+
+      await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+    } catch (e) {
+      // Swallow — invalidate is best-effort, retried on next entry.
+    }
+  }
+
   /// QR Login API - For QR code based login
   static Future<MobileOtpModel?> qrLogin({
     required String uniqueId,
@@ -306,6 +346,81 @@ class WebAuthApi {
       }
     } catch (e) {
       ResponsiveSnackBar.showError(context, "Failed to process request. Please try again.");
+    }
+    return null;
+  }
+
+  /// Forgot Password — Send OTP
+  ///
+  /// First half of the new OTP-gated forgot-password flow. Backend sends a
+  /// 4-digit OTP to the user's registered mobile/email for the given
+  /// identifier. Frontend should then show the OTP-entry screen and call
+  /// [forgetPasswordOtpVerify] once the user types the OTP.
+  ///
+  /// Known responses:
+  /// - { "msg": "otp sended" } — success
+  /// - { "msg": "No data found" } — identifier doesn't exist
+  /// - { "emsg": "Your mobile registered in multiple accounts, Please login
+  ///     with client ID", "stat": "Not_Ok" } — ambiguous mobile
+  /// - { "emsg": "Invalid field", "stat": "Not_Ok" } — bad field name
+  static Future<Map<String, dynamic>?> forgetPasswordOtpSend({
+    required String mobileOrClientId,
+  }) async {
+    try {
+      final uri = Uri.parse('$_loginBaseUrl/ForgetPasswordOtpSend');
+      final data = {
+        'field': _getInputType(mobileOrClientId),
+        'value': mobileOrClientId.toUpperCase(),
+      };
+      final res = await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Caller handles user-facing error toast.
+    }
+    return null;
+  }
+
+  /// Forgot Password — Verify OTP
+  ///
+  /// Second half of the new OTP-gated forgot-password flow. Backend
+  /// validates the OTP and, on success, internally runs the old
+  /// ForgetPassword behavior (generates and sends the temp password to the
+  /// user's registered mobile/email). Frontend then jumps straight to the
+  /// Change Password screen — no separate ForgetPassword call needed.
+  ///
+  /// Known error responses:
+  /// - { "emsg": "clientid not found" } — identifier mismatch
+  /// - { "emsg": "Invalid field", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP expired, Please request a new one", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP already used", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP not valid" }
+  static Future<Map<String, dynamic>?> forgetPasswordOtpVerify({
+    required String mobileOrClientId,
+    required String otp,
+  }) async {
+    try {
+      final uri = Uri.parse('$_loginBaseUrl/ForgetPasswordOtpVerify');
+      final data = {
+        'field': _getInputType(mobileOrClientId),
+        'value': mobileOrClientId.toUpperCase(),
+        'otp': otp,
+      };
+      final res = await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Caller handles user-facing error toast.
     }
     return null;
   }

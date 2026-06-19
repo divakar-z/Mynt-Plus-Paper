@@ -686,14 +686,11 @@ if (_isExpiryToday(widget.watchListData['expDate'])) ...[
                                                     false,
                                                     false,
                                                     false);
-                                            if (mounted) {
-                                              showResponsiveSuccess(context,
-                                                  'Scrip removed from watchlist');
-                                            }
+                                          
                                           } catch (e) {
                                             if (mounted) {
                                               showResponsiveError(context,
-                                                  'Failed to delete scrip');
+                                                  'Failed to delete stock');
                                             }
                                           } finally {
                                             if (mounted) {

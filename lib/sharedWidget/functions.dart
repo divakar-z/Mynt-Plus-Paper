@@ -205,7 +205,12 @@ DateTime parseDate(String dateStr) {
 }
 
 // Cached compiled RegExp — avoids recompilation on every call (1500× per fetchOrderBook)
-final RegExp _tsymDatePattern = RegExp(r'\d{2}[A-Z]{3}\d{2,4}');
+// Month names are whitelisted: a generic [A-Z]{3} false-matches inside symbols
+// that contain digits (e.g. 360ONE30JUN26C1040 matched "60ONE30" as a date).
+// The 2-digit year is optional with a no-more-digits guard: BFO symbols carry
+// no year and the strike follows the month directly (360ONE26JUN1040CE).
+final RegExp _tsymDatePattern = RegExp(
+    r'\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{2}(?!\d))?');
 
 Map spilitTsym({required String value}) {
   String symbol = "";
@@ -225,20 +230,28 @@ Map spilitTsym({required String value}) {
     String month = date.substring(2, 5);
     String year = date.substring(5);
 
-    expDate = '$day $month $year';
-    if (value.substring(index + dateMatch.length).contains("P")) {
-      option = value.substring(index + dateMatch.length).replaceAll("P", "PE ");
-    } else if (value.substring(index + dateMatch.length).contains("C")) {
-      option = value.substring(index + dateMatch.length).replaceAll("C", "CE ");
-    } else if (value.substring(index + dateMatch.length).contains("F")) {
-      option =
-          value.substring(index + dateMatch.length).replaceAll("F", "FUT ");
+    expDate = year.isEmpty ? '$day $month' : '$day $month $year';
+    String rest = value.substring(index + dateMatch.length);
+    // BFO-style symbols put the strike before CE/PE (e.g. 360ONE26JUN1040CE);
+    // the replace-and-swap below assumes the NFO order (C/P before strike).
+    final RegExpMatch? strikeFirst =
+        RegExp(r'^(\d+(?:\.\d+)?)(CE|PE)$').firstMatch(rest);
+    if (strikeFirst != null) {
+      option = '${strikeFirst.group(1)} ${strikeFirst.group(2)}';
     } else {
-      option = value.substring(index + dateMatch.length);
-    }
-    if (option.isNotEmpty) {
-      List<String> swapStr = option.split(" ");
-      option = "${swapStr[1]} ${swapStr[0]}";
+      if (rest.contains("P")) {
+        option = rest.replaceAll("P", "PE ");
+      } else if (rest.contains("C")) {
+        option = rest.replaceAll("C", "CE ");
+      } else if (rest.contains("F")) {
+        option = rest.replaceAll("F", "FUT ");
+      } else {
+        option = rest;
+      }
+      if (option.isNotEmpty) {
+        List<String> swapStr = option.split(" ");
+        option = "${swapStr[1]} ${swapStr[0]}";
+      }
     }
   } else {
     symbol = value;

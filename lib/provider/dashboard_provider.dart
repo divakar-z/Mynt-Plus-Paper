@@ -1121,6 +1121,7 @@ Color getSectorAllocationColor(String sector) {
           name: fund.name,
           schemeName: scheme['schemename']?.toString() ?? fund.schemeName,
           type: fund.type,
+          oneYearCAGR: double.tryParse(scheme['1Year']?.toString() ?? '0') ?? fund.oneYearCAGR,
           fiveYearCAGR: double.tryParse(scheme['5Year']?.toString() ?? '0') ?? fund.fiveYearCAGR,
           threeYearCAGR: double.tryParse(scheme['3Year']?.toString() ?? '0') ?? fund.threeYearCAGR,
           aum: double.tryParse(scheme['AUM']?.toString() ?? '0') ?? fund.aum,
@@ -1166,6 +1167,7 @@ Color getSectorAllocationColor(String sector) {
             name: fund.name,
             schemeName: fund.schemeName,
             type: fund.type,
+            oneYearCAGR: double.tryParse(match.oneYearData ?? "0") ?? 0.0,
             fiveYearCAGR: double.tryParse(match.fIVEYEARDATA ?? "0") ?? 0.0,
             threeYearCAGR: double.tryParse(match.tHREEYEARDATA ?? "0") ?? 0.0,
             aum: fund.aum > 0 ? fund.aum : (double.tryParse(match.aUM ?? "0") ?? 0.0),
@@ -1190,6 +1192,7 @@ Color getSectorAllocationColor(String sector) {
         name: fund.name,
         schemeName: fund.schemeName,
         type: fund.type,
+        oneYearCAGR: fund.oneYearCAGR,
         fiveYearCAGR: fund.fiveYearCAGR,
         threeYearCAGR: fund.threeYearCAGR,
         aum: fund.aum,
@@ -1250,9 +1253,27 @@ Color getSectorAllocationColor(String sector) {
     }
   }
 
+  /// Returns true if the user is allowed to change [fund]'s weight in the
+  /// current strategy. When every other fund is locked, redistribution has
+  /// no target and the total would drift away from 100 — block at the call
+  /// site instead.
+  bool canChangeWeightOf(FundListModel fund) {
+    final index = _selectedFunds.indexWhere((f) => f.name == fund.name);
+    if (index == -1) return false;
+    if (_selectedFunds.length <= 1) return true;
+    for (int i = 0; i < _selectedFunds.length; i++) {
+      if (i != index && !_selectedFunds[i].isLocked) return true;
+    }
+    return false;
+  }
+
   void updateFundPercentage(FundListModel fund, double percentage) {
     final index = _selectedFunds.indexWhere((f) => f.name == fund.name);
     if (index != -1) {
+      // Safety guard: if every other fund is locked, redistribution can't
+      // bring the total back to 100. Reject silently — the UI calls
+      // [canChangeWeightOf] beforehand and surfaces a toast.
+      if (!canChangeWeightOf(fund)) return;
       final roundedPercentage = percentage.round().clamp(0, 100).toDouble();
       _selectedFunds[index].percentage = roundedPercentage;
       // Do NOT set controller.text here — _autoRedistributePercentages will

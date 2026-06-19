@@ -452,8 +452,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
         case 2: // Alert Type
           String aType = '';
           String bType = '';
+          
           if (a is BrokerMessage) {
-            aType = 'TRIGGERED';
+            aType = _resolveTriggeredAlertLabel(a);
           } else {
             switch (a.aiT) {
               case 'LTP_A':
@@ -473,7 +474,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
             }
           }
           if (b is BrokerMessage) {
-            bType = 'TRIGGERED';
+            bType = _resolveTriggeredAlertLabel(b);
           } else {
             switch (b.aiT) {
               case 'LTP_A':
@@ -981,7 +982,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
             break;
           case 2: // Alert Type
             if (alert is BrokerMessage) {
-              cellText = 'TRIGGERED';
+              // Use the resolved direction so search / CSV export keeps
+              // the same wording as the rendered cell.
+              cellText = _resolveTriggeredAlertLabel(alert);
             } else {
               switch (alert.aiT) {
                 case 'LTP_A':
@@ -1411,18 +1414,38 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     );
   }
 
+ 
+  String _resolveTriggeredAlertLabel(BrokerMessage alert) {
+    final dmsg = (alert.dmsg ?? '').toLowerCase();
+    if (dmsg.isEmpty) return 'TRIGGERED';
+
+    final isPercent = dmsg.contains('%') ||
+        dmsg.contains('percent') ||
+        dmsg.contains('perc') ||
+        dmsg.contains('ch_per');
+
+    final isAbove = RegExp(r'\babove\b').hasMatch(dmsg);
+    final isBelow = RegExp(r'\bbelow\b').hasMatch(dmsg);
+
+    if (isAbove) return isPercent ? 'Perc.Change Above' : 'LTP Above';
+    if (isBelow) return isPercent ? 'Perc.Change Below' : 'LTP Below';
+    return 'TRIGGERED';
+  }
+
   Widget _buildAlertTypeCell(dynamic alert, ThemesProvider theme) {
     String alertType = '';
     Color alertColor;
 
     if (alert is BrokerMessage) {
-      alertType = 'TRIGGERED';
-      // Use global MyntColors with resolveThemeColor for TRIGGERED
-      alertColor = resolveThemeColor(
-        context,
-        dark: MyntColors.profitDark,
-        light: MyntColors.profit,
-      );
+      // Keep the originally-configured direction on the Alert Type column
+      // (only Status flips to TRIGGERED — see _buildStatusCell).
+      alertType = _resolveTriggeredAlertLabel(alert);
+      final isBelowDirection = alertType.endsWith('Below');
+      alertColor = isBelowDirection
+          ? resolveThemeColor(context,
+              dark: MyntColors.lossDark, light: MyntColors.loss)
+          : resolveThemeColor(context,
+              dark: MyntColors.profitDark, light: MyntColors.profit);
     } else {
       switch (alert.aiT) {
         case 'LTP_A':

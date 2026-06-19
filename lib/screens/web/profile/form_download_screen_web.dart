@@ -86,7 +86,7 @@ class _FormDownloadScreenWebState extends ConsumerState<FormDownloadScreenWeb> {
           provider.clientAllDetailsSafe?.clientData?.mOBILENO ?? '';
       if (mobileNo.isEmpty) return;
 
-      final uri = Uri.parse('https://ekycbe.mynt.in/dd/ekyc_form_download');
+      final uri = Uri.parse('https://ekycbe.mynt.in/dashboard/ekyc_form_download');
       final res = await _api.apiClient.post(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -388,7 +388,7 @@ class _FormDownloadScreenWebState extends ConsumerState<FormDownloadScreenWeb> {
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: () => _openLink(
-                      'https://ekycbe.mynt.in$_ekycDownloadPath'),
+                      'https://ekycbe.mynt.in/file?path=$_ekycDownloadPath'),
                   borderRadius: BorderRadius.circular(6),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(

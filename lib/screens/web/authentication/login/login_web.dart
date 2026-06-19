@@ -27,6 +27,16 @@ import '../../../../utils/no_emoji_inputformatter.dart';
 import '../../../../utils/responsive_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:html' as html;
+import 'dart:js_interop';
+
+// JS interop binding to window.fetch — used by the beforeunload handler to
+// fire a keepalive POST that survives page unload (replacement for the older
+// sendBeacon approach, which forced credentials mode 'include' and tripped
+// the backend's wildcard CORS config).
+@JS('fetch')
+external JSPromise<JSAny?> _jsFetch(JSString input, JSObject init);
 
 
 class LoginScreenWeb extends ConsumerStatefulWidget {
@@ -42,6 +52,11 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   late FocusNode focusNode;
   late FocusNode focusNode1;
   bool _showForgotPassword = false;
+  // OTP-gated forgot-password screen — shown between identifier entry and
+  // the Change Password screen. User enters the 4-digit OTP sent to their
+  // registered mobile/email; on verify success the backend has already
+  // dispatched the temp password and we jump straight to Change Password.
+  bool _showForgotPasswordOtp = false;
   bool _showOtpScreen = false;
   bool _showQrScreen = false;
   bool _showChangePassword = false;
@@ -65,6 +80,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   int _qrStart = _qrCountdownStart;
   int _qrRefreshCount = 0;
   bool _qrExpired = false;
+  bool _qrImageLoaded = false;
 
   // New Password — transient max-length error.
   // Fired only when the user actually attempts to type/paste beyond 12 chars
@@ -72,6 +88,13 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   // field doesn't carry a permanent error after the user stops trying.
   bool _showNewPwdMaxLengthError = false;
   Timer? _newPwdMaxLengthHideTimer;
+
+  // Browser unload subscription — fires invalidate-QR + clears the pending
+  // UUID from localStorage when the user refreshes the page or closes the
+  // tab while a QR session is active. Uses sendBeacon for delivery
+  // reliability since regular http.post calls often get killed mid-flight
+  // when the page unloads.
+  StreamSubscription<html.Event>? _qrBeforeUnloadSub;
 
   void startTimer() {
     _timer?.cancel();
@@ -127,12 +150,49 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
       Preferences().setLogout(false);
     }
 
+    // Browser-refresh / tab-close handler — invalidates any pending QR
+    // session UUID on the backend via sendBeacon (the only reliable way
+    // to fire a network call as the page unloads) and then clears the
+    // localStorage entry so the next page load starts fresh.
+    _qrBeforeUnloadSub = html.window.onBeforeUnload.listen((event) {
+      final pendingUuid = Preferences().pendingQrUuid;
+      if (pendingUuid != null && pendingUuid.isNotEmpty) {
+        // Backend expects only { unique_id } in the body — no source/imei.
+        // Response is { "detail": "QR invalid" } but Beacon is fire-and-forget,
+        // we don't read it.
+        final body = jsonEncode({
+          'unique_id': pendingUuid,
+        });
+        // fetch + keepalive replaces sendBeacon. keepalive: true lets the
+        // request survive page unload (same property sendBeacon gave us).
+        // credentials: 'omit' sidesteps the backend's wildcard+credentials
+        // CORS combo — without credentials the browser stops enforcing the
+        // "Allow-Origin must not be *" rule, so the existing live CORS
+        // config works as-is.
+        final init = <String, Object>{
+          'method': 'POST',
+          'body': body,
+          'headers': <String, String>{'Content-Type': 'application/json'},
+          'keepalive': true,
+          'credentials': 'omit',
+          'mode': 'cors',
+        }.jsify() as JSObject;
+        _jsFetch('https://ws.mynt.in/login/QRInvalidate'.toJS, init);
+        Preferences().clearPendingQrUuid();
+      }
+    });
+
     // Defer context-dependent operations to avoid holding context reference
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (mounted) {
         ref.read(versionProvider).checkVersion(context);
         ref.read(authProvider).setChangetotp(true);
         ref.read(webAuthProvider).init(); // Initialize web auth provider
+
+        // Defensive cleanup for any stale QR UUID left in localStorage
+        // from a previous session that ended without beforeunload firing
+        // (e.g., browser crash). Safe no-op when nothing is pending.
+        ref.read(webAuthProvider).cleanupStaleQrSession();
 
         // Set up QR login success listener
         _setupQrLoginListener();
@@ -175,6 +235,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     _timer?.cancel();
     _qrCountdownTimer?.cancel();
     _newPwdMaxLengthHideTimer?.cancel();
+    _qrBeforeUnloadSub?.cancel();
     super.dispose();
   }
 
@@ -500,20 +561,30 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
       _showOtpScreen = false;
       _showForgotPassword = false; // Ensure other screens are hidden
       _qrExpired = false;
+      _qrImageLoaded = false;
     });
 
-    // Begin user-visible countdown
-    _startQrCountdown();
+    // Countdown is started by the Image.network frameBuilder once the QR
+    // PNG is actually decoded — so slow networks don't eat into the timer.
+    _qrCountdownTimer?.cancel();
+    _qrCountdownTimer = null;
   }
 
   /// Cancel QR Login - Back to Login Form
   void _handleCancelQrLogin() {
     final webAuth = ref.read(webAuthProvider);
+    final auth = ref.read(authProvider);
 
     _stopQrCountdown();
     _qrRefreshCount = 0;
     _qrExpired = false;
     webAuth.cancelQrLogin(); // Use cancelQrLogin to clear mobileOtp and prevent stale data
+
+    // Returning to the login form should be a clean slate — clear any
+    // stale inline validation errors left over from the previous attempt.
+    // Otherwise the empty Mobile/Password fields show "required" errors
+    // immediately on return, which is confusing UX.
+    auth.clearError();
 
     if (!mounted) return;
     setState(() {
@@ -547,7 +618,12 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
           // a Reload icon. User stays on the QR screen and can tap Reload
           // to start a fresh cycle (counter resets via _handleQrLogin).
           ref.read(webAuthProvider).cancelQrLogin();
-          if (mounted) setState(() => _qrExpired = true);
+          if (mounted) {
+            setState(() {
+              _qrExpired = true;
+              _qrImageLoaded = false;
+            });
+          }
         }
       } else {
         setState(() => _qrStart--);
@@ -671,34 +747,36 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     }
   }
 
-  /// Handle forgot password and show change password form inline on success
+  /// Reset click on the Forgot Password screen — fires the OTP send call.
+  /// On success, switches the inline UI to the OTP entry screen and starts
+  /// the resend-cooldown timer. The backend dispatches the temp password
+  /// only after OTP verify, not here.
   Future<void> _handleForgotPasswordSubmit() async {
     final forpass = ref.read(changePasswordProvider);
-
-    // Validate first — inline error only, no toast
-    if (!forpass.validateForgetpassWord()) {
-      return;
+    final success = await forpass.submitForgetPasswordOtpSend(context);
+    if (success && mounted) {
+      setState(() {
+        _showForgotPassword = false;
+        _showForgotPasswordOtp = true;
+        _start = 89;
+        resendTime = formattedTime(timeInSecond: _start);
+      });
+      startTimer();
     }
+  }
 
-    // Store the value before API call
-    final inputValue = forpass.forGetloginMethCtrl.text;
-
-    // Call the API - this will show success snackbar and set userIdController
-    await forpass.fetchForgetPassword(
-      inputValue,
-      inputValue.toUpperCase(),
-      context,
-    );
-
-    // Check if forgot password was successful by checking if userIdController was set
-    if (forpass.userIdController.text.isNotEmpty && forpass.changePass?.stat == "Ok") {
-      // Success! Show change password
-      if (mounted) {
-        setState(() {
-          _showForgotPassword = false;
-          _showChangePassword = true;
-        });
-      }
+  /// Submit on the Forgot Password OTP screen — verifies the OTP. On
+  /// success the backend has already generated and sent the temp password
+  /// to the user's registered mobile/email, so we jump straight to the
+  /// Change Password screen.
+  Future<void> _handleForgotPasswordOtpSubmit() async {
+    final forpass = ref.read(changePasswordProvider);
+    final success = await forpass.submitForgetPasswordOtpVerify(context);
+    if (success && mounted) {
+      setState(() {
+        _showForgotPasswordOtp = false;
+        _showChangePassword = true;
+      });
     }
   }
 
@@ -824,20 +902,23 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                   pref.clientMob?.isNotEmpty == true)))
                           Text(
                             _showChangePassword
-                                ? "Choose your Password"
-                                : _showForgotPassword
-                                    ? "Forgot Password"
-                                    : _showOtpScreen
-                                        ? (webAuth.isTotp
-                                            ? "Enter the 6-digit TOTP"
-                                            : (webAuth.topflow
-                                                ? "Enter OTP to set up TOTP"
-                                                : "Enter the 4-digit OTP"))
-                                        : "Sign in with MYNT",
+                                ? "Change Your Password"
+                                : _showForgotPasswordOtp
+                                    ? "Enter the 4-digit OTP"
+                                    : _showForgotPassword
+                                        ? "Forgot Password"
+                                        : _showOtpScreen
+                                            ? (webAuth.isTotp
+                                                ? "Enter the 6-digit TOTP"
+                                                : (webAuth.topflow
+                                                    ? "Enter OTP to set up TOTP"
+                                                    : "Enter the 4-digit OTP"))
+                                            : "Sign in with MYNT",
                             style: webText(
                               context,
                               size: MediaQuery.of(context).size.width < 600 ? 18 : 22,
-                              weight: FontWeight.w900,
+                             
+                              weight: FontWeight.w700,
                               color: resolveThemeColor(context,
                                   dark: MyntColors.textPrimaryDark,
                                   light: MyntColors.textPrimary),
@@ -900,7 +981,29 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                               ),
                                             )
                                           : (wa.qrLoginImageUrl != null
-                                              ? Image.network(wa.qrLoginImageUrl!)
+                                               ? Stack(
+                                                  alignment: Alignment.center,
+                                                  children: [
+                                                    MyntLoader.simple(size: MyntLoaderSize.medium),
+                                                    Image.network(
+                                                      wa.qrLoginImageUrl!,
+                                                      frameBuilder: (context, child, frame, wasSyncLoaded) {
+                                                        if (wasSyncLoaded || frame != null) {
+                                                          if (!_qrImageLoaded) {
+                                                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                                                              if (mounted && !_qrImageLoaded) {
+                                                                setState(() => _qrImageLoaded = true);
+                                                                _startQrCountdown();
+                                                              }
+                                                            });
+                                                          }
+                                                          return child;
+                                                        }
+                                                        return const SizedBox.shrink();
+                                                      },
+                                                    ),
+                                                  ],
+                                                )
                                               : MyntLoader.simple(size: MyntLoaderSize.medium)),
                                     ),
                                     const SizedBox(height: 16),
@@ -913,7 +1016,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                           dark: MyntColors.textSecondaryDark,
                                           light: MyntColors.textSecondary)),
                                     ),
-                                    if (!_qrExpired) ...[
+                                    if (!_qrExpired && _qrImageLoaded) ...[
                                       const SizedBox(height: 12),
                                       Text(
                                         "QR expires in ${formattedTime(timeInSecond: _qrStart)}",
@@ -935,7 +1038,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                           padding: const EdgeInsets.only(right: 12.0),
                                           child: InkWell(
                                             onTap: _handleCancelQrLogin,
-                                            child: Text("Back to login", style: MyntWebTextStyles.body(context, fontWeight: FontWeight.bold, color: MyntColors.primary)),
+                                            child: Text("Back to login", style: MyntWebTextStyles.body(context, fontWeight: FontWeight.bold, color:resolveThemeColor(context, dark:  MyntColors.secondaryDark, light:  MyntColors.primary))),
                                           ),
                                         ),
                                       ],
@@ -1222,7 +1325,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                    decoration: InputDecoration(
                                      filled: false,
                                      labelText: webAuth.topflow
-                                         ? "Enter 4-digit OTP sent to mobile/email to set up TOTP"
+                                         ? "Enter the 4-digit OTP to complete TOTP setup"
                                          : "Enter ${webAuth.isTotp ? '6' : '4'} digit ${webAuth.isTotp ? 'TOTP' : 'OTP'}",
                                      floatingLabelBehavior: FloatingLabelBehavior.auto,
                                      labelStyle: MyntWebTextStyles.body(
@@ -1517,6 +1620,10 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                       _showForgotPassword = false;
                                       forpass.clearError();
                                       forpass.clearTextField();
+                                      // Wipe any stale login-form errors so
+                                      // the user lands on a clean form, not
+                                      // one showing leftover "required" reds.
+                                      auth.clearError();
                                     });
                                  },
                                  child: Text(
@@ -1531,6 +1638,210 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                  ),
                                ),
                              ),
+
+                          ] else if (!_showQrScreen && _showForgotPasswordOtp) ...[
+                            // Forgot Password — OTP entry screen.
+                            // Backend has dispatched a 4-digit OTP to the user's
+                            // registered mobile/email via /ForgetPasswordOtpSend.
+                            // On verify the backend itself runs the password
+                            // generation, so we just advance to Change Password.
+                            TextFormField(
+                              controller: forpass.forgotOtpController,
+                              readOnly: _isProcessing || forpass.loading,
+                              maxLength: 4,
+                              keyboardType: TextInputType.number,
+                              textInputAction: TextInputAction.done,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                              style: MyntWebTextStyles.title(
+                                context,
+                                fontWeight: MyntFonts.medium,
+                                color: resolveThemeColor(context,
+                                    dark: MyntColors.textPrimaryDark,
+                                    light: MyntColors.textPrimary),
+                              ),
+                              decoration: InputDecoration(
+                                filled: false,
+                                labelText: "Enter the 4-digit OTP",
+                                floatingLabelBehavior: FloatingLabelBehavior.auto,
+                                labelStyle: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.regular,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.textSecondaryDark,
+                                      light: MyntColors.textSecondary),
+                                ),
+                                enabledBorder: UnderlineInputBorder(
+                                  borderSide: BorderSide(
+                                      color: resolveThemeColor(context,
+                                          dark: MyntColors.dividerDark,
+                                          light: MyntColors.divider),
+                                      width: 1),
+                                ),
+                                focusedBorder: UnderlineInputBorder(
+                                  borderSide: BorderSide(
+                                      color: resolveThemeColor(context,
+                                          dark: MyntColors.primaryDark,
+                                          light: MyntColors.primary),
+                                      width: 1),
+                                ),
+                                counterText: "",
+                                contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                                // Mirror the login OTP screen's resend UX:
+                                // a "Resend in m:ss" countdown while _start > 0,
+                                // then a tappable "Resend OTP" once it hits 0.
+                                // Resend tap restarts the 89-second cooldown.
+                                suffix: (_start > 0)
+                                    ? Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            "Resend",
+                                            style: MyntWebTextStyles.caption(
+                                              context,
+                                              color: resolveThemeColor(context,
+                                                  dark: MyntColors.textSecondaryDark,
+                                                  light: MyntColors.textSecondary),
+                                            ),
+                                          ),
+                                          Text(
+                                            "in ${formattedTime(timeInSecond: _start)}",
+                                            style: MyntWebTextStyles.caption(
+                                              context,
+                                              color: resolveThemeColor(context,
+                                                  dark: MyntColors.textSecondaryDark,
+                                                  light: MyntColors.textSecondary),
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : InkWell(
+                                        onTap: () async {
+                                          if (forpass.loading) return;
+                                          final ok = await forpass
+                                              .submitForgetPasswordOtpSend(context);
+                                          if (ok && mounted) {
+                                            forpass.forgotOtpController.clear();
+                                            setState(() {
+                                              _start = 89;
+                                              resendTime = formattedTime(timeInSecond: _start);
+                                            });
+                                            startTimer();
+                                          }
+                                        },
+                                        child: Text(
+                                          "Resend OTP",
+                                          style: MyntWebTextStyles.caption(
+                                            context,
+                                            color: resolveThemeColor(context,
+                                                dark: MyntColors.secondaryDark,
+                                                light: MyntColors.secondary),
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                              ),
+                              onChanged: (v) {
+                                if (forpass.forgotOtpError != null) {
+                                  forpass.clearError();
+                                }
+                                // Auto-verify once the 4-digit OTP is filled —
+                                // matches the login OTP UX (no manual Verify
+                                // tap needed). Guarded against re-entry while
+                                // a verify call is already in flight.
+                                if (v.length == 4 &&
+                                    !_isProcessing &&
+                                    !forpass.loading) {
+                                  _handleForgotPasswordOtpSubmit();
+                                }
+                              },
+                              onFieldSubmitted: (_) {
+                                _handleForgotPasswordOtpSubmit();
+                              },
+                            ),
+                            const SizedBox(height: 5),
+                            if (forpass.forgotOtpError != null &&
+                                forpass.forgotOtpError!.isNotEmpty)
+                              Text(
+                                forpass.forgotOtpError!,
+                                style: MyntWebTextStyles.para(
+                                  context,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.lossDark,
+                                      light: MyntColors.loss),
+                                ),
+                              ),
+                            const SizedBox(height: 32),
+
+                            // Verify Button
+                            SizedBox(
+                              height: 48,
+                              child: ElevatedButton(
+                                onPressed: forpass.loading
+                                    ? null
+                                    : _handleForgotPasswordOtpSubmit,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: resolveThemeColor(context,
+                                      dark: MyntColors.secondary,
+                                      light: MyntColors.primary),
+                                  disabledBackgroundColor: resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.secondary.withOpacity(0.6),
+                                      light: MyntColors.primary.withOpacity(0.6)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(6)),
+                                  elevation: 0,
+                                ),
+                                child: forpass.loading
+                                    ? MyntLoader.inline()
+                                    : Text(
+                                        "Verify",
+                                        style: MyntWebTextStyles.title(
+                                          context,
+                                          fontWeight: MyntFonts.bold,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+
+                            // Back to Login — bails out of the entire forgot
+                            // flow. Identifier and OTP are cleared so the next
+                            // entry starts fresh.
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: InkWell(
+                                onTap: () {
+                                  setState(() {
+                                    auth.loginMethCtrl.text =
+                                        forpass.forGetloginMethCtrl.text;
+                                    auth.passCtrl.clear();
+                                    _showForgotPasswordOtp = false;
+                                    forpass.clearError();
+                                    forpass.clearTextField();
+                                    // Clear stale login-form validation
+                                    // errors so the returned-to login form
+                                    // is clean, not pre-flashing reds.
+                                    auth.clearError();
+                                  });
+                                },
+                                child: Text(
+                                  "Back to login",
+                                  style: MyntWebTextStyles.para(
+                                    context,
+                                    fontWeight: MyntFonts.bold,
+                                    color: resolveThemeColor(context,
+                                        dark: MyntColors.secondaryDark,
+                                        light: MyntColors.secondary),
+                                  ),
+                                ),
+                              ),
+                            ),
 
                           ] else if (_showChangePassword) ...[
                             // Change Password Form
@@ -1943,9 +2254,12 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                     light: MyntColors.textPrimary),
                               ),
                               decoration: _mobileInputDecoration(context),
-                              onTap: pref.isMobileLogin!
-                                  ? auth.getCurrentPhone
-                                  : null,
+                              // No onTap: getCurrentPhone() relies on SMS
+                              // auto-fill (mobile-only). On web that path
+                              // falls through to setting the controller
+                              // empty and triggering validateLogin, which
+                              // flashed a spurious "required" error just
+                              // from clicking the empty field.
                               onChanged: (v) {
                                 auth.validateLogin();
                                 auth.activeBtnLogin();
@@ -1969,7 +2283,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                           ],
                           
                           // Password and Actions (Only Show if NOT in Forgot Password or Change Password Mode)
-                          if (!_showQrScreen && !_showForgotPassword && !_showOtpScreen && !_showChangePassword) ...[
+                          if (!_showQrScreen && !_showForgotPassword && !_showForgotPasswordOtp && !_showOtpScreen && !_showChangePassword) ...[
                             const SizedBox(height: 20),
                             
                             // Password Input (Always Visible)

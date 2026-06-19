@@ -240,6 +240,46 @@ class WebAuthProvider extends ChangeNotifier {
     return false;
   }
 
+  /// URL token-based auto-login (app.mynt.in/?uid=..&token=..).
+  ///
+  /// Validates (uid, token) against the backend and commits a session ONLY on
+  /// success. Returns true if logged in (navigation to home is triggered).
+  /// Returns false for an invalid/expired token WITHOUT modifying any stored
+  /// pref — so a wrong link can never overwrite or log out the current user.
+  Future<bool> tryUrlAutoLogin(
+      BuildContext context, String uid, String token) async {
+    _setLoading(true);
+    try {
+      final result =
+          await WebAuthApi.validateSession(clientId: uid, apiSession: token);
+
+      if (result != null && result['stat'] == 'Ok') {
+        // Validated — now (and only now) replace any existing session. Start
+        // clean so a new user never inherits the previous user's prefs.
+        await pref.clearUserSession();
+        await pref.setClientId(uid);
+        await pref.setClientSession(token);
+        if (result['uname'] != null) {
+          await pref.setClientName(result['uname']);
+        }
+        await pref.setLogout(false);
+        await pref.setMobileLogin(true);
+
+        if (context.mounted) {
+          await ref.read(authProvider).initialLoadMethods(context, "");
+        }
+        return true;
+      }
+
+      // Invalid/expired link — touch nothing; existing session stays intact.
+      return false;
+    } catch (e) {
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
   /// Web Login - Submit login credentials
   Future<bool> submitWebLogin(BuildContext context) async {
     if (!validateLogin() || !validatePassword()) {
@@ -310,6 +350,8 @@ class WebAuthProvider extends ChangeNotifier {
         mobileOrClientId: loginController.text.trim().toUpperCase(),
         source: _source,
         context: context,
+        // TOTP-setup flow → tell the backend this OTP is for TOTP setup.
+        isTotp: _topflow,
       );
 
       if (result != null && (result['stat'] == 'Ok' || (result['msg'] != null && result['msg'].toString().toLowerCase().contains('otp')))) {
@@ -551,9 +593,25 @@ class WebAuthProvider extends ChangeNotifier {
     // Stop any existing poll
     stopQrLogin();
 
+    // Invalidate any previously stored UUID before generating a new one.
+    // Tells the backend to mark the old QR session as abandoned so a
+    // mobile-side confirmation of it gets rejected — closes the race
+    // where mobile holds an unconfirmed scan and the user re-enters or
+    // refreshes the QR screen on web.
+    final oldUuid = pref.pendingQrUuid;
+    if (oldUuid != null && oldUuid.isNotEmpty) {
+      // Fire-and-forget — don't block the new QR fetch.
+      WebAuthApi.invalidateQrSession(uniqueId: oldUuid);
+    }
+
     // Fresh UUID per entry so each visit shows a newly generated QR and the
     // poll endpoint tracks a distinct session (no stale state across re-entries).
     _deviceUuid = uuid.v4();
+
+    // Persist the new UUID so subsequent triggers (in-app reload, browser
+    // refresh via beforeunload, crash recovery on next app boot) can find
+    // it and invalidate it server-side.
+    pref.setPendingQrUuid(_deviceUuid);
 
     // Construct QR Image URL
     // URL: {BASE_URL}/get_login_qr?unique_id={UUID}&source=WEB
@@ -570,6 +628,21 @@ class WebAuthProvider extends ChangeNotifier {
         }
       });
     });
+  }
+
+  /// Defensive cleanup for stale QR sessions left over from previous app
+  /// runs — e.g., browser crash, OS kill, or any path where the normal
+  /// beforeunload-based invalidate didn't fire. Called once when the
+  /// login screen mounts; safe to invoke even when no stale UUID exists.
+  void cleanupStaleQrSession() {
+    final staleUuid = pref.pendingQrUuid;
+    if (staleUuid != null && staleUuid.isNotEmpty) {
+      WebAuthApi.invalidateQrSession(uniqueId: staleUuid);
+      // Note: do NOT clear localStorage here. If user immediately enters
+      // QR again, startQrLogin will harmlessly attempt to invalidate the
+      // same UUID (idempotent on backend) and then overwrite with a new
+      // one. The clear happens only on browser refresh via beforeunload.
+    }
   }
   
   /// Stop QR Login Process

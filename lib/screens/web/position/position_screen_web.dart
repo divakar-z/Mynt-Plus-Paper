@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -24,6 +25,7 @@ import '../../../../res/responsive_extensions.dart';
 import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_search_fields_web.dart';
+import '../../../../sharedWidget/custom_text_form_field.dart' show UpperCaseTextFormatter;
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../sharedWidget/snack_bar.dart';
@@ -490,6 +492,14 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 controller: _searchController,
                 placeholder: context.isMobile ? 'Search' : 'Search positions',
                 leadingIcon: assets.searchIcon,
+                inputFormatters: [
+                  UpperCaseTextFormatter(),
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9& \-]')),
+                  TextInputFormatter.withFunction((oldValue, newValue) {
+                    if (newValue.text.startsWith(' ')) return oldValue;
+                    return newValue;
+                  }),
+                ],
                 onClear: () => _searchController.clear(),
               ),
             ),
@@ -632,6 +642,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 _handleManualRefresh();
               },
               theme: theme,
+              tooltip: 'Refresh',
             ),
             SizedBox(width: context.responsive<double>(mobile: 4, tablet: 6, desktop: 8)),
             // Groups toggle icon - show posgrp icon to navigate to groups
@@ -705,6 +716,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     required IconData icon,
     required VoidCallback onPressed,
     required ThemesProvider theme,
+    String? tooltip,
   }) {
     final buttonSize = context.responsive<double>(
       mobile: 32,
@@ -717,7 +729,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
       desktop: 28,
     );
 
-    return Container(
+    final button = Container(
       width: buttonSize,
       height: buttonSize,
       decoration: BoxDecoration(
@@ -742,6 +754,9 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
         ),
       ),
     );
+
+    if (tooltip == null) return button;
+    return Tooltip(message: tooltip, child: button);
   }
 
   /// PiP toggle icon — reflects active state via pipVisibilityNotifier.
@@ -768,6 +783,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             );
           },
           theme: theme,
+          tooltip: 'Picture in Picture',
         );
       },
     );
@@ -889,27 +905,30 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
 
     return Builder(
       builder: (buttonContext) {
-        return MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => _showFilterPopup(buttonContext, theme),
-            child: Container(
-              width: buttonSize,
-              height: buttonSize,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(
-                child: SvgPicture.asset(
-                  assets.searchFilter,
-                  width: iconSize,
-                  colorFilter: ColorFilter.mode(
-                    resolveThemeColor(
-                      context,
-                      dark: MyntColors.iconDark,
-                      light: MyntColors.icon,
+        return Tooltip(
+          message: 'Filter',
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => _showFilterPopup(buttonContext, theme),
+              child: Container(
+                width: buttonSize,
+                height: buttonSize,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: SvgPicture.asset(
+                    assets.searchFilter,
+                    width: iconSize,
+                    colorFilter: ColorFilter.mode(
+                      resolveThemeColor(
+                        context,
+                        dark: MyntColors.iconDark,
+                        light: MyntColors.icon,
+                      ),
+                      BlendMode.srcIn,
                     ),
-                    BlendMode.srcIn,
                   ),
                 ),
               ),

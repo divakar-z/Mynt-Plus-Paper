@@ -60,6 +60,7 @@ class ApiLinks {
   String get optionChain => '$goMyntURL/GetOptionChain';
   String get deleteMWScrips => '$goMyntURL/DeleteMultiMWScrips';
   String get addMWScrips => '$goMyntURL/AddMultiScripsToMW';
+  String get reorderMWScrips => '$goMyntURL/ReorderMWScrips';
   String get searchScrip => '$goMyntURL/SearchScrip';
   // String get searchScripNew => '${bemynt}global/SearchScrip';
 String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
@@ -395,6 +396,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   
   String get mfholdingsnewapi => "$newvenketmfurl/order/holdings";
   String get mfAllHoldingsApi => "$newvenketmfurl/order/All_holdings";
+  String get mfDematHoldingsApi => "$newvenketmfurl/order/demat_holdings";
   String get mfnewbestMf => "$newvenketmfurl/dashboard/getMfBaskets";
   String get mfnfoMF => "$newvenketmfurl/dashboard/NFO_datas";
   String get newmfallcatnewendpoit =>

@@ -35,6 +35,8 @@ class SliceOrderSheetWeb extends StatefulWidget {
   final int lotSize;
   final bool isBracketOrderEnabled;
   final VoidCallback? onClose;
+  // Closes the parent Place Order window after slices are placed (web only).
+  final VoidCallback? onParentClose;
 
   const SliceOrderSheetWeb({
     super.key,
@@ -56,6 +58,7 @@ class SliceOrderSheetWeb extends StatefulWidget {
     required this.lotSize,
     required this.isBracketOrderEnabled,
     this.onClose,
+    this.onParentClose,
   });
 
   // Static overlay entry to track current slice order overlay
@@ -81,6 +84,7 @@ class SliceOrderSheetWeb extends StatefulWidget {
     required TextEditingController mktProtCtrl,
     required int lotSize,
     required bool isBracketOrderEnabled,
+    VoidCallback? onParentClose,
   }) {
     // Close existing slice order overlay if one is already open
     if (_currentOverlayEntry != null) {
@@ -127,6 +131,7 @@ class SliceOrderSheetWeb extends StatefulWidget {
                 mktProtCtrl: mktProtCtrl,
                 lotSize: lotSize,
                 isBracketOrderEnabled: isBracketOrderEnabled,
+                onParentClose: onParentClose,
                 onClose: () {
                   overlayEntry.remove();
                   _currentOverlayEntry = null;
@@ -387,7 +392,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
                                         }
 
                                         // Use the slice order with confirmation function
-                                        orders.slicePlaceOrderWithConfirmation(context, placeOrderInputs, widget.quantity, widget.reminder);
+                                        orders.slicePlaceOrderWithConfirmation(context, placeOrderInputs, widget.quantity, widget.reminder, onWebParentClose: widget.onParentClose);
 
                                       } catch (e) {
                                         // Handle any unexpected errors
