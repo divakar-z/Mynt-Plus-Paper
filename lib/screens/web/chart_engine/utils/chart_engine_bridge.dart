@@ -29,6 +29,12 @@ String encodeTick(String token, Map<String, dynamic> packet) =>
 String encodeWsReconnected() =>
     jsonEncode({'type': 'wsReconnected'});
 
+/// Ask the engine to apply [scrip] to its currently-active pane (the one with
+/// the live `.pane.active` marker). The engine replies with `paneSymbolApplied`
+/// carrying the exact paneId so the store can sync.
+String encodeApplyActiveSymbol(Map<String, dynamic> scrip) =>
+    jsonEncode({'type': 'applyActiveSymbol', 'value': {'scrip': scrip}});
+
 String encodeSetLayout({
   required String id,
   required String areas,

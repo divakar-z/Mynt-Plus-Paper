@@ -145,6 +145,21 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
   }
 
   const bucketSec = Math.floor(tickMs / targetMs) * (targetMs / 1000);
+  // Daily/weekly/monthly: TODAY's bar isn't in the EOD history (which ends
+  // yesterday), so it's built from live ticks. Seed/maintain it from the
+  // broker's true day OHLC (tick.dayOpen/High/Low) — using the first tick's lp
+  // as "open" showed the LTP-at-open, not the real session open. For weekly/
+  // monthly only high/low get widened by today's extremes; the open stays the
+  // bucket's first-day open (so we only override `o` for the 1-day timeframe).
+  const isDailyPlus = targetMs >= 86400000;
+  const isDaily = targetMs === 86400000;
+  const dO = tick.dayOpen, dH = tick.dayHigh, dL = tick.dayLow;
+  const applyDayExtremes = (bar) => {
+    if (!isDailyPlus) return;
+    if (typeof dH === 'number' && dH > bar.h) bar.h = dH;
+    if (typeof dL === 'number' && dL < bar.l) bar.l = dL;
+    if (isDaily && typeof dO === 'number') bar.o = dO;
+  };
   let c = candles.length ? candles[candles.length - 1] : null;
   if (c && bucketSec < c.ts) {
     // Out-of-order tick. In lpOnly mode (indices), the synthesised ft is
@@ -156,6 +171,7 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
       c.c = raw;
       if (raw > c.h) c.h = raw;
       if (raw < c.l) c.l = raw;
+      applyDayExtremes(c);
       aggState.prevPrice = raw;
       aggState.prevMs = tickMs;
       return 'applied';
@@ -163,12 +179,20 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
     return 'skipped';
   }
   if (!c || bucketSec > c.ts) {
-    c = { ts: bucketSec, o: raw, h: raw, l: raw, c: raw, v: 0 };
+    if (isDailyPlus && typeof dO === 'number') {
+      c = { ts: bucketSec, o: dO,
+            h: Math.max(typeof dH === 'number' ? dH : raw, raw),
+            l: Math.min(typeof dL === 'number' ? dL : raw, raw),
+            c: raw, v: 0 };
+    } else {
+      c = { ts: bucketSec, o: raw, h: raw, l: raw, c: raw, v: 0 };
+    }
     candles.push(c);
   }
   c.c = raw;
   if (raw > c.h) c.h = raw;
   if (raw < c.l) c.l = raw;
+  applyDayExtremes(c);
   if (!lpOnly) {
     c.v += (cumVol - aggState.prevCumVol);
     aggState.prevCumVol = cumVol;

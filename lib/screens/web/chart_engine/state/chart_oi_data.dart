@@ -7,12 +7,18 @@ class ChartOiStrike {
   final double putOi;
   final double callOiChgPct;
   final double putOiChgPct;
+  // Previous-day OI (poi). The chart computes the absolute change (current OI −
+  // poi) and the % from these, so the tooltip shows a live, correct change.
+  final double callPoi;
+  final double putPoi;
   const ChartOiStrike({
     required this.strike,
     required this.callOi,
     required this.putOi,
     required this.callOiChgPct,
     required this.putOiChgPct,
+    this.callPoi = 0,
+    this.putPoi = 0,
   });
 
   Map<String, Object?> toJson() => {
@@ -21,6 +27,8 @@ class ChartOiStrike {
         'putOi': putOi,
         'callOiChgPct': callOiChgPct,
         'putOiChgPct': putOiChgPct,
+        'callPoi': callPoi,
+        'putPoi': putPoi,
       };
 }
 

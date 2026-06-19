@@ -1241,10 +1241,10 @@
       if (_helpCloseTimer) { clearTimeout(_helpCloseTimer); _helpCloseTimer = null; }
     });
     pop.addEventListener('mouseleave', _scheduleCloseHelp);
-    // Measure off-screen, then place beside the anchor and clamp to viewport.
-    // Prefer opening to the LEFT of the anchor (Settings sits at the right
-    // edge, so its body's info icon has more room on the left); fall back to
-    // the right / below as needed.
+    // Measure off-screen, then place BESIDE the anchor and clamp to viewport.
+    // Settings is a centred modal, so prefer opening to the RIGHT of the info
+    // icon (into open screen space beside the modal) rather than over the
+    // panel's toggles; fall back to the left if there's no room.
     pop.style.left = '-9999px';
     pop.style.top = '0';
     document.body.appendChild(pop);
@@ -1254,13 +1254,10 @@
     const vw = document.documentElement.clientWidth;
     const vh = document.documentElement.clientHeight;
     const margin = 8;
-    let left = rect.left - popW - 8;
-    if (left < margin) left = rect.right + 8;
-    if (left + popW + margin > vw) left = Math.max(margin, vw - popW - margin);
-    // The info icon sits low in the Settings panel, so grow the popover UPWARD
-    // (align its bottom near the icon) instead of centring on the icon — that
-    // kept it from dangling past the bottom of the Settings card.
-    let top = rect.bottom - popH;
+    let left = rect.right + 8;
+    if (left + popW + margin > vw) left = rect.left - popW - 8;
+    if (left < margin) left = Math.max(margin, vw - popW - margin);
+    let top = rect.top + rect.height / 2 - popH / 2;
     if (top < margin) top = margin;
     if (top + popH + margin > vh) top = Math.max(margin, vh - popH - margin);
     pop.style.left = left + 'px';

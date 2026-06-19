@@ -483,7 +483,9 @@ html.light .tb-layout-tile--on:hover {
 }
 
 /* Keyboard-shortcuts help popover (the "?" chip). */
-.tb-help-popover { width: 290px; padding-bottom: 8px; border-radius: 12px; }
+/* Above the Settings modal (backdrop z-index 2000) — the shortcuts popover is
+   opened from the info icon INSIDE Settings, so it must stack on top of it. */
+.tb-help-popover { width: 290px; padding-bottom: 8px; border-radius: 12px; z-index: 2100; }
 .tb-help-popover .tb-popover-title {
   font-size: 15px;
   font-weight: 700;
@@ -1439,9 +1441,12 @@ html:not(.light) .pane-ctrl-btn:active {
 /* ── Left drawing rail (full-height, flush-left, TradingView-style) ───────── */
 .draw-rail {
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
+  /* Inset by the active-pane border width (2px) so the rail sits INSIDE the
+     pane's `.active::after` accent frame instead of painting over it — the
+     left/top-left/bottom-left border stays visible while the rail is open. */
+  left: 2px;
+  top: 2px;
+  bottom: 2px;
   width: 44px;
   z-index: 30;
   display: flex;

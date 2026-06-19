@@ -12,6 +12,7 @@ import 'dart:ui_web' as ui_web;
 
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart';
+import 'package:mynt_plus/screens/web/chart_engine/state/active_pane_symbol_request.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_oi_data.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/indicator_schema.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/pane_runtime_status.dart';
@@ -162,10 +163,12 @@ class _ChartEngineShellScreenState
   Timer? _tickPollTimer;
   // Phase 18 — periodic OI fetch timer.
   Timer? _oiFetchTimer;
-  // Task 2 fix — separate throttle map for linkedScrips retries (2s gate).
-  // Kept independent of chartOiDataProvider.fetchedAtByPane which gates
-  // the chain-fetch step only.
-  final Map<int, int> _linkedScripsAtByPane = {};
+  // Expiry (getLinkedScrip) fetch control, keyed by scrip 'exch|token':
+  // - `_linkedScripCheckedAt`: last attempt (ms) → throttle re-fetches to once
+  //   per 5 min (live OI flows via WS, so frequent expiry re-fetch is wasteful).
+  // - `_noOptionChainScrips`: scrips that returned NO chain — never re-queried.
+  final Map<String, int> _linkedScripCheckedAt = {};
+  final Set<String> _noOptionChainScrips = {};
   // Task 3 — per-pane option-token subscription map for WS-based OI delivery.
   final Map<int, Map<String, _OiTokenInfo>> _oiSubs = {};
   OverlayEntry? _overlayDetailEntry;
@@ -296,6 +299,13 @@ class _ChartEngineShellScreenState
         if (entry['ft'] != null) 'ft': entry['ft'],
         if (entry['bp1'] != null) 'bp1': entry['bp1'],
         if (entry['sp1'] != null) 'sp1': entry['sp1'],
+        // Day OHLC from the touchline feed — needed to form TODAY's
+        // daily/weekly/monthly bar correctly (EOD history ends yesterday, so
+        // the live bar must use the real session open/high/low, not the
+        // LTP-at-open). `o`/`h`/`l` are today's; `c` here is the previous close.
+        if (entry['o'] != null) 'o': entry['o'],
+        if (entry['h'] != null) 'h': entry['h'],
+        if (entry['l'] != null) 'l': entry['l'],
       };
       if (packet.length <= 1) continue;
       _post(encodeTick(token, packet));
@@ -339,6 +349,8 @@ class _ChartEngineShellScreenState
               info.isCe ? chgPct : (prev?.callOiChgPct ?? 0),
           putOiChgPct:
               info.isCe ? (prev?.putOiChgPct ?? 0) : chgPct,
+          callPoi: info.isCe ? info.poi : (prev?.callPoi ?? 0),
+          putPoi: info.isCe ? (prev?.putPoi ?? 0) : info.poi,
         );
       }
       final list = byStrike.values.toList()
@@ -424,6 +436,22 @@ class _ChartEngineShellScreenState
           }
         }
         break;
+      case 'paneSymbolApplied': {
+        // Engine applied a watchlist pick to its active pane — sync the store
+        // for that exact pane (persistence, overlays, OI fetch). The re-push
+        // from this is a no-op in the engine (oldKey===newKey).
+        final v = msg['value'];
+        if (v is Map && v['scrip'] is Map) {
+          final idx = int.tryParse(v['paneId']?.toString() ?? '');
+          if (idx != null) {
+            ref.read(chartEngineSessionProvider.notifier).setPaneSymbol(
+                idx,
+                ChartScrip.fromJson(
+                    Map<String, dynamic>.from(v['scrip'] as Map)));
+          }
+        }
+        break;
+      }
       case 'overlayClicked': {
         final v = msg['value'];
         if (v is Map) {
@@ -1378,6 +1406,13 @@ class _ChartEngineShellScreenState
         if (entry['ft'] != null) 'ft': entry['ft'],
         if (entry['bp1'] != null) 'bp1': entry['bp1'],
         if (entry['sp1'] != null) 'sp1': entry['sp1'],
+        // Day OHLC from the touchline feed — needed to form TODAY's
+        // daily/weekly/monthly bar correctly (EOD history ends yesterday, so
+        // the live bar must use the real session open/high/low, not the
+        // LTP-at-open). `o`/`h`/`l` are today's; `c` here is the previous close.
+        if (entry['o'] != null) 'o': entry['o'],
+        if (entry['h'] != null) 'h': entry['h'],
+        if (entry['l'] != null) 'l': entry['l'],
       };
       if (packet.length > 1) _post(encodeTick(token, packet));
     }
@@ -1528,6 +1563,11 @@ class _ChartEngineShellScreenState
           _post(encodeSetPaneSymbol(i.toString(), pane.scrip!.toJson()));
           // Symbol changed → previous tradable result is stale.
           _pushedTradableKey.remove(i);
+          // Symbol changed → the chart wiped its OI (setSymbol → _resetData),
+          // and the OI for the new symbol hasn't been re-fetched yet. Drop the
+          // OI dedup so the new symbol's strikes are guaranteed to re-push once
+          // fetched, instead of being suppressed as "unchanged".
+          _pushedOiDataJson.remove(i);
           // Prefetch the full ScripInfoModel so PlaceOrderScreen has real
           // quote data when the user later opens the order popup. Cached
           // in marketWatchProvider.storeQuotes so this is a cheap no-op on
@@ -2577,14 +2617,18 @@ class _ChartEngineShellScreenState
       final cachedExpiry = expiryCache.nearestByPane[i];
       final cachedScripKey = expiryCache.scripKeyByPane[i];
 
-      // ── Step 1: fetch expiry list if cache is absent or stale ──────────
-      // Fire-and-return; next 5s tick will see the cache and proceed to Step 2.
-      // Uses _linkedScripsAtByPane (NOT fetchedAtByPane) as the 2s throttle so
-      // the chain-fetch gate (fetchedAtByPane) is NOT poisoned by this stamp.
+      // Scrips already known to have no option chain are never re-queried.
+      if (_noOptionChainScrips.contains(scripKey)) continue;
+
+      // ── Step 1: fetch expiry list if not cached for this scrip ─────────
+      // Fire-and-continue; the next tick sees the cache and proceeds to Step 2.
+      // Throttled to once per 5 min PER SCRIP (keyed by scripKey, so a symbol
+      // switch isn't blocked) — live OI flows via WS, no need to re-fetch the
+      // expiry list often.
       if (cachedExpiry == null || cachedScripKey != scripKey) {
-        final lastLinkedAt = _linkedScripsAtByPane[i] ?? 0;
-        if (now - lastLinkedAt < 2000) continue;
-        _linkedScripsAtByPane[i] = now;
+        final lastLinkedAt = _linkedScripCheckedAt[scripKey] ?? 0;
+        if (now - lastLinkedAt < 300000) continue;
+        _linkedScripCheckedAt[scripKey] = now;
         // ignore: discarded_futures
         locator<ApiExporter>()
             .getLinkedScrip(scrip.token, scrip.exch)
@@ -2593,6 +2637,9 @@ class _ChartEngineShellScreenState
           if (linked.stat != 'Ok' ||
               linked.optExp == null ||
               linked.optExp!.isEmpty) {
+            // No option chain for this scrip — remember it so we never ask
+            // again (until the app restarts).
+            _noOptionChainScrips.add(scripKey);
             return;
           }
           final sorted = [...linked.optExp!]
@@ -2659,6 +2706,8 @@ class _ChartEngineShellScreenState
             putOi: isCe ? (prev?.putOi ?? 0) : oi,
             callOiChgPct: isCe ? chg : (prev?.callOiChgPct ?? 0),
             putOiChgPct: isCe ? (prev?.putOiChgPct ?? 0) : chg,
+            callPoi: isCe ? poi : (prev?.callPoi ?? 0),
+            putPoi: isCe ? (prev?.putPoi ?? 0) : poi,
           );
           // Subscribe token for WS-based live OI updates.
           if (t != null && ex != null) {
@@ -2716,6 +2765,23 @@ class _ChartEngineShellScreenState
   Widget build(BuildContext context) {
     ref.watch(themeProvider);
     ref.watch(chartEngineSessionProvider);
+    // Push session changes (symbol / layout / qty / active pane …) to the
+    // iframe AS SOON AS they happen. Without this, a pane symbol change only
+    // reached the chart when some OTHER provider (portfolio/order/marketWatch)
+    // next ticked — so during a quiet period or after market close, switching
+    // a pane's symbol updated the store but never reached the iframe.
+    ref.listen(chartEngineSessionProvider, (_, __) {
+      if (_iframeReady) _pushSession();
+    });
+    // Watchlist pick → apply to the engine's live active pane. Forward each
+    // distinct request (seq bumps even for the same symbol) so re-picking a
+    // symbol already shown elsewhere still lands on the focused pane.
+    ref.listen(activePaneSymbolRequestProvider, (prev, next) {
+      if (!_iframeReady) return;
+      if (next.scrip == null) return;
+      if (prev != null && prev.seq == next.seq) return;
+      _post(encodeApplyActiveSymbol(next.scrip!));
+    });
     ref.listen(portfolioProvider, (_, __) {
       if (_iframeReady) _pushSession();
       // No auto-dismiss of popups — `portfolioProvider.notifyListeners()`

@@ -512,6 +512,21 @@ function handleMessage(d) {
       if (chart) chart.setSymbol(scrip);
       break;
     }
+    case 'applyActiveSymbol': {
+      // Apply a symbol to whichever pane is live-active (the `.pane.active`
+      // marker) and report the exact paneId back so Flutter syncs its store.
+      const { scrip } = d.value || {};
+      if (!scrip) return;
+      const chart = window.chartEngine.activeChart();
+      if (chart) {
+        chart.setSymbol(scrip);
+        postToParent({
+          type: 'paneSymbolApplied',
+          value: { paneId: chart.paneId, scrip },
+        });
+      }
+      break;
+    }
     case 'setScripTradable': {
       const { paneId, tradable } = d.value || {};
       if (typeof paneId !== 'string' || typeof tradable !== 'boolean') return;

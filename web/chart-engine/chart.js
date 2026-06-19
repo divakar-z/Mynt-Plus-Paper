@@ -1020,6 +1020,12 @@ class Chart {
     if (lp != null) this.tickState.lp = lp;
     if (v != null) this.tickState.v = v;
     if (ft != null) this.tickState.ft = ft;
+    // Day OHLC (today's session open/high/low) from the touchline feed — the
+    // aggregator uses these to seed today's daily/weekly/monthly bar with the
+    // real session open instead of the LTP-at-open. Keep the last known value.
+    if (packet.o != null) this.tickState.dayOpen = +packet.o;
+    if (packet.h != null) this.tickState.dayHigh = +packet.h;
+    if (packet.l != null) this.tickState.dayLow = +packet.l;
     const bid = packet.bp1 != null ? +packet.bp1 : null;
     const ask = packet.sp1 != null ? +packet.sp1 : null;
     let bidAskChanged = false;
@@ -1149,6 +1155,20 @@ class Chart {
     this._pendingRequestId = null;
     this._hideOverlay();
     if (!Array.isArray(candles) || candles.length === 0) {
+      // Daily/weekly/monthly with no EOD history (e.g. some index series like
+      // SENSEX): don't block with "No history available". Start empty and let
+      // the live WS day-OHLC tick build TODAY's bar — same as TradingView,
+      // which shows just today's candle for day/week/month when history is
+      // absent. Still subscribe so ticks arrive.
+      if (this.timeframeMinutes >= 1440) {
+        this.candles = [];
+        this._noMoreHistory = true; // nothing older to fetch
+        this.scheduleRedraw();
+        if (this.scrip) {
+          this.subscribe({ exch: this.scrip.exch, token: this.scrip.token });
+        }
+        return;
+      }
       this._showOverlay('No history available');
       return;
     }
@@ -1292,6 +1312,9 @@ class Chart {
     this._pendingExtendId = null;
     this._extendBlockedUntil = 0;
     this._noMoreHistory = false;
+    // Drop the previous symbol's option-chain OI bars so they don't linger on
+    // the new symbol until its own OI is fetched + pushed.
+    this._oiData = [];
   }
 
   _loadHistory() {
@@ -4683,10 +4706,19 @@ class Chart {
 
   _drawOiHoverTooltip(plot, s) {
     const padX = 8, padY = 6, lineH = 14;
+    // Change = current OI − previous-day OI (poi). Shown as absolute change +
+    // % in brackets, e.g. "2.2Cr  +12.3L (+0.6%)". When poi is unknown (0) the
+    // change is omitted rather than reported as the whole OI.
+    const sgn = (n) => (n >= 0 ? '+' : '-') + this._fmtOi(Math.abs(n));
+    const chgText = (oi, poi) => {
+      if (!(poi > 0)) return '';
+      const chg = (oi || 0) - poi;
+      return `  ${sgn(chg)} ${this._fmtPct((chg / poi) * 100)}`;
+    };
     const lines = [
       `Strike:   ${this._fmtStrike(s.strike)}`,
-      `Call OI:  ${this._fmtOi(s.callOi)}  ${this._fmtPct(s.callOiChgPct)}`,
-      `Put OI:   ${this._fmtOi(s.putOi)}  ${this._fmtPct(s.putOiChgPct)}`,
+      `Call OI:  ${this._fmtOi(s.callOi)}${chgText(s.callOi, s.callPoi)}`,
+      `Put OI:   ${this._fmtOi(s.putOi)}${chgText(s.putOi, s.putPoi)}`,
     ];
     this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
