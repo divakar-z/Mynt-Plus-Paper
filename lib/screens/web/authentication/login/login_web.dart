@@ -972,7 +972,19 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                               ),
                                             )
                                           : (wa.qrLoginImageUrl != null
-                                              ? Image.network(wa.qrLoginImageUrl!)
+                                               ? Stack(
+                                                  alignment: Alignment.center,
+                                                  children: [
+                                                    MyntLoader.simple(size: MyntLoaderSize.medium),
+                                                    Image.network(
+                                                      wa.qrLoginImageUrl!,
+                                                      frameBuilder: (context, child, frame, wasSyncLoaded) {
+                                                        if (wasSyncLoaded || frame != null) return child;
+                                                        return const SizedBox.shrink();
+                                                      },
+                                                    ),
+                                                  ],
+                                                )
                                               : MyntLoader.simple(size: MyntLoaderSize.medium)),
                                     ),
                                     const SizedBox(height: 16),
