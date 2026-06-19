@@ -1199,6 +1199,16 @@ class WebSocketProvider extends ChangeNotifier {
           successMessage(_context!, message);
         }
         break;
+      case 'TRIGGER_PENDING':
+        // Stop-loss orders rest in TRIGGER_PENDING. This previously fell into
+        // default with no web toast, so modifying an SL order showed nothing.
+        message = '$tranType order for $symbol ($exchange) modified successfully';
+        if (kIsWeb) {
+          ResponsiveSnackBar.showSuccess(_context!, message);
+        } else {
+          successMessage(_context!, message);
+        }
+        break;
       case 'PENDING':
         // Skip PENDING notification to avoid duplicate with OPEN
         break;
@@ -1206,7 +1216,7 @@ class WebSocketProvider extends ChangeNotifier {
         // Skip CANCELED notification - cancel action already shows success snackbar
         break;
       default:
-        // For other statuses like TRIGGER_PENDING, etc.
+        // For other statuses, etc.
         if (status.isNotEmpty) {
           message = '$tranType order for $symbol ($exchange): $status';
           if (kIsWeb) {
