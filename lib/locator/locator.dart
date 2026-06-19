@@ -5,6 +5,8 @@ import '../api/core/api_link.dart';
 import '../api/insta_options/dashboard/dashboard_api.dart';
 import '../api/insta_options/dashboard/dashboard_api_config.dart';
 import '../api/insta_options/insta_options_api.dart';
+import '../api/insta_options/option_chain/option_chain_api.dart';
+import '../api/insta_options/symbols_api.dart';
 import '../api/insta_options/insta_options_config.dart';
 import 'preference.dart';
 
@@ -20,4 +22,7 @@ void setupLocator() {
   // F&O Dashboard (Screen 1) — separate zdf-dashboard-api backend.
   locator.registerLazySingleton(() => const DashboardApiConfig());
   locator.registerLazySingleton(() => DashboardApi());
+  // Option Chain (Screen 2) + global symbols — same zdf backend.
+  locator.registerLazySingleton(() => SymbolsApi());
+  locator.registerLazySingleton(() => OptionChainApi());
 }

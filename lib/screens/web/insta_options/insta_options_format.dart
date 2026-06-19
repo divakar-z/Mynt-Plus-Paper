@@ -32,6 +32,21 @@ class InstaOptionsFormat {
     return '${RupeeFormat.format(value, showSign: true)}%';
   }
 
+  /// Compact change % with magnitude-scaled precision so big values never get
+  /// truncated: `+339%` (|x| ≥ 100), `+48.7%` (≥ 10), `+4.88%` (< 10). Set
+  /// [showSign] false to drop the leading sign (e.g. paired with "building").
+  static String pctCompact(num? value, {bool showSign = true}) {
+    if (value == null || !value.isFinite) return '—';
+    final a = value.abs();
+    final n = a >= 100
+        ? a.toStringAsFixed(0)
+        : a >= 10
+            ? a.toStringAsFixed(1)
+            : a.toStringAsFixed(2);
+    final sign = !showSign ? '' : (value > 0 ? '+' : (value < 0 ? '-' : ''));
+    return '$sign$n%';
+  }
+
   /// Implied volatility — `12.8%`.
   static String iv(num? value) {
     if (value == null || !value.isFinite) return '—';

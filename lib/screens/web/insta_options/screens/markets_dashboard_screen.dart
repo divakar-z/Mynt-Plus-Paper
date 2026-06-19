@@ -32,12 +32,6 @@ class _MarketsDashboardScreenState
     });
   }
 
-  @override
-  void dispose() {
-    ref.read(marketsDashboardProvider).stop();
-    super.dispose();
-  }
-
   static String _iso(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'

@@ -2,10 +2,10 @@
 /// (`zdf-dashboard-api`).
 ///
 /// This is a SEPARATE service from both the Mynt Noren APIs and the older
-/// InstaOptions OI-Data backend ([InstaOptionsConfig]). Screen 1 — the Markets
-/// Dashboard — is the only consumer; every other InstaOptions sub-screen keeps
-/// talking to the legacy OI-Data service, so this config must never be merged
-/// into [InstaOptionsConfig].
+/// InstaOptions OI-Data backend ([InstaOptionsConfig]). The date-based screens
+/// (Markets Dashboard, Option Chain) and the global `/symbols` list consume it;
+/// the remaining legacy InstaOptions sub-screens keep talking to the OI-Data
+/// service, so this config must never be merged into [InstaOptionsConfig].
 ///
 /// The origin resolves from `--dart-define=API_BASE=...` at build/run time,
 /// falling back to the documented local default. All dashboard endpoints sit
@@ -28,6 +28,12 @@ class DashboardApiConfig {
 
   /// Base for all dashboard endpoints: `<origin>/api/v1/dashboard`.
   String get dashboardBase => '$origin/api/v1/dashboard';
+
+  /// Base for all option-chain endpoints: `<origin>/api/v1/option-chain`.
+  String get optionChainBase => '$origin/api/v1/option-chain';
+
+  /// Global F&O symbol universe (indices + stocks): `<origin>/api/v1/symbols`.
+  String get symbolsUrl => '$origin/api/v1/symbols';
 
   /// Health probe, served at the root: `<origin>/health`.
   String get healthUrl => '$origin/health';

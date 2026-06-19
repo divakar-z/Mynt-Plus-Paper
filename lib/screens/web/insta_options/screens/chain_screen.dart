@@ -1,21 +1,17 @@
-import 'package:data_table_2/data_table_2.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mynt_plus/models/insta_options/chain_row.dart';
-import 'package:mynt_plus/provider/insta_options/insta_options_chain_provider.dart';
-import 'package:mynt_plus/provider/insta_options/insta_options_selection_provider.dart';
+import 'package:mynt_plus/provider/insta_options/option_chain/option_chain_provider.dart';
+import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
-import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
-import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/chain_leg_bottom_sheet.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/oi_bar_cell.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_app_bar.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_balance_bar.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_key_walls.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_ladder.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_range_axis.dart';
 
-/// Option Chain screen (README §10.3). Phase 2: REST-only.
-///
-/// Loads `/analytics/chain` + `/spot` on mount and on selection change.
-/// Highlights the ATM row. Right-click (or long-press) on any CE/PE cell
-/// opens the bottom sheet for visual basket enqueue. Sticky ATM scrolling,
-/// the Change-ref dropdown, and WS streaming are deferred to a polish sprint.
+/// Option Chain (Screen 2) — the NSE-style `CALLS | STRIKE | PUTS` ladder on the
+/// date-based backend. The app bar (underlying / date / expiry) stays put; only
+/// the body switches between loading / error / empty / chain.
 class ChainScreen extends ConsumerStatefulWidget {
   const ChainScreen({super.key});
 
@@ -24,372 +20,94 @@ class ChainScreen extends ConsumerStatefulWidget {
 }
 
 class _ChainScreenState extends ConsumerState<ChainScreen> {
-  bool _showGreeks = true;
+  final GlobalKey<ChainLadderState> _ladderKey = GlobalKey<ChainLadderState>();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(optionChainProvider).start();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final tokens = InstaOptionsTokens.of(context);
-    final chain = ref.watch(instaOptionsChainProvider);
-    final selection = ref.watch(instaOptionsSelectionProvider).selection;
-
-    if (selection.expiry.isEmpty) {
-      return _EmptyState(
-        icon: Icons.event_busy,
-        title: 'Pick an expiry',
-        message: 'Choose an expiry from the bar above to load the chain.',
-        tokens: tokens,
-      );
-    }
-    if (chain.loading && chain.rows.isEmpty) {
-      return _LoadingState(tokens: tokens);
-    }
-    if (chain.error != null && chain.rows.isEmpty) {
-      return _ErrorState(
-        message: chain.error!,
-        tokens: tokens,
-        onRetry: chain.refresh,
-      );
-    }
-    if (chain.rows.isEmpty) {
-      return _EmptyState(
-        icon: Icons.table_chart,
-        title: 'No chain data',
-        message: 'Selection may be stale. Retry to fetch again.',
-        tokens: tokens,
-        onRetry: chain.refresh,
-      );
-    }
+    final p = ref.watch(optionChainProvider);
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.backgroundColorDark, light: MyntColors.backgroundColor);
 
     return Container(
-      color: tokens.bgPrimary,
+      color: bg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _ChainHeader(
-            spot: chain.spot,
-            futLtp: chain.futRow?.ltp,
-            atm: chain.atmStrike,
-            showGreeks: _showGreeks,
-            onToggleGreeks: (v) => setState(() => _showGreeks = v),
-            tokens: tokens,
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: _ChainTable(
-                strikes: chain.strikes,
-                atm: chain.atmStrike,
-                showGreeks: _showGreeks,
-                maxOi: chain.maxOi,
-                chain: chain,
-                tokens: tokens,
-              ),
-            ),
-          ),
+          ChainAppBar(
+              onRecenter: () => _ladderKey.currentState?.centerOnAtm()),
+          Expanded(child: _body(context, p)),
         ],
       ),
     );
   }
-}
 
-class _ChainHeader extends StatelessWidget {
-  final double spot;
-  final double? futLtp;
-  final double? atm;
-  final bool showGreeks;
-  final ValueChanged<bool> onToggleGreeks;
-  final InstaOptionsTokens tokens;
-
-  const _ChainHeader({
-    required this.spot,
-    required this.futLtp,
-    required this.atm,
-    required this.showGreeks,
-    required this.onToggleGreeks,
-    required this.tokens,
-  });
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _body(BuildContext context, OptionChainProvider p) {
+    if (p.isInitialLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          color: resolveThemeColor(context,
+              dark: MyntColors.primaryDark, light: MyntColors.primary),
+        ),
+      );
+    }
+    if (p.isFatalError) {
+      return _ErrorState(
+        message: p.error ?? 'Failed to load the option chain.',
+        onRetry: () => ref.read(optionChainProvider).refresh(),
+      );
+    }
+    final data = p.data;
+    if (data == null || data.isEmpty) {
+      return const _EmptyState();
+    }
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _Stat(label: 'Spot', value: InstaOptionsFormat.price(spot), tokens: tokens),
-          const SizedBox(width: 24),
-          _Stat(
-            label: 'FUT',
-            value: futLtp == null ? '—' : InstaOptionsFormat.price(futLtp!),
-            tokens: tokens,
-          ),
-          const SizedBox(width: 24),
-          _Stat(
-            label: 'ATM',
-            value: atm == null ? '—' : atm!.toStringAsFixed(0),
-            tokens: tokens,
-          ),
-          const Spacer(),
-          Text(
-            'Show Greeks',
-            style: MyntWebTextStyles.body(
-              context,
-              color: tokens.textSecondary,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Switch(
-            value: showGreeks,
-            activeThumbColor: tokens.accent,
-            onChanged: onToggleGreeks,
-          ),
+          ChainRangeAxis(data: data),
+          const SizedBox(height: 16),
+          ChainBalanceBar(
+              totalCeOi: data.totalCeOi,
+              totalPeOi: data.totalPeOi,
+              pcr: data.pcr),
+          const SizedBox(height: 18),
+          ChainKeyWalls(data: data),
+          const SizedBox(height: 16),
+          Expanded(child: ChainLadder(key: _ladderKey, data: data)),
         ],
       ),
     );
   }
-}
-
-class _Stat extends StatelessWidget {
-  final String label;
-  final String value;
-  final InstaOptionsTokens tokens;
-
-  const _Stat({required this.label, required this.value, required this.tokens});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          '$label:',
-          style: MyntWebTextStyles.caption(
-            context,
-            color: tokens.textSecondary,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          value,
-          style: MyntWebTextStyles.price(
-            context,
-            color: tokens.textPrimary,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ChainTable extends StatelessWidget {
-  final List<double> strikes;
-  final double? atm;
-  final bool showGreeks;
-  final int maxOi;
-  final InstaOptionsChainProvider chain;
-  final InstaOptionsTokens tokens;
-
-  const _ChainTable({
-    required this.strikes,
-    required this.atm,
-    required this.showGreeks,
-    required this.maxOi,
-    required this.chain,
-    required this.tokens,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: tokens.bgSecondary,
-        border: Border.all(color: tokens.border, width: 1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: DataTable2(
-        columnSpacing: 6,
-        horizontalMargin: 8,
-        dataRowHeight: 32,
-        headingRowHeight: 40,
-        headingTextStyle: MyntWebTextStyles.para(
-          context,
-          color: tokens.textSecondary,
-          fontWeight: FontWeight.w600,
-        ),
-        headingRowColor: WidgetStateProperty.all(tokens.bgTertiary),
-        dataTextStyle: MyntWebTextStyles.tableCell(
-          context,
-          color: tokens.textPrimary,
-        ),
-        dividerThickness: 0.5,
-        columns: _buildColumns(),
-        rows: strikes
-            .map((strike) => _buildRow(context, strike))
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  List<DataColumn2> _buildColumns() {
-    return [
-      if (showGreeks) const DataColumn2(label: Text('Δ'), fixedWidth: 60, numeric: true),
-      const DataColumn2(label: Text('OI'), fixedWidth: 110, numeric: true),
-      if (showGreeks) const DataColumn2(label: Text('IV'), fixedWidth: 60, numeric: true),
-      const DataColumn2(label: Text('LTP'), fixedWidth: 80, numeric: true),
-      const DataColumn2(label: Text('STRIKE'), fixedWidth: 96, numeric: true),
-      const DataColumn2(label: Text('LTP'), fixedWidth: 80, numeric: true),
-      if (showGreeks) const DataColumn2(label: Text('IV'), fixedWidth: 60, numeric: true),
-      const DataColumn2(label: Text('OI'), fixedWidth: 110, numeric: true),
-      if (showGreeks) const DataColumn2(label: Text('Δ'), fixedWidth: 60, numeric: true),
-      const DataColumn2(label: Text('PCR'), fixedWidth: 60, numeric: true),
-    ];
-  }
-
-  DataRow2 _buildRow(BuildContext context, double strike) {
-    final pair = chain.atStrike(strike);
-    final ce = pair.ce;
-    final pe = pair.pe;
-    final isAtm = atm != null && strike == atm;
-    final rowColor = isAtm ? tokens.atmHighlight : null;
-    final pcr = (ce == null || ce.oi == 0)
-        ? double.nan
-        : (pe?.oi ?? 0) / ce.oi.toDouble();
-
-    return DataRow2(
-      color: rowColor == null ? null : WidgetStateProperty.all(rowColor),
-      cells: [
-        if (showGreeks) _centerCell(_greekText(context, ce?.delta)),
-        _oiCell(context, ce, isCallSide: true),
-        if (showGreeks) _centerCell(_ivText(context, ce?.iv, ce?.ivSolverOk)),
-        _centerCell(_priceText(context, ce)),
-        _strikeCell(context, strike, isAtm),
-        _centerCell(_priceText(context, pe)),
-        if (showGreeks) _centerCell(_ivText(context, pe?.iv, pe?.ivSolverOk)),
-        _oiCell(context, pe, isCallSide: false),
-        if (showGreeks) _centerCell(_greekText(context, pe?.delta)),
-        _centerCell(_pcrText(context, pcr)),
-      ],
-    );
-  }
-
-  DataCell _centerCell(Widget child) => DataCell(Center(child: child));
-
-  DataCell _oiCell(BuildContext context, ChainRow? row, {required bool isCallSide}) {
-    final oi = row?.oi ?? 0;
-    return DataCell(
-      GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onSecondaryTap: row == null
-            ? null
-            : () => ChainLegBottomSheet.show(context, row),
-        onLongPress: row == null
-            ? null
-            : () => ChainLegBottomSheet.show(context, row),
-        child: OIBarCell(value: oi, maxValue: maxOi, isCallSide: isCallSide),
-      ),
-    );
-  }
-
-  DataCell _strikeCell(BuildContext context, double strike, bool isAtm) {
-    return DataCell(
-      Container(
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        decoration: isAtm
-            ? BoxDecoration(
-                border: Border(left: BorderSide(color: tokens.accent, width: 2)),
-              )
-            : null,
-        child: Text(
-          strike.toStringAsFixed(0),
-          style: MyntWebTextStyles.price(
-            context,
-            color: tokens.textPrimary,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _priceText(BuildContext context, ChainRow? row) {
-    final ltpLine = Text(
-      InstaOptionsFormat.price(row?.ltp),
-      style: MyntWebTextStyles.price(
-        context,
-        color: tokens.textPrimary,
-        fontWeight: FontWeight.w600,
-      ),
-    );
-    final pct = row?.ltpChangePct;
-    if (pct == null) return ltpLine;
-    final color = pct == 0
-        ? tokens.textSecondary
-        : (pct > 0 ? tokens.profit : tokens.loss);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        ltpLine,
-        Text(
-          InstaOptionsFormat.changePct(pct),
-          style: MyntWebTextStyles.caption(context, color: color),
-        ),
-      ],
-    );
-  }
-
-  Widget _greekText(BuildContext context, double? value) => Text(
-        InstaOptionsFormat.greek(value),
-        style: MyntWebTextStyles.tableCell(context, color: tokens.textSecondary),
-      );
-
-  Widget _ivText(BuildContext context, double? iv, bool? ivOk) {
-    final value = (ivOk == false) ? null : iv;
-    return Text(
-      InstaOptionsFormat.iv(value),
-      style: MyntWebTextStyles.tableCell(context, color: tokens.textSecondary),
-    );
-  }
-
-  Widget _pcrText(BuildContext context, double pcr) => Text(
-        InstaOptionsFormat.pcr(pcr.isFinite ? pcr : null),
-        style: MyntWebTextStyles.tableCell(context, color: tokens.textSecondary),
-      );
-}
-
-class _LoadingState extends StatelessWidget {
-  final InstaOptionsTokens tokens;
-  const _LoadingState({required this.tokens});
-  @override
-  Widget build(BuildContext context) => Container(
-        color: tokens.bgPrimary,
-        child: Center(
-          child: CircularProgressIndicator(color: tokens.accent),
-        ),
-      );
 }
 
 class _ErrorState extends StatelessWidget {
   final String message;
-  final InstaOptionsTokens tokens;
-  final Future<void> Function() onRetry;
-  const _ErrorState({
-    required this.message,
-    required this.tokens,
-    required this.onRetry,
-  });
+  final VoidCallback onRetry;
+
+  const _ErrorState({required this.message, required this.onRetry});
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: tokens.bgPrimary,
+    final loss = resolveThemeColor(context,
+        dark: MyntColors.lossDark, light: MyntColors.loss);
+    return Padding(
       padding: const EdgeInsets.all(24),
       child: Center(
         child: Container(
           padding: const EdgeInsets.all(16),
+          constraints: const BoxConstraints(maxWidth: 480),
           decoration: BoxDecoration(
-            color: tokens.loss.withValues(alpha: 0.1),
-            border: Border.all(color: tokens.loss, width: 1),
+            color: loss.withValues(alpha: 0.1),
+            border: Border.all(color: loss, width: 1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -398,26 +116,18 @@ class _ErrorState extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.error_outline, color: tokens.loss, size: 20),
+                  Icon(Icons.cloud_off, color: loss, size: 20),
                   const SizedBox(width: 8),
-                  Text(
-                    'Failed to load chain',
-                    style: MyntWebTextStyles.body(
-                      context,
-                      color: tokens.loss,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  Text('Chain failed to load',
+                      style: MyntWebTextStyles.body(context,
+                          color: loss, fontWeight: MyntFonts.semiBold)),
                 ],
               ),
               const SizedBox(height: 8),
-              Text(
-                message,
-                style: MyntWebTextStyles.caption(
-                  context,
-                  color: tokens.textSecondary,
-                ),
-              ),
+              Text(message,
+                  style: MyntWebTextStyles.caption(context,
+                      darkColor: MyntColors.textSecondaryDark,
+                      lightColor: MyntColors.textSecondary)),
               const SizedBox(height: 12),
               TextButton.icon(
                 onPressed: onRetry,
@@ -433,53 +143,27 @@ class _ErrorState extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String message;
-  final InstaOptionsTokens tokens;
-  final Future<void> Function()? onRetry;
-
-  const _EmptyState({
-    required this.icon,
-    required this.title,
-    required this.message,
-    required this.tokens,
-    this.onRetry,
-  });
+  const _EmptyState();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: tokens.bgPrimary,
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 48, color: tokens.textMuted),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: MyntWebTextStyles.head(context, color: tokens.textPrimary),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              message,
-              style: MyntWebTextStyles.body(
-                context,
-                color: tokens.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            if (onRetry != null) ...[
-              const SizedBox(height: 12),
-              TextButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Retry'),
-              ),
-            ],
-          ],
-        ),
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.table_rows_outlined, size: 44, color: muted),
+          const SizedBox(height: 12),
+          Text('No chain for this selection',
+              style: MyntWebTextStyles.title(context,
+                  darkColor: MyntColors.textPrimaryDark,
+                  lightColor: MyntColors.textPrimary,
+                  fontWeight: MyntFonts.semiBold)),
+          const SizedBox(height: 4),
+          Text('Try another underlying, date, or expiry.',
+              style: MyntWebTextStyles.caption(context, color: muted)),
+        ],
       ),
     );
   }
