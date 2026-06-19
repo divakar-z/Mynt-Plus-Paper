@@ -1212,8 +1212,6 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final isDark = isDarkMode(context);
 
     final tradeFromChart = ref.watch(tradeFromChartModeProvider);
-    final accent = resolveThemeColor(context,
-        dark: MyntColors.secondary, light: MyntColors.primary);
     // The Trade from Chart pill only makes sense when the chart area is
     // actually visible — Overview (0) and Chart (1) tabs. Hidden on
     // Options / Stock Report tabs where the chart isn't shown.
@@ -1266,8 +1264,8 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         // engine (ON). Persisted via SharedPreferences per session. Only
         // visible on Overview/Chart tabs (chart-bearing tabs).
         if (showTradeFromChartPill) ...[
-        const SizedBox(width: 16),
-        MouseRegion(
+          const SizedBox(width: 8),
+          MouseRegion(
           cursor: SystemMouseCursors.click,
           child: GestureDetector(
             onTap: () =>
@@ -1277,19 +1275,13 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 color: tradeFromChart
-                    ? accent
-                    : (isDark
-                        ? Colors.white.withValues(alpha: 0.06)
-                        : Colors.black.withValues(alpha: 0.04)),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: tradeFromChart
-                      ? accent
-                      : (isDark
-                          ? Colors.white.withValues(alpha: 0.12)
-                          : Colors.black.withValues(alpha: 0.08)),
-                ),
-              ),
+                      ? (isDark
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.black.withValues(alpha: 0.05))
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: null,
+               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1297,21 +1289,22 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                     Icons.candlestick_chart,
                     size: 14,
                     color: tradeFromChart
-                        ? Colors.white
-                        : theme.colorScheme.mutedForeground,
-                  ),
+                          ? theme.colorScheme.foreground
+                          : theme.colorScheme.mutedForeground,
+                    ),
                   const SizedBox(width: 6),
                   Text(
                     'Trade from Chart',
                     style: MyntWebTextStyles.body(
                       context,
-                      fontWeight: MyntFonts.semiBold,
-                    ).copyWith(
-                      color: tradeFromChart
-                          ? Colors.white
-                          : theme.colorScheme.mutedForeground,
-                      fontSize: 12,
-                    ),
+                        fontWeight: tradeFromChart
+                            ? MyntFonts.semiBold
+                            : MyntFonts.medium,
+                      ).copyWith(
+                        color: tradeFromChart
+                            ? theme.colorScheme.foreground
+                            : theme.colorScheme.mutedForeground,
+                      ),
                   ),
                 ],
               ),

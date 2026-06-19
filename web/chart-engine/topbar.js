@@ -365,12 +365,14 @@
     }
     const counts = Array.from(groups.keys()).sort((a, b) => a - b);
     for (const count of counts) {
-      const row = document.createElement('div');
-      row.className = 'tb-layout-row';
-      const lbl = document.createElement('span');
-      lbl.className = 'tb-layout-row-label';
-      lbl.textContent = String(count);
-      row.appendChild(lbl);
+      const section = document.createElement('div');
+      section.className = 'tb-layout-section';
+      const sectionLbl = document.createElement('div');
+      sectionLbl.className = 'tb-layout-section-label';
+      sectionLbl.textContent = count === 1
+          ? 'Single'
+          : `${count} Panes`;
+      section.appendChild(sectionLbl);
       const grid = document.createElement('div');
       grid.className = 'tb-layout-row-grid';
       for (const spec of groups.get(count)) {
@@ -379,8 +381,8 @@
         tile.className = 'tb-layout-tile';
         if (spec.id === activeLayoutId) tile.classList.add('tb-layout-tile--on');
         const tc = document.createElement('canvas');
-        tc.width = 26; tc.height = 26;
-        tc.style.width = '26px'; tc.style.height = '26px';
+        tc.width = 28; tc.height = 28;
+        tc.style.width = '28px'; tc.style.height = '28px';
         tile.appendChild(tc);
         tile.title = spec.id;
         tile.addEventListener('click', () => {
@@ -394,8 +396,8 @@
         setTimeout(() => paintLayoutGlyph(
             tc, spec, getComputedStyle(tile).color), 0);
       }
-      row.appendChild(grid);
-      content.appendChild(row);
+      section.appendChild(grid);
+      content.appendChild(section);
     }
     const pop = openPopover(layoutBtn, content);
     pop.classList.add('tb-layout-popover');

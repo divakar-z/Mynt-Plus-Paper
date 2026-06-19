@@ -89,6 +89,20 @@ class PlusMenuPopup extends StatelessWidget {
                 color: bg,
                 border: Border.all(color: border),
                 borderRadius: BorderRadius.circular(8),
+                boxShadow: [
+                  BoxShadow(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.black.withValues(alpha: 0.32)
+                        : const Color(0xFF0F1729).withValues(alpha: 0.10),
+                    blurRadius:
+                        Theme.of(context).brightness == Brightness.dark
+                            ? 18
+                            : 28,
+                    offset: Theme.of(context).brightness == Brightness.dark
+                        ? const Offset(0, 6)
+                        : const Offset(0, 10),
+                  ),
+                ],
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -122,10 +136,10 @@ class PlusMenuPopup extends StatelessWidget {
                         () { onPick(OrderPrefillKind.sellStopLmt); }),
                   ],
                   item('Set Alert at $priceStr',
-                       Icons.notifications_none_outlined,
+                      Icons.notifications_none_outlined,
                       resolveThemeColor(context,
-                          dark: const Color(0xFFF59E0B),
-                          light: const Color(0xFFD97706)),
+                          dark: MyntColors.iconDark,
+                          light: MyntColors.icon),
                       onSetAlert),
                   const Divider(height: 1),
                   item('Create new order…',

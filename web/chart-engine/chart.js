@@ -3222,19 +3222,37 @@ class Chart {
 
   _drawLoadingBanner(w, h) {
     if (!this._loadingTitle) return;
-    this.ctx.font = '600 12px Geist, sans-serif';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.textAlign = 'center';
-    const padX = 14;
-    const tw = this.ctx.measureText(this._loadingTitle).width + padX * 2;
-    const tH = 28;
-    const x = (w - tw) / 2;
-    const y = h / 2 - tH / 2;
-    this.ctx.fillStyle = this.palette.crosshairChip;
-    this._roundedRect(x, y, tw, tH, 6);
-    this.ctx.fill();
-    this.ctx.fillStyle = this.palette.chipText;
-    this.ctx.fillText(this._loadingTitle, w / 2, y + tH / 2);
+    // Plain circular spinner — matches MyntLoader.simple() from the app:
+    // a CircularProgressIndicator-style arc in the primary brand color.
+    const ctx = this.ctx;
+    const cx = w / 2;
+    const cy = h / 2;
+    const radius = 18;
+    const stroke = 3;
+    const t = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const start = (t * Math.PI * 1.6) % (Math.PI * 2);
+    const sweep = Math.PI * 1.25;
+    // Track ring (subtle)
+    ctx.lineWidth = stroke;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = this._withAlpha(this.palette.axisText, 0.18);
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    // Active arc in primary color
+    ctx.strokeStyle = this.palette.long;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, start, start + sweep);
+    ctx.stroke();
+    // Keep animating until the loader is dismissed.
+    if (this._loadingTitle != null) {
+      if (!this._frame) {
+        this._frame = requestAnimationFrame(() => {
+          this._frame = null;
+          this.draw();
+        });
+      }
+    }
   }
 
   _priceDecimals() {
@@ -3396,13 +3414,25 @@ class Chart {
     const dp = this._priceDecimals();
 
     // Layout: bid (left, tall)   center-column (spread top, qty bottom)   ask (right, tall)
-    const stripY = 44;
-    const tallH = 42;        // bid/ask chip height — large, button-shaped
-    const halfH = 20;        // each row of the centre column
-    const halfGap = 2;       // vertical gap between spread row and qty row
-    const padX = 10;         // bid/ask inner padding (tight, button-like)
-    const innerPadX = 12;    // centre-column inner padding
-    const gap = 10;          // gap between bid|centre|ask
+    // Responsive shrink: narrow panes (multi-pane layouts) scale the strip
+    // down so it doesn't overflow the chart. Push the strip below when the
+    // OHLC cluster wrapped onto a second row.
+    const paneW = plot.right - plot.left;
+    const scale = paneW < 280 ? 0.72 : (paneW < 380 ? 0.84 : 1);
+    const stripY = (this._ohlcWrapped ? 62 : 44);
+    const tallH = Math.round(42 * scale);
+    const halfH = Math.round(20 * scale);
+    const halfGap = 2;
+    const padX = Math.max(6, Math.round(10 * scale));
+    const innerPadX = Math.max(8, Math.round(12 * scale));
+    const gap = Math.max(6, Math.round(10 * scale));
+    const minSideW = Math.round(82 * scale);
+    const fPrice = Math.max(11, Math.round(14 * scale));
+    const fLabel = Math.max(9, Math.round(11 * scale));
+    const fQty = Math.max(10, Math.round(12 * scale));
+    const fSpread = Math.max(9, Math.round(11 * scale));
+    const priceTextDy = -Math.round(tallH * 0.14);
+    const labelTextDy = Math.round(tallH * 0.24);
     const hovered = this._hoveredHeaderKind || null;
 
     ctx.textBaseline = 'middle';
@@ -3411,9 +3441,9 @@ class Chart {
     let x = plot.left + 12;
 
     // --- Bid chip (tall) ---
-    ctx.font = '700 14px Geist, sans-serif';
+    ctx.font = `700 ${fPrice}px Geist, sans-serif`;
     const bidText = bid != null ? bid.toFixed(dp) : '—';
-    const bidW = Math.max(82, ctx.measureText(bidText).width + padX * 2);
+    const bidW = Math.max(minSideW, ctx.measureText(bidText).width + padX * 2);
     // Solid red fill matching the global "S" (sell) button color pattern.
     // Disabled (non-tradable / index): flat solid color
     ctx.fillStyle = isNonTradable
@@ -3428,10 +3458,10 @@ class Chart {
       ctx.fill();
     }
     ctx.fillStyle = '#FFFFFF';
-    ctx.font = '600 14px Geist, sans-serif';
-    ctx.fillText(bidText, x + bidW / 2, stripY + tallH / 2 - 6);
-    ctx.font = '600 11px Geist, sans-serif';
-    ctx.fillText('SELL', x + bidW / 2, stripY + tallH / 2 + 10);
+    ctx.font = `500 ${fPrice}px Geist, sans-serif`;
+    ctx.fillText(bidText, x + bidW / 2, stripY + tallH / 2 + priceTextDy);
+    ctx.font = `500 ${fLabel}px Geist, sans-serif`;
+    ctx.fillText('SELL', x + bidW / 2, stripY + tallH / 2 + labelTextDy);
     if (bid != null && !isNonTradable) {
       this._headerHits.push({
         rect: { x, y: stripY, w: bidW, h: tallH },
@@ -3446,8 +3476,8 @@ class Chart {
       // Just a small "INDEX" / "COM" label in the middle so the strip doesn't
       // collapse and the user understands why bid==ask==LTP.
       const tag = instname === 'COM' ? 'COM' : 'INDEX';
-      ctx.font = '600 10px Geist, sans-serif';
-      const tagW = Math.max(56, ctx.measureText(tag).width + innerPadX * 2);
+      ctx.font = `600 ${Math.max(9, Math.round(10 * scale))}px Geist, sans-serif`;
+      const tagW = Math.max(Math.round(56 * scale), ctx.measureText(tag).width + innerPadX * 2);
       ctx.fillStyle = this.palette.axisText;
       ctx.fillText(tag, x + tagW / 2, stripY + tallH / 2);
       x += tagW + gap;
@@ -3458,23 +3488,24 @@ class Chart {
       if (bid != null && ask != null) {
         spreadText = (ask - bid).toFixed(dp);
       }
-      ctx.font = '500 11px Geist, sans-serif';
+      ctx.font = `500 ${fSpread}px Geist, sans-serif`;
       const spreadTextW = spreadText
           ? ctx.measureText(spreadText).width
           : 0;
 
-      ctx.font = '600 12px Geist, sans-serif';
+      ctx.font = `600 ${fQty}px Geist, sans-serif`;
       const qtyText = String(this.qty);
       const qtyTextW = ctx.measureText(qtyText).width;
 
       centreW = Math.max(spreadTextW, qtyTextW) + innerPadX * 2;
-      if (centreW < 56) centreW = 56;
+      const minCentreW = Math.round(56 * scale);
+      if (centreW < minCentreW) centreW = minCentreW;
 
       if (spreadText) {
         ctx.fillStyle = this._withAlpha(this.palette.bg, 0.8);
         this._roundedRect(x, stripY, centreW, halfH, 4);
         ctx.fill();
-        ctx.font = '500 11px Geist, sans-serif';
+        ctx.font = `500 ${fSpread}px Geist, sans-serif`;
         ctx.fillStyle = (ask - bid) < 0
             ? this.palette.short
             : this.palette.axisText;
@@ -3483,7 +3514,7 @@ class Chart {
       }
 
       const qtyY = stripY + halfH + halfGap;
-      // White (theme bg) qty chip with a subtle border 
+      // White (theme bg) qty chip with a subtle border
       ctx.fillStyle = this.palette.bg;
       this._roundedRect(x, qtyY, centreW, halfH, 4);
       ctx.fill();
@@ -3491,7 +3522,7 @@ class Chart {
       ctx.lineWidth = 1;
       this._roundedRect(x, qtyY, centreW, halfH, 4);
       ctx.stroke();
-      ctx.font = '600 12px Geist, sans-serif';
+      ctx.font = `600 ${fQty}px Geist, sans-serif`;
       ctx.fillStyle = this.palette.axisTextStrong;
       ctx.fillText(qtyText, x + centreW / 2, qtyY + halfH / 2);
       this._headerHits.push({
@@ -3502,9 +3533,9 @@ class Chart {
     }
 
     // --- Ask chip (tall) ---
-    ctx.font = '700 14px Geist, sans-serif';
+    ctx.font = `700 ${fPrice}px Geist, sans-serif`;
     const askText = ask != null ? ask.toFixed(dp) : '—';
-    const askW = Math.max(82, ctx.measureText(askText).width + padX * 2);
+    const askW = Math.max(minSideW, ctx.measureText(askText).width + padX * 2);
     // Solid blue fill matching the global "B" (buy) button color pattern.
     // Disabled (non-tradable / index): flat solid color
     ctx.fillStyle = isNonTradable
@@ -3519,10 +3550,10 @@ class Chart {
       ctx.fill();
     }
     ctx.fillStyle = '#FFFFFF';
-    ctx.font = '600 14px Geist, sans-serif';
-    ctx.fillText(askText, x + askW / 2, stripY + tallH / 2 - 6);
-    ctx.font = '600 11px Geist, sans-serif';
-    ctx.fillText('BUY', x + askW / 2, stripY + tallH / 2 + 10);
+    ctx.font = `500 ${fPrice}px Geist, sans-serif`;
+    ctx.fillText(askText, x + askW / 2, stripY + tallH / 2 + priceTextDy);
+    ctx.font = `500 ${fLabel}px Geist, sans-serif`;
+    ctx.fillText('BUY', x + askW / 2, stripY + tallH / 2 + labelTextDy);
     if (ask != null && !isNonTradable) {
       this._headerHits.push({
         rect: { x, y: stripY, w: askW, h: tallH },
@@ -3714,7 +3745,6 @@ class Chart {
     // OHLC segments — placed inline next to the symbol on the same row.
     // `chipW` already includes the 12px left inset + a 4px trailing margin,
     // so we just add a small extra gap so OHLC reads as a separate cluster.
-    const ohlcStartX = plot.left + chipW + 8;
     this.ctx.textAlign = 'left';
     // Pre-measure each segment so we can pad a solid background behind the
     // whole cluster (keeps candles from bleeding through the values).
@@ -3731,7 +3761,15 @@ class Chart {
     if (ohlcLaid.length) ohlcTotalW -= 14;  // trailing gap shouldn't pad bg
     const ohlcBgPadX = 6;
     const ohlcBgH = 22;
-    const ohlcBgY = ohlcY - ohlcBgH / 2;
+    // Responsive wrap: if the inline OHLC cluster would overflow the pane's
+    // right edge, drop it onto a second row aligned under the symbol chip.
+    const inlineStartX = plot.left + chipW + 8;
+    const wouldOverflow =
+        inlineStartX + ohlcTotalW + ohlcBgPadX > plot.right - 4;
+    this._ohlcWrapped = wouldOverflow;
+    const ohlcStartX = wouldOverflow ? (plot.left + 12) : inlineStartX;
+    const ohlcRowY = wouldOverflow ? (ohlcY + 20) : ohlcY;
+    const ohlcBgY = ohlcRowY - ohlcBgH / 2;
     const ohlcBgX = ohlcStartX - ohlcBgPadX;
     const ohlcBgW = ohlcTotalW + ohlcBgPadX * 2;
     this.ctx.fillStyle = this._withAlpha(this.palette.bg, 0.8);
@@ -3746,11 +3784,11 @@ class Chart {
     for (const seg of ohlcLaid) {
       this.ctx.font = '500 11px Geist, sans-serif';
       this.ctx.fillStyle = this._withAlpha(this.palette.ohlcLabel, 0.95);
-      this.ctx.fillText(seg.label, x, ohlcY);
+      this.ctx.fillText(seg.label, x, ohlcRowY);
       x += seg.lw + 5;
       this.ctx.font = '600 11px Geist, sans-serif';
       this.ctx.fillStyle = seg.color;
-      this.ctx.fillText(seg.value, x, ohlcY);
+      this.ctx.fillText(seg.value, x, ohlcRowY);
       x += seg.vw + 14;
     }
     // Bid/ask/qty strip is for active trading — and on a non-tradable
