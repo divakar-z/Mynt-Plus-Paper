@@ -1909,7 +1909,7 @@ class Chart {
             const isDraggable =
                 ov && (ov.kind === 'limit' || ov.kind === 'sl' ||
                        ov.kind === 'sl-l' || ov.kind === 'ocoTp' ||
-                       ov.kind === 'ocoSl');
+                       ov.kind === 'ocoSl' || ov.kind === 'alert');
             if (isDraggable) {
               this._dragOverlay = {
                 overlayId: hit.overlayId,

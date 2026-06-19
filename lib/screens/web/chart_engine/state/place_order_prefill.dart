@@ -22,6 +22,18 @@ String resolveProduct(ChartScrip scrip, OrderDefaults? defaults) {
   return isOption ? defaults.optionsProduct : defaults.futuresProduct;
 }
 
+/// Whether an order on [exch] placed *now* should be flagged AMO (After Market
+/// Order) because the market is closed. Mirrors `PlaceOrderScreenWeb`'s
+/// `_checkMarketClosed` so chart orders behave like the normal place-order
+/// screen: MCX/NCOM close at 23:50 IST, every other exchange at 16:00 IST.
+bool isAmoTime(String exch) {
+  final nowIst =
+      DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+  final minutes = nowIst.hour * 60 + nowIst.minute;
+  if (exch == 'MCX' || exch == 'NCOM') return minutes >= 23 * 60 + 50;
+  return minutes >= 16 * 60;
+}
+
 /// Variants of an order pre-fill — used by the chart-overlay layer when
 /// opening the existing `PlaceOrderScreenWeb` from a chip / menu item.
 enum OrderPrefillKind {
@@ -112,6 +124,10 @@ Map<String, dynamic> buildOrderScreenArgs({
     if (trgprc != null) 'trgprc': trgprc.toStringAsFixed(2),
     'ret': 'DAY',
     'prd': defaultPrd,
+    // Auto-flag AMO when the market is closed — PlaceOrderScreenWeb reads
+    // raw['amo'] verbatim (its own auto-AMO is skipped when a prefill is
+    // present), so without this a chart order placed after close is rejected.
+    'amo': isAmoTime(scrip.exch) ? 'Yes' : '',
   };
 
   // Display price for the screen's price field; prefer limit, else trigger,
@@ -246,7 +262,9 @@ PlaceOrderInput buildPlaceOrderInput({
     blprc: '',
     bpprc: '',
     dscqty: '',
-    amo: '',
+    // Instant orders fire directly (no PlaceOrderScreen), so AMO must be set
+    // here too or an after-close instant order is rejected.
+    amo: isAmoTime(scrip.exch) ? 'Yes' : '',
     trailprc: '',
     mktProt: '',
     channel: channel,

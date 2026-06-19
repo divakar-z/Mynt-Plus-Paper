@@ -2137,6 +2137,31 @@ class _ChartEngineShellScreenState
     final scrip = session.panes[paneIndex].scrip;
     if (scrip == null) return;
 
+    // Alert line drag → ModifyAlert with the new price, keeping the same
+    // condition (ai_t). fetchmodifyalert refreshes the pending list + toasts
+    // and does NOT Navigator.pop, so it's safe from the chart. The optimistic
+    // _pendingOverlayMoves in JS holds the line until the refresh re-pushes it.
+    if (overlayId.startsWith('alert-')) {
+      final alId = overlayId.substring('alert-'.length);
+      final alerts =
+          ref.read(marketWatchProvider).alertPendingModel ?? const [];
+      AlertPendingModel? alert;
+      for (final a in alerts) {
+        if (a.alId == alId) { alert = a; break; }
+      }
+      if (alert == null) return;
+      // ignore: discarded_futures
+      ref.read(marketWatchProvider).fetchmodifyalert(
+            alert.exch ?? '',
+            alert.tsym ?? '',
+            newPrice.toStringAsFixed(2),
+            alert.aiT ?? '',
+            alert.alId ?? '',
+            context,
+          );
+      return;
+    }
+
     // OCO bracket legs (ocoTp-<alId> / ocoSl-<alId>) — drag modifies a single
     // leg via ModifyOCO, replaying the other leg untouched.
     if (overlayId.startsWith('ocoTp-') || overlayId.startsWith('ocoSl-')) {
@@ -2447,7 +2472,7 @@ class _ChartEngineShellScreenState
             blprc: '',
             bpprc: '',
             dscqty: '',
-            amo: '',
+            amo: isAmoTime(p.exch ?? '') ? 'Yes' : '',
             trailprc: '',
             mktProt: '',
             channel: channel,
@@ -2519,7 +2544,7 @@ class _ChartEngineShellScreenState
               blprc: '',
               bpprc: '',
               dscqty: '',
-              amo: '',
+              amo: isAmoTime(p.exch ?? '') ? 'Yes' : '',
               trailprc: '',
               mktProt: '',
               channel: channel,

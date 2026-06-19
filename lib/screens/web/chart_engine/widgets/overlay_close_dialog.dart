@@ -412,7 +412,9 @@ Future<bool> showAlertCancelDialog({
   required WidgetRef ref,
   required AlertPendingModel alert,
 }) async {
-  final price = alert.pp ?? '';
+  // Alert target price lives in `d` (same field the overlay renders). `pp`
+  // is an unrelated value (showed up as "2" in the dialog).
+  final price = alert.d ?? '';
   final tsym = alert.tsym ?? '';
   final ok = await _showIframeSafeDialog<bool>(
     context: context,

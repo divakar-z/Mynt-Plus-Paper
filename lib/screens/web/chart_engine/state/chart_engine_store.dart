@@ -844,6 +844,25 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
 
   void setPaneSymbol(int index, ChartScrip scrip) {
     if (index < 0 || index >= state.panes.length) return;
+    final existing = state.panes[index].scrip;
+    if (existing != null &&
+        existing.exch == scrip.exch &&
+        existing.token == scrip.token) {
+      // Redundant re-set of the SAME symbol — a late engine `paneSymbolApplied`
+      // echo, a rebuild, or the watchlist's dual routing all re-fire this with
+      // the lot-less ls=1 placeholder. Recomputing qty here would WIPE the real
+      // lot size + qty that GetSecurityInfo already backfilled (qty falls back
+      // to 1, sometimes 0). Keep the better lot/tick and leave qty untouched.
+      final keepLs = existing.ls > scrip.ls ? existing.ls : scrip.ls;
+      final keepTi = existing.ti > 0 ? existing.ti : scrip.ti;
+      if (keepLs == existing.ls && keepTi == existing.ti) return; // no-op
+      state = state.copyWithPane(
+          index,
+          state.panes[index]
+              .copyWith(scrip: scrip.copyWith(ls: keepLs, ti: keepTi)));
+      _schedulePersist();
+      return;
+    }
     final ls = scrip.ls > 0 ? scrip.ls : 1;
     // Initial qty for the new symbol respects Order Defaults → Trade
     // Quantity (per instrument family). Futures/options multiply by lot
