@@ -197,8 +197,16 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
         // Set up QR login success listener
         _setupQrLoginListener();
 
-        // Auto-login check
-        await ref.read(webAuthProvider).checkAutoLogin(context);
+        // Auto-login check — skipped when arriving from the OAuth flow (a
+        // client_id is present in the URL). There the user must see the login
+        // form to re-auth as the account that owns the app_key; auto-login would
+        // silently bounce a still-valid session to the dashboard and abandon the
+        // OAuth authorization.
+        final fromOAuth =
+            (Uri.base.queryParameters['client_id'] ?? '').trim().isNotEmpty;
+        if (!fromOAuth) {
+          await ref.read(webAuthProvider).checkAutoLogin(context);
+        }
 
         // Mark initialization complete (show login form if no auto-login)
         if (mounted) {
