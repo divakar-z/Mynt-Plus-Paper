@@ -15,6 +15,12 @@ class Preferences {
     await _prefInstance?.remove(_clientSession);
   }
 
+  /// Clears the OAuth-only session keys. Leaves the main web session intact.
+  Future clearOauthSession() async {
+    await _prefInstance?.remove(_oauthSession);
+    await _prefInstance?.remove(_oauthClientId);
+  }
+
   /// Clears the logged-in user's identity + session keys (the "Client Details"
   /// group) while leaving device, theme, and filter prefs intact. Used by the
   /// URL token-based auto-login so a new user can never inherit the previous
@@ -72,6 +78,12 @@ class Preferences {
       await _prefInstance!.setString(_clientSession, session);
   Future setApiToken(String session) async =>
       await _prefInstance!.setString(_apiToken, session);
+  // OAuth session — stored separately so the OAuth flow never overwrites the
+  // main web session (clientSession).
+  Future setOauthSession(String session) async =>
+      await _prefInstance!.setString(_oauthSession, session);
+  Future setOauthClientId(String id) async =>
+      await _prefInstance!.setString(_oauthClientId, id);
   Future setClientName(String name) async =>
       await _prefInstance!.setString(_clientName, name);
   Future setImei(String val) async =>
@@ -325,6 +337,8 @@ class Preferences {
   String? get clientId => _prefInstance?.getString(_clientId) ?? "";
   String? get clientSession => _prefInstance?.getString(_clientSession) ?? "";
   String? get token => _prefInstance?.getString(_apiToken) ?? "";
+  String? get oauthSession => _prefInstance?.getString(_oauthSession) ?? "";
+  String? get oauthClientId => _prefInstance?.getString(_oauthClientId) ?? "";
   String? get clientMob => _prefInstance?.getString(_clientMob) ?? "";
   String? get clientName => _prefInstance?.getString(_clientName) ?? "";
 
@@ -577,6 +591,11 @@ const String _hideLoginOptBtn = 'hideLoginOptBtn';
 const String _clientId = 'clientId';
 const String _clientSession = 'clientSession';
 const String _apiToken = 'apiToken';
+
+// OAuth session — kept separate from the main web session so the OAuth flow
+// never overwrites clientId / clientSession.
+const String _oauthSession = 'oauthSession';
+const String _oauthClientId = 'oauthClientId';
 
 const String _clientMob = 'clientMob';
 const String _clientName = 'clientName';
