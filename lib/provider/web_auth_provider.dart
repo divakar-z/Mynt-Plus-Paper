@@ -441,6 +441,17 @@ class WebAuthProvider extends ChangeNotifier {
           }
           notifyListeners();
           return false;
+        } else if (errorMsg.contains('invalid user')) {
+          // OAuth: the account being logged in doesn't own the app key, so the
+          // backend rejects with "Invalid User". Show that real reason as a toast,
+          // NOT a misleading "Invalid TOTP" — the emsg ("Invalid Input : Invalid
+          // User") would otherwise be swallowed by the 'invalid input' check below.
+          // Strip the "Invalid Input :" prefix and show just "Invalid User".
+          _otpError = null;
+          if (context.mounted) {
+            final reason = _mobileOtp!.emsg!.split(':').last.trim();
+            ResponsiveSnackBar.showError(context, reason);
+          }
         } else if (errorMsg.contains('otp not valid') || errorMsg.contains('invalid otp') || errorMsg.contains('invalid input')) {
           // API error → toaster only (consistent with login flow)
           _otpError = null;
