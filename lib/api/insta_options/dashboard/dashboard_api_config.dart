@@ -32,8 +32,16 @@ class DashboardApiConfig {
   /// Base for all option-chain endpoints: `<origin>/api/v1/option-chain`.
   String get optionChainBase => '$origin/api/v1/option-chain';
 
+  /// Base for all index-contribution endpoints: `<origin>/api/v1/contribution`.
+  String get contributionBase => '$origin/api/v1/contribution';
+
   /// Global F&O symbol universe (indices + stocks): `<origin>/api/v1/symbols`.
   String get symbolsUrl => '$origin/api/v1/symbols';
+
+  /// Global trading-day calendar shared by every date-based screen:
+  /// `<origin>/api/v1/dates`. The per-section `/dates` endpoints were removed —
+  /// all screens (dashboard, option-chain, contribution) read this one calendar.
+  String get datesUrl => '$origin/api/v1/dates';
 
   /// Health probe, served at the root: `<origin>/health`.
   String get healthUrl => '$origin/health';

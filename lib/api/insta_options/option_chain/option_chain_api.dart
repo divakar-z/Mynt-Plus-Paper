@@ -9,11 +9,10 @@ import 'package:mynt_plus/models/insta_options/dashboard/dates_response.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/expiry_option.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/option_chain_data.dart';
 
-/// HTTP client for the date-based **Option Chain** backend (Screen 2). Three
-/// endpoints under `<origin>/api/v1/option-chain`:
-/// - `GET /dates` → available trading days (same shape as the dashboard).
-/// - `GET /expiries?underlying=&date=` → expiries for that day (near first).
-/// - `GET /option-chain?underlying=&date=&expiry=` → the full chain.
+/// HTTP client for the date-based **Option Chain** backend (Screen 2):
+/// - `GET /api/v1/dates` → global trading-day calendar (shared by all screens).
+/// - `GET /api/v1/option-chain/expiries?underlying=&date=` → expiries (near first).
+/// - `GET /api/v1/option-chain?underlying=&date=&expiry=` → the full chain.
 ///
 /// Same zdf backend + [DashboardApiException] as [DashboardApi]; omitting
 /// `date` = latest day, omitting `expiry` = the near expiry.
@@ -25,9 +24,10 @@ class OptionChainApi {
 
   OptionChainApi({http.Client? client}) : _http = client ?? http.Client();
 
-  /// `GET /api/v1/option-chain/dates`.
+  /// `GET /api/v1/dates` — the global trading-day calendar (shared by every
+  /// date-based screen; the old `/api/v1/option-chain/dates` was removed).
   Future<DatesResponse> getDates() async {
-    final body = await _get('/dates');
+    final body = await _getUrl(_config.datesUrl);
     return DatesResponse.fromJson(body as Map<String, dynamic>);
   }
 
@@ -63,8 +63,13 @@ class OptionChainApi {
 
   // -------- internal helpers --------
 
-  Future<dynamic> _get(String path, {Map<String, String>? query}) async {
-    final uri = Uri.parse('${_config.optionChainBase}$path').replace(
+  Future<dynamic> _get(String path, {Map<String, String>? query}) =>
+      _getUrl('${_config.optionChainBase}$path', query: query);
+
+  /// GET an absolute URL (used for both the section base and the global
+  /// `/api/v1/dates` calendar, which sits outside the option-chain prefix).
+  Future<dynamic> _getUrl(String url, {Map<String, String>? query}) async {
+    final uri = Uri.parse(url).replace(
       queryParameters: query == null || query.isEmpty ? null : query,
     );
     final http.Response res;

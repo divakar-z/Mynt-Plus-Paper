@@ -19,8 +19,8 @@ class DashboardApiException implements Exception {
 
 /// HTTP client for the date-based F&O Dashboard backend.
 ///
-/// Two endpoints only (INSTAOPTIONS dashboard v2):
-/// - `GET /api/v1/dashboard/dates` → available trading days.
+/// Endpoints (INSTAOPTIONS dashboard v2):
+/// - `GET /api/v1/dates` → global trading-day calendar (shared by all screens).
 /// - `GET /api/v1/dashboard?date=YYYY-MM-DD` → the whole dashboard for a day
 ///   (omit `date` = latest).
 ///
@@ -33,9 +33,10 @@ class DashboardApi {
 
   DashboardApi({http.Client? client}) : _http = client ?? http.Client();
 
-  /// `GET /api/v1/dashboard/dates`.
+  /// `GET /api/v1/dates` — the global trading-day calendar (shared by every
+  /// date-based screen; the old `/api/v1/dashboard/dates` was removed).
   Future<DatesResponse> getDates() async {
-    final body = await _get('/dates');
+    final body = await _getUrl(_config.datesUrl);
     return DatesResponse.fromJson(body as Map<String, dynamic>);
   }
 
@@ -47,8 +48,13 @@ class DashboardApi {
 
   // -------- internal helpers --------
 
-  Future<dynamic> _get(String path, {Map<String, String>? query}) async {
-    final uri = Uri.parse('${_config.dashboardBase}$path').replace(
+  Future<dynamic> _get(String path, {Map<String, String>? query}) =>
+      _getUrl('${_config.dashboardBase}$path', query: query);
+
+  /// GET an absolute URL (used for both the section base and the global
+  /// `/api/v1/dates` calendar, which sits outside the dashboard prefix).
+  Future<dynamic> _getUrl(String url, {Map<String, String>? query}) async {
+    final uri = Uri.parse(url).replace(
       queryParameters: query == null || query.isEmpty ? null : query,
     );
     final http.Response res;

@@ -2,6 +2,7 @@ import 'package:get_it/get_it.dart';
 
 import '../api/core/api_export.dart';
 import '../api/core/api_link.dart';
+import '../api/insta_options/contribution/contribution_api.dart';
 import '../api/insta_options/dashboard/dashboard_api.dart';
 import '../api/insta_options/dashboard/dashboard_api_config.dart';
 import '../api/insta_options/insta_options_api.dart';
@@ -25,4 +26,6 @@ void setupLocator() {
   // Option Chain (Screen 2) + global symbols — same zdf backend.
   locator.registerLazySingleton(() => SymbolsApi());
   locator.registerLazySingleton(() => OptionChainApi());
+  // Index Contribution (Screen 3) — same zdf backend, global dates.
+  locator.registerLazySingleton(() => ContributionApi());
 }
