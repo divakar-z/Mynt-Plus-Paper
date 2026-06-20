@@ -12,6 +12,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mynt_plus/routes/web_router.dart';
 import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
 import 'package:mynt_plus/sharedWidget/functions.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
@@ -508,7 +509,16 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
                                               4),
                                     ),
                                   ),
-                                          onPressed: () {
+                                          onPressed: () async {
+                                            // Skip confirmation dialog on
+                                            // Pledge Balance tab (unpledge).
+                                            if (selectedFilterType != '1') {
+                                              final confirmed =
+                                                  await _showPledgeConfirmDialog(
+                                                      context, ledgerprovider);
+                                              if (confirmed != true) return;
+                                              if (!context.mounted) return;
+                                            }
                                             ledgerprovider
                                                 .changesegvaldummy('');
                                             if (ledgerprovider
@@ -589,6 +599,228 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
               ),
       );
     });
+  }
+
+  // ============================================================
+  // Pledge / Unpledge Confirmation Dialog
+  // ============================================================
+
+  Future<bool?> _showPledgeConfirmDialog(
+      BuildContext context, LDProvider ledgerprovider) async {
+    final isDelete =
+        ledgerprovider.pledgeoruppledgedelete == 'unpledgedelete';
+    final base = ledgerprovider.pledgeorunpledge;
+    final mode = isDelete ? 'cancel_$base' : base;
+
+    final String title;
+    final String submitLabel;
+    switch (mode) {
+      case 'unpledge':
+        title = 'Unpledge Details';
+        submitLabel = 'Submit Request';
+        break;
+      case 'cancel_pledge':
+        title = 'Delete Pledge request';
+        submitLabel = 'Submit Request';
+        break;
+      case 'cancel_unpledge':
+        title = 'Delete Unpledge request';
+        submitLabel = 'Submit Request';
+        break;
+      case 'pledge':
+      default:
+        title = 'Pledge Details';
+        submitLabel = 'Submit Request';
+        break;
+    }
+
+    return showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withOpacity(0.3),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screenWidth = MediaQuery.of(dialogContext).size.width;
+        final screenHeight = MediaQuery.of(dialogContext).size.height;
+        final dialogWidth =
+            screenWidth * 0.9 > 400.0 ? 400.0 : screenWidth * 0.9;
+        final listMaxHeight = screenHeight * 0.5;
+        final items = ledgerprovider.listforpledge;
+
+        return Center(
+          child: shadcn.Card(
+            borderRadius: BorderRadius.circular(8),
+            padding: EdgeInsets.zero,
+            child: Container(
+              width: dialogWidth,
+              decoration: BoxDecoration(
+                color: resolveThemeColor(dialogContext,
+                    dark: MyntColors.dialogDark,
+                    light: MyntColors.dialog),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: shadcn.Theme.of(dialogContext)
+                              .colorScheme
+                              .border,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            overflow: TextOverflow.ellipsis,
+                            style: MyntWebTextStyles.title(
+                              dialogContext,
+                              color: resolveThemeColor(dialogContext,
+                                  dark: MyntColors.textPrimaryDark,
+                                  light: MyntColors.textPrimary),
+                            ),
+                          ),
+                        ),
+                        MyntCloseButton(
+                          onPressed: () =>
+                              Navigator.of(dialogContext).pop(false),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Content
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ConstrainedBox(
+                            constraints:
+                                BoxConstraints(maxHeight: listMaxHeight),
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  for (int i = 0; i < items.length; i++) ...[
+                                    _buildConfirmScriptRow(
+                                        dialogContext, items[i]),
+                                    if (i != items.length - 1)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 12),
+                                        child: Divider(
+                                          height: 1,
+                                          thickness: 0.5,
+                                          color: shadcn.Theme.of(dialogContext)
+                                              .colorScheme
+                                              .border,
+                                        ),
+                                      ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          MyntButton(
+                            type: MyntButtonType.primary,
+                            size: MyntButtonSize.large,
+                            label: submitLabel,
+                            isFullWidth: true,
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(true),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curvedAnimation = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOut,
+          reverseCurve: Curves.easeIn,
+        );
+        return FadeTransition(
+          opacity: curvedAnimation,
+          child: ScaleTransition(
+            scale:
+                Tween<double>(begin: 0.95, end: 1.0).animate(curvedAnimation),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildConfirmScriptRow(
+      BuildContext context, Map<dynamic, dynamic> value) {
+    final symbol = '${value['symbol'] ?? '-'}';
+    final qty = '${value['quantity'] ?? '-'}';
+    final segment = '${value['segments'] ?? '-'}';
+
+    final labelStyle = MyntWebTextStyles.bodySmall(
+      context,
+      darkColor: MyntColors.textSecondaryDark,
+      lightColor: MyntColors.textSecondary,
+      fontWeight: MyntFonts.medium,
+    );
+    final valueStyle = MyntWebTextStyles.bodySmall(
+      context,
+      darkColor: MyntColors.textPrimaryDark,
+      lightColor: MyntColors.textPrimary,
+      fontWeight: MyntFonts.semiBold,
+    );
+
+    Widget row(String label, String val) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 90,
+              child: Text(label, style: labelStyle),
+            ),
+            Expanded(
+              child: Text(
+                val,
+                style: valueStyle,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row('Symbol :', symbol),
+        row('Total Qty :', qty),
+        row('Segment :', segment),
+      ],
+    );
   }
 
   // ============================================================

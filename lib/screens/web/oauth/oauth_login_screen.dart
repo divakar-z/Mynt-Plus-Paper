@@ -67,18 +67,18 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
 
   /// Sessions to try for validate/auth, in priority order:
   ///   1. the main web session (clientSession), then
-  ///   2. the OAuth-only session — but only if it was issued for THIS client_id
-  ///      (a stale OAuth session for a different app key is ignored).
-  /// Keeping them separate is what lets the main web session survive while an
-  /// OAuth login for a different account is in play.
+  ///   2. the OAuth-only session.
+  /// We do NOT filter the OAuth session locally — mynt-validate is the single
+  /// source of truth: each session is sent and only a uid means "owns this key".
+  /// Keeping the OAuth session separate is what lets the main web session survive
+  /// while an OAuth login for a different account is in play.
   List<String> get _candidateSessions {
     final pref = locator<Preferences>();
     final out = <String>[];
     final main = (pref.clientSession ?? '').trim();
     if (main.isNotEmpty) out.add(main);
     final oauth = (pref.oauthSession ?? '').trim();
-    final oauthFor = (pref.oauthClientId ?? '').trim();
-    if (oauth.isNotEmpty && oauthFor == _clientId) out.add(oauth);
+    if (oauth.isNotEmpty) out.add(oauth);
     return out;
   }
 
