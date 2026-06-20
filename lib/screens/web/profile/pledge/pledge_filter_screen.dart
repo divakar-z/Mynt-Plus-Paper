@@ -6,6 +6,7 @@ import 'package:mynt_plus/provider/ledger_provider.dart';
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/screens/web/profile/pledge/pledge_details.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
 import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:mynt_plus/sharedWidget/loader_ui.dart';
@@ -353,7 +354,22 @@ class _PledgeFilterState extends State<PledgeFilter> {
   }
 
   shadcn.TableCell _buildTableDataCell(Widget child, BuildContext context,
-      {bool alignRight = false}) {
+      {bool alignRight = false, VoidCallback? onTap}) {
+    Widget content = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+      child: child,
+    );
+    if (onTap != null) {
+      content = MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: content,
+        ),
+      );
+    }
     return shadcn.TableCell(
       theme: const shadcn.TableCellTheme(
         border: shadcn.WidgetStatePropertyAll(
@@ -365,11 +381,7 @@ class _PledgeFilterState extends State<PledgeFilter> {
           ),
         ),
       ),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
-        child: child,
-      ),
+      child: content,
     );
   }
 
@@ -455,8 +467,15 @@ class _PledgeFilterState extends State<PledgeFilter> {
       _handlePledgeRowTap(value, tab, ledgerprovider, context);
     }
 
-    // Delete handler for removing item from pledge list
-    void onQtyDelete() {
+    // Delete handler for removing item from pledge list.
+    // Pledge Balance tab (tab == '1') deletes without confirmation;
+    // other tabs go through _showDeleteConfirmDialog first.
+    void onQtyDelete() async {
+      if (tab != '1') {
+        final confirmed =
+            await _showDeleteConfirmDialog(context, symbolName, tab);
+        if (confirmed != true) return;
+      }
       final isinVal = value.iSIN?.toString() ?? '';
       ledgerprovider.removeSinglePledgeItem(
         isinVal,
@@ -479,17 +498,41 @@ class _PledgeFilterState extends State<PledgeFilter> {
       fontWeight: MyntFonts.medium,
     );
 
+    final cnc = (value.cRnc ?? '').toString().toLowerCase();
+    final isCash = cnc == 'cash';
+    final isNonCash = cnc == 'noncash';
+    final showCashTag = tab == '1' && (isCash || isNonCash);
+
+    // Row-level tap: clicking anywhere on the row opens the qty dialog.
+    // Disabled on Non-Approved tab (no dialog) and on already-selected rows
+    // in editable tabs (so the edit/delete icons stay reachable).
+    final VoidCallback? rowTap =
+        (tab != '2' && !isItemSelected) ? onQtyTap : null;
+
     return shadcn.TableRow(
       cells: [
-        // Symbol
+        // Symbol + Cash / Non-Cash tag (only on Pledge Balance tab)
         _buildTableDataCell(
-          Text(
-            symbolName,
-            style: textStyle.copyWith(fontWeight: FontWeight.w600),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 1,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  symbolName,
+                  style: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
+              if (showCashTag) ...[
+                const SizedBox(width: 6),
+                _buildCashTag(context, isCash: isCash),
+              ],
+            ],
           ),
           context,
+          onTap: rowTap,
         ),
         // Qty to pledge/unpledge
         _buildTableDataCell(
@@ -504,18 +547,21 @@ class _PledgeFilterState extends State<PledgeFilter> {
               : Text(pledgeQty, style: textStyle),
           context,
           alignRight: true,
+          onTap: rowTap,
         ),
         // Total Qty
         _buildTableDataCell(
           Text('$totalQty', style: textStyle),
           context,
           alignRight: true,
+          onTap: rowTap,
         ),
         // Value
         _buildTableDataCell(
           Text(amountVal.toStringAsFixed(2), style: textStyle),
           context,
           alignRight: true,
+          onTap: rowTap,
         ),
         // Mrg / Est
         _buildTableDataCell(
@@ -525,12 +571,14 @@ class _PledgeFilterState extends State<PledgeFilter> {
           ),
           context,
           alignRight: true,
+          onTap: rowTap,
         ),
         // Est %
         _buildTableDataCell(
           Text('${estPct.toInt()} %', style: textStyle),
           context,
           alignRight: true,
+          onTap: rowTap,
         ),
       ],
     );
@@ -611,17 +659,41 @@ class _PledgeFilterState extends State<PledgeFilter> {
                 fontWeight: MyntFonts.medium,
               ),
             ),
-            const SizedBox(width: 4),
-            Text(
-              '+',
-              style: TextStyle(
-                color: primaryColor,
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
+            // const SizedBox(width: 4),
+            // Text(
+            //   '+',
+            //   style: TextStyle(
+            //     color: primaryColor,
+            //     fontWeight: FontWeight.bold,
+            //     fontSize: 14,
+            //   ),
+            // ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCashTag(BuildContext context, {required bool isCash}) {
+    final Color baseColor = isCash
+        ? resolveThemeColor(context,
+            dark: MyntColors.profitDark, light: MyntColors.profit)
+        : resolveThemeColor(context,
+            dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: baseColor.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        isCash ? 'Cash' : 'Non Cash',
+        style: MyntWebTextStyles.tableCell(
+          context,
+          darkColor: baseColor,
+          lightColor: baseColor,
+          fontWeight: MyntFonts.semiBold,
+        ).copyWith(fontSize: 10),
       ),
     );
   }
@@ -688,6 +760,130 @@ class _PledgeFilterState extends State<PledgeFilter> {
   // ============================================================
   // Existing Helper Methods
   // ============================================================
+
+  Future<bool?> _showDeleteConfirmDialog(
+      BuildContext context, String symbolName, String tab) {
+    final titleLabel =
+        tab == '1' ? 'Remove Unpledge Item' : 'Remove Pledge Item';
+    return showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withOpacity(0.3),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screenWidth = MediaQuery.of(dialogContext).size.width;
+        final dialogWidth =
+            screenWidth * 0.9 > 400.0 ? 400.0 : screenWidth * 0.9;
+
+        return Center(
+          child: shadcn.Card(
+            borderRadius: BorderRadius.circular(8),
+            padding: EdgeInsets.zero,
+            child: Container(
+              width: dialogWidth,
+              decoration: BoxDecoration(
+                color: resolveThemeColor(dialogContext,
+                    dark: MyntColors.dialogDark,
+                    light: MyntColors.dialog),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: shadcn.Theme.of(dialogContext)
+                              .colorScheme
+                              .border,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            titleLabel,
+                            overflow: TextOverflow.ellipsis,
+                            style: MyntWebTextStyles.title(
+                              dialogContext,
+                              color: resolveThemeColor(dialogContext,
+                                  dark: MyntColors.textPrimaryDark,
+                                  light: MyntColors.textPrimary),
+                            ),
+                          ),
+                        ),
+                        MyntCloseButton(
+                          onPressed: () =>
+                              Navigator.of(dialogContext).pop(false),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Content
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Are you sure you want to remove "$symbolName"?',
+                          textAlign: TextAlign.center,
+                          style: MyntWebTextStyles.body(
+                            dialogContext,
+                            fontWeight: FontWeight.w500,
+                            color: resolveThemeColor(dialogContext,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        MyntButton(
+                          type: MyntButtonType.primary,
+                          size: MyntButtonSize.large,
+                          label: 'Delete',
+                          isFullWidth: true,
+                          backgroundColor: resolveThemeColor(
+                            dialogContext,
+                            dark: MyntColors.errorDark,
+                            light: MyntColors.tertiary,
+                          ),
+                          onPressed: () =>
+                              Navigator.of(dialogContext).pop(true),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curvedAnimation = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOut,
+          reverseCurve: Curves.easeIn,
+        );
+        return FadeTransition(
+          opacity: curvedAnimation,
+          child: ScaleTransition(
+            scale:
+                Tween<double>(begin: 0.95, end: 1.0).animate(curvedAnimation),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
 
   void _showPledgeDialog(BuildContext context, Widget content) {
     showDialog(

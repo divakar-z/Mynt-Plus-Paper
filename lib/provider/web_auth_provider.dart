@@ -722,7 +722,6 @@ class WebAuthProvider extends ChangeNotifier {
     final clientId = _oauthClientId;
     if (clientId == null) return;
     await pref.setOauthSession(token);
-    await pref.setOauthClientId(clientId);
     if (context.mounted) {
       context.go(
         '${WebRoutes.oauthAuthorize}?client_id=${Uri.encodeQueryComponent(clientId)}',
