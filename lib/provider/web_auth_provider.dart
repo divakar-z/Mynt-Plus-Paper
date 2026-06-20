@@ -695,9 +695,40 @@ class WebAuthProvider extends ChangeNotifier {
     }
   }
 
+  /// The OAuth app key when the login is happening inside the OAuth flow — i.e.
+  /// the current URL carries a client_id. Null for normal logins.
+  String? get _oauthClientId {
+    final id = (Uri.base.queryParameters['client_id'] ?? '').trim();
+    return id.isEmpty ? null : id;
+  }
+
+  /// OAuth-flow login success: store the returned session under the OAuth-only
+  /// keys (leaving the main web session — clientId/clientSession — untouched)
+  /// and route back to the authorize screen. No full app load: we're authorising
+  /// a partner, not entering the trading app, so the main session must survive.
+  Future<void> _handleOAuthLoginSuccess(
+      BuildContext context, String token) async {
+    final clientId = _oauthClientId;
+    if (clientId == null) return;
+    await pref.setOauthSession(token);
+    await pref.setOauthClientId(clientId);
+    if (context.mounted) {
+      context.go(
+        '${WebRoutes.oauthAuthorize}?client_id=${Uri.encodeQueryComponent(clientId)}',
+      );
+    }
+  }
+
   /// Handle successful login (direct login without OTP)
   Future<void> _handleLoginSuccess(BuildContext context) async {
     if (_mobileLogin == null) return;
+
+    // OAuth flow: keep this session out of the main web session and bounce back
+    // to the authorize screen instead of loading the trading app.
+    if (_oauthClientId != null) {
+      await _handleOAuthLoginSuccess(context, _mobileLogin!.apitoken ?? '');
+      return;
+    }
 
     await pref.setClientId(_mobileLogin!.clientid ?? '');
     await pref.setClientMob(_mobileLogin!.mobile ?? '');
@@ -717,6 +748,13 @@ class WebAuthProvider extends ChangeNotifier {
   /// Handle successful OTP verification
   Future<void> _handleOtpSuccess(BuildContext context) async {
     if (_mobileOtp == null) return;
+
+    // OAuth flow: store under the OAuth-only session keys and return to the
+    // authorize screen, leaving the main web session untouched.
+    if (_oauthClientId != null) {
+      await _handleOAuthLoginSuccess(context, _mobileOtp!.apitoken ?? '');
+      return;
+    }
 
     await pref.setClientId(_mobileOtp!.clientid ?? '');
     await pref.setClientMob(_mobileOtp!.mobile ?? '');
