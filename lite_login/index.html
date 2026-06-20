@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="Sign in with MYNT" />
+<title>Sign in with MYNT</title>
+<link rel="icon" href="/favicon.png" />
+<style>
+  /* Geist loaded async with swap so the page paints immediately in the system
+     font and upgrades to Geist when ready — never render-blocking. */
+  @font-face{font-family:'Geist';font-weight:400;font-display:swap;src:url('/assets/fonts/Geist/Geist-Regular.ttf') format('truetype')}
+  @font-face{font-family:'Geist';font-weight:500;font-display:swap;src:url('/assets/fonts/Geist/Geist-Medium.ttf') format('truetype')}
+  @font-face{font-family:'Geist';font-weight:600;font-display:swap;src:url('/assets/fonts/Geist/Geist-SemiBold.ttf') format('truetype')}
+  @font-face{font-family:'Geist';font-weight:700;font-display:swap;src:url('/assets/fonts/Geist/Geist-Bold.ttf') format('truetype')}
+
+  :root{
+    --primary:#0037B7; --btn:#0037B7; --secondary:#0052CC;
+    --bg:#FFFFFF; --panel:#FFFFFF; --card:#FFFFFF;
+    --border:#E1E4E8; --divider:#DDE2E7;
+    --text:#121212; --text2:#4A4A4A; --text3:#6B6B6B; --err:#FF1717;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --primary:#58A6FF; --btn:#0052CC; --secondary:#388BFD;
+      --bg:#0D0F11; --panel:#161B22; --card:#161B22;
+      --border:#30363D; --divider:#30363D;
+      --text:#C9D1D9; --text2:#8B949E; --text3:#6E7681; --err:#F85149;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%}
+  body{
+    font-family:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:var(--bg); color:var(--text);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  .wrap{min-height:100vh;display:flex;align-items:flex-start;justify-content:center}
+  /* ---------- login panel ---------- */
+  .panel{width:600px;max-width:95vw;min-height:calc(100vh - 40px);margin:20px 0;
+    background:var(--panel);border:.5px solid var(--border);padding:24px 20px;
+    display:flex;flex-direction:column}
+  .logo{height:40px}
+  .logo img,.logo svg{height:40px;width:auto}
+  h1.title{font-size:22px;font-weight:700;color:var(--text);margin:32px 0 0}
+  @media(max-width:600px){h1.title{font-size:18px}}
+  .field{margin-top:28px}
+  .field label{display:block;font-size:14px;color:var(--text2);margin-bottom:6px}
+  .inp{display:flex;align-items:center;border:none;border-bottom:1px solid var(--divider)}
+  .inp:focus-within{border-bottom:1px solid var(--primary)}
+  .inp input{flex:1;border:none;outline:none;background:transparent;color:var(--text);
+    font-size:16px;font-weight:500;padding:8px 0;font-family:inherit}
+  .inp button.eye{border:none;background:transparent;cursor:pointer;color:var(--text2);
+    display:flex;align-items:center;padding:4px}
+  .err{color:var(--err);font-size:12px;margin-top:5px;min-height:14px}
+  .btn{height:48px;border:none;border-radius:6px;background:var(--btn);color:#fff;
+    font-size:16px;font-weight:700;cursor:pointer;width:100%;font-family:inherit;margin-top:32px}
+  .btn[disabled]{opacity:.6;cursor:not-allowed}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-top:24px}
+  .link{color:var(--secondary);font-size:12px;font-weight:700;cursor:pointer;background:none;border:none;font-family:inherit}
+  .signup{text-align:center;margin-top:auto;padding-top:32px;font-size:14px;color:var(--text2)}
+  .signup a{color:var(--secondary);font-weight:700;text-decoration:none}
+  .foot{text-align:center;padding:20px 16px 0}
+  .foot .co{font-size:14px;font-weight:700}
+  .foot .reg{font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px}
+  .sub{font-size:13px;color:var(--text2);margin-top:8px}
+  /* ---------- otp ---------- */
+  .otp-hint{font-size:14px;color:var(--text2);margin-top:8px}
+  .toggle{margin-top:20px;display:flex;gap:16px;font-size:13px}
+  .toggle button{background:none;border:none;color:var(--secondary);font-weight:600;cursor:pointer;font-family:inherit;font-size:13px}
+  .toggle button.active{color:var(--text);text-decoration:underline}
+  /* ---------- oauth consent ---------- */
+  .consent-wrap{max-width:560px;width:100%;padding:48px 24px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:5px;padding:36px 40px}
+  .card.restricted{padding:28px 32px}
+  .card .clogo{display:flex;justify-content:center;margin-bottom:24px}
+  .card .clogo img,.card .clogo svg{height:44px;width:auto}
+  .card h2{font-size:18px;font-weight:700;text-align:center;margin:0}
+  .card .csub{font-size:14px;color:var(--text3);text-align:center;margin:6px 0 0}
+  .card .allow{font-size:16px;font-weight:700;margin:32px 0 14px}
+  .bullet{display:flex;align-items:flex-start;padding:4px 0;font-size:14px}
+  .bullet .dot{width:5px;height:5px;border-radius:50%;background:var(--text);margin:8px 12px 0 8px;flex:none}
+  .authbtn{height:48px;border:none;border-radius:8px;background:#0037B7;color:#fff;font-size:16px;font-weight:700;cursor:pointer;width:100%;margin-top:28px;font-family:inherit}
+  .outbtn{height:44px;border:1px solid var(--primary);border-radius:6px;background:transparent;color:var(--primary);font-size:16px;font-weight:600;cursor:pointer;width:100%;margin-top:24px;font-family:inherit}
+  .center{display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .spinner{width:34px;height:34px;border:4px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* ---------- toast ---------- */
+  #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#222;color:#fff;
+    padding:12px 18px;border-radius:8px;font-size:14px;max-width:90vw;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
+  #toast.show{opacity:1}
+  #toast.err{background:#b00020}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="app" class="wrap"></div>
+<div id="toast"></div>
+
+<!-- Inline brand logo (zero extra request) -->
+<template id="logo-svg"><svg width="299" height="135" viewBox="0 0 299 135" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="MYNT">
+<path d="M107.381 43.4033V95.2617H87.6521V49.7447C87.6521 38.612 82.7199 34.9481 76.9422 34.9481C67.0778 34.9481 63.5548 41.4304 63.5548 50.3083V95.2617H43.826V50.1674C43.826 43.826 43.826 34.9481 31.9888 34.9481C22.6881 34.9481 19.7288 41.4304 19.7288 49.6037V95.2617H0V20.2924H18.8832V31.2842H19.1651C21.7016 26.352 27.1975 18.3196 40.444 18.3196C51.2948 18.3196 56.227 22.2653 61.3001 30.2977C63.8366 26.6338 69.3325 18.3196 81.3107 18.3196C95.9663 18.3196 107.381 26.9157 107.381 43.4033Z" fill="#0037B7"/>
+<path d="M180.856 20.2924L155.068 93.9934C145.767 121.755 143.231 125.419 126.038 125.419C123.361 125.419 119.979 125.278 117.16 125.137V109.354C118.006 109.495 119.274 109.636 120.965 109.636C128.152 109.636 132.098 108.649 133.93 98.3619L106.31 20.2924H128.293L144.358 75.533H144.64L160 20.2924H180.856Z" fill="#0037B7"/>
+<path d="M253.101 43.4033V95.2617H233.372V49.7447C233.372 44.2488 233.09 34.9481 220.548 34.9481C211.811 34.9481 205.047 40.8667 205.047 52.2812V95.2617H185.318V20.2924H204.201V31.2842H204.483C207.161 26.7747 212.798 18.3196 227.03 18.3196C241.686 18.3196 253.101 26.9157 253.101 43.4033Z" fill="#0037B7"/>
+<path d="M286.545 0V20.2924H298.805V34.3844H286.545V75.1102C286.545 79.4787 286.686 81.1697 294.718 81.1697C295.986 81.1697 297.396 81.0288 298.805 80.8879V95.8254C295.705 95.9663 292.604 96.1072 289.504 96.1072H286.968C269.916 96.1072 266.816 89.6249 266.816 79.9015V34.3844H256.67V20.2924H266.816V8.17334L286.545 0Z" fill="#0037B7"/>
+<path d="M204.79 121.7H207.85C208.49 121.7 208.94 121.57 209.2 121.31C209.48 121.03 209.62 120.57 209.62 119.93V114.71C209.62 114.07 209.48 113.62 209.2 113.36C208.94 113.08 208.49 112.94 207.85 112.94H206.53C205.15 112.94 204.46 113.7 204.46 115.22V121.37C204.46 121.59 204.57 121.7 204.79 121.7ZM200.65 124.37V104.54C200.65 104.12 200.86 103.91 201.28 103.91H203.83C204.25 103.91 204.46 104.12 204.46 104.54V111.29H204.58C204.8 110.75 205.19 110.34 205.75 110.06C206.31 109.78 206.9 109.64 207.52 109.64H208.48C210.06 109.64 211.28 110.06 212.14 110.9C213 111.74 213.43 112.95 213.43 114.53V120.11C213.43 121.69 213 122.9 212.14 123.74C211.28 124.58 210.06 125 208.48 125H201.28C200.86 125 200.65 124.79 200.65 124.37ZM218.931 130.07H217.011C216.611 130.07 216.411 129.85 216.411 129.41V127.4C216.411 126.96 216.611 126.74 217.011 126.74H217.641C218.901 126.74 219.751 126.56 220.191 126.2C220.651 125.86 221.001 125.19 221.241 124.19H219.651C219.271 124.19 219.021 123.98 218.901 123.56L215.391 110.33C215.271 109.91 215.421 109.7 215.841 109.7H218.511C218.911 109.7 219.161 109.91 219.261 110.33L221.841 121.4H221.961L224.511 110.33C224.591 109.91 224.841 109.7 225.261 109.7H227.781C228.281 109.7 228.481 109.92 228.381 110.36L224.721 125C224.281 126.66 223.601 127.92 222.681 128.78C221.761 129.64 220.511 130.07 218.931 130.07ZM236.944 124.37V122.57C236.944 121.91 237.074 121.42 237.334 121.1L245.284 109.37V109.25H238.114C237.694 109.25 237.484 109.04 237.484 108.62V106.34C237.484 105.92 237.694 105.71 238.114 105.71H248.764C249.164 105.71 249.364 105.92 249.364 106.34V108.92C249.364 109.52 249.214 110.04 248.914 110.48L241.444 121.34V121.46H249.064C249.464 121.46 249.664 121.65 249.664 122.03V124.31C249.664 124.77 249.464 125 249.064 125H237.574C237.154 125 236.944 124.79 236.944 124.37ZM263.538 125H253.728C253.308 125 253.098 124.79 253.098 124.37V106.34C253.098 105.92 253.308 105.71 253.728 105.71H263.538C263.938 105.71 264.138 105.92 264.138 106.34V108.38C264.138 108.8 263.938 109.01 263.538 109.01H257.268C257.028 109.01 256.908 109.12 256.908 109.34V113.24C256.908 113.46 257.028 113.57 257.268 113.57H262.398C262.818 113.57 263.028 113.78 263.028 114.2V116.24C263.028 116.66 262.818 116.87 262.398 116.87H257.268C257.028 116.87 256.908 116.98 256.908 117.2V121.37C256.908 121.59 257.028 121.7 257.268 121.7H263.538C263.938 121.7 264.138 121.91 264.138 122.33V124.37C264.138 124.79 263.938 125 263.538 125ZM271.594 121.82H274.954C275.614 121.82 276.084 121.69 276.364 121.43C276.664 121.15 276.814 120.7 276.814 120.08V118.34C276.814 117.72 276.664 117.28 276.364 117.02C276.064 116.76 275.574 116.63 274.894 116.63H271.594C271.374 116.63 271.264 116.74 271.264 116.96V121.49C271.264 121.71 271.374 121.82 271.594 121.82ZM271.594 113.54H274.654C275.294 113.54 275.764 113.41 276.064 113.15C276.364 112.87 276.514 112.42 276.514 111.8V110.63C276.514 110.01 276.364 109.57 276.064 109.31C275.784 109.03 275.324 108.89 274.684 108.89H271.594C271.374 108.89 271.264 109 271.264 109.22V113.21C271.264 113.43 271.374 113.54 271.594 113.54ZM267.454 124.37V106.34C267.454 105.92 267.664 105.71 268.084 105.71H275.284C276.864 105.71 278.084 106.13 278.944 106.97C279.804 107.81 280.234 109.01 280.234 110.57V111.8C280.234 113.5 279.444 114.6 277.864 115.1C278.664 115.22 279.304 115.55 279.784 116.09C280.264 116.61 280.504 117.36 280.504 118.34V120.14C280.504 121.7 280.074 122.9 279.214 123.74C278.354 124.58 277.144 125 275.584 125H268.084C267.664 125 267.454 124.79 267.454 124.37ZM293.965 105.71H296.485C296.925 105.71 297.145 105.91 297.145 106.31V120.11C297.145 121.67 296.705 122.88 295.825 123.74C294.965 124.58 293.755 125 292.195 125H288.895C287.315 125 286.095 124.58 285.235 123.74C284.375 122.9 283.945 121.69 283.945 120.11V106.34C283.945 105.92 284.155 105.71 284.575 105.71H287.125C287.545 105.71 287.755 105.92 287.755 106.34V119.93C287.755 120.57 287.885 121.03 288.145 121.31C288.425 121.57 288.875 121.7 289.495 121.7H291.565C292.205 121.7 292.655 121.57 292.915 121.31C293.195 121.03 293.335 120.57 293.335 119.93V106.34C293.335 105.92 293.545 105.71 293.965 105.71Z" fill="#686A69"/>
+</svg></template>
+
+<script>
+"use strict";
+(function(){
+  // ----- contract constants (verified) -----
+  const LOGIN_BASE = "https://ws.mynt.in/login";
+  const URL_VALIDATE = "https://ws.mynt.in/login/api/mynt-validate";
+  const URL_AUTH     = "https://ws.mynt.in/login/api/mynt-auth";
+  const SIGNUP = "https://oa.mynt.in/?ref=zws";
+  const PREFIX = "flutter."; // shared_preferences-web key prefix (cross-tab parity)
+
+  const params = new URLSearchParams(location.search);
+  const CLIENT_ID = (params.get("client_id") || "").trim();
+  const IS_OAUTH = CLIENT_ID.length > 0;
+  // Route: consent if the OAuth path or an explicit view=consent (used for the /lite/ test harness)
+  const WANT_CONSENT = /oauthlogin/i.test(location.pathname) || params.get("view") === "consent";
+
+  const app = document.getElementById("app");
+  const logoSvg = () => document.getElementById("logo-svg").innerHTML;
+  const deviceUuid = (crypto.randomUUID ? crypto.randomUUID()
+    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==="x"?r:(r&0x3|0x8)).toString(16);}));
+
+  // ----- helpers -----
+  const ls = {
+    get:(k)=>{try{return localStorage.getItem(PREFIX+k);}catch(e){return null;}},
+    set:(k,v)=>{try{localStorage.setItem(PREFIX+k,v);}catch(e){}},
+  };
+  const inputType = (raw)=> /^[0-9]+$/.test(raw) ? "mobile" : "clientid";
+  const normId = (raw)=> raw.trim().toUpperCase();
+  function el(html){const t=document.createElement("template");t.innerHTML=html.trim();return t.content.firstElementChild;}
+  let toastTimer;
+  function toast(msg,isErr){const t=document.getElementById("toast");t.textContent=msg;t.className="show"+(isErr?" err":"");clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.className="",3200);}
+
+  async function postJson(url, body){
+    const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    let json=null; try{ json = await res.json(); }catch(e){}
+    return {ok:res.status===200, status:res.status, json};
+  }
+
+  // in-memory session captured from a fresh login (used to chain straight into consent)
+  let memSession = null; // apitoken
+  let otpBusy = false;   // guards against duplicate concurrent otp_verify calls
+
+  // ============================================================
+  //  LOGIN FLOW
+  // ============================================================
+  const state = { id:"", pwd:"", isTotp:true, showPwd:false };
+
+  function renderLogin(){
+    app.className = "wrap";
+    app.innerHTML = "";
+    const panel = el(`
+      <div class="panel">
+        <div class="logo">${logoSvg()}</div>
+        <h1 class="title">Sign in with MYNT</h1>
+        ${IS_OAUTH ? '<div class="sub">to continue to the requesting application</div>' : ''}
+        <div class="field">
+          <label>Mobile / Client ID</label>
+          <div class="inp"><input id="id" type="text" autocomplete="username" maxlength="10" inputmode="text" autocapitalize="characters" placeholder="" /></div>
+          <div class="err" id="id-err"></div>
+        </div>
+        <div class="field" style="margin-top:20px">
+          <label>Password</label>
+          <div class="inp">
+            <input id="pwd" type="password" autocomplete="current-password" placeholder="" />
+            <button class="eye" id="eye" type="button" aria-label="Toggle password">${eyeIcon(false)}</button>
+          </div>
+          <div class="err" id="pwd-err"></div>
+        </div>
+        <button class="btn" id="login-btn">Login</button>
+        <div class="row">
+          <button class="link" id="forgot">Forgot password</button>
+        </div>
+        <div class="signup">Don't have an account yet? <a href="${SIGNUP}">Sign Up</a></div>
+        <div class="foot">
+          <div class="co">Zebu Share and Wealth Managements Pvt. Ltd.</div>
+          <div class="reg">SEBI Registration No: INZ000174634 | NSE : 13179 | BSE : 6550 | MCX : 55730 | CDSL : 12080400 | AMFI ARN : 113118 | Research Analyst : INH200006044</div>
+        </div>
+      </div>`);
+    app.appendChild(panel);
+
+    const idEl = panel.querySelector("#id");
+    const pwdEl = panel.querySelector("#pwd");
+    idEl.addEventListener("input", ()=>{ idEl.value = idEl.value.replace(/[^a-zA-Z0-9]/g,"").toUpperCase().slice(0,10); });
+    pwdEl.addEventListener("input", ()=>{ pwdEl.value = pwdEl.value.replace(/[\s\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}π£•₹€℅™∆√¶/,]/gu,""); });
+    panel.querySelector("#eye").addEventListener("click",(e)=>{ state.showPwd=!state.showPwd; pwdEl.type=state.showPwd?"text":"password"; e.currentTarget.innerHTML=eyeIcon(state.showPwd); });
+    panel.querySelector("#forgot").addEventListener("click", ()=> toast("Forgot-password is available in the full app."));
+    pwdEl.addEventListener("keydown",(e)=>{ if(e.key==="Enter") submitLogin(panel); });
+    panel.querySelector("#login-btn").addEventListener("click", ()=> submitLogin(panel));
+  }
+
+  async function submitLogin(panel){
+    const id = normId(panel.querySelector("#id").value);
+    const pwd = panel.querySelector("#pwd").value;
+    panel.querySelector("#id-err").textContent = id ? "" : "Your mobile / client id is required";
+    panel.querySelector("#pwd-err").textContent = pwd ? "" : "Please enter the password";
+    if(!id || !pwd) return;
+    state.id = id; state.pwd = pwd;
+    const btn = panel.querySelector("#login-btn"); btn.disabled=true; btn.textContent="Please wait...";
+    try{
+      const body = { device: IS_OAUTH?"OAUTH":"WEB", [inputType(id)]: id, password: pwd };
+      if(IS_OAUTH) body.authid = CLIENT_ID;
+      const {ok,json} = await postJson(`${LOGIN_BASE}/MobileLogin`, body);
+      if(!ok){ toast("Server error. Please try again later.", true); return; }
+      if(!json){ toast("Unexpected server response.", true); return; }
+      if(json.stat !== "Ok"){
+        const raw = (json.emsg || json.msg || "").toString();
+        const low = raw.toLowerCase();
+        if(low.includes("wrong password")) toast("Wrong Password, Please Try again", true);
+        else toast(raw || "Login failed", true);
+        return;
+      }
+      if(json.apitoken && json.token){ // direct success, no OTP
+        return onLoginSuccess(json);
+      }
+      if(!state.isTotp) toast("OTP sent to your registered mobile and email");
+      renderOtp();
+    }catch(e){
+      toast("Network/CORS error reaching the auth server. (Expected on a cross-origin test host.)", true);
+      console.error(e);
+    }finally{ btn.disabled=false; btn.textContent="Login"; }
+  }
+
+  function renderOtp(){
+    app.className = "wrap";
+    app.innerHTML = "";
+    const max = state.isTotp ? 6 : 4;
+    const panel = el(`
+      <div class="panel">
+        <div class="logo">${logoSvg()}</div>
+        <h1 class="title">${state.isTotp ? "Enter TOTP" : "Enter OTP"}</h1>
+        <div class="otp-hint">${state.isTotp ? "Open your authenticator app and enter the 6-digit code." : "Enter the OTP sent to your registered mobile & email."}</div>
+        <div class="field">
+          <label>${state.isTotp ? "6-digit TOTP" : "4-digit OTP"}</label>
+          <div class="inp"><input id="otp" type="text" inputmode="numeric" maxlength="${max}" /></div>
+          <div class="err" id="otp-err"></div>
+        </div>
+        <button class="btn" id="verify-btn">Verify &amp; Continue</button>
+        <div class="toggle">
+          <button id="m-totp" class="${state.isTotp?'active':''}">Use TOTP</button>
+          <button id="m-otp" class="${!state.isTotp?'active':''}">Use OTP (SMS/Email)</button>
+        </div>
+        <div class="row"><button class="link" id="back">Back</button></div>
+      </div>`);
+    app.appendChild(panel);
+    const otpEl = panel.querySelector("#otp");
+    otpEl.addEventListener("input", ()=>{ otpEl.value = otpEl.value.replace(/[^0-9]/g,"").slice(0,max); if(otpEl.value.length===max) submitOtp(panel); });
+    panel.querySelector("#verify-btn").addEventListener("click", ()=> submitOtp(panel));
+    panel.querySelector("#back").addEventListener("click", renderLogin);
+    panel.querySelector("#m-totp").addEventListener("click", ()=>{ state.isTotp=true; renderOtp(); });
+    panel.querySelector("#m-otp").addEventListener("click", async ()=>{ state.isTotp=false; await sendOtp(); renderOtp(); });
+    otpEl.focus();
+  }
+
+  async function sendOtp(){
+    try{
+      const body = { device:"WEB", [inputType(state.id)]: state.id };
+      await postJson(`${LOGIN_BASE}/otp_send`, body);
+      toast("OTP sent to your registered mobile and email");
+    }catch(e){ console.error(e); }
+  }
+
+  async function submitOtp(panel){
+    if(otpBusy) return;
+    const code = panel.querySelector("#otp").value.trim();
+    const need = state.isTotp ? 6 : 4;
+    if(code.length !== need){ panel.querySelector("#otp-err").textContent = `Please enter ${need} digit ${state.isTotp?"TOTP":"OTP"}`; return; }
+    otpBusy = true;
+    const btn = panel.querySelector("#verify-btn"); btn.disabled=true; btn.textContent="Verifying...";
+    try{
+      const log = { datetime:new Date().toISOString(), login_type: state.isTotp?"totp":"otp", src:"flutter web app", IP_address:"web", app:"MYNT Web", platform:"web", imei:deviceUuid };
+      const body = { source: IS_OAUTH?"OAUTH":"WEB", otp:code, [inputType(state.id)]: state.id, log };
+      if(IS_OAUTH) body.authid = CLIENT_ID;
+      const {ok,json} = await postJson(`${LOGIN_BASE}/otp_verify`, body);
+      if(!ok){ toast("Server error. Please try again later.", true); return; }
+      if(!json){ toast("Unexpected server response.", true); return; }
+      if(json.stat === "Ok" && json.apitoken){ return onLoginSuccess(json); }
+      const low = (json.emsg||"").toLowerCase();
+      if(low.includes("invalid user")) toast((json.emsg.split(":")[1]||json.emsg).trim(), true);
+      else toast("Invalid OTP/TOTP, Please Try again", true);
+    }catch(e){
+      toast("Network/CORS error during verify.", true); console.error(e);
+    }finally{ btn.disabled=false; btn.textContent="Verify & Continue"; otpBusy=false; }
+  }
+
+  function onLoginSuccess(resp){
+    memSession = resp.apitoken;
+    if(IS_OAUTH){
+      ls.set("oauthSession", resp.apitoken);
+      ls.set("oauthClientId", CLIENT_ID);
+      // Chain straight into the consent step in this same page (no full reload needed).
+      runConsent();
+    }else{
+      ls.set("clientSession", resp.apitoken);
+      if(resp.token) ls.set("apiToken", resp.token);
+      if(resp.clientid) ls.set("clientId", resp.clientid);
+      if(resp.mobile) ls.set("clientMob", resp.mobile);
+      if(resp.name) ls.set("clientName", resp.name);
+      ls.set("imei", deviceUuid); ls.set("isLogout","false");
+      renderLoggedIn(resp);
+    }
+  }
+
+  function renderLoggedIn(resp){
+    app.className="center";
+    app.innerHTML="";
+    app.appendChild(el(`<div class="card" style="max-width:420px;text-align:center">
+      <div class="clogo">${logoSvg()}</div>
+      <h2>You're signed in</h2>
+      <div class="csub">Welcome${resp.name?(" "+escapeHtml(resp.name)):""}. In production this hands off to the trading app.</div>
+    </div>`));
+  }
+
+  // ============================================================
+  //  OAUTH CONSENT FLOW
+  // ============================================================
+  function candidateSessions(){
+    const out=[];
+    if(memSession) out.push(memSession);
+    const main=(ls.get("clientSession")||"").trim(); if(main && !out.includes(main)) out.push(main);
+    const oauth=(ls.get("oauthSession")||"").trim();
+    const oauthFor=(ls.get("oauthClientId")||"").trim();
+    if(oauth && oauthFor===CLIENT_ID && !out.includes(oauth)) out.push(oauth);
+    return out;
+  }
+
+  function renderSpinner(){ app.className="center"; app.innerHTML=""; app.appendChild(el('<div class="spinner"></div>')); }
+
+  async function runConsent(){
+    if(!CLIENT_ID){ return renderInvalid(); }
+    renderSpinner();
+    const sessions = candidateSessions();
+    const toTry = sessions.length ? sessions : [deviceUuid];
+    let authNwc=null, dname="", uid="";
+    try{
+      for(const nwc of toTry){
+        const {ok,json} = await postJson(URL_VALIDATE, { client_id:CLIENT_ID, nwc_id:nwc });
+        if(!ok || !json){ return renderInvalid(); }
+        const stat=json.stat, u=(json.uid||"").toString(), emsg=(json.emsg||"").toString().toLowerCase();
+        if(stat==="Ok" && u){ authNwc=nwc; dname=(json.dname||"").toString(); uid=u; break; }
+        if(stat==="Not_Ok" && emsg.includes("no data")){ return renderRestricted(); }
+        // Ok but no uid -> try next
+      }
+    }catch(e){
+      toast("Network/CORS error reaching validate. (Expected on a cross-origin test host.)", true);
+      console.error(e); return renderInvalid();
+    }
+    if(!authNwc){ // none owned the key -> sign in
+      memSession=null;
+      try{ const u=new URL(location.href); u.searchParams.delete("view"); history.replaceState(null,"",u); }catch(e){}
+      return renderLogin();
+    }
+    renderConsent(dname, uid, authNwc);
+  }
+
+  function prettyDname(raw){ return (raw||"").replace(/\s+s\s+api\s*key\s*$/i, " API Key"); }
+
+  function renderConsent(dname, uid, nwc){
+    const appName = dname ? prettyDname(dname) : "this app";
+    app.className="wrap";
+    app.innerHTML="";
+    const wrap = el(`<div class="consent-wrap"><div class="card">
+      <div class="clogo">${logoSvg()}</div>
+      <h2>${escapeHtml(appName)}</h2>
+      <div class="csub">wants to access your account${uid?(" "+escapeHtml(uid)):""}</div>
+      <div class="allow">This will allow ${escapeHtml(appName)} to :</div>
+      <div class="bullet"><span class="dot"></span><span>View your profile details, including account balance.</span></div>
+      <div class="bullet"><span class="dot"></span><span>Access your portfolio, including positions and holdings.</span></div>
+      <div class="bullet"><span class="dot"></span><span>Place, modify, and cancel orders.</span></div>
+      <button class="authbtn" id="authorize">Authorize</button>
+    </div></div>`);
+    app.appendChild(wrap);
+    wrap.querySelector("#authorize").addEventListener("click", ()=> doAuthorize(nwc));
+  }
+
+  function doAuthorize(nwc){
+    if(!CLIENT_ID || !nwc){ toast("Session not found.", true); return; }
+    const form = document.createElement("form");
+    form.action = URL_AUTH; form.method="POST"; form.target="_self"; form.style.display="none";
+    const f1=document.createElement("input"); f1.type="hidden"; f1.name="client_id"; f1.value=CLIENT_ID; form.appendChild(f1);
+    const f2=document.createElement("input"); f2.type="hidden"; f2.name="nwc_id"; f2.value=nwc; form.appendChild(f2);
+    document.body.appendChild(form);
+    form.submit(); // full-page nav; backend redirects back to the partner app
+  }
+
+  function renderRestricted(){
+    app.className="wrap";
+    app.innerHTML="";
+    app.appendChild(el(`<div class="consent-wrap"><div class="card restricted">
+      <div class="clogo">${logoSvg()}</div>
+      <h2>Access Restricted for API Only Users</h2>
+      <button class="outbtn" id="close">Close</button>
+    </div></div>`));
+    app.querySelector("#close").addEventListener("click", ()=> location.href="/");
+  }
+
+  function renderInvalid(){
+    app.className="wrap";
+    app.innerHTML="";
+    app.appendChild(el(`<div class="consent-wrap"><div class="card">
+      <div class="clogo">${logoSvg()}</div>
+      <h2>Invalid link</h2>
+      <div class="csub">This authorization link is missing required information.</div>
+    </div></div>`));
+  }
+
+  // ----- misc -----
+  function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  function eyeIcon(open){
+    return open
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10 10 0 0 1 12 19c-6.5 0-10-7-10-7a18 18 0 0 1 5.06-5.94M9.9 4.24A9 9 0 0 1 12 4c6.5 0 10 7 10 7a18 18 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/></svg>';
+  }
+
+  // ----- boot -----
+  if(WANT_CONSENT) runConsent(); else renderLogin();
+})();
+</script>
+</body>
+</html>
