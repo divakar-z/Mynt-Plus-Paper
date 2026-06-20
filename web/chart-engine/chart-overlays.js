@@ -270,10 +270,14 @@ class _ChartOverlaysMixin {
         const minY = Math.min(...ys);
         const maxY = Math.max(...ys);
         if (maxY - minY >= 4) {
-          // Bar sits in the gutter just past the price chips (which end
-          // around plot.right + 66 at chipW=64). 72px keeps it clear of
-          // both the gutter price chip and the price axis numbers.
-          const barX = plot.right + 72;
+          // The price pills fill the right gutter (plot.right + 2 → canvas
+          // edge), so a bar "past" them falls off-canvas — which is why the
+          // old plot.right + 72 was never visible. Sit the bar INSIDE the plot's
+          // right edge with legs reaching out to the pills' left edge. Pulled in
+          // ~18px so the bracket is clearly visible and not crushed against the
+          // price axis.
+          const barX = plot.right - 18;
+          const legEndX = plot.right + 2; // left edge of the price pills
           ctx.strokeStyle = this.palette.axisText;
           ctx.lineWidth = 1;
           ctx.setLineDash([]);
@@ -282,14 +286,11 @@ class _ChartOverlaysMixin {
           ctx.moveTo(barX, minY);
           ctx.lineTo(barX, maxY);
           ctx.stroke();
-          // Horizontal legs from each chip to the bar.
-          // We don't have the chip's exact right edge here; approximate as
-          // (plot.right + 66) — just past the gutter price chip column.
-          const legStartX = plot.right + 66;
+          // Horizontal legs from the bar out to each chip.
           for (const y of ys) {
             ctx.beginPath();
-            ctx.moveTo(legStartX, y);
-            ctx.lineTo(barX, y);
+            ctx.moveTo(barX, y);
+            ctx.lineTo(legEndX, y);
             ctx.stroke();
           }
         }
