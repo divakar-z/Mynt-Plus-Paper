@@ -176,14 +176,20 @@
   }
 
   function prefetchFlutter(){
-    // Intentionally a NO-OP. Manually prefetching Flutter's main.dart.js / canvaskit
-    // from this page raced Flutter's own asset load after the redirect and crashed
-    // the engine (white-screen hang) — both an as="script" prefetch of main.dart.js
-    // and a CORS-mode prefetch of canvaskit.wasm reproduced it. The Flutter service
-    // worker (registered by flutter_bootstrap.js) already precaches these assets
-    // after the first Flutter load, so returning users get a warm app WITHOUT this
-    // hazard. A safe pre-warm would need Speculation Rules or a prefetch guaranteed
-    // to finish before navigation — deferred to a later pass.
+    if(IS_OAUTH) return; // gateway users bounce to the partner; never load Flutter
+    // Warm main.dart.js (the dominant ~2MB asset) during the login interaction so
+    // the trading app loads faster after the handoff. as="script" matches exactly
+    // how Flutter loads it, so the cached copy is reused. Deliberately NOT
+    // prefetching canvaskit.wasm with a CORS mode (crossOrigin) — that poisons the
+    // cache with a response canvaskit's same-origin fetch cannot instantiate and
+    // crashes the engine. If this prefetch is still in flight when the user submits,
+    // the navigation simply cancels it (no harm); if it finishes first, the post-
+    // login Flutter load is warm. (Repeat visits are also warmed by the Flutter SW.)
+    setTimeout(()=>{
+      const l=document.createElement("link");
+      l.rel="prefetch"; l.as="script"; l.href="/main.dart.js";
+      document.head.appendChild(l);
+    }, 400);
   }
 
   const S={ id:"", pwd:"", isTotp:true, topflow:false, showPwd:false,
