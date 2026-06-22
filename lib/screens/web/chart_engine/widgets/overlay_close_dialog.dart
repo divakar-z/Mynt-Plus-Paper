@@ -216,9 +216,12 @@ Future<void> showCloseOrderDialog({
     confirmColor: MyntColors.tertiary,
   );
   if (!ok || !context.mounted) return;
+  // loop=true shows the "Order Cancelled" toast + refreshes the book (web path
+  // does NOT pop any route, so it's safe from the chart). With false it was
+  // cancelling silently — unlike the order book.
   await ref
       .read(orderProvider)
-      .fetchOrderCancel(order.norenordno.toString(), context, false);
+      .fetchOrderCancel(order.norenordno.toString(), context, true);
 }
 
 Future<void> showSquareOffDialog({

@@ -2614,11 +2614,12 @@ class _ChartEngineShellScreenState
       for (final o in orders) {
         if (o.norenordno == id) {
           if (session.effectiveInstantFor(paneIndex)) {
-            // Instant: skip dialog, fire cancel directly.
+            // Instant: skip dialog, fire cancel directly. loop=true shows the
+            // "Order Cancelled" toast + refresh (web path doesn't pop a route).
             // ignore: discarded_futures
             ref
                 .read(orderProvider)
-                .fetchOrderCancel(o.norenordno.toString(), context, false);
+                .fetchOrderCancel(o.norenordno.toString(), context, true);
             return;
           }
           showCloseOrderDialog(context: context, ref: ref, order: o);
