@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
@@ -173,10 +174,8 @@ class _HoldingDetailScreenWebState
   // Calculate profit and loss values
   void _updateProfitLossValues() {
     final ltp = double.tryParse(_exchTsym.lp ?? "0.0") ?? 0.0;
-    final qty = _holdingData.currentQty ?? 0;
-    // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-    final int t1Qty = int.parse(_holdingData.npoadt1qty ?? "0");
-    final int totalQty = qty + t1Qty;
+    // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+    final int totalQty = _holdingData.currentQty ?? 0;
     final avgPrice = double.tryParse(_holdingData.upldprc ?? "0.0") ?? 0.0;
 
     if (ltp > 0 && totalQty > 0 && avgPrice > 0) {
@@ -513,7 +512,7 @@ class _HoldingDetailScreenWebState
           _rowOfInfoData(
             "T1 Qty",
             Text(
-              "${int.parse(_holdingData.btstqty ?? "0") + int.parse(_holdingData.npoadt1qty ?? "0")}",
+              "${math.max(int.parse(_holdingData.btstqty ?? "0"), int.parse(_holdingData.npoadt1qty ?? "0"))}",
               style:
                   MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
             ),
@@ -550,8 +549,7 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Current",
           Text(
-            ((int.parse("${_holdingData.currentQty ?? 0}") +
-                        int.parse(_holdingData.npoadt1qty ?? "0")) *
+            (int.parse("${_holdingData.currentQty ?? 0}") *
                     double.parse(_exchTsym.lp?.toString() ?? "0.0"))
                 .toStringAsFixed(2),
             style:
