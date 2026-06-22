@@ -48,3 +48,5 @@ app.*.map.json
 /firebase.json
 .firebaserc
 /.playwright-mcp
+
+*.cache
