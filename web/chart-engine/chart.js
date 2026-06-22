@@ -1357,6 +1357,10 @@ class Chart {
     // Drop the previous symbol's option-chain OI bars so they don't linger on
     // the new symbol until its own OI is fetched + pushed.
     this._oiData = [];
+    // Clear any in-progress drawing and the transient one-shot measurement so
+    // they don't linger on the new symbol's chart until the next click.
+    this._inProgressDrawing = null;
+    this._activeMeasure = null;
   }
 
   _loadHistory() {
