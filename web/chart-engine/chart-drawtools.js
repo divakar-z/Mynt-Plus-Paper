@@ -1507,7 +1507,9 @@ const DRAWING_TOOLS = {
       const p = d.points[0];
       if (!p) return null;
       const x = g.tsToX(p.ts), y = g.priceToY(p.price);
-      const t = d.text || p.price.toFixed(2);
+      // Always the price at the anchor — auto-updates as the label is dragged.
+      // (Price Label is automatic; it never prompts for or stores custom text.)
+      const t = p.price.toFixed(2);
       const ctx = g.ctx;
       ctx.save();
       ctx.font = '600 11px Geist, sans-serif';

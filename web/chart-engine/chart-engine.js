@@ -424,10 +424,13 @@ function _attachPaneControls(container, paneId) {
         + '<path d="M3 8a5 5 0 1 0 1.5-3.5"/>'
         + '<polyline points="3 3 3 5 5 5"/></svg>',
   };
+  // Maximize / restore — only meaningful with 2+ panes, so it's shown
+  // conditionally (toggled in _setVisible against the live pane count).
+  const maxBtn = mk(ICONS.fit, 'Maximize / restore pane',
+      () => _maximizePane(paneId));
   bar.appendChild(mk(ICONS.minus, 'Zoom out',          chartCall('zoomOut')));
   bar.appendChild(mk(ICONS.plus,  'Zoom in',           chartCall('zoomIn')));
-  // bar.appendChild(mk(ICONS.fit,   'Maximize / restore pane',
-  //                                                      () => _maximizePane(paneId)));
+  bar.appendChild(maxBtn);
   bar.appendChild(mk(ICONS.left,  'Pan left',          chartCall('panLeft')));
   bar.appendChild(mk(ICONS.right, 'Pan right',         chartCall('panRight')));
   bar.appendChild(mk(ICONS.reset, 'Reset view',        chartCall('resetView')));
@@ -444,6 +447,8 @@ function _attachPaneControls(container, paneId) {
   function _setVisible(v) {
     if (v === _visible) return;
     _visible = v;
+    // Maximize only makes sense with multiple panes — re-evaluate each reveal.
+    if (v) maxBtn.style.display = (panes.size > 1) ? '' : 'none';
     bar.classList.toggle('visible', v);
   }
   container.addEventListener('mousemove', (e) => {
@@ -904,13 +909,18 @@ function applyRailGutters() {
   if (!layout) return;
   const lrect = layout.getBoundingClientRect();
   const gut = window.__drawRailGutter || 0;
+  let paneIdx = 0;
   for (const [id, ch] of panes) {
-    if (!ch || typeof ch.setLeftGutter !== 'function') continue;
+    if (!ch || typeof ch.setLeftGutter !== 'function') { paneIdx++; continue; }
     const el = document.getElementById('pane-' + id);
-    const isLeftmost = el
-        ? (el.getBoundingClientRect().left - lrect.left) < 4
-        : true;
+    // The FIRST pane is always the leftmost (covers single-pane and the case
+    // where the DOM measurement hasn't settled yet and would wrongly report 0,
+    // leaving candles + time labels UNDER the expanded rail). Additional
+    // left-column panes in a grid layout are matched by their DOM left edge.
+    const isLeftmost = (paneIdx === 0)
+        || (el ? (el.getBoundingClientRect().left - lrect.left) < 4 : true);
     ch.setLeftGutter(isLeftmost ? gut : 0);
+    paneIdx++;
   }
 }
 window.__applyRailGutters = applyRailGutters;

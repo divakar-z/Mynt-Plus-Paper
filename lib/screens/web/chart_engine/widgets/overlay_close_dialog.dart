@@ -738,6 +738,7 @@ class _DrawingTextCard extends StatefulWidget {
 class _DrawingTextCardState extends State<_DrawingTextCard> {
   late final TextEditingController _ctrl =
       TextEditingController(text: widget.initial);
+  String? _error;
 
   @override
   void dispose() {
@@ -745,7 +746,14 @@ class _DrawingTextCardState extends State<_DrawingTextCard> {
     super.dispose();
   }
 
-  void _submit() => Navigator.of(context).pop(_ctrl.text.trim());
+  void _submit() {
+    final text = _ctrl.text.trim();
+    if (text.isEmpty) {
+      setState(() => _error = 'Text cannot be empty');
+      return;
+    }
+    Navigator.of(context).pop(text);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -800,8 +808,25 @@ class _DrawingTextCardState extends State<_DrawingTextCard> {
                       controller: _ctrl,
                       autofocus: true,
                       placeholder: 'Enter text',
+                      onChanged: (_) {
+                        if (_error != null) setState(() => _error = null);
+                      },
                       onSubmitted: (_) => _submit(),
                     ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        _error!,
+                        style: MyntWebTextStyles.caption(
+                          context,
+                          color: resolveThemeColor(
+                            context,
+                            dark: MyntColors.errorDark,
+                            light: MyntColors.tertiary,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 24),
                     MyntPrimaryButton(
                       size: MyntButtonSize.large,

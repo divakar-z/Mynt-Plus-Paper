@@ -60,8 +60,10 @@ class _OiTokenInfo {
 
 /// Annotation drawing tools that carry user text — placement triggers a
 /// text-entry dialog (see `_promptDrawingText`).
+// Price Label is intentionally NOT here: it auto-shows the price at its anchor
+// and never prompts for or stores custom text.
 const Set<String> _kTextDrawTools = {
-  'text', 'note', 'callout', 'comment', 'pricelabel', 'signpost',
+  'text', 'note', 'callout', 'comment', 'signpost',
 };
 
 /// Full-page Chart Engine shell. Hosts the iframe at
@@ -779,6 +781,19 @@ class _ChartEngineShellScreenState
                 }
               }
             }
+          }
+        }
+        break;
+      }
+      case 'drawingTextEditRequested': {
+        // Double-clicked a text annotation → re-open the text dialog seeded
+        // with its current value.
+        final v = msg['value'];
+        if (v is Map) {
+          final pid = v['paneId'];
+          final did = v['drawingId'];
+          if (pid is String && did is String) {
+            _editDrawingText(pid, did);
           }
         }
         break;
@@ -2404,6 +2419,34 @@ class _ChartEngineShellScreenState
     } else {
       n.updateDrawing(scripKey, drawingId, text: value);
     }
+  }
+
+  /// Re-edit an existing text annotation (double-click). Seeds the dialog with
+  /// the current text; on cancel the drawing is KEPT as-is (unlike placement,
+  /// which removes an empty one).
+  Future<void> _editDrawingText(String paneId, String drawingId) async {
+    final idx = int.tryParse(paneId);
+    if (idx == null) return;
+    final session = ref.read(chartEngineSessionProvider);
+    if (idx < 0 || idx >= session.panes.length) return;
+    final scrip = session.panes[idx].scrip;
+    if (scrip == null) return;
+    final scripKey = '${scrip.exch}|${scrip.token}';
+    final list = session.drawings[scripKey] ?? const <ChartDrawing>[];
+    ChartDrawing? target;
+    for (final d in list) {
+      if (d.id == drawingId) {
+        target = d;
+        break;
+      }
+    }
+    if (target == null) return;
+    final value = await showDrawingTextDialog(
+        context: context, initial: target.text, title: 'Edit text');
+    if (!mounted || value == null) return; // cancel → keep existing text
+    ref
+        .read(chartEngineSessionProvider.notifier)
+        .updateDrawing(scripKey, drawingId, text: value);
   }
 
   /// Resolves a placed OCO bracket by its alert id from the GTT book.

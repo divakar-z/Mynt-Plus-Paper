@@ -180,7 +180,12 @@ class _ChartDrawingsMixin {
         const tH = 28;                   // toolbar height (pill)
         const btn = 28;                  // square button hit area
         const inner = 4;                 // pad inside the toolbar card
-        const btnCount = 6;
+        // Text-bearing annotations get an extra "edit text" (pencil) button.
+        // (Price Label is excluded — it auto-shows the price, no editable text.)
+        const TEXT_KINDS = { text: 1, note: 1, callout: 1, comment: 1,
+                             signpost: 1 };
+        const isTextKind = !!TEXT_KINDS[d.kind];
+        const btnCount = isTextKind ? 7 : 6;
         const strokeBtnExtra = 14;       // extra width for "Npx" label
         const toolbarW = inner * 2 + btn * btnCount + strokeBtnExtra;
         const chipW = 14;
@@ -302,6 +307,32 @@ class _ChartDrawingsMixin {
             anchorX: ax,
           });
           bx += strokeBtnExtra;
+        }
+
+        // 3.5) Edit text — pencil (only for text-bearing annotations). Clicking
+        //      re-opens the text dialog seeded with the current value.
+        if (isTextKind) {
+          const ax = stepX();
+          const cxg = ax + btn / 2;
+          const cyg = by + tH / 2;
+          const iconPx = 16;
+          const pencilD =
+              'M11.5 2.5 a1.414 1.414 0 0 1 2 2 L5.5 12.5 L2.5 13.5 L3.5 10.5 Z';
+          const nibD = 'M10 4 l2 2';
+          ctx.save();
+          ctx.translate(cxg - iconPx / 2, cyg - iconPx / 2);
+          ctx.scale(iconPx / 16, iconPx / 16);
+          ctx.strokeStyle = tbIcon;
+          ctx.lineWidth = 1;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke(new Path2D(pencilD));
+          ctx.stroke(new Path2D(nibD));
+          ctx.restore();
+          buttons.push({
+            rect: { x: ax, y: by, w: btn, h: tH },
+            action: 'editText',
+          });
         }
 
         // 4) Duplicate — charm-icons clone glyph (stroked, viewBox 16)

@@ -1670,6 +1670,23 @@ class Chart {
           }
         }
 
+        // --- Inline-toolbar: edit text (annotation drawings) ---
+        for (const h of this._drawingHits) {
+          if (h.action !== 'editText') continue;
+          const r = h.rect;
+          if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+            e.preventDefault();
+            e.stopPropagation();
+            try {
+              parent.postMessage(JSON.stringify({
+                type: 'drawingTextEditRequested',
+                value: { paneId: this.paneId, drawingId: h.drawingId },
+              }), '*');
+            } catch (_) {}
+            return;
+          }
+        }
+
         // --- Inline-toolbar: lock toggle ---
         for (const h of this._drawingHits) {
           if (h.action !== 'lockToggle') continue;
@@ -3768,10 +3785,6 @@ class Chart {
         ['C', this._fmtPrice(c.c), dir],
         ['V', this._fmtVol(c.v), this.palette.ohlcValue],
       ];
-      const instname = (this.scrip && this.scrip.instname) || '';
-      if (instname.startsWith('FUT') && this.tickState.oi != null) {
-        segs.push(['OI', this._fmtVol(this.tickState.oi), this.palette.ohlcValue]);
-      }
     }
 
     if (!chipText && !haveCandles) return;
@@ -5015,6 +5028,10 @@ class Chart {
       if (absIdx % labelCadence !== 0) continue;
       const c = visible[i];
       const xCenter = this._candleXCenter(absIdx, plot);
+      // The labels are center-aligned and drawn after the series clip is
+      // released, so a label near the left edge spills under the drawing rail
+      // (and one near the right spills into the price axis). Skip those.
+      if (xCenter < plot.left + 16 || xCenter > plot.right - 8) continue;
       const ist = new Date(c.ts * 1000 + (5.5 * 3600 * 1000));
       let label;
       if (this.timeframeMinutes >= 1440) {

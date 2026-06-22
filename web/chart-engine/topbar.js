@@ -2258,7 +2258,10 @@
     reopen.className = 'draw-rail-reopen';
     reopen.innerHTML = _railSvg(_ACT_ICONS.expand);
     reopen.hidden = true;
+    reopen.addEventListener('mouseenter', () => showTip(reopen, 'Show drawing toolbar'));
+    reopen.addEventListener('mouseleave', hideTip);
     reopen.addEventListener('click', () => {
+      hideTip();
       rail.hidden = false; reopen.hidden = true; setGutter(40);
     });
 
