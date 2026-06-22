@@ -407,7 +407,8 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            _handleHoldingsTap(initialTabIndex: 1);
+            // Mutual Fund tab is index 2 (Equity=0, MTF=1, MF=2, MF BETA=3).
+            _handleHoldingsTap(initialTabIndex: 2);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();
@@ -482,7 +483,8 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            _handleHoldingsTap(initialTabIndex: 1);
+            // Mutual Fund tab is index 2 (Equity=0, MTF=1, MF=2, MF BETA=3).
+            _handleHoldingsTap(initialTabIndex: 2);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();

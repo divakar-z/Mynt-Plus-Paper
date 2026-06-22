@@ -30,14 +30,14 @@ mixin PortfolioAPI on ApiCore {
     }
   }
 
-  Future<Map<String, dynamic>> getHolding() async {
+  Future<Map<String, dynamic>> getHolding({String prd = "C"}) async {
     String stat = "";
     try {
       final uri = Uri.parse(apiLinks.getHoldings);
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","actid":"${prefs.clientId}","prd":"C"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","actid":"${prefs.clientId}","prd":"$prd"}&jKey=${prefs.clientSession}''');
       //  log("Holdings res=>${res.body} ");
       final List<HoldingsModel> data = [];
       if (res.statusCode == 200) {
