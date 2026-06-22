@@ -26,6 +26,10 @@
         "destination": "/lite/index.html"
       },
       {
+        "source": "/login",
+        "destination": "/lite/index.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
