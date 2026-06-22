@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart'
     show
@@ -1060,7 +1061,7 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                               borderRadius: BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              'T1: ${int.parse(holding.npoadt1qty ?? "0") + int.parse(holding.btstqty ?? "0")}',
+                                              'T1: ${math.max(int.parse(holding.npoadt1qty ?? "0"), int.parse(holding.btstqty ?? "0"))}',
                                               style: MyntWebTextStyles.para(
                                                 context,
                                                 darkColor: MyntColors.primaryDark,

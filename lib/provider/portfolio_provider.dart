@@ -704,6 +704,10 @@ changeHoldingsTabIndex(int index) {
             element.exchTsym![0].symbol = "${spilitSymbol["symbol"]}";
             element.exchTsym![0].expDate = "${spilitSymbol["expDate"]}";
             element.exchTsym![0].option = "${spilitSymbol["option"]}";
+            // After e-DIS, the broker mirrors the SAME shares into both the
+            // POA and Non-POA fields — settled into dpQty + npoadqty, and T1
+            // into btstqty + npoadt1qty. Use max() on each pair so the mirrored
+            // qty is counted once (summing would double-count an e-DIS'd holding).
             int qty = (
                     // int.parse("${element.npoadqty ?? 0}") +
                     // int.parse("${element.brkcolqty ?? 0}") +
@@ -711,8 +715,8 @@ changeHoldingsTabIndex(int index) {
                     max(int.parse("${element.dpQty ?? 0}"),
                             int.parse("${element.npoadqty ?? 0}")) +
                         int.parse("${element.holdqty ?? 0}") +
-                        int.parse("${element.btstqty ?? 0}")  +
-                        int.parse("${element.npoadt1qty ?? 0}")) -
+                        max<int>(int.parse("${element.btstqty ?? 0}"),
+                            int.parse("${element.npoadt1qty ?? 0}"))) -
                 int.parse("${element.trdqty ?? 0}");
             element.currentQty = qty;
             // FIX: Update holdQty without wiping existing socket data
