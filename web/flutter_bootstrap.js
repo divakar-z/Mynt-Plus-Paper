@@ -27,4 +27,11 @@ _flutter.loader.load({
   config: {
     canvasKitBaseUrl: "canvaskit/",
   },
+  // Keep the Flutter service-worker registration that the DEFAULT bootstrap
+  // includes. Omitting it means new deploys can't update a previously-installed
+  // service worker, leaving stale cached assets that break startup. The token
+  // below is substituted by the build (a quoted version string, or null).
+  serviceWorkerSettings: {
+    serviceWorkerVersion: {{flutter_service_worker_version}},
+  },
 });
