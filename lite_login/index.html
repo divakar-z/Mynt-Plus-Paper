@@ -146,7 +146,13 @@
   const uuid=()=>crypto.randomUUID?crypto.randomUUID():"xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==="x"?r:(r&0x3|0x8)).toString(16);});
   const deviceUuid=uuid();
 
-  const ls={get:k=>{try{return localStorage.getItem(PREFIX+k);}catch(e){return null;}},set:(k,v)=>{try{localStorage.setItem(PREFIX+k,v);}catch(e){}}};
+  // shared_preferences-web stores String values JSON-encoded (e.g. "ZP00231" with
+  // quotes) and bools unquoted (true/false). MUST match that encoding or Flutter's
+  // pref.init() throws decoding our values and the app crashes before runApp.
+  const ls={
+    get:k=>{try{const v=localStorage.getItem(PREFIX+k); if(v===null)return null; try{return JSON.parse(v);}catch(e){return v;}}catch(e){return null;}},
+    set:(k,v)=>{try{localStorage.setItem(PREFIX+k,JSON.stringify(v));}catch(e){}}
+  };
   const inputType=raw=>/^[0-9]+$/.test(raw)?"mobile":"clientid";
   const upper=raw=>raw.trim().toUpperCase();
   const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -170,14 +176,14 @@
   }
 
   function prefetchFlutter(){
-    if(IS_OAUTH) return;
-    setTimeout(()=>{
-      ["flutter_bootstrap.js","main.dart.js","canvaskit/canvaskit.js","canvaskit/canvaskit.wasm"].forEach(p=>{
-        const l=document.createElement("link"); l.rel="prefetch"; l.href="/"+p;
-        if(p.endsWith(".js")) l.as="script"; else if(p.endsWith(".wasm")){ l.as="fetch"; l.crossOrigin="anonymous"; }
-        document.head.appendChild(l);
-      });
-    }, 600);
+    // Intentionally a NO-OP. Manually prefetching Flutter's main.dart.js / canvaskit
+    // from this page raced Flutter's own asset load after the redirect and crashed
+    // the engine (white-screen hang) — both an as="script" prefetch of main.dart.js
+    // and a CORS-mode prefetch of canvaskit.wasm reproduced it. The Flutter service
+    // worker (registered by flutter_bootstrap.js) already precaches these assets
+    // after the first Flutter load, so returning users get a warm app WITHOUT this
+    // hazard. A safe pre-warm would need Speculation Rules or a prefetch guaranteed
+    // to finish before navigation — deferred to a later pass.
   }
 
   const S={ id:"", pwd:"", isTotp:true, topflow:false, showPwd:false,
@@ -212,7 +218,7 @@
   // ---------- LOGIN ----------
   function savedAccount(){
     if(IS_OAUTH) return null;
-    const isLogout=(ls.get("isLogout")||"").toLowerCase()==="true";
+    const lo=ls.get("isLogout"); const isLogout=(lo===true||lo==="true");
     const cid=(ls.get("clientId")||"").trim(); const mob=(ls.get("clientMob")||"").trim();
     if(isLogout && (cid||mob)) return {cid, name:(ls.get("clientName")||"").trim()};
     return null;
@@ -254,7 +260,7 @@
     inner.querySelector("#login-btn").addEventListener("click",()=>submitLogin(inner));
     inner.querySelector("#scan-qr").addEventListener("click",startQr);
     inner.querySelector("#left-action").addEventListener("click",()=>{
-      if(saved){ ls.set("isLogout","false"); S.id=""; renderLogin(); }
+      if(saved){ ls.set("isLogout", false); S.id=""; renderLogin(); }
       else { S.fId=S.id; renderForgot1(); }
     });
   }
@@ -275,7 +281,9 @@
       if(!ok){ showError("Server error. Please try again later."); return; }
       if(!json){ showError("An error occurred. Please try again."); return; }
       if(json.stat==="Ok"){
-        ls.set("imei",deviceUuid);
+        // NOTE: do not write any flutter.* prefs on the normal path — the URL
+        // auto-login handoff lets Flutter create the session itself. imei is
+        // already sent directly in the otp_verify log below.
         if(json.apitoken&&json.token){ return onLoginSuccess(json); }
         S.isTotp=true; S.topflow=false; renderOtp(); return;
       }
