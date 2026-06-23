@@ -1,6 +1,26 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <!-- Pre-boot auth gate. Real users land on the bare root "/", which Firebase
+       serves as this (heavy) Flutter index.html. Before the engine boots, send
+       logged-OUT visitors to the fast lite login (/login -> /lite/index.html via
+       the Firebase rewrite). Authenticated users and the lite->Flutter handoff
+       (/?uid=&token=) fall through and boot the app as normal. Runs in <1ms. -->
+  <script>
+    (function () {
+      try {
+        if (window.opener) return; // never gate popups (digilocker/razorpay callbacks)
+        var p = new URLSearchParams(location.search);
+        var isHandoff = p.get('uid') && p.get('token'); // lite -> Flutter auto-login handoff
+        var sess = localStorage.getItem('flutter.clientSession'); // present after a real login
+        var authed = sess && sess !== '""' && sess !== 'null';
+        if (location.pathname === '/' && !isHandoff && !authed) {
+          location.replace('/login'); // -> fast lite login page
+        }
+      } catch (e) {}
+    })();
+  </script>
+
   <!--
     If you are serving your web app in a path other than the root, change the
     href value below to reflect the base path you are serving from.

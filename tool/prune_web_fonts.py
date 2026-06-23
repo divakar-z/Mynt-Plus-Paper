@@ -26,8 +26,18 @@ import sys
 
 # Upright weights to keep for the variable-ish Geist families.
 KEEP_WEIGHTS = {400, 500, 600, 700}
-# Only prune these shadcn families (matched by substring on the family name).
+# Weight/italic-prune these shadcn families (matched by substring on the family name).
 TARGET_FAMILIES = ("GeistSans", "GeistMono")
+
+# Families to DROP ENTIRELY from the WEB manifest — verified unused on web by a
+# 4-agent audit (2026-06-23). CanvasKit downloads every manifest font before the
+# first frame, so these were pure cost on the post-login critical path. Matched by
+# substring. WEB-ONLY: pubspec is shared with the mobile build, so we strip them
+# from the built web manifest here, never from pubspec.yaml / dependencies.
+#   - InterVariable                 : web uses 'Geist'/'tenon'; Inter is a non-web fallback only
+#   - GeistMono                     : no web widget consumes theme.typography.mono / .mono
+#   - syncfusion_flutter_datagrid/* : datagrid package declared but never imported anywhere
+DROP_FAMILIES = ("InterVariable", "GeistMono", "syncfusion_flutter_datagrid")
 
 
 def should_keep(font: dict) -> bool:
@@ -52,11 +62,22 @@ def main() -> int:
 
     removed_assets = []
     kept = dropped = 0
+    new_families = []
     for fam in families:
         name = fam.get("family", "")
+        # Drop entire families that are verified unused on web.
+        if any(d in name for d in DROP_FAMILIES):
+            for font in fam.get("fonts", []):
+                if font.get("asset"):
+                    removed_assets.append(font["asset"])
+                dropped += 1
+            continue  # omit this family from the manifest
+        # Families we don't touch: keep as-is.
         if not any(t in name for t in TARGET_FAMILIES):
             kept += len(fam.get("fonts", []))
+            new_families.append(fam)
             continue
+        # Weight/italic-prune the shadcn variable families.
         keep_list, drop_list = [], []
         for font in fam.get("fonts", []):
             (keep_list if should_keep(font) else drop_list).append(font)
@@ -67,6 +88,8 @@ def main() -> int:
             asset = font.get("asset")
             if asset:
                 removed_assets.append(asset)
+        new_families.append(fam)
+    families = new_families
 
     # Delete the unreferenced files from the asset bundle.
     deleted_bytes = 0

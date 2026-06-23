@@ -6,6 +6,22 @@
 <meta name="description" content="Sign in with MYNT" />
 <title>Sign in with MYNT</title>
 <link rel="icon" href="/favicon.png" />
+<script>
+  /* Theme parity with the Flutter app. The app does NOT follow the OS theme: it
+     reads the saved `userAppTheme` preference (shared_preferences-web key
+     `flutter.userAppTheme`, a JSON-encoded string) and defaults to Light when it
+     is anything other than "Dark" (incl. "Light", "System Default", or absent).
+     Mirror that here, and set it before first paint so there is no theme flash. */
+  (function(){
+    try {
+      var raw = localStorage.getItem('flutter.userAppTheme');
+      var v = raw; try { v = JSON.parse(raw); } catch(e){}
+      document.documentElement.setAttribute('data-theme', v === 'Dark' ? 'dark' : 'light');
+    } catch(e) {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  })();
+</script>
 <style>
   /* Geist, async (font-display:swap) so paint never blocks on fonts */
   @font-face{font-family:'Geist';font-weight:400;font-display:swap;src:url('/assets/fonts/Geist/Geist-Regular.ttf') format('truetype')}
@@ -19,11 +35,11 @@
     --bg:#FFFFFF; --panel:#FFFFFF; --inner:#FFFFFF; --inner-border:#E0E0E0;
     --divider:#DDE2E7; --text:#121212; --text2:#4A4A4A; --loss:#FF1717; --white:#FFFFFF;
   }
-  @media (prefers-color-scheme:dark){:root{
-    --primary:#58A6FF; --secondary:#388BFD; --btn:#0052CC; --focus:#58A6FF;
-    --bg:#0D0F11; --panel:#161B22; --inner:#0D0F11; --inner-border:#30363D;
-    --divider:#30363D; --text:#C9D1D9; --text2:#8B949E; --loss:#F85149; --white:#FFFFFF;
-  }}
+  /* No prefers-color-scheme rule on purpose: the Flutter app ignores the OS
+     theme, so the lite page must too. Theme is driven solely by the data-theme
+     attribute, set from the saved userAppTheme preference by the head script.
+     With no attribute (JS disabled) the base :root above => Light, matching the
+     Flutter default. */
   :root[data-theme=dark]{
     --primary:#58A6FF; --secondary:#388BFD; --btn:#0052CC; --focus:#58A6FF;
     --bg:#0D0F11; --panel:#161B22; --inner:#0D0F11; --inner-border:#30363D;
@@ -177,18 +193,43 @@
 
   function prefetchFlutter(){
     if(IS_OAUTH) return; // gateway users bounce to the partner; never load Flutter
-    // Warm main.dart.js (the dominant ~2MB asset) during the login interaction so
-    // the trading app loads faster after the handoff. as="script" matches exactly
-    // how Flutter loads it, so the cached copy is reused. Deliberately NOT
-    // prefetching canvaskit.wasm with a CORS mode (crossOrigin) — that poisons the
-    // cache with a response canvaskit's same-origin fetch cannot instantiate and
-    // crashes the engine. If this prefetch is still in flight when the user submits,
-    // the navigation simply cancels it (no harm); if it finishes first, the post-
-    // login Flutter load is warm. (Repeat visits are also warmed by the Flutter SW.)
+    // Warm the ENTIRE Flutter first-frame critical path during the login interaction:
+    // the JS bundle, the CanvasKit renderer, and EVERY font. CanvasKit blocks its
+    // first frame until canvaskit.wasm AND all FontManifest fonts have downloaded, so
+    // warming only main.dart.js still left ~5-6MB (wasm + fonts) to download after the
+    // handoff. All of these are SAME-ORIGIN, so we prefetch them WITHOUT crossOrigin —
+    // a CORS-mode prefetch poisons the cache with a response canvaskit's same-origin
+    // fetch cannot instantiate and crashes the engine. Everything is rel=prefetch
+    // (lowest priority, so it never delays the login API calls); if still in flight at
+    // submit, the navigation cancels the rest (no harm) and whatever finished is reused
+    // warm. (Repeat visits are also warmed by the Flutter service worker.)
     setTimeout(()=>{
-      const l=document.createElement("link");
-      l.rel="prefetch"; l.as="script"; l.href="/main.dart.js";
-      document.head.appendChild(l);
+      function pf(href, as){
+        const l=document.createElement("link");
+        l.rel="prefetch"; if(as) l.as=as; l.href=href;
+        document.head.appendChild(l);
+      }
+      pf("/main.dart.js","script");      // ~2MB JS bundle (as=script matches Flutter's <script>)
+      pf("/assets/AssetManifest.bin");    // read on engine startup
+      // CanvasKit ships a browser-specific renderer variant. Flutter loads
+      // canvaskit/chromium/* when the browser has Intl.v8BreakIterator + Intl.Segmenter
+      // + ImageDecoder (Chromium), else canvaskit/*. We must warm the SAME file the
+      // engine will fetch — warming the wrong variant just wastes ~1.5MB. Use fetch()
+      // (not <link rel=prefetch>) for the .wasm so the request mirrors the engine's own
+      // fetch() (same mode/Accept-Encoding) and the brotli response is reused warm.
+      var chromium = (typeof Intl!=="undefined" && typeof Intl.v8BreakIterator!=="undefined"
+                      && typeof Intl.Segmenter!=="undefined" && typeof ImageDecoder!=="undefined");
+      var ckBase = chromium ? "/canvaskit/chromium/" : "/canvaskit/";
+      fetch(ckBase+"canvaskit.wasm").then(r=>r.arrayBuffer()).catch(()=>{}); // the renderer
+      pf(ckBase+"canvaskit.js","script");
+      // Warm every font CanvasKit must load before first paint. Reading FontManifest
+      // (also warms it) keeps this in lock-step with the pruned font set automatically.
+      fetch("/assets/FontManifest.json").then(r=>r.json()).then(fams=>{
+        const seen={};
+        fams.forEach(fam=>(fam.fonts||[]).forEach(f=>{
+          if(f.asset && !seen[f.asset]){ seen[f.asset]=1; pf("/assets/"+f.asset); }
+        }));
+      }).catch(()=>{});
     }, 400);
   }
 
