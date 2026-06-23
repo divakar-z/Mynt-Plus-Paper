@@ -14,6 +14,7 @@ import '../notification_api.dart';
 import '../order_api.dart';
 import '../portfolio_api.dart';
 import '../profile_all_details_api.dart';
+import '../stock_scanner_api.dart';
 import '../stocks_api.dart';
 import '../transcation_api.dart';
 import '../user_profile_api.dart';
@@ -42,4 +43,5 @@ class ApiExporter
         MockApiResponse,
         LedgerApi,
         ProfileAllDetailsApi,
-        VersionApi {}
+        VersionApi,
+        StockScannerApi {}

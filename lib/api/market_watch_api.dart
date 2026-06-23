@@ -522,6 +522,42 @@ mixin MarketWatchApi on ApiCore {
 
 
 
+  // Variant used by the chart engine. Takes explicit from/to unix-epoch
+  // seconds (matches the EODChartData API contract directly) so callers
+  // that already compute their own time range — like the chart engine's
+  // infinite-scroll extend path — don't have to round-trip through a
+  // timeframe-string enum.
+  Future<List<EodChartData>> getEODChartDataRange({
+    required String tsym,
+    required String exch,
+    required int fromEpoch,
+    required int toEpoch,
+  }) async {
+    final uri = Uri.parse(apiLinks.eodchartdata);
+    final formattedSymbol = "$exch:$tsym";
+    final payload =
+        'jData={"sym": "$formattedSymbol","from": "$fromEpoch","to": "$toEpoch"}'
+        '&jKey=${prefs.clientSession}';
+    final res = await apiClient.post(uri, headers: defaultHeaders, body: payload);
+    final json = jsonDecode(res.body);
+    if (json is Map &&
+        json['stat'] == 'Not_Ok' &&
+        json['emsg'] == 'Session Expired :  Invalid Session Key') {
+      throw Exception('Session Expired :  Invalid Session Key');
+    }
+    if (json is List) {
+      return json.map((item) {
+        // Backend wraps each row as a JSON string inside the outer array.
+        final itemData = jsonDecode(item as String);
+        return EodChartData.fromJson(itemData as Map<String, dynamic>);
+      }).toList();
+    }
+    if (json is Map) {
+      return [EodChartData.fromJson(json as Map<String, dynamic>)];
+    }
+    throw Exception('Unexpected EOD response format');
+  }
+
   Future<List<EodChartData>> getEODChartData(String tsym, String exch, {String timeframe = "1Y"}) async {
     try {
       final uri = Uri.parse(apiLinks.eodchartdata);

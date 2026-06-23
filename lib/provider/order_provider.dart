@@ -1448,6 +1448,69 @@ class OrderProvider extends DefaultChangeNotifier {
     }
   }
 
+  /// Places a set of pre-sliced child orders for INSTANT mode (no confirmation
+  /// UI). Each input already carries a freeze-qty-bounded quantity. Fires them
+  /// in parallel (same as [slicePlaceOrderWithConfirmation]), refreshes the
+  /// order book, and shows a single summary toast. Unlike the confirmation
+  /// variant, this opens/closes no overlay and performs no navigation — it is
+  /// the headless slicing path the chart's instant orders use.
+  Future<void> placeInstantSlices(
+      BuildContext context, List<PlaceOrderInput> inputs) async {
+    if (inputs.isEmpty) return;
+    try {
+      _sliceOrderResults.clear();
+      final results = await Future.wait(
+          inputs.map((inp) => _placeSliceOrderInternal(inp)));
+      int ok = 0;
+      int fail = 0;
+      bool sessionExpired = false;
+      for (final r in results) {
+        if (r == null) {
+          fail++;
+          continue;
+        }
+        if (r.emsg == "Session Expired :  Invalid Session Key") {
+          sessionExpired = true;
+          break;
+        }
+        if (r.stat == "Ok") {
+          ok++;
+          _sliceOrderResults.add(r);
+        } else {
+          fail++;
+        }
+      }
+      if (sessionExpired) {
+        if (context.mounted) ref.read(authProvider).ifSessionExpired(context);
+        return;
+      }
+      if (ok > 0) fetchOrderBook(context, true);
+      if (context.mounted) {
+        if (fail == 0) {
+          ResponsiveSnackBar.showSuccess(
+              context, "Placed $ok slice order${ok == 1 ? '' : 's'}.");
+        } else if (ok > 0) {
+          ResponsiveSnackBar.showWarning(context,
+              "Placed $ok of ${inputs.length} slices; $fail failed.");
+        } else {
+          ResponsiveSnackBar.showWarning(
+              context, "Failed to place sliced order. Please try again.");
+        }
+      }
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Instant Slice Order", "Error": "$e"});
+      if (context.mounted) {
+        ResponsiveSnackBar.showWarning(
+            context, "Error placing sliced order: ${e.toString()}");
+      }
+    } finally {
+      notifyListeners();
+    }
+  }
+
   Future fetchOrderBook(context, bool websocCon) async {
     try {
       final freshOrders = List<OrderBookModel>.from(await _fetchPortfolioData('ob'));

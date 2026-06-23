@@ -102,6 +102,9 @@ import '../../../utils/custom_navigator.dart';
 import '../../../routes/route_names.dart';
 import '../../../routes/web_router.dart';
 import '../../models/marketwatch_model/get_quotes.dart';
+import '../../models/scanner_model/scan_explain.dart' show ExplainKey;
+import 'scanner/scanner_shell_screen.dart';
+import 'orderflow/orderflow_shell_screen.dart';
 import 'market_watch/chart_with_depth_web.dart';
 // import 'market_watch/scrip_tabs_manager.dart';
 
@@ -112,6 +115,7 @@ import 'home/widgets/app_bar/profile_dropdown.dart';
 import 'home/widgets/app_bar/navigation_drawer_web.dart';
 import '../../../res/responsive_extensions.dart';
 import 'scalper/scalper_screen_web.dart';
+import 'chart_engine/widgets/workspace/chart_workspace_screen.dart';
 import 'collection_basket/basketlist_dashboard_web.dart';
 import 'collection_basket/create_baskerscreen_web.dart' as basket_create;
 import 'collection_basket/collection_basket_builder.dart';
@@ -175,6 +179,17 @@ enum ScreenTypeParam {
   saveBasketStrategy,
   profileDetails,
   caBuyback,
+  scanner,
+  orderflow,
+  charts
+}
+
+/// Sub-page within the Scanner shell — drives the left rail + IndexedStack.
+enum ScannerSubPage {
+  symbols,
+  scanners,
+  fundamentals,
+  customScans,
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -186,11 +201,20 @@ class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
   final String? digilockerCode;
   final String? digilockerState;
 
+  /// Optional initial Scanner sub-page (used when arriving via /scanner/<sub>).
+  final ScannerSubPage? initialScannerSubPage;
+
+  /// Optional initial Scan-Explanation args (used when arriving via
+  /// /scanner/explain/{builtin|custom}/{id}/{ticker}).
+  final ExplainKey? initialExplainArgs;
+
   const CustomizableSplitHomeScreen({
     super.key,
     this.initialRightPanel,
     this.digilockerCode,
     this.digilockerState,
+    this.initialScannerSubPage,
+    this.initialExplainArgs,
   });
 
   @override
@@ -219,6 +243,7 @@ class _CustomizableSplitHomeScreenState
   bool _isInitialLoad = true; // Track if this is the initial load
   int _holdingsInitialTabIndex = 0; // Track initial tab for holdings screen
   bool _isScalperMode = false; // When true, hides watchlist and shows scalper full-width
+  bool _isChartsMode = false; // When true, hides watchlist body and shows chart workspace full-width with slim index strip on left
 
   // Scaffold key for drawer control
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -433,6 +458,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "charts") {
+            _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
             _handleWebHookTap();
           } else if (routeName == "mutualFund") {
@@ -509,6 +536,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "charts") {
+            _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
             _handleWebHookTap();
           } else if (routeName == "mutualFund") {
@@ -664,6 +693,9 @@ class _CustomizableSplitHomeScreenState
       case ScreenTypeParam.scalper:
         _handleScalperTap();
         break;
+      case ScreenTypeParam.charts:
+        _handleChartsTap();
+        break;
       case ScreenTypeParam.myAccount:
         _navigateToScreen(ScreenType.myAccount);
         break;
@@ -717,6 +749,12 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenTypeParam.caBuyback:
         _handleCABuybackTap();
+        break;
+      case ScreenTypeParam.scanner:
+        _replaceScreenInPanel(ScreenType.scanner);
+        break;
+      case ScreenTypeParam.orderflow:
+        _replaceScreenInPanel(ScreenType.orderflow);
         break;
       case ScreenTypeParam.dashboard:
       case ScreenTypeParam.watchlist:
@@ -1180,9 +1218,25 @@ class _CustomizableSplitHomeScreenState
     _handleReconnectionSuccess();
   }
 
+  /// True when any panel currently shows the Scanner shell — the Scanner
+  /// page renders full-width with no watchlist (same pattern as Scalper).
+  bool get _isScannerActive {
+    for (final panel in _panels) {
+      if (panel.screenType == ScreenType.scanner) return true;
+      if (panel.screens.isNotEmpty &&
+          panel.activeScreenIndex >= 0 &&
+          panel.activeScreenIndex < panel.screens.length &&
+          panel.screens[panel.activeScreenIndex] == ScreenType.scanner) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// New layout: Watchlist full height on one side, AppBar + Content on other side
   /// Respects panel swap - checks which panel has watchlist
   /// In scalper mode: hides watchlist, shows AppBar + Scalper content full-width
+  /// In scanner mode: hides watchlist, shows AppBar + Scanner shell full-width
   Widget _buildNewLayout(ThemesProvider theme) {
     // Scalper mode: full-width AppBar + Scalper content, no watchlist
     if (_isScalperMode) {
@@ -1192,6 +1246,50 @@ class _CustomizableSplitHomeScreenState
           const Expanded(
             child: ScalperScreenWeb(embedded: true),
           ),
+        ],
+      );
+    }
+
+    // Scanner mode: full-width AppBar + Scanner shell, no watchlist
+    if (_isScannerActive) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          Expanded(
+            child: ScannerShellScreen(
+              initialSubPage: widget.initialScannerSubPage,
+              initialExplainArgs: widget.initialExplainArgs,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Charts mode: full-width chart workspace. Top app bar carries an indices strip
+    // alongside the live-P&L ticker so we recover the watchlist column's space.
+    // ChartWorkspaceScreen hosts its own right-tray (Watchlist/Positions/Holdings/Orders/DOM).
+    if (_isChartsMode) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          Container(
+            color: resolveThemeColor(context,
+                dark: MyntColors.backgroundColorDark,
+                light: MyntColors.backgroundColor),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 320,
+                  child: _buildWatchlistIndexSlots(theme.isDarkMode),
+                ),
+                Container(
+                    width: 1,
+                    color: shadcn.Theme.of(context).colorScheme.border),
+                const Expanded(child: PortfolioTickerStrip()),
+              ],
+            ),
+          ),
+          const Expanded(child: ChartWorkspaceScreen()),
         ],
       );
     }
@@ -1418,6 +1516,8 @@ class _CustomizableSplitHomeScreenState
     bool? showOptionZ,
     bool? showOptionFlash,
     bool? showScalper,
+    bool? showScanner,
+    bool? showCharts,
   }) {
     final theme = ref.read(themeProvider);
     final userProfile = ref.read(userProfileProvider);
@@ -1496,6 +1596,18 @@ class _CustomizableSplitHomeScreenState
             shadcn.closeDrawer(drawerContext);
             _handleScalperTap();
           },
+          onScannerTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleScannerTap();
+          },
+          onOrderflowTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleOrderflowTap();
+          },
+          onChartsTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleChartsTap();
+          },
           onStrategyBuilderTap: () {
             shadcn.closeDrawer(drawerContext);
             _handleStrategyBuilderTap();
@@ -1521,6 +1633,8 @@ class _CustomizableSplitHomeScreenState
           showOptionZ: showOptionZ,
           showOptionFlash: showOptionFlash,
           showScalper: showScalper,
+          showScanner: showScanner,
+          showCharts: showCharts,
         ),
         );
       },
@@ -1610,6 +1724,8 @@ class _CustomizableSplitHomeScreenState
                           showOptionZ: !showAllLeftNav, // Options dropdown hidden with left nav
                           showOptionFlash: !showAllLeftNav,
                           showScalper: !showAllLeftNav,
+                          showScanner: !showAllLeftNav,
+                          showCharts: !showAllLeftNav,
                         );
                       }
                     },
@@ -2137,6 +2253,37 @@ class _CustomizableSplitHomeScreenState
     WebNavigationHelper.updateUrl(WebRoutes.scalper);
   }
 
+  void _handleScannerTap({ScannerSubPage? initial}) {
+    _replaceScreenInPanel(ScreenType.scanner);
+    final path = initial == null
+        ? WebRoutes.scanner
+        : _scannerPath(initial);
+    WebNavigationHelper.updateUrl(path);
+  }
+
+  void _handleOrderflowTap() {
+    _replaceScreenInPanel(ScreenType.orderflow);
+    WebNavigationHelper.updateUrl(WebRoutes.orderflow);
+  }
+
+  String _scannerPath(ScannerSubPage p) {
+    switch (p) {
+      case ScannerSubPage.symbols:
+        return WebRoutes.scannerSymbols;
+      case ScannerSubPage.scanners:
+        return WebRoutes.scannerScanners;
+      case ScannerSubPage.fundamentals:
+        return WebRoutes.scannerFundamentals;
+      case ScannerSubPage.customScans:
+        return WebRoutes.scannerCustom;
+    }
+  }
+
+  void _handleChartsTap() {
+    setState(() => _isChartsMode = true);
+    WebNavigationHelper.updateUrl(WebRoutes.charts);
+  }
+
   // Build navigation screens for app bar
   Widget _buildNavigationScreens(bool isDarkMode) {
     return Row(
@@ -2183,9 +2330,12 @@ class _CustomizableSplitHomeScreenState
       title: title,
       isActive: isActive,
       onTap: () {
-        // Exit scalper mode when navigating to another screen
-        if (_isScalperMode) {
-          setState(() => _isScalperMode = false);
+        // Exit scalper / charts mode when navigating to another screen
+        if (_isScalperMode || _isChartsMode) {
+          setState(() {
+            _isScalperMode = false;
+            _isChartsMode = false;
+          });
         }
         onTap();
       },
@@ -2216,7 +2366,7 @@ class _CustomizableSplitHomeScreenState
       VoidCallback onTap) {
     // Check if this screen is currently active in any panel
     bool isActive = false;
-    if (!_isScalperMode) {
+    if (!_isScalperMode && !_isChartsMode) {
       for (int i = 0; i < _panels.length; i++) {
         final panel = _panels[i];
         if (panel.screenType == screenType ||
@@ -2428,13 +2578,133 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
+                      // Scanner
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleScannerTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.radar,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Scanner',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Orderflow — nested under Scanner in the Options menu
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleOrderflowTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.activity,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Orderflow',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Transform.translate(
+                                offset: const Offset(0, -6),
+                                child: Text(
+                                  'Beta',
+                                  style: MyntWebTextStyles.caption(
+                                    context,
+                                    color: Colors.red,
+                                    fontWeight: MyntFonts.semiBold,
+                                  ).copyWith(fontSize: 10),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Charts
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleChartsTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.chartLine,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Charts',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                       ),
                     ),
                   );
                 },
-              );
+              ).future.whenComplete(() {
+                // Backstop: the dropdown can close WITHOUT the MouseRegion's
+                // onExit firing (tapping a menu item, click-away dismiss, or
+                // Esc). When that happens the chart iframes were left at
+                // pointer-events:none by onEnter/_disableAllChartIframes and
+                // stayed unclickable until something else re-enabled them —
+                // the intermittent "can't click / hover the chart" bug.
+                // Restoring here guarantees the chart is interactive again
+                // no matter how the menu was dismissed. showDropdown returns
+                // an OverlayCompleter, whose `.future` resolves on close.
+                ChartIframeGuard.release();
+                _enableAllChartIframes();
+              });
             },
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -2500,10 +2770,17 @@ class _CustomizableSplitHomeScreenState
 
   // Navigate to a specific screen type in the main panel
   void _navigateToScreen(ScreenType screenType) {
-    // Exit scalper mode when navigating to any other screen — otherwise the
-    // scalper full-width view stays rendered regardless of panel state.
+    // Exit scalper / charts mode when navigating to any other screen — otherwise
+    // the full-width view stays rendered regardless of panel state.
     if (_isScalperMode && screenType != ScreenType.scalper) {
       _isScalperMode = false;
+    }
+    if (_isChartsMode && screenType != ScreenType.charts) {
+      _isChartsMode = false;
+    }
+    if (screenType == ScreenType.charts) {
+      setState(() => _isChartsMode = true);
+      return;
     }
 
     // Find the active panel (not watchlist) and switch to the new screen
@@ -2797,6 +3074,8 @@ class _CustomizableSplitHomeScreenState
         return const StrategyBuilderPanelWeb();
       case ScreenType.scalper:
         return const ScalperScreenWeb(embedded: true);
+      case ScreenType.charts:
+        return const ChartWorkspaceScreen();
       case ScreenType.tradingViewWebHook:
         return const WebHookTradingViewScreen();
       case ScreenType.basketDashboard:
@@ -2871,6 +3150,13 @@ class _CustomizableSplitHomeScreenState
         return FormDownloadScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: _goBackInRightPanel);
+      case ScreenType.scanner:
+        return ScannerShellScreen(
+          initialSubPage: widget.initialScannerSubPage,
+          initialExplainArgs: widget.initialExplainArgs,
+        );
+      case ScreenType.orderflow:
+        return const OrderflowShellScreen();
       // caEvent and cpAction removed
     }
   }
@@ -2938,6 +3224,8 @@ class _CustomizableSplitHomeScreenState
         return 'Strategy Builder';
       case ScreenType.scalper:
         return 'Scalper';
+      case ScreenType.charts:
+        return 'Charts';
       case ScreenType.tradingViewWebHook:
         return 'WebHook';
       case ScreenType.basketDashboard:
@@ -2982,6 +3270,10 @@ class _CustomizableSplitHomeScreenState
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.scanner:
+        return 'Scanner';
+      case ScreenType.orderflow:
+        return 'Orderflow';
       // caEvent and cpAction removed
     }
   }
@@ -3049,6 +3341,8 @@ class _CustomizableSplitHomeScreenState
         return Icons.architecture;
       case ScreenType.scalper:
         return Icons.speed;
+      case ScreenType.charts:
+        return Icons.show_chart;
       case ScreenType.tradingViewWebHook:
         return Icons.webhook;
       case ScreenType.basketDashboard:
@@ -3093,6 +3387,10 @@ class _CustomizableSplitHomeScreenState
         return Icons.download;
       case ScreenType.closureDetails:
         return Icons.cancel;
+      case ScreenType.scanner:
+        return Icons.radar;
+      case ScreenType.orderflow:
+        return Icons.show_chart;
       // caEvent and cpAction removed
     }
   }
@@ -3502,6 +3800,9 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.scalper:
         setState(() => _isScalperMode = true);
         break;
+      case ScreenType.charts:
+        setState(() => _isChartsMode = true);
+        break;
       case ScreenType.refer:
         break;
       case ScreenType.helpSupport:
@@ -3536,6 +3837,12 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.formDownload:
         break;
       case ScreenType.closureDetails:
+        break;
+      case ScreenType.scanner:
+        _replaceScreenInPanel(ScreenType.scanner);
+        break;
+      case ScreenType.orderflow:
+        _replaceScreenInPanel(ScreenType.orderflow);
         break;
       // caEvent and cpAction removed
     }
@@ -4293,9 +4600,12 @@ class _CustomizableSplitHomeScreenState
   }
 
   void _replaceScreenInPanel(ScreenType screenType) {
-    // Exit scalper mode when switching to any other screen
+    // Exit scalper / charts mode when switching to any other screen
     if (_isScalperMode && screenType != ScreenType.scalper) {
       _isScalperMode = false;
+    }
+    if (_isChartsMode && screenType != ScreenType.charts) {
+      _isChartsMode = false;
     }
 
     int targetPanelIndex = -1;
@@ -4400,6 +4710,9 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.strategyBuilder:
         urlPath = WebRoutes.strategyBuilder;
         break;
+      case ScreenType.charts:
+        urlPath = WebRoutes.charts;
+        break;
       case ScreenType.tradingViewWebHook:
         urlPath = WebRoutes.tradingViewWebHook;
         break;
@@ -4409,6 +4722,12 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.dashboard:
       case ScreenType.watchlist:
         urlPath = WebRoutes.home;
+        break;
+      case ScreenType.scanner:
+        urlPath = WebRoutes.scanner;
+        break;
+      case ScreenType.orderflow:
+        urlPath = WebRoutes.orderflow;
         break;
       default:
         // Don't update URL for other screen types (like scripDepthInfo, etc.)
@@ -4618,6 +4937,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case WebRoutes.scalper: // '/scalper'
         _handleScalperTap();
+        break;
+      case WebRoutes.charts: // '/charts'
+        _handleChartsTap();
         break;
       case WebRoutes.myAccount: // '/my-account'
         _navigateToScreen(ScreenType.myAccount);
@@ -5555,6 +5877,7 @@ enum ScreenType {
   portfolioAnalysis,
   strategyBuilder,
   scalper,
+  charts,
   tradingViewWebHook,
   basketDashboard,
   createBasketStrategy,
@@ -5580,6 +5903,8 @@ enum ScreenType {
   nomineeDetails,
   formDownload,
   closureDetails,
+  scanner,
+  orderflow,
 }
 
 // Hoverable navigation item widget
