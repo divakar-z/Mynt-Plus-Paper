@@ -274,6 +274,30 @@ class PortfolioProvider extends DefaultChangeNotifier {
 
   List<String> get posGrpNames => _posGrpNames;
 
+  // Position group filter: 'underlying' (default) groups by symbol only,
+  // 'underlying_expiry' groups by symbol + expiry (only affects default
+  // F&O groups — equity rows without expDate stay grouped by symbol; custom
+  // groups are not affected).
+  String _positionGroupFilter = 'underlying';
+  String get positionGroupFilter => _positionGroupFilter;
+
+  void setPositionGroupFilter(String value) {
+    if (value != 'underlying' && value != 'underlying_expiry') return;
+    if (_positionGroupFilter == value) return;
+    _positionGroupFilter = value;
+    getPositionGroupNames();
+    for (var symbol in _groupPositionSym) {
+      if (_groupedBySymbol.containsKey(symbol)) {
+        final groupData = _groupedBySymbol[symbol]['groupList'];
+        final isCustomGrp = _groupedBySymbol[symbol]['isCustomGrp'] ?? false;
+        if (groupData != null && groupData.isNotEmpty) {
+          positionGroupCal(_isDay, groupData, symbol, isCustomGrp);
+        }
+      }
+    }
+    notifyListeners();
+  }
+
   List<GetGroupSymbol> _getPositionGroupSymbol = [];
   List<GetGroupSymbol> get getPositionGroupSymbol => _getPositionGroupSymbol;
 
@@ -2961,12 +2985,18 @@ changeHoldingsTabIndex(int index) {
     try {
       _groupedBySymbol = {};
       for (var element in _allPostionList) {
-        if (_groupedBySymbol.containsKey(element.symbol)) {
-          _groupedBySymbol['${element.symbol}']["groupList"]
+        final expDate = element.expDate?.toString() ?? '';
+        final hasExpiry = expDate.isNotEmpty && expDate != '-';
+        final groupKey =
+            (_positionGroupFilter == 'underlying_expiry' && hasExpiry)
+                ? "${element.symbol} $expDate"
+                : "${element.symbol}";
+        if (_groupedBySymbol.containsKey(groupKey)) {
+          _groupedBySymbol[groupKey]["groupList"]
               .add(jsonDecode(jsonEncode(element)));
         } else {
           _groupedBySymbol.addAll({
-            "${element.symbol}": {
+            groupKey: {
               "isCustomGrp": false,
               "totMtm": "0.00",
               "totPnl": "0.00",
