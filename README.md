@@ -19,7 +19,16 @@ The fix is a **standalone HTML/CSS/JS lite login page** that renders in **~0.7 s
 cold / ~0.1 s warm**, while the full Flutter app is prefetched in the background so
 the post-login handoff is near-instant.
 
+> **Current testing scope:** the lite page is wired up for the **OAuth gateway
+> only**. Normal users (bare root `/` and `/login`) go through the standard Flutter
+> login. To roll the lite page out to **all** users, see
+> [Enabling the lite page for all users](#enabling-the-lite-page-for-all-users).
+
 ### Entry flow
+
+_The diagram below shows the **full-rollout** design. In the current OAuth-only
+scope, only the `/OAuthlogin/**` branch is active — `/login` and bare-root requests
+go straight to Flutter._
 
 ```
                          ┌─────────────────────────────────────────────┐
@@ -51,8 +60,8 @@ the post-login handoff is near-instant.
 | # | Change | File(s) |
 |---|--------|---------|
 | 1 | **Lite login page** — self-contained HTML/CSS/JS with full parity: login (+ saved-account), OTP/TOTP (incl. TOTP setup), forgot-password, change-password (SHA-256), QR polling, OAuth consent. Theme parity by reading `localStorage['flutter.userAppTheme']` (defaults Light, matching the app; does **not** follow OS). | [web/lite/index.html](web/lite/index.html) |
-| 2 | **Pre-boot auth gate** — a tiny synchronous script at the top of the Flutter `index.html`. Logged-out visitors landing on the bare root are redirected to the lite login *before* the engine boots; authenticated sessions and the `?uid=&token=` handoff fall through and boot Flutter. | [web/index.html](web/index.html) |
-| 3 | **Hosting rewrites** — `/login` and `/OAuthlogin/**` → `/lite/index.html` (everything else → the Flutter `/index.html`). | [firebase.json](firebase.json) |
+| 2 | **Pre-boot auth gate** *(not active in OAuth-only scope)* — a tiny synchronous script for the Flutter `index.html` that redirects logged-out bare-root visitors to the lite login *before* the engine boots (handoff/authenticated sessions fall through). Removed for now so normal users use the Flutter login; re-add to roll out to all users (commit `fb04e423`). | [web/index.html](web/index.html) |
+| 3 | **Hosting rewrites** — `/OAuthlogin/**` → `/lite/index.html`; everything else (incl. `/login` and bare root) → the Flutter `/index.html`. *(Full rollout also rewrites `/login` → lite.)* | [firebase.json](firebase.json) |
 | 4 | **Background Flutter prefetch** — during the login interaction the lite page warms the entire first-frame critical path: `main.dart.js`, the correct CanvasKit variant (`chromium/` on Chromium browsers, base otherwise), `AssetManifest.bin`, and every font in `FontManifest.json` (read dynamically). Same-origin, `rel=prefetch`/`fetch()` at lowest priority. | [web/lite/index.html](web/lite/index.html) |
 | 5 | **Web font pruning** — post-build script removes fonts CanvasKit would otherwise download before the first frame: shadcn Geist/GeistMono italics + off weights, plus families verified unused on web (`InterVariable`, `GeistMono`, `syncfusion_flutter_datagrid` icons). **Web build only** — pubspec/dependencies are untouched, so mobile is unaffected. | [tool/prune_web_fonts.py](tool/prune_web_fonts.py) |
 | 6 | **CanvasKit self-hosting** — `canvasKitBaseUrl: "canvaskit/"` so the renderer loads from our origin (HTTP/2-multiplexed) instead of `gstatic.com`. Service-worker registration kept. Render-blocking third-party scripts (digio) removed from the critical path. | [web/flutter_bootstrap.js](web/flutter_bootstrap.js), [web/index.html](web/index.html) |
@@ -72,6 +81,22 @@ the prefetch from ~5.5 MB to ~4.36 MB and lightens every cold Flutter load.
 > **Note:** the prefetch is best-effort — it races the user's login. On a slow
 > connection a very fast login can finish before the ~4.36 MB completes, in which
 > case the remainder downloads after login (no worse than before).
+
+### Enabling the lite page for all users
+
+The lite page is currently **OAuth-only**. To make it the default for **every**
+login (the full-rollout design above):
+
+1. **`firebase.json`** — add the `/login` rewrite *above* the `**` catch-all:
+   ```json
+   { "source": "/login", "destination": "/lite/index.html" },
+   ```
+2. **`web/index.html`** — re-add the pre-boot auth gate as the first `<script>` in
+   `<head>`: redirect logged-out bare-root visitors to `/login` before the engine
+   boots, while letting `?uid=&token=` handoffs and an existing
+   `flutter.clientSession` fall through to Flutter. Exact snippet is in commit
+   `fb04e423`.
+3. Rebuild and deploy.
 
 ---
 
