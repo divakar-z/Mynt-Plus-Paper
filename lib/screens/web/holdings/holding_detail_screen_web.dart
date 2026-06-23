@@ -530,8 +530,12 @@ class _HoldingDetailScreenWebState
         ),
         _rowOfInfoData(
           "Product",
-          Text(
-            _holdingData.sPrdtAli != "null" ? "${_holdingData.sPrdtAli}" : "--",
+        Text(
+            (_holdingData.sPrdtAli == null ||
+                    _holdingData.sPrdtAli!.isEmpty ||
+                    _holdingData.sPrdtAli == "null")
+                ? ""
+                : _holdingData.sPrdtAli!,
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
