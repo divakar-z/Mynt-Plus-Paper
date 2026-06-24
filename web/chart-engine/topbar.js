@@ -2535,6 +2535,7 @@
   labBtn.className = 'tb-chip tb-lab';
   labBtn.type = 'button';
   labBtn.title = 'The Lab — experimental analysis';
+  labBtn.style.display = 'none';
   labBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" '
       + 'fill="none" stroke="currentColor" stroke-width="2" '
       + 'stroke-linecap="round" stroke-linejoin="round">'

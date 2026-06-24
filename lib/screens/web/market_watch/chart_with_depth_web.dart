@@ -1306,6 +1306,22 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             : theme.colorScheme.mutedForeground,
                       ),
                   ),
+                  const SizedBox(width: 4),
+                  Transform.translate(
+                    offset: const Offset(0, -6),
+                    child: Text(
+                      'Beta',
+                      style: MyntWebTextStyles.caption(
+                        context,
+                        color: resolveThemeColor(
+                          context,
+                          dark: MyntColors.primaryDark,
+                          light: MyntColors.primary,
+                        ),
+                        fontWeight: MyntFonts.semiBold,
+                      ).copyWith(fontSize: 10),
+                    ),
+                  ),
                 ],
               ),
             ),
