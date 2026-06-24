@@ -2569,7 +2569,11 @@ class _CustomizableSplitHomeScreenState
                                   'Beta',
                                   style: MyntWebTextStyles.caption(
                                     context,
-                                    color: Colors.red,
+                                    color: resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.primaryDark,
+                                      light: MyntColors.primary,
+                                    ),
                                     fontWeight: MyntFonts.semiBold,
                                   ).copyWith(fontSize: 10),
                                 ),
@@ -2578,6 +2582,10 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
+                      // Scanner / Orderflow / Charts — hidden from the Options
+                      // dropdown for now (commented out per request). Restore by
+                      // un-commenting; handlers (_handleScannerTap etc.) remain.
+                      /*
                       // Scanner
                       shadcn.MenuButton(
                         onPressed: (context) {
@@ -2645,7 +2653,11 @@ class _CustomizableSplitHomeScreenState
                                   'Beta',
                                   style: MyntWebTextStyles.caption(
                                     context,
-                                    color: Colors.red,
+                                    color: resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.primaryDark,
+                                      light: MyntColors.primary,
+                                    ),
                                     fontWeight: MyntFonts.semiBold,
                                   ).copyWith(fontSize: 10),
                                 ),
@@ -2686,6 +2698,7 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
+                      */
                     ],
                   ),
                       ),
