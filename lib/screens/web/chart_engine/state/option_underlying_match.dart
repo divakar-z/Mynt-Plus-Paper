@@ -113,13 +113,58 @@ class _UnderlyingScrip {
 ///
 /// Returns the parsed option metadata as a side effect via [parsedOut] so
 /// the caller can reuse it for the overlay label without re-parsing.
+/// Robustly extracts (strike, CE/PE) without depending on the expiry format —
+/// some tsyms have no 2-digit year (e.g. BFO `SENSEX26JUN77100CE`), which makes
+/// the strict DD-MON-YY regex mis-read the strike. Order of trust:
+///   1) `dname` — space-separated and unambiguous, e.g. `SENSEX 25 JUN 77100 CE`
+///   2) tsym tail `77100CE` (strike then CE/PE) — e.g. `SENSEX26JUN77100CE`
+///   3) tsym tail `C305` (C/P then strike) — e.g. `NATGASMINI23JUN26C305`
+({double strike, String optType})? _strikeAndType({String? tsym, String? dname}) {
+  final d = (dname ?? '').toUpperCase().trim();
+  if (d.isNotEmpty) {
+    final parts = d.split(RegExp(r'\s+'));
+    for (var i = parts.length - 1; i > 0; i--) {
+      if (parts[i] == 'CE' || parts[i] == 'PE') {
+        final s = double.tryParse(parts[i - 1].replaceAll(',', ''));
+        if (s != null && s > 0) return (strike: s, optType: parts[i]);
+      }
+    }
+  }
+  final t = (tsym ?? '').toUpperCase();
+  var m = RegExp(r'(\d+(?:\.\d+)?)(CE|PE)$').firstMatch(t);
+  if (m != null) {
+    final s = double.tryParse(m.group(1)!);
+    if (s != null && s > 0) return (strike: s, optType: m.group(2)!);
+  }
+  m = RegExp(r'([CP])(\d+(?:\.\d+)?)$').firstMatch(t);
+  if (m != null) {
+    final s = double.tryParse(m.group(2)!);
+    if (s != null && s > 0) {
+      return (strike: s, optType: m.group(1)! == 'C' ? 'CE' : 'PE');
+    }
+  }
+  return null;
+}
+
 bool positionOptionMatchesPane({
   required ChartScrip paneScrip,
   required PositionBookModel pos,
   required void Function(ParsedOption) parsedOut,
 }) {
-  final parsed = parseOptionTsym(pos.tsym);
-  if (parsed == null) return false; // need the strike + label for the line
+  // Strike + CE/PE for the line/label (format-tolerant, dname-first).
+  final st = _strikeAndType(tsym: pos.tsym, dname: pos.dname);
+  if (st == null) return false; // can't place a line without a strike
+  // Underlying NAME (only needed for the index-map fallback) — best effort from
+  // the strict parse; the wrong-strike case there is irrelevant, we use `st`.
+  final strict = parseOptionTsym(pos.tsym);
+  final parsed = ParsedOption(
+    underlying: strict?.underlying ?? (pos.symname ?? '').toUpperCase(),
+    expiryDay: strict?.expiryDay ?? '',
+    expiryMon: strict?.expiryMon ?? '',
+    expiryYr: strict?.expiryYr ?? '',
+    optType: st.optType,
+    strike: st.strike,
+  );
 
   // PRIMARY — broker-provided underlying linkage. OPTFUT/OPTSTK positions carry
   // `und_exch`/`und_tk` = the underlying future/spot scrip, so we match it
