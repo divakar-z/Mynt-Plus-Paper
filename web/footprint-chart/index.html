@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orderflow</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="root">
+    <header id="topbar">
+      <div class="brand">Footprint</div>
+      <div class="meta">
+        <span id="sym">—</span>
+        <span class="dot"></span>
+        <span id="tf">—</span>
+        <span class="dot"></span>
+        <span id="status" class="status status-offline">Offline</span>
+        <span class="dot"></span>
+        <span id="counters">0 candles</span>
+      </div>
+    </header>
+    <main id="chart-wrap">
+      <canvas id="chart"></canvas>
+      <div id="overlay" hidden>
+        <div class="overlay-card">
+          <div id="overlay-title">Loading orderflow…</div>
+          <div id="overlay-detail" class="muted"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="chart.js"></script>
+</body>
+</html>

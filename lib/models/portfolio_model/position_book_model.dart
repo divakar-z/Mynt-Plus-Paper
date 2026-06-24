@@ -58,6 +58,13 @@ class PositionBookModel {
   String? unRealMtm;
   String? dname;
   String? bookedPnL;
+  // Underlying linkage for derivatives (OPTFUT/OPTSTK/FUT). The broker gives
+  // the option's underlying directly, so we don't have to parse the tsym:
+  //   und_exch / und_tk → the underlying future/spot's exch + token
+  //   symname           → clean underlying symbol, e.g. "NATGASMINI"
+  String? undExch;
+  String? undTk;
+  String? symname;
   bool? isExitSelection;
   bool? isAlreadyGroup;
   PositionBookModel(
@@ -119,6 +126,9 @@ class PositionBookModel {
       this.qty,
       this.unRealMtm,
       this.bookedPnL,
+      this.undExch,
+      this.undTk,
+      this.symname,
       this.isExitSelection,
       this.isAlreadyGroup});
 
@@ -167,6 +177,9 @@ class PositionBookModel {
     totsellamt = json['totsellamt'];
     totsellavgprc = json['totsellavgprc'];
     tsym = json['tsym'];
+    undExch = json['und_exch'];
+    undTk = json['und_tk'];
+    symname = json['symname'];
     uid = json['uid'];
     upldprc = json['upldprc'];
     urmtom = json['urmtom'];
