@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
+import 'package:uuid/uuid.dart';
 
 import '../../../api/core/api_link.dart';
 import '../../../locator/locator.dart';
@@ -37,6 +38,9 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
   _OAuthStage _stage = _OAuthStage.checking;
   String _dname = '';
   String _uid = '';
+  // The session (nwc_id) that actually validated — main web session or the
+  // OAuth-only session. Used when submitting the authorize (mynt-auth) call.
+  String? _authNwcId;
 
   @override
   void initState() {
@@ -61,15 +65,21 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
 
   String get _clientId => (widget.clientId ?? '').trim();
 
-  String? get _nwcId {
-    final s = locator<Preferences>().clientSession ?? '';
-    return s.isEmpty ? null : s;
-  }
-
-  bool get _hasSession {
+  /// Sessions to try for validate/auth, in priority order:
+  ///   1. the main web session (clientSession), then
+  ///   2. the OAuth-only session.
+  /// We do NOT filter the OAuth session locally — mynt-validate is the single
+  /// source of truth: each session is sent and only a uid means "owns this key".
+  /// Keeping the OAuth session separate is what lets the main web session survive
+  /// while an OAuth login for a different account is in play.
+  List<String> get _candidateSessions {
     final pref = locator<Preferences>();
-    return (pref.clientId ?? '').isNotEmpty &&
-        (pref.clientSession ?? '').isNotEmpty;
+    final out = <String>[];
+    final main = (pref.clientSession ?? '').trim();
+    if (main.isNotEmpty) out.add(main);
+    final oauth = (pref.oauthSession ?? '').trim();
+    if (oauth.isNotEmpty) out.add(oauth);
+    return out;
   }
 
   Future<void> _bootstrap() async {
@@ -78,73 +88,83 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
       return;
     }
 
-    if (!_hasSession) {
-      _redirectToLogin();
-      return;
-    }
-
-    // Don't compare the logged-in account against the link locally — the app_key
-    // lookup is case-sensitive and owner-aware on the backend. Always validate on
-    // the raw client_id and let the response decide: a session that owns the key
-    // gets a uid (consent); one that doesn't gets no uid and is sent to login.
+    // Validate first — always, even with no session (an empty nwc_id) — so an
+    // invalid app key shows Restricted immediately instead of after a pointless
+    // login, matching the vendor. No local account comparison; the backend's
+    // response (uid / "no data" / neither) decides the screen.
     setState(() => _stage = _OAuthStage.validating);
     await _validate();
   }
 
   Future<void> _validate() async {
-    final nwcId = _nwcId;
-    if (nwcId == null) {
-      setState(() => _stage = _OAuthStage.invalid);
-      return;
+    // Try the real sessions in priority order (main web session first, then the
+    // OAuth session). When there are none, still make ONE attempt with a throwaway
+    // random nwc_id so the backend can tell us whether the app key is even valid.
+    // (Our mynt-validate rejects an empty nwc_id, but a non-empty random one lets
+    // the session-independent key check run: an invalid key returns "no data" →
+    // Restricted; a valid key returns no uid → login.)
+    final sessions = _candidateSessions;
+    final toTry = sessions.isEmpty ? [const Uuid().v4()] : sessions;
+
+    // The first session that returns a uid wins; a session that doesn't own the
+    // key (Ok, no uid) just falls through to the next.
+    for (final nwcId in toTry) {
+      final json = await _postValidate(nwcId);
+      if (!mounted) return;
+
+      if (json == null) {
+        // Hard error (non-200 / exception). The endpoint is the same for every
+        // session, so retrying with another won't help — surface it.
+        setState(() => _stage = _OAuthStage.invalid);
+        return;
+      }
+
+      final stat = json['stat'];
+      final uid = (json['uid'] ?? '').toString();
+      final emsg = (json['emsg'] ?? '').toString().toLowerCase();
+
+      if (stat == 'Ok' && uid.isNotEmpty) {
+        setState(() {
+          _stage = _OAuthStage.ready;
+          _dname = (json['dname'] ?? '').toString();
+          _uid = uid;
+          _authNwcId = nwcId; // remember the session that authorised
+        });
+        return;
+      }
+      if (stat == 'Not_Ok' && emsg.contains('no data')) {
+        // App key not valid for OAuth at all — session-independent, so stop.
+        setState(() => _stage = _OAuthStage.restricted);
+        return;
+      }
+      // stat=Ok but no uid → this session doesn't own the key; try the next one.
     }
 
+    // No session could authorise the key — send the user to /login to sign in as
+    // the owning account. No logout: the main web session must stay alive.
+    _redirectToLogin();
+  }
+
+  /// POSTs one validate attempt. Returns the parsed JSON, or null on a hard
+  /// error (non-200 status or exception).
+  Future<Map<String, dynamic>?> _postValidate(String nwcId) async {
     final payload = {'client_id': _clientId, 'nwc_id': nwcId};
     if (kDebugMode) log('mynt-validate Request => $payload');
-
     try {
       final res = await http.post(
         Uri.parse(_validateUrl),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       );
-
       if (kDebugMode) {
         log('mynt-validate status => ${res.statusCode}');
         log('mynt-validate body => ${res.body}');
       }
-
-      if (!mounted) return;
-
-      if (res.statusCode != 200) {
-        setState(() => _stage = _OAuthStage.invalid);
-        return;
-      }
-
-      final json = jsonDecode(res.body) as Map<String, dynamic>;
-      final stat = json['stat'];
-      final uid = (json['uid'] ?? '').toString();
-      // Backend contract: a valid caller returns stat=Ok AND a uid. Anything else
-      // (no uid, or a non-"no data" Not_Ok) means this session can't authorise the
-      // app_key — send the user to /login to re-auth as the owning account. Do NOT
-      // log out: the session is shared across tabs and must stay alive.
-      final emsg = (json['emsg'] ?? '').toString().toLowerCase();
-      if (stat == 'Ok' && uid.isNotEmpty) {
-        setState(() {
-          _stage = _OAuthStage.ready;
-          _dname = (json['dname'] ?? '').toString();
-          _uid = uid;
-        });
-      } else if (stat == 'Not_Ok' && emsg.contains('no data')) {
-        // API-only user — not allowed to use this OAuth flow. Show a dedicated
-        // restricted screen instead of logging them out.
-        setState(() => _stage = _OAuthStage.restricted);
-      } else {
-        _redirectToLogin();
-      }
+      if (res.statusCode != 200) return null;
+      return jsonDecode(res.body) as Map<String, dynamic>;
     } catch (e) {
       if (kDebugMode) log('mynt-validate error => $e');
-      if (!mounted) return;
-      setState(() => _stage = _OAuthStage.invalid);
+      return null;
     }
   }
 
@@ -160,7 +180,7 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
   }
 
   void _onAuthorisePressed() {
-    final nwcId = _nwcId;
+    final nwcId = _authNwcId;
     if (_clientId.isEmpty || nwcId == null) {
       ResponsiveSnackBar.showError(context, 'Session not found.');
       return;

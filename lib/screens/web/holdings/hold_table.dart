@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart'
     show
@@ -81,8 +82,15 @@ import 'holding_detail_screen_web.dart';
 class TableExample1 extends ConsumerStatefulWidget {
   final String? searchQuery;
   final String filterType; // 'All', 'Stocks', 'Bonds'
+  // When true, render the MTF (prd:"F") holdings list instead of the equity
+  // (prd:"C") list. Same table UI, different data source.
+  final bool isMtf;
 
-  const TableExample1({super.key, this.searchQuery, this.filterType = 'All'});
+  const TableExample1(
+      {super.key,
+      this.searchQuery,
+      this.filterType = 'All',
+      this.isMtf = false});
 
   @override
   ConsumerState<TableExample1> createState() => _TableExample1State();
@@ -564,7 +572,9 @@ class _TableExample1State extends ConsumerState<TableExample1> {
   @override
   Widget build(BuildContext context) {
     final portfolioData = ref.watch(portfolioProvider);
-    final holdings = portfolioData.holdingsModel ?? [];
+    final holdings = widget.isMtf
+        ? (portfolioData.mtfHoldingsModel ?? [])
+        : (portfolioData.holdingsModel ?? []);
 
     // Filter to show only stock holdings (not mutual funds)
     var stockHoldings = holdings.where((holding) {
@@ -684,12 +694,20 @@ class _TableExample1State extends ConsumerState<TableExample1> {
 
     // Show NoDataFound if no results after filtering
     if (displayHoldings.isEmpty) {
+      final emptyTitleNoSearch = widget.isMtf ? "No MTF Holdings" : "No Stocks";
+      final emptyTitleSearch =
+          widget.isMtf ? "No MTF Holdings Found" : "No Stocks Found";
+      final emptySubtitleNoSearch = widget.isMtf
+          ? "You don't have any MTF holdings yet."
+          : "You don't have any stock holdings yet.";
+      final emptySubtitleSearch = widget.isMtf
+          ? "No MTF holdings match your search \"$searchQuery\"."
+          : "No stocks match your search \"$searchQuery\".";
       return shadcn.OutlinedContainer(
         child: NoDataFoundWeb(
-          title: searchQuery.isNotEmpty ? "No Stocks Found" : "No Stocks",
-          subtitle: searchQuery.isNotEmpty
-              ? "No stocks match your search \"$searchQuery\"."
-              : "You don't have any stock holdings yet.",
+          title: searchQuery.isNotEmpty ? emptyTitleSearch : emptyTitleNoSearch,
+          subtitle:
+              searchQuery.isNotEmpty ? emptySubtitleSearch : emptySubtitleNoSearch,
           primaryEnabled: false,
           secondaryEnabled: false,
         ),
@@ -1060,7 +1078,7 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                               borderRadius: BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              'T1: ${int.parse(holding.npoadt1qty ?? "0") + int.parse(holding.btstqty ?? "0")}',
+                                              'T1: ${math.max(int.parse(holding.npoadt1qty ?? "0"), int.parse(holding.btstqty ?? "0"))}',
                                               style: MyntWebTextStyles.para(
                                                 context,
                                                 darkColor: MyntColors.primaryDark,

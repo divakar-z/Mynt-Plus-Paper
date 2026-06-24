@@ -477,9 +477,8 @@ class _PositionHoldingsCardWebState
     // Use currentQty for display (total holdings), saleableQty is for selling
     final currentQty = holding.currentQty ?? 0;
     final saleableQty = holding.saleableQty ?? 0;
-    // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-    final int t1Qty = int.parse(holding.npoadt1qty ?? "0");
-    final int totalQty = currentQty + t1Qty;
+    // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+    final int totalQty = currentQty;
 
     // Show card if there's any holding (totalQty > 0)
     if (totalQty <= 0) return const SizedBox.shrink();

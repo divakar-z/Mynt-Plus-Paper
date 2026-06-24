@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart' hide Colors;
 import 'package:flutter/material.dart' as material show showDialog;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -328,7 +329,7 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
       case 'Net Qty':
         final qty = holding.currentQty ?? 0;
         // T1 qty: npoadt1qty for Non-POA clients, btstqty for POA clients
-        final t1Qty = int.parse(holding.npoadt1qty ?? "0") + int.parse(holding.btstqty ?? "0");
+        final t1Qty = math.max(int.parse(holding.npoadt1qty ?? "0"), int.parse(holding.btstqty ?? "0"));
         final qtyText = qty > 0 ? '+$qty' : '$qty';
         return Row(
           mainAxisSize: MainAxisSize.min,
@@ -390,8 +391,8 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
           return Text(holding.currentValue ?? '0.00',
               textAlign: TextAlign.right);
         }
-        // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-        final int curValTotalQty = (holding.currentQty ?? 0) + int.parse(holding.npoadt1qty ?? "0");
+        // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+        final int curValTotalQty = (holding.currentQty ?? 0);
         return _CurrentValueCell(
           token: token,
           qty: curValTotalQty,
@@ -420,8 +421,8 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
         if (token.isEmpty) {
           return _buildColoredText(exchTsym?.profitNloss ?? '0.00');
         }
-        // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-        final int pnlTotalQty = (holding.currentQty ?? 0) + int.parse(holding.npoadt1qty ?? "0");
+        // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+        final int pnlTotalQty = (holding.currentQty ?? 0);
         return _OverallPnLCell(
           token: token,
           qty: pnlTotalQty,
