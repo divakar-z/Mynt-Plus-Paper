@@ -1315,8 +1315,32 @@ class _ModifyPlaceOrderScreenState
                               if (prcType == "MKT" ||
                                   prcType == "SL-MKT") ...[
                                 const SizedBox(height: 16),
-                                marketProtectionDisclaimer(theme, context,
-                                    widget.scripInfo, mktProtCtrl.text),
+                                // Market protection is not editable on modify
+                                // (vendor does not allow changing it) — show only.
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 16),
+                                  child: Row(
+                                    children: [
+                                      Text("Market Protected by",
+                                          style: WebTextStyles.sub(
+                                            isDarkTheme: theme.isDarkMode,
+                                            color: resolveThemeColor(context,
+                                                dark: MyntColors.primaryDark,
+                                                light: MyntColors.primary),
+                                          )),
+                                      const SizedBox(width: 6),
+                                      Text("${mktProtCtrl.text} %",
+                                          style: WebTextStyles.para(
+                                            isDarkTheme: theme.isDarkMode,
+                                            color: resolveThemeColor(context,
+                                                dark: MyntColors.primaryDark,
+                                                light: MyntColors.primary),
+                                            fontWeight: WebFonts.semiBold,
+                                          )),
+                                    ],
+                                  ),
+                                ),
                                 // const SizedBox(height: 16),
                               ],
                               // Advance Option section
@@ -2359,13 +2383,18 @@ class _ModifyPlaceOrderScreenState
                                                                           ? "${widget.scripInfo.exch == 'MCX' ? 'Lot' : 'Quantity'} cannot be 0"
                                                                           : "Price cannot be 0");
                                                                 } else if (_hasValidCircuitBreakerValues &&
-                                                                    ((double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) < double.parse("${widget.scripInfo.lc}")) ||
-                                                                    (double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) >
+                                                                    prcType != "MKT" &&
+                                                                    prcType != "SL-MKT" &&
+                                                                    ((double.parse(priceCtrl.text) < double.parse("${widget.scripInfo.lc}")) ||
+                                                                    (double.parse(priceCtrl.text) >
                                                                         double.parse(
                                                                             "${widget.scripInfo.uc}")))) {
+                                                                  // Skip for MKT/SL-MKT: they have no limit price ("Market"),
+                                                                  // so a price-vs-circuit check would falsely block the modify
+                                                                  // (mirrors the Place screen, which gates this to limit orders).
                                                                   ResponsiveSnackBar.showWarning(
                                                                       context,
-                                                                      double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) <
+                                                                      double.parse(priceCtrl.text) <
                                                                               double.parse("${widget.scripInfo.lc}")
                                                                           ? "Price can not be lesser than Lower Circuit Limit ${widget.scripInfo.lc}"
                                                                           : "Price can not be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
