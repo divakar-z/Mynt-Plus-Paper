@@ -34,9 +34,9 @@ class ScoreProgressBar extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
         ClipRRect(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(0),
           child: Stack(
             children: [
               Container(height: 8, color: bg),

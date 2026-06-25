@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_score.dart';
 import 'package:mynt_plus/models/scanner_model/symbol_info.dart';
@@ -19,42 +20,69 @@ class FundamentalTab extends ConsumerWidget {
     final info = ref.watch(symbolInfoProvider(ticker));
     final score = ref.watch(fundamentalScoreProvider(ticker));
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Overview',
-              style:
-                  MyntWebTextStyles.body(context, fontWeight: MyntFonts.semiBold)),
-          const SizedBox(height: 8),
-          info.when(
-            loading: () => const Padding(
-                padding: EdgeInsets.all(20),
-                child: Center(child: CircularProgressIndicator())),
-            error: (e, _) => EmptyState(
-              kind: EmptyStateKind.error,
-              title: 'Could not load company info',
-              message: e.toString(),
-              onRetry: () => ref.invalidate(symbolInfoProvider(ticker)),
-            ),
-            data: (i) => _overviewGrid(i),
+    final overview = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Overview',
+            style:
+                MyntWebTextStyles.body(context, fontWeight: MyntFonts.bold)),
+        const SizedBox(height: 8),
+        info.when(
+          loading: () => Padding(
+              padding: const EdgeInsets.all(20),
+              child: Center(child: MyntLoader.simple())),
+          error: (e, _) => EmptyState(
+            kind: EmptyStateKind.error,
+            title: 'Could not load company info',
+            message: e.toString(),
+            onRetry: () => ref.invalidate(symbolInfoProvider(ticker)),
           ),
-          const SizedBox(height: 24),
-          score.when(
-            loading: () => const Padding(
-                padding: EdgeInsets.all(20),
-                child: Center(child: CircularProgressIndicator())),
-            error: (e, _) => EmptyState(
-              kind: EmptyStateKind.error,
-              title: 'Could not load score',
-              message: e.toString(),
-              onRetry: () => ref.invalidate(fundamentalScoreProvider(ticker)),
-            ),
-            data: (s) => _scoreSection(context, s),
-          ),
-        ],
+          data: (i) => _overviewGrid(i),
+        ),
+      ],
+    );
+
+    final scoreSection = score.when(
+      loading: () => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Center(child: MyntLoader.simple())),
+      error: (e, _) => EmptyState(
+        kind: EmptyStateKind.error,
+        title: 'Could not load score',
+        message: e.toString(),
+        onRetry: () => ref.invalidate(fundamentalScoreProvider(ticker)),
       ),
+      data: (s) => _scoreSection(context, s),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: LayoutBuilder(builder: (ctx, c) {
+        final wide = c.maxWidth >= 700;
+        if (!wide) {
+          return SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                overview,
+                const SizedBox(height: 24),
+                scoreSection,
+              ],
+            ),
+          );
+        }
+        // Wide: Overview on the left half, Fundamental Score on the right half.
+        return SingleChildScrollView(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: overview),
+              const SizedBox(width: 24),
+              Expanded(child: scoreSection),
+            ],
+          ),
+        );
+      }),
     );
   }
 
@@ -103,10 +131,10 @@ class FundamentalTab extends ConsumerWidget {
           children: [
             Text('Fundamental Score:  ',
                 style: MyntWebTextStyles.body(context,
-                    fontWeight: MyntFonts.semiBold)),
+                    fontWeight: MyntFonts.bold)),
             Text(
               composite == null ? kEmDash : composite.round().toString(),
-              style: MyntWebTextStyles.head(context,
+              style: MyntWebTextStyles.title(context,
                   fontWeight: MyntFonts.bold, color: scoreColor),
             ),
             Text(' / 100',

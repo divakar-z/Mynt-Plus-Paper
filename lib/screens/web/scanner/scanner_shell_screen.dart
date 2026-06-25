@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/models/scanner_model/scan_explain.dart'
@@ -6,6 +7,7 @@ import 'package:mynt_plus/models/scanner_model/scan_explain.dart'
 import 'package:mynt_plus/provider/scanner/scanner_shell_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
 import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart'
     show ScannerSubPage;
 import 'package:mynt_plus/screens/web/market_watch/chart_with_depth_web.dart';
@@ -15,7 +17,8 @@ import 'sub_pages/scan_explain_screen.dart';
 import 'sub_pages/scanners_sub_page.dart';
 import 'sub_pages/symbols_sub_page.dart';
 import 'widgets/empty_state.dart';
-import 'widgets/scanner_breadcrumb.dart';
+// ignore: unused_import
+import 'widgets/scanner_breadcrumb.dart'; // kept for the commented breadcrumb
 import 'widgets/scanner_left_rail.dart';
 
 class ScannerShellScreen extends ConsumerStatefulWidget {
@@ -105,7 +108,7 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
     if (state.isResolvingScrip) {
       return Column(children: [
         _backBar(state),
-        const Expanded(child: Center(child: CircularProgressIndicator())),
+        Expanded(child: Center(child: MyntLoader.branded())),
       ]);
     }
     if (state.scripError != null) {
@@ -126,19 +129,19 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
     // Default — show the active sub-page.
     return Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: width < 760 ? 12 : 24,
-        vertical: width < 760 ? 16 : 20,
+        horizontal: 16,
+        vertical: 16,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ScannerBreadcrumb(
-            segments: [
-              const BreadcrumbSegment('Scanner'),
-              BreadcrumbSegment(_label(state.activeSubPage)),
-            ],
-          ),
-          const SizedBox(height: 12),
+          // ScannerBreadcrumb(
+          //   segments: [
+          //     const BreadcrumbSegment('Scanner'),
+          //     BreadcrumbSegment(_label(state.activeSubPage)),
+          //   ],
+          // ),
+          // const SizedBox(height: 12),
           Expanded(
             child: IndexedStack(
               // Symbols sub-page is no longer shown in the rail, but its
@@ -158,27 +161,24 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
     );
   }
 
-  /// Top bar shown while a scrip is selected (or being resolved). One-line
-  /// header: ← Back · Scanner › `SubPage` › `Symbol`
+  /// Top bar shown while a scrip is selected (or being resolved): a simple
+  /// back button + the symbol name (matches the detail header style).
   Widget _backBar(ScannerShellState state) {
     final border = shadcn.Theme.of(context).colorScheme.border;
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final scrip = state.selectedScrip;
     final explain = state.explainArgs;
     final inExplain = explain != null;
+    final title = scrip != null
+        ? (scrip.symbol.isNotEmpty ? scrip.symbol : scrip.tsym)
+        : (explain?.ticker ?? '');
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: border)),
       ),
       child: Row(children: [
-        IconButton(
-          icon: const Icon(shadcn.LucideIcons.arrowLeft, size: 18),
-          tooltip: 'Back',
-          onPressed: () {
+        CustomBackBtn(
+          onBack: () {
             // Same back arrow handles both modes — explain wins because
             // it can only be open when scrip detail is closed.
             if (inExplain) {
@@ -188,31 +188,21 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
             }
           },
         ),
-        const SizedBox(width: 4),
-        Text('Scanner',
-            style: MyntWebTextStyles.caption(context, color: secondary)),
-        Icon(shadcn.LucideIcons.chevronRight, size: 12, color: secondary),
-        Text(_label(state.activeSubPage),
-            style: MyntWebTextStyles.caption(context, color: secondary)),
-        if (scrip != null) ...[
-          Icon(shadcn.LucideIcons.chevronRight, size: 12, color: secondary),
-          Text(scrip.symbol.isNotEmpty ? scrip.symbol : scrip.tsym,
-              style: MyntWebTextStyles.caption(context,
-                  fontWeight: MyntFonts.semiBold, color: primary)),
-        ],
-        if (inExplain) ...[
-          Icon(shadcn.LucideIcons.chevronRight, size: 12, color: secondary),
-          Text(explain.ticker,
-              style: MyntWebTextStyles.caption(context,
-                  fontWeight: MyntFonts.semiBold, color: primary)),
-          Icon(shadcn.LucideIcons.chevronRight, size: 12, color: secondary),
-          Text('Explanation',
-              style: MyntWebTextStyles.caption(context, color: secondary)),
-        ],
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            title,
+            style: MyntWebTextStyles.title(context,
+                fontWeight: MyntFonts.semiBold),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ]),
     );
   }
 
+  // Kept for the (currently commented-out) breadcrumb in the default area.
+  // ignore: unused_element
   String _label(ScannerSubPage p) {
     switch (p) {
       case ScannerSubPage.symbols:

@@ -26,7 +26,7 @@ class MetricCard extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         border: Border.all(color: border, width: 1),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(5),
         color: resolveThemeColor(context,
             dark: MyntColors.cardDark, light: MyntColors.card),
       ),
@@ -36,32 +36,43 @@ class MetricCard extends StatelessWidget {
         children: [
           Text(
             label,
-            style: MyntWebTextStyles.caption(context,
+            style: MyntWebTextStyles.para(context,
                 color: resolveThemeColor(context,
                     dark: MyntColors.textSecondaryDark,
                     light: MyntColors.textSecondary)),
           ),
           const SizedBox(height: 4),
-          Text(
-            value,
-            style: MyntWebTextStyles.body(context,
-                fontWeight: MyntFonts.semiBold),
+          // Value on the left, badge opposite it on the right (same row).
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  value,
+                  style: MyntWebTextStyles.body(context,
+                      fontWeight: MyntFonts.semiBold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (badge != null) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: badge!.color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    badge!.label,
+                    style: MyntWebTextStyles.caption(context,
+                        color: badge!.color, fontWeight: MyntFonts.medium),
+                  ),
+                ),
+              ],
+            ],
           ),
-          if (badge != null) ...[
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: badge!.color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                badge!.label,
-                style: MyntWebTextStyles.caption(context,
-                    color: badge!.color, fontWeight: MyntFonts.medium),
-              ),
-            ),
-          ],
           if (secondaryLine != null) ...[
             const SizedBox(height: 4),
             Text(secondaryLine!,

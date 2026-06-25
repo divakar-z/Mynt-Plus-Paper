@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -49,7 +50,7 @@ class CustomScansSubPage extends ConsumerWidget {
         const SizedBox(height: 12),
         Expanded(
           child: async.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
+            loading: () => Center(child: MyntLoader.branded()),
             error: (e, _) => EmptyState(
               kind: EmptyStateKind.error,
               title: 'Could not load custom scans',
@@ -299,7 +300,7 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
         const SizedBox(height: 16),
         Expanded(
           child: view.result.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
+            loading: () => Center(child: MyntLoader.simple()),
             error: (e, _) => EmptyState(
               kind: EmptyStateKind.error,
               title: 'Could not run scan',

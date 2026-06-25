@@ -1,5 +1,8 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/api/core/api_export.dart';
@@ -67,32 +70,14 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
                               light: MyntColors.textSecondary)))
                   : Wrap(spacing: 8, runSpacing: 8, children: [
                       for (final s in list)
-                        InputChip(
-                          avatar: const Icon(shadcn.LucideIcons.bookmark, size: 12),
-                          label: Text(s.name),
-                          onPressed: () => _setBuilder(_state.copyWith(
-                                    filters: s.filters,
-                                    treatNullAs: s.treatNullAs,
-                                  )),
-                          onDeleted: () async {
-                            final ok = await showDialog<bool>(
-                              context: context,
-                              builder: (_) => AlertDialog(
-                                title: const Text('Delete saved screen?'),
-                                content: Text('"${s.name}" will be removed.'),
-                                actions: [
-                                  TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, false),
-                                      child: const Text('Cancel')),
-                                  FilledButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, true),
-                                      child: const Text('Delete')),
-                                ],
-                              ),
-                            );
-                            if (ok == true) {
+                        _SavedScreenChip(
+                          name: s.name,
+                          onApply: () => _setBuilder(_state.copyWith(
+                                filters: s.filters,
+                                treatNullAs: s.treatNullAs,
+                              )),
+                          onDelete: () async {
+                            if (await _confirmDelete(s.name)) {
                               await locator<ApiExporter>()
                                   .deleteSavedScreen(s.id);
                               ref.invalidate(savedScreensProvider);
@@ -141,9 +126,9 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
               orElse: () => const SizedBox.shrink(),
             ),
             child: fields.when(
-              loading: () => const Padding(
+              loading: () => Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
-                child: Center(child: CircularProgressIndicator()),
+                child: Center(child: MyntLoader.branded()),
               ),
               error: (e, _) => EmptyState(
                 kind: EmptyStateKind.error,
@@ -202,35 +187,38 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
   // Top bar: title + Save as / Download / Run scan
   // ---------------------------------------------------------------------
   Widget _topBar() {
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 12,
-      runSpacing: 8,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text('Fundamental Screener',
-            style:
-                MyntWebTextStyles.head(context, fontWeight: MyntFonts.bold)),
-        Text('Filter by any combination of fundamental metrics',
-            style: MyntWebTextStyles.caption(context, color: secondary)),
-        const SizedBox(width: 200), // pushes actions right when wrap fits
+        // Title on the left; Expanded pushes the actions to the far right.
+        Expanded(
+          child: Text('Fundamental Screener',
+              style:
+                  MyntWebTextStyles.head(context, fontWeight: MyntFonts.bold)),
+        ),
+        const SizedBox(width: 16),
+        // Action buttons — right-aligned.
         Row(mainAxisSize: MainAxisSize.min, children: [
-          OutlinedButton.icon(
-            icon: const Icon(shadcn.LucideIcons.save, size: 14),
-            label: const Text('Save as…'),
+          // Save as… — outlined blue (the MF "Backtest" button style).
+          MyntButton(
+            type: MyntButtonType.outlined,
+            label: 'Save as…',
+            icon: shadcn.LucideIcons.save,
             onPressed: _save,
           ),
           const SizedBox(width: 8),
-          OutlinedButton.icon(
-            icon: const Icon(shadcn.LucideIcons.download, size: 14),
-            label: const Text('Download'),
-            onPressed: _export,
+          // Download — icon-only hover button (the scanner-detail download style).
+          _HoverIconButton(
+            icon: Icons.download,
+            tooltip: 'Download',
+            onTap: _export,
           ),
           const SizedBox(width: 8),
-          FilledButton.icon(
-            icon: const Icon(shadcn.LucideIcons.play, size: 14),
-            label: const Text('Run scan'),
+          // Run scan — filled blue primary (the MF "Place Order" button style).
+          MyntButton(
+            type: MyntButtonType.primary,
+            label: 'Run scan',
+            icon: shadcn.LucideIcons.play,
             onPressed: _run,
           ),
         ]),
@@ -402,24 +390,107 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
 
   Future<void> _save() async {
     final ctrl = TextEditingController();
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    // Same shell + name field as the MF "Create Strategy" dialog: shadcn.Card →
+    // bordered header (title + close) → MyntFormTextField (40px) with inline
+    // validation → full-width primary Save (the button always fires).
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Save screen'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(hintText: 'Screen name'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Save')),
-        ],
-      ),
+      builder: (_) {
+        String? errorText;
+        return StatefulBuilder(builder: (dCtx, setLocal) {
+          void trySave() {
+            if (ctrl.text.trim().isEmpty) {
+              setLocal(() => errorText = 'Please enter a name');
+              return;
+            }
+            Navigator.of(dCtx).pop(true);
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            child: shadcn.Card(
+              borderRadius: BorderRadius.circular(8),
+              padding: EdgeInsets.zero,
+              child: Container(
+                width: 400,
+                decoration: BoxDecoration(
+                  color: resolveThemeColor(dCtx,
+                      dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header — title + close, bottom border.
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: border)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Save screen',
+                              style: MyntWebTextStyles.title(dCtx,
+                                  color: textPrimary)),
+                          MyntCloseButton(
+                              onPressed: () => Navigator.of(dCtx).pop(false)),
+                        ],
+                      ),
+                    ),
+                    // Content — name field with inline validation.
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Enter a name for this screen',
+                              style: MyntWebTextStyles.body(dCtx,
+                                  color: textPrimary)),
+                          const SizedBox(height: 12),
+                          MyntFormTextField(
+                            controller: ctrl,
+                            placeholder: 'Screen name',
+                            height: 40,
+                            autofocus: true,
+                            onChanged: (_) {
+                              if (errorText != null) {
+                                setLocal(() => errorText = null);
+                              }
+                            },
+                            onSubmitted: (_) => trySave(),
+                          ),
+                          if (errorText != null) ...[
+                            const SizedBox(height: 8),
+                            Text(errorText!,
+                                style: MyntWebTextStyles.caption(dCtx,
+                                    color: resolveThemeColor(dCtx,
+                                        dark: MyntColors.lossDark,
+                                        light: MyntColors.loss))),
+                          ],
+                          const SizedBox(height: 20),
+                          MyntButton(
+                            type: MyntButtonType.primary,
+                            label: 'Save',
+                            isFullWidth: true,
+                            onPressed: trySave,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        });
+      },
     );
     if (ok == true && ctrl.text.trim().isNotEmpty) {
       await locator<ApiExporter>().saveScreen(
@@ -432,6 +503,86 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
       );
       ref.invalidate(savedScreensProvider);
     }
+  }
+
+  /// Watchlist-style delete confirmation: shadcn.Card → header (title + close)
+  /// → centered confirm text → full-width red Delete. Returns true if confirmed.
+  Future<bool> _confirmDelete(String name) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: shadcn.Card(
+          borderRadius: BorderRadius.circular(8),
+          padding: EdgeInsets.zero,
+          child: Container(
+            width: 400,
+            decoration: BoxDecoration(
+              color: resolveThemeColor(dCtx,
+                  dark: MyntColors.dialogDark, light: MyntColors.dialog),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                          color: shadcn.Theme.of(dCtx).colorScheme.border),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Delete saved screen',
+                          style: MyntWebTextStyles.title(dCtx,
+                              color: resolveThemeColor(dCtx,
+                                  dark: MyntColors.textPrimaryDark,
+                                  light: MyntColors.textPrimary))),
+                      MyntCloseButton(
+                          onPressed: () => Navigator.of(dCtx).pop(false)),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Are you sure you want to delete "$name"?',
+                        textAlign: TextAlign.center,
+                        style: MyntWebTextStyles.body(dCtx,
+                            fontWeight: MyntFonts.medium,
+                            color: resolveThemeColor(dCtx,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary)),
+                      ),
+                      const SizedBox(height: 24),
+                      MyntButton(
+                        type: MyntButtonType.primary,
+                        size: MyntButtonSize.large,
+                        label: 'Delete',
+                        isFullWidth: true,
+                        backgroundColor: resolveThemeColor(dCtx,
+                            dark: MyntColors.errorDark,
+                            light: MyntColors.tertiary),
+                        onPressed: () => Navigator.of(dCtx).pop(true),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return ok == true;
   }
 
   Future<void> _export() async {
@@ -457,9 +608,9 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
 
   Widget _buildResults() {
     return _result!.when(
-      loading: () => const Padding(
+      loading: () => Padding(
           padding: EdgeInsets.all(16),
-          child: Center(child: CircularProgressIndicator())),
+          child: Center(child: MyntLoader.simple())),
       error: (e, _) => EmptyState(
         kind: EmptyStateKind.error,
         title: 'Run failed',
@@ -559,6 +710,122 @@ class _SectionCard extends StatelessWidget {
           const SizedBox(height: 10),
           child,
         ],
+      ),
+    );
+  }
+}
+
+/// Saved-screen chip — the boxed scalper-style chip used by the scanner index
+/// filter (light fill, primary border, radius 6): tap the body to apply the
+/// screen, the × to delete it.
+class _SavedScreenChip extends StatelessWidget {
+  final String name;
+  final VoidCallback onApply;
+  final VoidCallback onDelete;
+  const _SavedScreenChip({
+    required this.name,
+    required this.onApply,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final textColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: resolveThemeColor(context,
+            dark: Colors.transparent, light: const Color(0xFFF1F3F8)),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark, light: MyntColors.primary),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Tap the body to apply the saved screen.
+          InkWell(
+            onTap: onApply,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 7, 6, 7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [                  
+                  Text(name,
+                      style: MyntWebTextStyles.body(context,
+                          fontWeight: MyntFonts.medium, color: textColor)),
+                ],
+              ),
+            ),
+          ),
+          // × to delete.
+          InkWell(
+            onTap: onDelete,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(2, 7, 8, 7),
+              child: Icon(shadcn.LucideIcons.x, size: 14, color: muted),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact icon button with a grey hover circle — the same download/export
+/// button style used in the scanner-detail header.
+class _HoverIconButton extends StatefulWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _HoverIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  State<_HoverIconButton> createState() => _HoverIconButtonState();
+}
+
+class _HoverIconButtonState extends State<_HoverIconButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: widget.tooltip,
+          child: Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hover
+                  ? resolveThemeColor(context,
+                      dark: MyntColors.cardHoverDark,
+                      light: MyntColors.cardHover)
+                  : Colors.transparent,
+            ),
+            child: Icon(
+              widget.icon,
+              size: 20,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.iconDark, light: MyntColors.icon),
+            ),
+          ),
+        ),
       ),
     );
   }

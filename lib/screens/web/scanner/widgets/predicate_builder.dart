@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/models/scanner_model/indicator_catalog.dart';
@@ -156,9 +157,9 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
   Widget build(BuildContext context) {
     final catalogAsync = ref.watch(indicatorCatalogProvider);
     return catalogAsync.when(
-      loading: () => const Padding(
+      loading: () => Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(child: CircularProgressIndicator()),
+        child: Center(child: MyntLoader.simple()),
       ),
       error: (e, _) => EmptyState(
         kind: EmptyStateKind.error,

@@ -119,18 +119,21 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
     final border = shadcn.Theme.of(context).colorScheme.border;
     final dataCols = _dataCols;
     final rows = _sortedRows;
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    // Footer "Showing N matches" is commented out per request — re-enable
+    // this `secondary` together with the footer block at the bottom.
+    // final secondary = resolveThemeColor(context,
+    //     dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final headerBg = resolveThemeColor(context,
+        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
 
-    // Fixed-width frame columns. Each data column gets a base width based on
-    // its content type (string columns need more room than numeric ones);
-    // any remaining viewport width is then distributed evenly across all
-    // data columns.
-    const stockNameW = 240.0;
+    // Min widths that double as proportional weights for the flexible
+    // columns. Stock Name carries the long company names, so it gets the
+    // largest share of any spare width; numeric columns (short values) get
+    // the least. Exch is fixed — it only ever shows "NSE".
     const exchW = 64.0;
     const rowHPad = 20.0;
-    double baseWidthFor(ScanColumn c) =>
-        c.fmt == 'string' ? 130.0 : 110.0;
+    const stockNameMin = 300.0;
+    double dataMinFor(ScanColumn c) => c.fmt == 'string' ? 150.0 : 120.0;
 
     return LayoutBuilder(builder: (ctx, constraints) {
       // The wrapping Container has a 1px border on each side, so the inner
@@ -138,18 +141,24 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
       const borderW = 1.0;
       final available =
           (constraints.maxWidth - borderW * 2).clamp(0.0, double.infinity);
-      final fixedPart = stockNameW + exchW + rowHPad * 2;
-      final totalBase = dataCols.fold<double>(
-          0.0, (sum, c) => sum + baseWidthFor(c));
-      final extra =
-          (available - fixedPart - totalBase).clamp(0.0, double.infinity);
-      final bonus =
-          dataCols.isEmpty ? 0.0 : extra / dataCols.length;
+      // Spread the spare width proportionally across the flexible columns
+      // (Stock Name + data columns) by their min width — wider columns grow
+      // more, short numeric columns stay compact. Only scale up; when there
+      // isn't room, fall back to mins and let the table scroll horizontally.
+      final dataMinTotal =
+          dataCols.fold<double>(0.0, (sum, c) => sum + dataMinFor(c));
+      final flexBaseTotal = stockNameMin + dataMinTotal;
+      final availableForFlex =
+          (available - exchW - rowHPad * 2).clamp(0.0, double.infinity);
+      final rawScale =
+          flexBaseTotal == 0 ? 1.0 : availableForFlex / flexBaseTotal;
+      final scale = rawScale > 1.0 ? rawScale : 1.0;
+      final stockNameW = stockNameMin * scale;
       final colWidths = <double>[
-        for (final c in dataCols) baseWidthFor(c) + bonus,
+        for (final c in dataCols) dataMinFor(c) * scale,
       ];
       final dataColsW = colWidths.fold<double>(0.0, (s, w) => s + w);
-      final totalWidth = fixedPart + dataColsW;
+      final totalWidth = stockNameW + exchW + rowHPad * 2 + dataColsW;
       final needsScroll = totalWidth > available + 0.5;
 
       Widget table = SizedBox(
@@ -161,6 +170,7 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
               padding: const EdgeInsets.symmetric(
                   horizontal: rowHPad, vertical: 14),
               decoration: BoxDecoration(
+                color: headerBg,
                 border: Border(bottom: BorderSide(color: border)),
               ),
               child: Row(children: [
@@ -175,7 +185,7 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
                 ),
                 SizedBox(
                   width: exchW,
-                  child: const _HeaderText('EXCH'),
+                  child: const _HeaderText('Exch'),
                 ),
                 for (int i = 0; i < dataCols.length; i++)
                   SizedBox(
@@ -224,11 +234,7 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: border),
-                borderRadius: BorderRadius.circular(10),
-              ),
+            child: shadcn.OutlinedContainer(
               clipBehavior: Clip.antiAlias,
               child: needsScroll
                   ? SingleChildScrollView(
@@ -236,12 +242,12 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
                   : table,
             ),
           ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Text(widget.footer,
-                style: MyntWebTextStyles.caption(context, color: secondary)),
-          ),
+          // const SizedBox(height: 8),
+          // Padding(
+          //   padding: const EdgeInsets.only(left: 4),
+          //   child: Text(widget.footer,
+          //       style: MyntWebTextStyles.caption(context, color: secondary)),
+          // ),
         ],
       );
     });
@@ -257,24 +263,24 @@ class _HeaderText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(label,
-        style: MyntWebTextStyles.caption(context,
-                fontWeight: MyntFonts.semiBold,
-                color: resolveThemeColor(context,
-                    dark: MyntColors.textSecondaryDark,
-                    light: MyntColors.textSecondary))
-            .copyWith(letterSpacing: 0.6));
+        style: MyntWebTextStyles.tableHeader(context,
+            fontWeight: MyntFonts.semiBold,
+            color: resolveThemeColor(context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.textSecondary)));
   }
 }
 
-/// Header text with up/down sort indicator + optional info tooltip.
-class _SortHeader extends StatefulWidget {
+/// Header text with a Positions-style sort indicator (arrow shown only on
+/// the active column) plus an optional info tooltip.
+class _SortHeader extends StatelessWidget {
   final String label;
   final String? description;
   final bool active;
   final bool asc;
   final VoidCallback onTap;
   /// When true, the header fills its parent's full width and right-aligns
-  /// its content (label + arrow + info). Used for numeric data columns.
+  /// its content. Used for numeric data columns.
   final bool alignEnd;
   const _SortHeader({
     required this.label,
@@ -286,65 +292,55 @@ class _SortHeader extends StatefulWidget {
   });
 
   @override
-  State<_SortHeader> createState() => _SortHeaderState();
-}
-
-class _SortHeaderState extends State<_SortHeader> {
-  bool _hover = false;
-  @override
   Widget build(BuildContext context) {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final color = widget.active ? primary : secondary;
 
     final labelWidget = Flexible(
-      child: Text(widget.label,
-          textAlign: widget.alignEnd ? TextAlign.end : TextAlign.start,
+      child: Text(label,
+          textAlign: alignEnd ? TextAlign.end : TextAlign.start,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: MyntWebTextStyles.caption(context,
-                  fontWeight: MyntFonts.semiBold, color: color)
-              .copyWith(letterSpacing: 0.6)),
-    );
-    final sortIcon = Icon(
-      widget.active
-          ? (widget.asc
-              ? shadcn.LucideIcons.arrowUp
-              : shadcn.LucideIcons.arrowDown)
-          : shadcn.LucideIcons.chevronsUpDown,
-      size: 10,
-      color: widget.active || _hover ? color : color.withValues(alpha: 0.5),
+          style: MyntWebTextStyles.tableHeader(context,
+              fontWeight: MyntFonts.semiBold, color: secondary)),
     );
 
+    // Positions pattern: the sort arrow appears ONLY on the active column
+    // (arrow_upward / arrow_downward, 16px). Numeric (right-aligned) columns
+    // place the arrow before the label; text columns after it.
+    final sortArrow = active
+        ? Icon(asc ? Icons.arrow_upward : Icons.arrow_downward,
+            size: 16, color: secondary)
+        : null;
+
     // The sort-clickable area (label + arrow) and the info tooltip are
-    // SIBLINGS — keeps the Tooltip's MouseRegion outside the sort gesture
-    // detector so hover works.
+    // SIBLINGS — keeps the Tooltip's MouseRegion outside the sort gesture.
     final sortable = MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: widget.onTap,
+        onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Inside this inner Row, Flexible has the parent Row's bounded
-            // width as its constraint — so the label can wrap to 2 lines.
+            if (alignEnd && sortArrow != null) ...[
+              sortArrow,
+              const SizedBox(width: 4),
+            ],
             labelWidget,
-            const SizedBox(width: 4),
-            sortIcon,
+            if (!alignEnd && sortArrow != null) ...[
+              const SizedBox(width: 4),
+              sortArrow,
+            ],
           ],
         ),
       ),
     );
 
-    final infoIcon = widget.description == null
+    final infoIcon = description == null
         ? null
         : Tooltip(
-            message: widget.description!,
+            message: description!,
             waitDuration: const Duration(milliseconds: 200),
             preferBelow: true,
             triggerMode: TooltipTriggerMode.tap,
@@ -353,17 +349,15 @@ class _SortHeaderState extends State<_SortHeader> {
               child: Padding(
                 padding: const EdgeInsets.all(2),
                 child: Icon(shadcn.LucideIcons.info,
-                    size: 12, color: secondary),
+                    size: 15, color: secondary),
               ),
             ),
           );
 
-    // Outer Row fills the parent's width so Flexible/Expanded inside the
-    // sortable cluster has space to flex into.
     return Row(
-      mainAxisSize: widget.alignEnd ? MainAxisSize.max : MainAxisSize.min,
+      mainAxisSize: alignEnd ? MainAxisSize.max : MainAxisSize.min,
       mainAxisAlignment:
-          widget.alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
+          alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
       children: [
         Flexible(child: sortable),
         if (infoIcon != null) ...[
@@ -426,86 +420,84 @@ class _DataRowState extends State<_DataRow> {
         behavior: HitTestBehavior.opaque,
         child: Container(
           color: _hover ? hoverBg : Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Row(children: [
-                // Stock Name (name + ticker stacked)
-                SizedBox(
-                  width: widget.stockNameW,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(widget.row.name,
-                          style: MyntWebTextStyles.body(context,
-                              fontWeight: MyntFonts.semiBold, color: primary),
-                          overflow: TextOverflow.ellipsis),
-                      const SizedBox(height: 2),
-                      Text(widget.row.ticker,
-                          style: MyntWebTextStyles.caption(context,
-                                  color: secondary)
-                              .copyWith(fontFamily: 'monospace'),
-                          overflow: TextOverflow.ellipsis),
-                    ],
-                  ),
-                ),
-                // EXCH
-                SizedBox(
-                  width: widget.exchW,
-                  child: Text('NSE',
-                      style:
-                          MyntWebTextStyles.body(context, color: secondary)),
-                ),
-                // Data columns — sized per-column so strings (sector/industry)
-                // get more room than numerics.
-                for (int i = 0; i < widget.cols.length; i++)
-                  SizedBox(
-                    width: widget.colWidths[i],
-                    child: Align(
-                      alignment: widget.cols[i].fmt == 'string'
-                          ? Alignment.centerLeft
-                          : Alignment.centerRight,
-                      child: _buildCell(context, widget.row, widget.cols[i]),
-                    ),
-                  ),
-              ]),
-              // Hover-only action buttons — Positioned over the trailing
-              // edge of the row, vertically centered. Their own InkWell
-              // gestures consume the click before the row GestureDetector
-              // sees it, so clicking "Explanation" never accidentally
-              // opens the Overview.
-              if (showActions)
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: Row(
+          // Fixed height so the row never grows (bounces) when the hover
+          // action buttons appear — matches the Positions fixed-row layout.
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(children: [
+            // Stock Name (name + ticker stacked) with inline hover actions —
+            // the name shrinks (ellipsis) to make room, like Positions.
+            SizedBox(
+              width: widget.stockNameW,
+              child: Row(
+                children: [
+                  // Flexible (not Expanded) so the name takes only the width
+                  // it needs — the hover buttons then sit right after the
+                  // name text, with the rest of the column left as a gap
+                  // before the Exch column (no more clashing with "NSE").
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (widget.onTap != null)
-                          _RowActionButton(
-                            label: 'Overview',
-                            icon: shadcn.LucideIcons.eye,
-                            onPressed: widget.onTap!,
-                          ),
-                        if (widget.onTap != null &&
-                            widget.onExplainTap != null)
-                          const SizedBox(width: 6),
-                        if (widget.onExplainTap != null)
-                          _RowActionButton(
-                            label: 'Scanner Details',
-                            icon: shadcn.LucideIcons.fileSearch,
-                            onPressed: widget.onExplainTap!,
-                          ),
+                        Text(widget.row.name,
+                            style: MyntWebTextStyles.body(context,
+                                fontWeight: MyntFonts.semiBold, color: primary),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        // Second line (ticker code) commented out per request.
+                        // const SizedBox(height: 2),
+                        // Text(widget.row.ticker,
+                        //     style: MyntWebTextStyles.caption(context,
+                        //             color: secondary)
+                        //         .copyWith(fontFamily: 'monospace'),
+                        //     maxLines: 1,
+                        //     overflow: TextOverflow.ellipsis),
                       ],
                     ),
                   ),
+                  // Hover-only action buttons — inline right after the name
+                  // (Positions pattern). Their own gesture wins the tap, so
+                  // "Scanner Details" never accidentally opens the Overview.
+                  if (showActions) ...[
+                    const SizedBox(width: 8),
+                    if (widget.onTap != null)
+                      _RowActionButton(
+                        label: 'Overview',
+                        icon: shadcn.LucideIcons.eye,
+                        onPressed: widget.onTap!,
+                      ),
+                    if (widget.onTap != null && widget.onExplainTap != null)
+                      const SizedBox(width: 6),
+                    if (widget.onExplainTap != null)
+                      _RowActionButton(
+                        label: 'Scanner Details',
+                        icon: shadcn.LucideIcons.fileSearch,
+                        onPressed: widget.onExplainTap!,
+                      ),
+                  ],
+                ],
+              ),
+            ),
+            // EXCH
+            SizedBox(
+              width: widget.exchW,
+              child: Text('NSE',
+                  style: MyntWebTextStyles.body(context, color: secondary)),
+            ),
+            // Data columns — sized per-column so strings (sector/industry)
+            // get more room than numerics.
+            for (int i = 0; i < widget.cols.length; i++)
+              SizedBox(
+                width: widget.colWidths[i],
+                child: Align(
+                  alignment: widget.cols[i].fmt == 'string'
+                      ? Alignment.centerLeft
+                      : Alignment.centerRight,
+                  child: _buildCell(context, widget.row, widget.cols[i]),
                 ),
-            ],
-          ),
+              ),
+          ]),
         ),
       ),
     );
@@ -550,8 +542,8 @@ class _DataRowState extends State<_DataRow> {
   }
 }
 
-/// Small white pill button surfaced on row hover. Compact (28px) so two of
-/// them fit at the trailing edge without crowding the data columns.
+/// Row-hover action — Positions-style: a small white icon square with a
+/// subtle drop shadow. The label is surfaced as a tooltip.
 class _RowActionButton extends StatelessWidget {
   final String label;
   final IconData icon;
@@ -564,31 +556,27 @@ class _RowActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final bg = resolveThemeColor(context,
-        dark: MyntColors.backgroundColorDark, light: Colors.white);
-    return Material(
-      color: bg,
-      shape: RoundedRectangleBorder(
-        side: BorderSide(color: border),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(6),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 12, color: primary),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: MyntWebTextStyles.caption(context,
-                      fontWeight: MyntFonts.semiBold, color: primary)),
-            ],
+    return Tooltip(
+      message: label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onPressed,
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(4),
+              boxShadow: [
+                BoxShadow(
+                  color: resolveThemeColor(context,
+                      dark: Colors.transparent, light: Colors.grey),
+                  blurRadius: 2,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Icon(icon, size: 16, color: MyntColors.textPrimary),
           ),
         ),
       ),

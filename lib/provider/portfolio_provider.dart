@@ -612,8 +612,8 @@ changeHoldingsTabIndex(int index) {
         _tholdingsModel = [];
       }
     } else if (mode == 'P') {
-      result = await api.getPositionBook();
-      // result = await api.mockPositionBookResponse();
+      // result = await api.getPositionBook();
+      result = await api.mockPositionBookResponse();
 
       if (result['stat'] == 'success') {
         _tpostionBookModel = result['data'];

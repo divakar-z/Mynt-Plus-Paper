@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/models/scanner_model/market_index.dart';
 import 'package:mynt_plus/provider/scanner/market_indices_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
 
 /// Multi-select dropdown that lets the user narrow scanner / custom-scan
 /// results to one or more NSE indices.
@@ -42,7 +47,30 @@ class IndexFilterDropdown extends ConsumerStatefulWidget {
 class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
   final LayerLink _link = LayerLink();
   final OverlayPortalController _portal = OverlayPortalController();
+  final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
+  bool _triggerHover = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Mirror the standard search field: rebuild/filter on any change to the
+    // controller — covers typing and the smart-clear (×) button.
+    _searchCtrl.addListener(_onSearchChanged);
+  }
+
+  void _onSearchChanged() {
+    if (mounted) {
+      setState(() => _query = _searchCtrl.text.trim().toLowerCase());
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.removeListener(_onSearchChanged);
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   void _toggleIndex(String name) {
     final next = [...widget.selected];
@@ -62,48 +90,59 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
 
   @override
   Widget build(BuildContext context) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final hasSelection = widget.selected.isNotEmpty;
 
     return CompositedTransformTarget(
       link: _link,
+      // Trigger: a compact filter icon (no text / chevron). When indices are
+      // selected, a small blue dot badge appears at the top-right corner.
+      // The multi-select panel (search, grouping, checkboxes) opens below it.
       child: OverlayPortal(
         controller: _portal,
         overlayChildBuilder: _buildOverlay,
-        child: OutlinedButton.icon(
-          icon: Icon(
-            shadcn.LucideIcons.listFilter,
-            size: 14,
-            color: hasSelection ? MyntColors.primary : primary,
-          ),
-          label: Text(
-            hasSelection
-                ? 'Indices · ${widget.selected.length} selected'
-                : 'Index filter',
-            style: MyntWebTextStyles.caption(context,
-                fontWeight: MyntFonts.semiBold,
-                color: hasSelection ? MyntColors.primary : primary),
-          ),
-          style: OutlinedButton.styleFrom(
-            side: BorderSide(
-              color: hasSelection
-                  ? MyntColors.primary.withValues(alpha: 0.5)
-                  : border,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _triggerHover = true),
+          onExit: (_) => setState(() => _triggerHover = false),
+          child: GestureDetector(
+            onTap: () {
+              // Reset the search box every time we re-open — feels fresher
+              // than carrying yesterday's query forward.
+              if (!_portal.isShowing) _searchCtrl.clear();
+              _portal.toggle();
+            },
+            child: Tooltip(
+              message: 'Index filter',
+              child: Container(
+                width: 40,
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  // Selected → a blue circular highlight; hover → a subtle
+                  // grey circle; otherwise transparent.
+                  color: hasSelection
+                      ? MyntColors.primary.withValues(alpha: 0.12)
+                      : (_triggerHover
+                          ? resolveThemeColor(context,
+                              dark: MyntColors.cardHoverDark,
+                              light: MyntColors.cardHover)
+                          : Colors.transparent),
+                ),
+                child: SvgPicture.asset(
+                  assets.searchFilter,
+                  width: 20,
+                  colorFilter: ColorFilter.mode(
+                    hasSelection
+                        ? MyntColors.primary
+                        : resolveThemeColor(context,
+                            dark: MyntColors.iconDark, light: MyntColors.icon),
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
             ),
-            backgroundColor: hasSelection
-                ? MyntColors.primary.withValues(alpha: 0.06)
-                : null,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           ),
-          onPressed: () {
-            // Reset the search box every time we re-open — feels fresher
-            // than carrying yesterday's query forward when the user
-            // returns to the panel.
-            if (!_portal.isShowing) setState(() => _query = '');
-            _portal.toggle();
-          },
         ),
       ),
     );
@@ -149,7 +188,7 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
       constraints: const BoxConstraints(maxHeight: 480),
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: border),
         boxShadow: [
           BoxShadow(
@@ -160,9 +199,9 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
         ],
       ),
       child: indicesAsync.when(
-        loading: () => const Padding(
+        loading: () => Padding(
           padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator()),
+          child: Center(child: MyntLoader.simple()),
         ),
         error: (e, _) => Padding(
           padding: const EdgeInsets.all(16),
@@ -208,31 +247,15 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Search box at the top — case-insensitive substring match.
+        // Search box at the top — our standard shared search field
+        // (case-insensitive substring match via the controller listener).
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: TextField(
-            autofocus: true,
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: 'Search 86 indices…',
-              hintStyle:
-                  MyntWebTextStyles.caption(ctx, color: secondary),
-              prefixIcon: Icon(shadcn.LucideIcons.search,
-                  size: 14, color: secondary),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: border),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: border),
-              ),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            ),
-            style: MyntWebTextStyles.body(ctx),
-            onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+          child: MyntSearchTextField.withSmartClear(
+            controller: _searchCtrl,
+            placeholder: 'Search indices…',
+            leadingIcon: assets.searchIcon,
+            textCapitalization: TextCapitalization.none,
           ),
         ),
         Divider(height: 1, color: border),
@@ -248,18 +271,27 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
         ),
         Divider(height: 1, color: border),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
           child: Row(children: [
-            Text(
-              widget.selected.isEmpty
-                  ? 'No filter — full universe'
-                  : '${widget.selected.length} selected',
-              style: MyntWebTextStyles.caption(ctx, color: secondary),
-            ),
+            // "N selected" status text commented out per request.
+            // Text(
+            //   widget.selected.isEmpty
+            //       ? 'No filter — full universe'
+            //       : '${widget.selected.length} selected',
+            //   style: MyntWebTextStyles.caption(ctx, color: secondary),
+            // ),
             const Spacer(),
-            TextButton(
+            MyntIconTextButton(
+              label: 'Clear all',
+              size: MyntButtonSize.small,
+              // Greys out (like before) when there's nothing to clear;
+              // otherwise the shared button defaults to the primary blue.
+              textColor: widget.selected.isEmpty
+                  ? resolveThemeColor(ctx,
+                      dark: MyntColors.textTertiaryDark,
+                      light: MyntColors.textTertiary)
+                  : null,
               onPressed: widget.selected.isEmpty ? null : _clearAll,
-              child: const Text('Clear all'),
             ),
           ]),
         ),
@@ -336,7 +368,7 @@ class _IndexRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(children: [
           // Custom small checkbox — avoids the heavy default Checkbox.
           Container(
@@ -359,7 +391,10 @@ class _IndexRow extends StatelessWidget {
           Expanded(
             child: Text(
               index.name,
-              style: MyntWebTextStyles.body(context, color: primary),
+              style: MyntWebTextStyles.body(context,
+                  color: primary,
+                  fontWeight:
+                      selected ? MyntFonts.semiBold : MyntFonts.regular),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -453,32 +488,39 @@ class ActiveIndexFilterChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (selected.isEmpty) return const SizedBox.shrink();
-    final primary = resolveThemeColor(context,
+    final textColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Wrap(
       spacing: 8,
       runSpacing: 6,
       children: [
         for (final name in selected)
+          // Boxed chip (matches the Scalper "Default Symbol" dropdown box) —
+          // light fill, primary border, square-ish corners — with an × to
+          // remove the filter.
           Container(
-            padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
+            padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
             decoration: BoxDecoration(
-              color: MyntColors.primary.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(14),
+              color: resolveThemeColor(context,
+                  dark: Colors.transparent, light: const Color(0xFFF1F3F8)),
+              borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: MyntColors.primary.withValues(alpha: 0.30),
+                color: resolveThemeColor(context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.primary),
               ),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(name,
-                    style: MyntWebTextStyles.caption(context,
-                        fontWeight: MyntFonts.semiBold,
-                        color: MyntColors.primary)),
-                const SizedBox(width: 4),
+                    style: MyntWebTextStyles.body(context,
+                        fontWeight: MyntFonts.medium, color: textColor)),
+                const SizedBox(width: 6),
                 InkWell(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(4),
                   onTap: () {
                     final next = [...selected]..remove(name);
                     onChanged(next);
@@ -487,8 +529,8 @@ class ActiveIndexFilterChips extends StatelessWidget {
                     padding: const EdgeInsets.all(2),
                     child: Icon(
                       shadcn.LucideIcons.x,
-                      size: 12,
-                      color: primary,
+                      size: 14,
+                      color: secondary,
                     ),
                   ),
                 ),

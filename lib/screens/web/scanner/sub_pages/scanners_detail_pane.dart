@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
+import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
@@ -61,28 +63,34 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(children: [
-          IconButton(
-            onPressed: onBack,
-            icon: const Icon(Icons.arrow_back, size: 18),
-            tooltip: 'Back to scanners',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
+        // Header with a bottom divider line (matches the MF detail header).
+        Container(
+          padding: const EdgeInsets.only(bottom: 4),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: resolveThemeColor(context,
+                    dark: MyntColors.dividerDark, light: MyntColors.divider),
+                width: 1,
+              ),
+            ),
           ),
+          child: Row(children: [
+            CustomBackBtn(onBack: onBack),
           const SizedBox(width: 8),
-          meta.when(
-            loading: () =>
-                Text('Loading…', style: MyntWebTextStyles.body(context)),
-            error: (_, __) => Text(code,
-                style: MyntWebTextStyles.body(context,
-                    fontWeight: MyntFonts.semiBold)),
-            data: (s) => Expanded(
-              child: Column(
+          Expanded(
+            child: meta.when(
+              loading: () =>
+                  Text('Loading…', style: MyntWebTextStyles.title(context)),
+              error: (_, __) => Text(code,
+                  style: MyntWebTextStyles.title(context,
+                      fontWeight: MyntFonts.semiBold)),
+              data: (s) => Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(s.displayName,
-                      style: MyntWebTextStyles.body(context,
-                          fontWeight: MyntFonts.bold)),
+                      style: MyntWebTextStyles.title(context,
+                          fontWeight: MyntFonts.semiBold)),
                   Text(
                     '${s.groupName}${s.subGroup == null ? "" : " · ${s.subGroup}"}',
                     style: MyntWebTextStyles.caption(context),
@@ -104,13 +112,14 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
             ),
           ),
           const SizedBox(width: 8),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.download, size: 16),
-            label: const Text('Export'),
-            onPressed: () => _export(context),
+          _HoverIconButton(
+            icon: Icons.download,
+            tooltip: 'Export',
+            onTap: () => _export(context),
           ),
-        ]),
-        const SizedBox(height: 12),
+          ]),
+        ),
+        // const SizedBox(height: 12),
         meta.maybeWhen(
           data: (s) {
             // Prefer the backend's layman-language long description when
@@ -136,7 +145,7 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
         const SizedBox(height: 16),
         Expanded(
           child: results.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
+            loading: () => Center(child: MyntLoader.branded()),
             error: (e, _) => EmptyState(
               kind: EmptyStateKind.error,
               title: 'Could not load results',
@@ -237,25 +246,80 @@ class _InfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final tint = MyntColors.primary;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: tint.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: tint.withValues(alpha: 0.15)),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      // decoration: BoxDecoration(
+      //   color: tint.withValues(alpha: 0.06),
+      //   borderRadius: BorderRadius.circular(10),
+      //   border: Border.all(color: tint.withValues(alpha: 0.15)),
+      // ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        // crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(shadcn.LucideIcons.info, size: 14, color: tint),
-          const SizedBox(width: 10),
+          // Icon(shadcn.LucideIcons.info, size: 14, color: tint),
+          // const SizedBox(width: 10),
           Expanded(
             child: Text(text,
                 style: MyntWebTextStyles.body(context,
                     color: resolveThemeColor(context,
+                    
                         dark: MyntColors.textPrimaryDark,
                         light: MyntColors.textPrimary))),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact icon button with a grey hover circle — visually pairs with the
+/// Index filter icon in the detail header.
+class _HoverIconButton extends StatefulWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _HoverIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  State<_HoverIconButton> createState() => _HoverIconButtonState();
+}
+
+class _HoverIconButtonState extends State<_HoverIconButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: widget.tooltip,
+          child: Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hover
+                  ? resolveThemeColor(context,
+                      dark: MyntColors.cardHoverDark,
+                      light: MyntColors.cardHover)
+                  : Colors.transparent,
+            ),
+            child: Icon(
+              widget.icon,
+              size: 20,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.iconDark, light: MyntColors.icon),
+            ),
+          ),
+        ),
       ),
     );
   }

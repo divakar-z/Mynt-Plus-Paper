@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/scanner_model/scan_explain.dart';
 import 'package:mynt_plus/models/scanner_model/scanner_exception.dart';
@@ -59,7 +61,7 @@ class _ScanExplainScreenState extends ConsumerState<ScanExplainScreen>
   Widget build(BuildContext context) {
     final asyncResp = ref.watch(scanExplainProvider(widget.args));
     return asyncResp.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => Center(child: MyntLoader.branded()),
       error: (e, _) => _errorView(context, e),
       data: (r) => _layout(context, r),
     );
@@ -72,21 +74,64 @@ class _ScanExplainScreenState extends ConsumerState<ScanExplainScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _header(context, r),
-          const SizedBox(height: 8),
-          TabBar(
-            controller: _tab,
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            indicatorColor: MyntColors.primary,
-            labelColor: MyntColors.primary,
-            unselectedLabelColor: resolveThemeColor(context,
-                dark: MyntColors.textSecondaryDark,
-                light: MyntColors.textSecondary),
-            tabs: [for (final t in _tabs) Tab(text: t)],
-          ),
-          const Divider(height: 1),
           const SizedBox(height: 12),
+          // Top tab strip styled like the Watchlist tabs (shadcn underline).
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: _topTabs(context),
+          ),
+          const SizedBox(height: 16),
           Expanded(child: _activeTabBody(context, r)),
+        ],
+      ),
+    );
+  }
+
+  /// Top tab strip styled like the Watchlist tabs: a [shadcn.TabList] with an
+  /// underline indicator, active tab in brand-primary bold, inactive muted. The
+  /// brand-coloured underline comes from overriding the shadcn colorScheme
+  /// primary (same approach the Watchlist tabs use).
+  Widget _topTabs(BuildContext context) {
+    final isDark = isDarkMode(context);
+    final currentTheme = shadcn.Theme.of(context);
+    final baseColorScheme = isDark
+        ? shadcn.ColorSchemes.darkDefaultColor
+        : shadcn.ColorSchemes.lightDefaultColor;
+    final primaryColor = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final customColorScheme =
+        baseColorScheme.copyWith(primary: () => primaryColor);
+
+    return shadcn.Theme(
+      data: shadcn.ThemeData(
+        colorScheme: customColorScheme,
+        radius: currentTheme.radius,
+      ),
+      child: shadcn.TabList(
+        index: _tab.index,
+        onChanged: (value) {
+          if (value != _tab.index) _tab.animateTo(value);
+        },
+        children: [
+          for (int i = 0; i < _tabs.length; i++)
+            shadcn.TabItem(
+              child: Builder(builder: (context) {
+                final isActive = i == _tab.index;
+                return Text(
+                  _tabs[i],
+                  style: MyntWebTextStyles.body(context,
+                      color: isActive
+                          ? resolveThemeColor(context,
+                              dark: MyntColors.primaryDark,
+                              light: MyntColors.primary)
+                          : resolveThemeColor(context,
+                              dark: MyntColors.textSecondaryDark,
+                              light: MyntColors.textSecondary),
+                      fontWeight:
+                          isActive ? MyntFonts.bold : MyntFonts.medium),
+                );
+              }),
+            ),
         ],
       ),
     );
@@ -143,25 +188,29 @@ class _ScanExplainScreenState extends ConsumerState<ScanExplainScreen>
   Widget _header(BuildContext context, ScanExplainResponse r) {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(r.scannerName,
+        // Name + "(as of …)" inline on the first line.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Flexible(
+              child: Text(r.scannerName,
                   style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.bold)),
-              const SizedBox(height: 2),
-              Text(r.ticker,
-                  style: MyntWebTextStyles.caption(context, color: secondary)
-                      .copyWith(fontFamily: 'monospace')),
-            ],
-          ),
+                      fontWeight: MyntFonts.bold),
+                  overflow: TextOverflow.ellipsis),
+            ),
+            const SizedBox(width: 6),
+            Text('(as of ${r.asOf})',
+                style: MyntWebTextStyles.caption(context, color: secondary)),
+          ],
         ),
-        Text('as of ${r.asOf}',
-            style: MyntWebTextStyles.caption(context, color: secondary)),
+        // const SizedBox(height: 2),
+        // Text(r.ticker,
+        //     style: MyntWebTextStyles.caption(context, color: secondary)
+        //         .copyWith(fontFamily: 'monospace')),
       ],
     );
   }

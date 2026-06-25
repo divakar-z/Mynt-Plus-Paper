@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -201,9 +202,9 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
 
   Widget _resultArea(AsyncValue<CustomScanRunResult> result) {
     return result.when(
-      loading: () => const Padding(
+      loading: () => Padding(
         padding: EdgeInsets.all(16),
-        child: Center(child: CircularProgressIndicator()),
+        child: Center(child: MyntLoader.simple()),
       ),
       error: (e, _) => EmptyState(
         kind: EmptyStateKind.error,
