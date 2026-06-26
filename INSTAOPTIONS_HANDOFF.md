@@ -2,7 +2,7 @@
 
 > **Read this first**: [INSTAOPTIONS_FLOW.md](INSTAOPTIONS_FLOW.md) — workflow playbook + 9-section catalog. Then check [INSTAOPTIONS_PLAN.md](INSTAOPTIONS_PLAN.md) for the active section. This HANDOFF is the cross-session status tracker.
 
-Last updated: 2026-05-29 (Phase β — Per-Strike finalized + writer bands dropped)
+Last updated: 2026-06-26 (date-based rebuild — OI Statistics on the zdf charts API)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Audit: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) (OptionZ vs our backend; mirrored at `.claude/insta-options-qa/data-audit.md` for local working copy)
 Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) (also mirrored at `.claude/insta-options-qa/backend-tickets.md`)
@@ -54,6 +54,32 @@ After Phase 4, we opened the live OptionZ app at https://zebu.instaoptions.trade
 | θ | Find Strategy | ✅ verified | b75450a2 | live Playwright QA confirms `POST /strategy/scan` 200 OK with 3 strategies rendered for `direction=Positive, min_reward=100 INR` against NIFTY 02-JUN-2026 expiry | New `FindStrategyScreen` + `StrategyResultCard` + `InstaOptionsStrategyScanProvider` + `StrategyScanResult` / `StrategyLeg` / `StrategyDirection` / `StrategyMinRewardType`. API extended with `scanStrategies(...)` (POST) + internal `_post` helper. Filter card (Direction dropdown + ₹/% toggle + min reward text field + Run scan button) + result cards (template name + Max P&L / Max Loss / BE KPIs + Add to basket + DataTable2 of legs with green B / red S side chips). **Build-time investigation resolved**: backend `/strategy/scan` legs return `{side, trading_symbol, strike, option_type, lot, ltp, oi}` only — no "Direction" field; OptionZ's "Direction" column does not map to our backend, dropped from scope. Add-to-basket currently surfaces a `ResponsiveSnackBar.showSuccess` toast; full wiring to `StrategyBuilderProvider` deferred to **Phase ι**. Inspect icon + breakeven-click-to-copy deferred to **Phase κ**. `flutter analyze` clean. |
 | ι | Basket / order rewire to `StrategyBuilderProvider` | ☐ todo | — | — | Optional, on user request. Deletes `InstaOptionsBasketProvider`, `BasketLeg`, `BasketChip`. Adds `ChainRow → OptionValues` adapter. Routes B/S taps and Find Strategy cart icon through existing strategy builder. |
 | κ | Polish: top-nav entry, URL persistence, brush slider, goldens, investigate pagination ❓ | ☐ todo | — | — | Final phase. |
+
+---
+
+## 2026-06 — Date-based rebuild (new zdf backend, `insta-option` branch)
+
+The InstaOptions screens are being rebuilt **screen-by-screen** onto a new **date-based** REST backend (`<API_BASE>/api/v1/*`, default `http://localhost:8000`; override via `--dart-define=API_BASE=`) — a separate, more reliable service from the legacy OI-Data backend the phases above use. New code lives in `lib/{api,models,provider}/insta_options/{dashboard,option_chain,contribution,charts}/` + `lib/screens/web/insta_options/widgets/{dashboard,option_chain,contribution,charts}/`. Each section **replaces** its legacy screen and registers its API in the locator. Style stays the app's shadcn / `MyntColors` / `MyntWebTextStyles` idiom.
+
+**Global date flow:** the per-section `/dates` endpoints were removed; every date-based screen reads one global **`GET /api/v1/dates`** (`DashboardApiConfig.datesUrl`). Underlying picker = global **`GET /api/v1/symbols`** (`symbolsProvider`). Expiries = `GET /api/v1/option-chain/expiries`.
+
+| Section | Status | Commit | Endpoint(s) |
+|---|---|---|---|
+| Markets Dashboard v2 | ✅ verified | `372fcd37` · `0b0fd3d4` | `/api/v1/dashboard` |
+| Option Chain v2 (ladder + mirrored OI bars + analysis header) | ✅ verified | `d222178a` | `/api/v1/option-chain` (+ `/expiries`) |
+| Global-dates migration (Dashboard + Chain repoint) | ✅ verified | `01d76a8b` | `/api/v1/dates` |
+| Index Contribution (movers/concentration/sector/constituents) | ✅ verified | `01d76a8b` | `/api/v1/contribution` |
+| **OI Statistics** (zoomable OI-by-strike chart) | ✅ verified | _this commit_ | `/api/v1/charts/oi-by-strike` |
+| PCR Ratio | ☐ todo | — | `/api/v1/charts/pcr-timeline` |
+| Trending OI | ☐ todo | — | `/api/v1/charts/oi-timeline` |
+
+**OI Statistics** — rebuilt as a zoomable vertical column chart on the new shared **charts data layer** (covers all 3 chart endpoints): `ChartsApi`, models under `models/insta_options/charts/` (`OiByStrike` / `PcrTimeline` / `OiTimeline`), `OiChartsProvider` (one source of truth for `underlying / date / expiry / interval / strikes`, on-demand per-slice load + refetch-loaded-slices on selection change), `chartsBase` config getter, `ChartsApi` registered in the locator.
+- `oi_stats_screen.dart` rewritten on `oiChartsProvider`: `ChartsAppBar` (underlying + expiry + date + refresh) → summary tiles (Spot · ATM · PCR band-coloured · Max-pain · Total CE/PE OI) → Syncfusion `SfCartesianChart`. **Indexed x-axis** (strikes plotted by index, so the irregular 50→1500 strike spacing doesn't distort the bars; labels formatted back to the real strike), **CE green / PE red** columns, **OI ⇄ OI-change** toggle, dashed **spot line** at the true fractional spot, mouse-wheel/pinch zoom + pan (`ZoomPanBehavior`, x-mode), default-zoomed to **ATM ± 12 strikes**, compact L/Cr y-axis + hover tooltip.
+- Shell: `oiStats` added to the `_showSymbolExpiryBar` exclusion (the screen owns its app bar; the legacy selection bar no longer shows above it).
+- Live Playwright QA (NIFTY · 25-Jun · 30-Jun expiry): CE-green resistance above spot / PE-red support below, real strike labels, spot line at 24,052.95, summary tiles populated, zoom/pan working. `flutter analyze` clean on the insta_options paths.
+- **Next:** PCR Ratio (`pcr-timeline` intraday line) + Trending OI (`oi-timeline` per-strike OI lines + sentiment table) reuse this data layer; then retire the legacy `insta_options_aggregate_provider` once all three chart screens are off it.
+
+---
 
 ## Confirmed scope (locked at start of build, refined 2026-05-29 after OptionZ audit)
 

@@ -35,6 +35,10 @@ class DashboardApiConfig {
   /// Base for all index-contribution endpoints: `<origin>/api/v1/contribution`.
   String get contributionBase => '$origin/api/v1/contribution';
 
+  /// Base for the OI chart endpoints: `<origin>/api/v1/charts`
+  /// (`/oi-by-strike`, `/pcr-timeline`, `/oi-timeline`).
+  String get chartsBase => '$origin/api/v1/charts';
+
   /// Global F&O symbol universe (indices + stocks): `<origin>/api/v1/symbols`.
   String get symbolsUrl => '$origin/api/v1/symbols';
 

@@ -62,7 +62,8 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
   bool get _showSymbolExpiryBar =>
       _active != InstaSubScreen.markets &&
       _active != InstaSubScreen.contributors &&
-      _active != InstaSubScreen.chain;
+      _active != InstaSubScreen.chain &&
+      _active != InstaSubScreen.oiStats;
 
   @override
   Widget build(BuildContext context) {
