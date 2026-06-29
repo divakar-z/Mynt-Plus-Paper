@@ -1,19 +1,22 @@
-import 'package:data_table_2/data_table_2.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mynt_plus/models/insta_options/trending_bucket.dart';
-import 'package:mynt_plus/provider/insta_options/insta_options_chain_provider.dart';
-import 'package:mynt_plus/provider/insta_options/insta_options_selection_provider.dart';
-import 'package:mynt_plus/provider/insta_options/insta_options_trending_provider.dart';
+import 'package:mynt_plus/models/insta_options/charts/oi_timeline.dart';
+import 'package:mynt_plus/provider/insta_options/charts/oi_charts_provider.dart';
+import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
-import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/bucket_minutes_selector.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/strike_multi_picker.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/charts/charts_app_bar.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/charts/oi_sentiment_table.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/charts/oi_timeline_chart.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/charts/strike_multi_select.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
-/// Trending OI screen (README §10.5). Sentiment + cumulative OI charts side
-/// by side over a top half, per-bucket DataTable2 underneath.
+enum _Leg { both, ce, pe }
+
+/// Trending OI — intraday OI per selected strike (multi-line, zoomable, with an
+/// optional spot/future price overlay) plus a per-strike buildup-sentiment
+/// table, on the date-based charts backend.
 class TrendingOiScreen extends ConsumerStatefulWidget {
   const TrendingOiScreen({super.key});
 
@@ -22,685 +25,443 @@ class TrendingOiScreen extends ConsumerStatefulWidget {
 }
 
 class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
-  bool _seeded = false;
+  _Leg _leg = _Leg.both;
+  bool _priceFuture = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(instaOptionsTrendingProvider).start();
+      if (mounted) ref.read(oiChartsProvider).openOiTimeline();
     });
-  }
-
-  @override
-  void dispose() {
-    ref.read(instaOptionsTrendingProvider).stop();
-    super.dispose();
-  }
-
-  void _seedAtmIfNeeded(List<double> strikes, double? atm) {
-    if (_seeded || atm == null || strikes.isEmpty) return;
-    _seeded = true;
-    // Default to ATM ± 3 strikes (7 total), centred on ATM.
-    int atmIdx = 0;
-    for (var i = 0; i < strikes.length; i++) {
-      if (strikes[i] == atm) {
-        atmIdx = i;
-        break;
-      }
-    }
-    final lo = (atmIdx - 3).clamp(0, strikes.length - 1);
-    final hi = (atmIdx + 3).clamp(0, strikes.length - 1);
-    final picked = strikes.sublist(lo, hi + 1);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(instaOptionsTrendingProvider).setStrikes(picked);
-    });
-  }
-
-  Future<void> _changeStrikes(List<double> all, double? atm) async {
-    final provider = ref.read(instaOptionsTrendingProvider);
-    final picked = await StrikeMultiPicker.show(
-      context: context,
-      allStrikes: all,
-      initial: provider.strikes,
-      atmStrike: atm,
-    );
-    if (picked != null) provider.setStrikes(picked);
   }
 
   @override
   Widget build(BuildContext context) {
-    final tokens = InstaOptionsTokens.of(context);
-    final selection = ref.watch(instaOptionsSelectionProvider).selection;
-    final chain = ref.watch(instaOptionsChainProvider);
-    final trending = ref.watch(instaOptionsTrendingProvider);
-
-    if (selection.expiry.isEmpty) {
-      return _Empty(
-        icon: Icons.event_busy,
-        title: 'Pick an expiry',
-        message: 'Choose an expiry from the bar above to load Trending OI.',
-        tokens: tokens,
-      );
-    }
-    if (chain.loading && chain.strikes.isEmpty) {
-      return Container(
-        color: tokens.bgPrimary,
-        child: Center(child: CircularProgressIndicator(color: tokens.accent)),
-      );
-    }
-    if (chain.strikes.isEmpty) {
-      return _Empty(
-        icon: Icons.trending_up,
-        title: 'No strikes available',
-        message: 'The chain has not loaded yet — retry once data is available.',
-        tokens: tokens,
-      );
-    }
-
-    _seedAtmIfNeeded(chain.strikes, chain.atmStrike);
+    final p = ref.watch(oiChartsProvider);
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.backgroundColorDark,
+        light: MyntColors.backgroundColor);
 
     return Container(
-      color: tokens.bgPrimary,
+      color: bg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _Controls(
-            trending: trending,
-            tokens: tokens,
-            onChangeStrikes: () =>
-                _changeStrikes(chain.strikes, chain.atmStrike),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(
-                    height: 320,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(
-                          child: _ChartCard(
-                            title: 'Trending Sentiment',
-                            tokens: tokens,
-                            child: _SentimentChart(
-                              buckets: trending.buckets,
-                              tokens: tokens,
-                            ),
-                          ),
+          const ChartsAppBar(showInterval: true),
+          Expanded(child: _body(context, p)),
+        ],
+      ),
+    );
+  }
+
+  Widget _body(BuildContext context, OiChartsProvider p) {
+    if (p.isOiTimelineInitialLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          color: resolveThemeColor(context,
+              dark: MyntColors.primaryDark, light: MyntColors.primary),
+        ),
+      );
+    }
+    if (p.isOiTimelineFatal) {
+      return _ErrorState(
+        message: p.oiTimelineError ?? 'Failed to load Trending OI.',
+        onRetry: () => ref.read(oiChartsProvider).refresh(),
+      );
+    }
+    final data = p.oiTimeline;
+    if (data == null || data.isEmpty) return const _EmptyState();
+
+    // Pinned controls + chart, only the table scrolls — so the mouse wheel
+    // zooms the chart instead of scrolling the page past it.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: _controls(context, data),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final chartH = (c.maxHeight * 0.56).clamp(320.0, 600.0);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(height: chartH, child: _chartCard(context, data)),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: DashSectionCard(
+                          title: 'Strike sentiment',
+                          subtitle: 'Day OI change + buildup per strike',
+                          child: OiSentimentTable(data: data),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _ChartCard(
-                            title: 'Cumulative OI',
-                            tokens: tokens,
-                            child: _CumulativeOiChart(
-                              buckets: trending.buckets,
-                              tokens: tokens,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: _ChartCard(
-                      title: 'Per-bucket detail',
-                      tokens: tokens,
-                      child: _BucketTable(
-                        buckets: trending.buckets,
-                        tokens: tokens,
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Controls extends StatelessWidget {
-  final InstaOptionsTrendingProvider trending;
-  final InstaOptionsTokens tokens;
-  final VoidCallback onChangeStrikes;
-
-  const _Controls({
-    required this.trending,
-    required this.tokens,
-    required this.onChangeStrikes,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          OutlinedButton.icon(
-            onPressed: onChangeStrikes,
-            icon: const Icon(Icons.tune, size: 16),
-            label: const Text('Change strikes'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: tokens.textPrimary,
-              side: BorderSide(color: tokens.border, width: 1),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            ),
-          ),
-          for (final s in trending.strikes)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: tokens.bgTertiary,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: tokens.border, width: 1),
-              ),
-              child: Text(
-                s.toStringAsFixed(0),
-                style: MyntWebTextStyles.caption(
-                  context,
-                  color: tokens.textPrimary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          const SizedBox(width: 4),
-          BucketMinutesSelector(
-            value: trending.bucketMinutes,
-            options: InstaOptionsTrendingProvider.bucketMinutesOptions,
-            onChanged: trending.setBucketMinutes,
-            tokens: tokens,
-          ),
-          TextButton.icon(
-            onPressed: trending.loading ? null : trending.refresh,
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('Refresh'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ChartCard extends StatelessWidget {
-  final String title;
-  final Widget child;
-  final InstaOptionsTokens tokens;
-
-  const _ChartCard({
-    required this.title,
-    required this.child,
-    required this.tokens,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: tokens.bgSecondary,
-        border: Border.all(color: tokens.border, width: 1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            title,
-            style: MyntWebTextStyles.bodyMedium(
-              context,
-              color: tokens.textPrimary,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(child: child),
-        ],
-      ),
-    );
-  }
-}
-
-class _SentimentChart extends StatelessWidget {
-  final List<TrendingBucket> buckets;
-  final InstaOptionsTokens tokens;
-
-  const _SentimentChart({required this.buckets, required this.tokens});
-
-  @override
-  Widget build(BuildContext context) {
-    if (buckets.isEmpty) return _emptyChart(context, tokens);
-
-    final sentimentSpots = <FlSpot>[];
-    for (var i = 0; i < buckets.length; i++) {
-      sentimentSpots.add(FlSpot(i.toDouble(), buckets[i].sentiment.clamp(-1.0, 1.0)));
-    }
-
-    return LineChart(
-      LineChartData(
-        minX: 0,
-        maxX: (buckets.length - 1).toDouble(),
-        minY: -1,
-        maxY: 1,
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: false,
-          horizontalInterval: 0.5,
-          getDrawingHorizontalLine: (v) => FlLine(
-            color: tokens.border,
-            strokeWidth: v == 0 ? 1 : 0.5,
-          ),
-        ),
-        titlesData: FlTitlesData(
-          show: true,
-          topTitles: const AxisTitles(),
-          rightTitles: const AxisTitles(),
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 24,
-              interval: ((buckets.length - 1) / 4).clamp(1, double.infinity),
-              getTitlesWidget: (v, _) {
-                final i = v.toInt();
-                if (i < 0 || i >= buckets.length) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    InstaOptionsFormat.time(buckets[i].time),
-                    style: MyntWebTextStyles.caption(
-                      context,
-                      color: tokens.textMuted,
-                    ),
-                  ),
+                  ],
                 );
               },
             ),
           ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 36,
-              interval: 0.5,
-              getTitlesWidget: (v, _) => Text(
-                v.toStringAsFixed(1),
-                style: MyntWebTextStyles.caption(
-                  context,
-                  color: tokens.textMuted,
-                ),
-              ),
-            ),
-          ),
         ),
-        borderData: FlBorderData(show: false),
-        lineTouchData: LineTouchData(
-          touchTooltipData: LineTouchTooltipData(
-            getTooltipColor: (_) => tokens.bgTertiary,
-            getTooltipItems: (spots) => spots.map((s) {
-              final b = buckets[s.x.toInt()];
-              return LineTooltipItem(
-                '${InstaOptionsFormat.time(b.time)}  ·  Sentiment '
-                    '${b.sentiment >= 0 ? '+' : ''}${b.sentiment.toStringAsFixed(2)}'
-                    '  ·  PCR ${b.pcr.toStringAsFixed(2)}',
-                MyntWebTextStyles.caption(context, color: tokens.textPrimary),
-              );
-            }).toList(growable: false),
-          ),
-        ),
-        lineBarsData: [
-          LineChartBarData(
-            spots: sentimentSpots,
-            isCurved: true,
-            color: tokens.accent,
-            barWidth: 2,
-            isStrokeCapRound: true,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              cutOffY: 0,
-              applyCutOffY: true,
-              color: tokens.profit.withValues(alpha: 0.25),
-            ),
-            aboveBarData: BarAreaData(
-              show: true,
-              cutOffY: 0,
-              applyCutOffY: true,
-              color: tokens.loss.withValues(alpha: 0.25),
-            ),
-          ),
-        ],
-        extraLinesData: ExtraLinesData(horizontalLines: [
-          HorizontalLine(
-            y: 0,
-            color: tokens.textMuted,
-            strokeWidth: 1,
-            dashArray: [4, 4],
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-class _CumulativeOiChart extends StatelessWidget {
-  final List<TrendingBucket> buckets;
-  final InstaOptionsTokens tokens;
-
-  const _CumulativeOiChart({required this.buckets, required this.tokens});
-
-  @override
-  Widget build(BuildContext context) {
-    if (buckets.isEmpty) return _emptyChart(context, tokens);
-
-    final ceSpots = <FlSpot>[];
-    final peSpots = <FlSpot>[];
-    var minOi = double.infinity;
-    var maxOi = -double.infinity;
-    for (var i = 0; i < buckets.length; i++) {
-      final ce = buckets[i].cumCeOi.toDouble();
-      final pe = buckets[i].cumPeOi.toDouble();
-      ceSpots.add(FlSpot(i.toDouble(), ce));
-      peSpots.add(FlSpot(i.toDouble(), pe));
-      if (ce < minOi) minOi = ce;
-      if (pe < minOi) minOi = pe;
-      if (ce > maxOi) maxOi = ce;
-      if (pe > maxOi) maxOi = pe;
-    }
-    final pad = (maxOi - minOi).abs() * 0.05;
-
-    return LineChart(
-      LineChartData(
-        minX: 0,
-        maxX: (buckets.length - 1).toDouble(),
-        minY: (minOi - pad).clamp(0, double.infinity),
-        maxY: maxOi + pad,
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: false,
-          getDrawingHorizontalLine: (_) => FlLine(
-            color: tokens.border,
-            strokeWidth: 0.5,
-          ),
-        ),
-        titlesData: FlTitlesData(
-          show: true,
-          topTitles: const AxisTitles(),
-          rightTitles: const AxisTitles(),
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 24,
-              interval: ((buckets.length - 1) / 4).clamp(1, double.infinity),
-              getTitlesWidget: (v, _) {
-                final i = v.toInt();
-                if (i < 0 || i >= buckets.length) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    InstaOptionsFormat.time(buckets[i].time),
-                    style: MyntWebTextStyles.caption(
-                      context,
-                      color: tokens.textMuted,
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 48,
-              getTitlesWidget: (v, _) => Text(
-                InstaOptionsFormat.oi(v),
-                style: MyntWebTextStyles.caption(
-                  context,
-                  color: tokens.textMuted,
-                ),
-              ),
-            ),
-          ),
-        ),
-        borderData: FlBorderData(show: false),
-        lineTouchData: LineTouchData(
-          touchTooltipData: LineTouchTooltipData(
-            getTooltipColor: (_) => tokens.bgTertiary,
-            getTooltipItems: (spots) {
-              if (spots.isEmpty) return [];
-              final b = buckets[spots.first.x.toInt()];
-              return [
-                LineTooltipItem(
-                  '${InstaOptionsFormat.time(b.time)}  ·  '
-                      'CE ${InstaOptionsFormat.oi(b.cumCeOi)}  ·  '
-                      'PE ${InstaOptionsFormat.oi(b.cumPeOi)}  ·  '
-                      'PCR ${b.pcr.toStringAsFixed(2)}',
-                  MyntWebTextStyles.caption(context, color: tokens.textPrimary),
-                ),
-                ...List.generate(spots.length - 1, (_) => null),
-              ];
-            },
-          ),
-        ),
-        lineBarsData: [
-          LineChartBarData(
-            spots: ceSpots,
-            isCurved: true,
-            color: tokens.profit,
-            barWidth: 2,
-            isStrokeCapRound: true,
-            dotData: const FlDotData(show: false),
-          ),
-          LineChartBarData(
-            spots: peSpots,
-            isCurved: true,
-            color: tokens.loss,
-            barWidth: 2,
-            isStrokeCapRound: true,
-            dotData: const FlDotData(show: false),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-Widget _emptyChart(BuildContext context, InstaOptionsTokens tokens) {
-  return Center(
-    child: Text(
-      'No buckets yet — backfill in progress',
-      style: MyntWebTextStyles.body(context, color: tokens.textSecondary),
-    ),
-  );
-}
-
-class _BucketTable extends StatelessWidget {
-  final List<TrendingBucket> buckets;
-  final InstaOptionsTokens tokens;
-
-  const _BucketTable({required this.buckets, required this.tokens});
-
-  @override
-  Widget build(BuildContext context) {
-    if (buckets.isEmpty) {
-      return Center(
-        child: Text(
-          'No buckets yet',
-          style: MyntWebTextStyles.body(context, color: tokens.textSecondary),
-        ),
-      );
-    }
-    // Sorted desc by time per spec.
-    final sorted = [...buckets]..sort((a, b) => b.time.compareTo(a.time));
-    final pcrByTime = {for (final b in buckets) b.time: b.pcr};
-    final timesAsc = buckets.map((b) => b.time).toList()
-      ..sort((a, b) => a.compareTo(b));
-    final prevPcrByTime = <DateTime, double?>{};
-    for (var i = 0; i < timesAsc.length; i++) {
-      prevPcrByTime[timesAsc[i]] = i == 0 ? null : pcrByTime[timesAsc[i - 1]];
-    }
-
-    return DataTable2(
-      columnSpacing: 8,
-      horizontalMargin: 12,
-      dataRowHeight: 32,
-      headingRowHeight: 40,
-      minWidth: 900,
-      headingTextStyle: MyntWebTextStyles.para(
-        context,
-        color: tokens.textSecondary,
-        fontWeight: FontWeight.w600,
-      ),
-      headingRowColor: WidgetStateProperty.all(tokens.bgTertiary),
-      dataTextStyle:
-          MyntWebTextStyles.tableCell(context, color: tokens.textPrimary),
-      dividerThickness: 0.5,
-      columns: const [
-        DataColumn2(label: Text('Time'), fixedWidth: 80),
-        DataColumn2(label: Text('LTP'), fixedWidth: 90, numeric: true),
-        DataColumn2(label: Text('ΔCallOI'), fixedWidth: 110, numeric: true),
-        DataColumn2(label: Text('ΔPutOI'), fixedWidth: 110, numeric: true),
-        DataColumn2(label: Text('DiffOI'), fixedWidth: 110, numeric: true),
-        DataColumn2(label: Text('Dir'), fixedWidth: 50),
-        DataColumn2(label: Text('ΔDir'), fixedWidth: 90, numeric: true),
-        DataColumn2(label: Text('Dir %'), fixedWidth: 70, numeric: true),
-        DataColumn2(label: Text('PCR'), fixedWidth: 60, numeric: true),
-      ],
-      rows: sorted
-          .map((b) => _row(context, b, prevPcrByTime[b.time]))
-          .toList(growable: false),
-    );
-  }
-
-  DataRow2 _row(BuildContext context, TrendingBucket b, double? prevPcr) {
-    Color signColor(num v) => v == 0
-        ? tokens.textSecondary
-        : (v > 0 ? tokens.profit : tokens.loss);
-    String signedInt(int v) =>
-        v == 0 ? '0' : '${v > 0 ? '+' : '−'}${InstaOptionsFormat.oi(v.abs())}';
-    final pcrDelta = prevPcr == null ? null : b.pcr - prevPcr;
-    final pcrDeltaPct = (prevPcr == null || prevPcr == 0)
-        ? null
-        : (b.pcr - prevPcr) / prevPcr * 100;
-    final dirIcon = pcrDelta == null
-        ? '—'
-        : (pcrDelta > 0 ? '▲' : (pcrDelta < 0 ? '▼' : '—'));
-    final dirColor = pcrDelta == null
-        ? tokens.textMuted
-        : signColor(pcrDelta);
-    return DataRow2(
-      cells: [
-        DataCell(Text(InstaOptionsFormat.time(b.time))),
-        DataCell(Text(InstaOptionsFormat.price(b.ltp))),
-        DataCell(
-          Text(
-            signedInt(b.deltaCeOi),
-            style: MyntWebTextStyles.tableCell(
-              context,
-              color: signColor(b.deltaCeOi),
-            ),
-          ),
-        ),
-        DataCell(
-          Text(
-            signedInt(b.deltaPeOi),
-            style: MyntWebTextStyles.tableCell(
-              context,
-              color: signColor(b.deltaPeOi),
-            ),
-          ),
-        ),
-        DataCell(
-          Text(
-            signedInt(b.diffOi),
-            style: MyntWebTextStyles.tableCell(
-              context,
-              color: signColor(b.diffOi),
-            ),
-          ),
-        ),
-        DataCell(
-          Center(
-            child: Text(
-              dirIcon,
-              style: MyntWebTextStyles.tableCell(
-                context,
-                color: dirColor,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ),
-        DataCell(
-          Text(
-            pcrDelta == null
-                ? '—'
-                : '${pcrDelta > 0 ? '+' : (pcrDelta < 0 ? '−' : '')}${pcrDelta.abs().toStringAsFixed(2)}',
-            style: MyntWebTextStyles.tableCell(context, color: dirColor),
-          ),
-        ),
-        DataCell(
-          Text(
-            pcrDeltaPct == null
-                ? '—'
-                : InstaOptionsFormat.changePct(pcrDeltaPct),
-            style: MyntWebTextStyles.tableCell(context, color: dirColor),
-          ),
-        ),
-        DataCell(Text(b.pcr.toStringAsFixed(2))),
       ],
     );
   }
-}
 
-class _Empty extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String message;
-  final InstaOptionsTokens tokens;
+  Widget _controls(BuildContext context, OiTimeline data) {
+    final priceAvailable = data.hasSpotSeries || data.hasFutureSeries;
+    return Row(
+      children: [
+        StrikeMultiSelect(
+          available: data.availableStrikes,
+          selected: data.selectedStrikes,
+          onChanged: (s) => ref.read(oiChartsProvider).setStrikes(s),
+        ),
+        const SizedBox(width: 12),
+        _legToggle(context),
+        const Spacer(),
+        if (priceAvailable) _priceToggle(context, data),
+      ],
+    );
+  }
 
-  const _Empty({
-    required this.icon,
-    required this.title,
-    required this.message,
-    required this.tokens,
-  });
+  Widget _legToggle(BuildContext context) {
+    return _Segmented(
+      items: const [
+        _SegItem('Both', _Leg.both),
+        _SegItem('CE', _Leg.ce),
+        _SegItem('PE', _Leg.pe),
+      ],
+      selected: _leg,
+      onSelect: (v) => setState(() => _leg = v as _Leg),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: tokens.bgPrimary,
-      child: Center(
+  Widget _priceToggle(BuildContext context, OiTimeline data) {
+    return _Segmented(
+      items: [
+        _SegItem('Spot', false, enabled: data.hasSpotSeries),
+        _SegItem('Future', true, enabled: data.hasFutureSeries),
+      ],
+      selected: _priceFuture,
+      onSelect: (v) => setState(() => _priceFuture = v as bool),
+    );
+  }
+
+  Widget _chartCard(BuildContext context, OiTimeline data) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final ordered = data.selectedStrikes.isNotEmpty
+        ? (List<double>.from(data.selectedStrikes)..sort())
+        : (data.series.map((s) => s.strike).toSet().toList()..sort());
+    final series = data.series.where((s) {
+      switch (_leg) {
+        case _Leg.both:
+          return true;
+        case _Leg.ce:
+          return s.optType == 'CE';
+        case _Leg.pe:
+          return s.optType == 'PE';
+      }
+    }).toList(growable: false);
+
+    final hasSpot = data.hasSpotSeries;
+    final hasFuture = data.hasFutureSeries;
+    final priceAvailable = hasSpot || hasFuture;
+    final priceIsFuture = priceAvailable && hasFuture && (_priceFuture || !hasSpot);
+    final priceLine = priceIsFuture ? data.futureSeries : data.spotSeries;
+    final priceLabel = priceIsFuture ? 'Future' : 'Spot';
+
+    return shadcn.OutlinedContainer(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Icon(icon, size: 48, color: tokens.textMuted),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: MyntWebTextStyles.head(context, color: tokens.textPrimary),
+            Row(
+              children: [
+                Text('Intraday OI',
+                    style: MyntWebTextStyles.title(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.semiBold)),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Text(
+                    'Spot ${InstaOptionsFormat.price(data.underlyingValue)}'
+                    '  ·  ATM ${InstaOptionsFormat.price(data.atmStrike)}'
+                    '  ·  ${data.interval}',
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.caption(context, color: muted),
+                  ),
+                ),
+                const Spacer(),
+                Icon(Icons.zoom_in, size: 14, color: muted),
+                const SizedBox(width: 3),
+                Text('scroll / drag to zoom',
+                    style: MyntWebTextStyles.caption(context, color: muted)),
+              ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              message,
-              style: MyntWebTextStyles.body(
-                context,
-                color: tokens.textSecondary,
-              ),
-              textAlign: TextAlign.center,
+            const SizedBox(height: 10),
+            _legend(context, ordered, priceAvailable, priceIsFuture),
+            const SizedBox(height: 6),
+            Expanded(
+              child: series.isEmpty
+                  ? _chartPlaceholder(context)
+                  : OiTimelineChart(
+                      series: series,
+                      orderedStrikes: ordered,
+                      priceLine: priceLine,
+                      showPrice: priceAvailable,
+                      priceLabel: priceLabel,
+                      underlyingLabel: data.underlying,
+                    ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _legend(BuildContext context, List<double> ordered,
+      bool priceShown, bool priceIsFuture) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final priceColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+
+    Widget group(String label, bool isCall) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$label ',
+                style: MyntWebTextStyles.caption(context, color: muted)
+                    .copyWith(fontWeight: MyntFonts.semiBold)),
+            for (final s in ordered) ...[
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                    color: oiLegColor(ordered, s, isCall),
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+              const SizedBox(width: 3),
+              Text('${s.toInt()}  ',
+                  style: MyntWebTextStyles.caption(context, color: muted)),
+            ],
+          ],
+        );
+
+    return Wrap(
+      spacing: 16,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (_leg != _Leg.pe) group('Calls', true),
+        if (_leg != _Leg.ce) group('Puts', false),
+        if (priceShown)
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            _DashedKey(color: priceColor),
+            const SizedBox(width: 5),
+            Text(priceIsFuture ? 'Future' : 'Spot',
+                style: MyntWebTextStyles.caption(context, color: muted)
+                    .copyWith(fontWeight: MyntFonts.semiBold)),
+          ]),
+      ],
+    );
+  }
+
+  Widget _chartPlaceholder(BuildContext context) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.show_chart, size: 36, color: muted),
+          const SizedBox(height: 8),
+          Text('Select strikes to plot intraday OI',
+              style: MyntWebTextStyles.caption(context, color: muted)),
+        ],
+      ),
+    );
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Small segmented toggle (Both/CE/PE and Spot/Future)
+// ----------------------------------------------------------------------------
+class _SegItem {
+  final String label;
+  final Object value;
+  final bool enabled;
+  const _SegItem(this.label, this.value, {this.enabled = true});
+}
+
+class _Segmented extends StatelessWidget {
+  final List<_SegItem> items;
+  final Object selected;
+  final ValueChanged<Object> onSelect;
+
+  const _Segmented({
+    required this.items,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final border = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final disabled = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: border, width: 0.5),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final it in items)
+              MouseRegion(
+                cursor: it.enabled
+                    ? SystemMouseCursors.click
+                    : SystemMouseCursors.basic,
+                child: GestureDetector(
+                  onTap: it.enabled ? () => onSelect(it.value) : null,
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                    color: it.value == selected
+                        ? accent.withValues(alpha: 0.14)
+                        : Colors.transparent,
+                    child: Text(it.label,
+                        style: MyntWebTextStyles.caption(context,
+                            color: !it.enabled
+                                ? disabled
+                                : (it.value == selected ? accent : muted),
+                            fontWeight: it.value == selected
+                                ? MyntFonts.semiBold
+                                : MyntFonts.medium)),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DashedKey extends StatelessWidget {
+  final Color color;
+  const _DashedKey({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < 3; i++) ...[
+          Container(width: 5, height: 2, color: color),
+          if (i != 2) const SizedBox(width: 2),
+        ],
+      ],
+    );
+  }
+}
+
+// ----------------------------------------------------------------------------
+// States
+// ----------------------------------------------------------------------------
+class _ErrorState extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _ErrorState({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final loss = resolveThemeColor(context,
+        dark: MyntColors.lossDark, light: MyntColors.loss);
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          constraints: const BoxConstraints(maxWidth: 480),
+          decoration: BoxDecoration(
+            color: loss.withValues(alpha: 0.1),
+            border: Border.all(color: loss, width: 1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.cloud_off, color: loss, size: 20),
+                  const SizedBox(width: 8),
+                  Text('Trending OI failed to load',
+                      style: MyntWebTextStyles.body(context,
+                          color: loss, fontWeight: MyntFonts.semiBold)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(message,
+                  style: MyntWebTextStyles.caption(context,
+                      darkColor: MyntColors.textSecondaryDark,
+                      lightColor: MyntColors.textSecondary)),
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.trending_up, size: 44, color: muted),
+          const SizedBox(height: 12),
+          Text('No trending OI data',
+              style: MyntWebTextStyles.title(context,
+                  darkColor: MyntColors.textPrimaryDark,
+                  lightColor: MyntColors.textPrimary,
+                  fontWeight: MyntFonts.semiBold)),
+          const SizedBox(height: 4),
+          Text('Try another underlying, date, or expiry.',
+              style: MyntWebTextStyles.caption(context, color: muted)),
+        ],
       ),
     );
   }

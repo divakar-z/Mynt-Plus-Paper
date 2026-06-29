@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
+import 'package:mynt_plus/models/insta_options/option_chain/option_chain_data.dart';
 import 'package:mynt_plus/provider/insta_options/option_chain/option_chain_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_app_bar.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_balance_bar.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_key_walls.dart';
@@ -21,6 +24,17 @@ class ChainScreen extends ConsumerStatefulWidget {
 
 class _ChainScreenState extends ConsumerState<ChainScreen> {
   final GlobalKey<ChainLadderState> _ladderKey = GlobalKey<ChainLadderState>();
+
+  // Collapsing the overview gives the ladder ~230px more height on short
+  // screens. Remembered across tab switches so it's a once-off, not per-visit.
+  static bool _overviewExpandedPref = true;
+  bool _overviewExpanded = _overviewExpandedPref;
+  static final NumberFormat _grp = NumberFormat('#,##0');
+
+  void _toggleOverview() => setState(() {
+        _overviewExpanded = !_overviewExpanded;
+        _overviewExpandedPref = _overviewExpanded;
+      });
 
   @override
   void initState() {
@@ -69,23 +83,97 @@ class _ChainScreenState extends ConsumerState<ChainScreen> {
       return const _EmptyState();
     }
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ChainRangeAxis(data: data),
-          const SizedBox(height: 16),
-          ChainBalanceBar(
-              totalCeOi: data.totalCeOi,
-              totalPeOi: data.totalPeOi,
-              pcr: data.pcr),
-          const SizedBox(height: 18),
-          ChainKeyWalls(data: data),
-          const SizedBox(height: 16),
+          _overviewHeader(context, data),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: _overviewExpanded
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 12),
+                      ChainRangeAxis(data: data),
+                      const SizedBox(height: 16),
+                      ChainBalanceBar(
+                          totalCeOi: data.totalCeOi,
+                          totalPeOi: data.totalPeOi,
+                          pcr: data.pcr),
+                      const SizedBox(height: 18),
+                      ChainKeyWalls(data: data),
+                    ],
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
+          const SizedBox(height: 12),
           Expanded(child: ChainLadder(key: _ladderKey, data: data)),
         ],
       ),
     );
+  }
+
+  /// Slim tappable bar that collapses the overview block. When collapsed it
+  /// keeps a one-line digest so the key levels aren't lost.
+  Widget _overviewHeader(BuildContext context, OptionChainData data) {
+    final fg = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final border = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleOverview,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            border: _overviewExpanded
+                ? null
+                : Border(bottom: BorderSide(color: border, width: 0.5)),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                  _overviewExpanded
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
+                  size: 18,
+                  color: fg),
+              const SizedBox(width: 4),
+              Text('Overview',
+                  style: MyntWebTextStyles.caption(context,
+                      color: fg, fontWeight: MyntFonts.semiBold)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _overviewExpanded ? '' : _compactSummary(data),
+                  overflow: TextOverflow.ellipsis,
+                  style: MyntWebTextStyles.caption(context, color: muted),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(_overviewExpanded ? 'Hide' : 'Show',
+                  style: MyntWebTextStyles.caption(context,
+                      color: muted, fontWeight: MyntFonts.medium)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _compactSummary(OptionChainData data) {
+    String s(double? v) => v == null ? '—' : _grp.format(v);
+    return 'Spot ${InstaOptionsFormat.price(data.underlyingValue)}'
+        '  ·  ATM ${s(data.atmStrike)}'
+        '  ·  PCR ${InstaOptionsFormat.pcr(data.pcr)}'
+        '  ·  Max pain ${s(data.maxPain)}';
   }
 }
 

@@ -58,21 +58,9 @@ const List<InstaSideRailItem> kInstaSideRailItems = [
     title: 'PCR Ratio',
     icon: Icons.show_chart,
   ),
-  InstaSideRailItem(
-    sub: InstaSubScreen.strike,
-    title: 'Per-Strike Chart',
-    icon: Icons.candlestick_chart,
-  ),
-  InstaSideRailItem(
-    sub: InstaSubScreen.buildup,
-    title: 'OI Buildup',
-    icon: Icons.layers,
-  ),
-  InstaSideRailItem(
-    sub: InstaSubScreen.findStrategy,
-    title: 'Find Strategy',
-    icon: Icons.search,
-  ),
+  // Hidden for now — not yet rebuilt on the date-based backend: Per-Strike
+  // Chart, OI Buildup, Find Strategy. Their InstaSubScreen cases + screens stay
+  // wired in the shell; they're just unreachable from the rail until rebuilt.
 ];
 
 class InstaSideRail extends StatelessWidget {

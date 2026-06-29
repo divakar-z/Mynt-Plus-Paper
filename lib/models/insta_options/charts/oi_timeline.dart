@@ -103,6 +103,24 @@ class OiTimelineRow {
       );
 }
 
+/// One intraday price bucket for the spot or future line (`spot` / `future`
+/// list entry), bucket-aligned to the OI [OiSeries] points. The future entry
+/// also carries its own OI, kept for the tooltip. Drives the dual-axis price
+/// overlay (Spot / Future toggle).
+class PriceTick {
+  final DateTime? t;
+  final double? ltp;
+  final int? oi; // future OI; null on the spot line
+
+  const PriceTick({required this.t, required this.ltp, this.oi});
+
+  factory PriceTick.fromJson(Map<String, dynamic> j) => PriceTick(
+        t: DateTime.tryParse((j['t'] ?? '').toString()),
+        ltp: (j['ltp'] as num?)?.toDouble(),
+        oi: (j['oi'] as num?)?.toInt(),
+      );
+}
+
 /// A selectable strike (`available_strikes` entry).
 class StrikeOption {
   final double strike;
@@ -131,6 +149,9 @@ class OiTimeline {
   final List<double> selectedStrikes;
   final List<OiSeries> series;
   final List<OiTimelineRow> table;
+  final List<PriceTick> spotSeries; // intraday underlying price, bucket-aligned
+  final List<PriceTick> futureSeries; // intraday near-future price
+  final String? futureExpiry;
 
   const OiTimeline({
     required this.underlying,
@@ -144,9 +165,19 @@ class OiTimeline {
     required this.selectedStrikes,
     required this.series,
     required this.table,
+    required this.spotSeries,
+    required this.futureSeries,
+    required this.futureExpiry,
   });
 
   bool get isEmpty => series.isEmpty && table.isEmpty;
+
+  /// The backend carries an intraday spot line for this bucket set.
+  bool get hasSpotSeries => spotSeries.any((p) => p.t != null && p.ltp != null);
+
+  /// The backend carries an intraday future line for this bucket set.
+  bool get hasFutureSeries =>
+      futureSeries.any((p) => p.t != null && p.ltp != null);
 
   factory OiTimeline.fromJson(Map<String, dynamic> j) => OiTimeline(
         underlying: (j['underlying'] ?? '').toString(),
@@ -171,5 +202,12 @@ class OiTimeline {
         table: (j['table'] as List<dynamic>? ?? const [])
             .map((e) => OiTimelineRow.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),
+        spotSeries: (j['spot'] as List<dynamic>? ?? const [])
+            .map((e) => PriceTick.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
+        futureSeries: (j['future'] as List<dynamic>? ?? const [])
+            .map((e) => PriceTick.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
+        futureExpiry: j['future_expiry'] as String?,
       );
 }

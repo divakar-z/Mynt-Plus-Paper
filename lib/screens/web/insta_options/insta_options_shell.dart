@@ -63,7 +63,9 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
       _active != InstaSubScreen.markets &&
       _active != InstaSubScreen.contributors &&
       _active != InstaSubScreen.chain &&
-      _active != InstaSubScreen.oiStats;
+      _active != InstaSubScreen.oiStats &&
+      _active != InstaSubScreen.pcr &&
+      _active != InstaSubScreen.trending;
 
   @override
   Widget build(BuildContext context) {
