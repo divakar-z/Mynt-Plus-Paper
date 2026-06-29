@@ -9,6 +9,7 @@ import 'package:mynt_plus/provider/scanner/custom_scans_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/formatters.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/open_scanner_scrip.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/empty_state.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/predicate_builder.dart';
@@ -176,9 +177,7 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
   Future<void> _save() async {
     final name = _nameCtl.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Give the scan a name first.')),
-      );
+      ResponsiveSnackBar.showWarning(context, 'Give the scan a name first.');
       return;
     }
     final predicate =
@@ -188,15 +187,11 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
           name: name, predicate: Map<String, dynamic>.from(predicate));
       ref.invalidate(savedCustomScansProvider);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved "$name"')),
-      );
+      ResponsiveSnackBar.showSuccess(context, 'Saved "$name"');
       widget.onClose();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Save failed: $e')),
-      );
+      ResponsiveSnackBar.showError(context, 'Save failed: $e');
     }
   }
 

@@ -4,6 +4,7 @@ import 'package:mynt_plus/models/scanner_model/fundamental_field.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/filter_inputs.dart';
 import 'package:mynt_plus/screens/web/scanner/sub_pages/fundamentals_builder_state.dart';
 
 class FundamentalFilterRow extends StatefulWidget {
@@ -58,39 +59,31 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
   bool get _isPct => _field?.dtype == 'pct';
   bool get _isMultiYear => isMultiYearField(widget.filter.field);
 
-  InputDecoration _box() => InputDecoration(
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide:
-              BorderSide(color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide:
-              BorderSide(color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-      );
-
   @override
   Widget build(BuildContext context) {
     final field = _field;
     final ops = field == null
         ? const <String>[]
         : validOpsForDtype(field.dtype, multiYear: _isMultiYear);
-    // Row + Expanded for the value column → no overflow regardless of viewport.
+    final op = widget.filter.op;
+    // Fixed-width value column (like the dropdowns) instead of stretching the
+    // whole row; `between` / list ops get a little more room.
+    final valueW = op == 'between'
+        ? 320.0
+        : (op == 'in' || op == 'not_in')
+            ? 280.0
+            : 200.0;
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       SizedBox(width: 200, child: _fieldDropdown()),
       const SizedBox(width: 8),
       SizedBox(width: 200, child: _opDropdown(ops)),
       const SizedBox(width: 8),
-      Expanded(child: _valueInputs(field)),
+      SizedBox(width: valueW, child: _valueInputs(field)),
       if (_isMultiYear) ...[
         const SizedBox(width: 8),
         SizedBox(width: 78, child: _yearsInput()),
       ],
+      const SizedBox(width: 4),
       IconButton(
         onPressed: widget.onRemove,
         icon: const Icon(shadcn.LucideIcons.x, size: 14),
@@ -105,54 +98,32 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
     for (final f in widget.fields) {
       byGroup.putIfAbsent(f.group, () => []).add(f);
     }
-    return DropdownButtonFormField<String>(
-      isDense: true,
-      decoration: _box(),
-      value: widget.filter.field.isEmpty ? null : widget.filter.field,
-      hint: Text('Field…', style: MyntWebTextStyles.body(context)),
-      style: MyntWebTextStyles.body(context),
-      items: [
-        for (final entry in byGroup.entries) ...[
-          DropdownMenuItem(
-            enabled: false,
-            value: '__g_${entry.key}',
-            child: _GroupHeader(label: entry.key),
-          ),
-          for (final f in entry.value)
-            DropdownMenuItem(value: f.key, child: Text(f.label)),
-        ],
+    final opts = <FilterSelectOption>[
+      for (final entry in byGroup.entries) ...[
+        FilterSelectOption('', entry.key, isHeader: true),
+        for (final f in entry.value) FilterSelectOption(f.key, f.label),
       ],
-      onChanged: (v) {
-        if (v == null || v.startsWith('__g_')) return;
-        widget.onChange(FundamentalFilter(field: v, op: widget.filter.op));
-      },
+    ];
+    return FilterSelect(
+      value: widget.filter.field.isEmpty ? null : widget.filter.field,
+      hint: 'Field…',
+      options: opts,
+      onChanged: (v) =>
+          widget.onChange(FundamentalFilter(field: v, op: widget.filter.op)),
     );
   }
 
   Widget _opDropdown(List<String> ops) {
-    return DropdownButtonFormField<String>(
-      isDense: true,
-      decoration: _box(),
+    return FilterSelect(
       value: ops.contains(widget.filter.op) ? widget.filter.op : null,
-      hint: Text('Op', style: MyntWebTextStyles.body(context)),
-      style: MyntWebTextStyles.body(context),
-      isExpanded: true,
-      items: [
-        for (final o in ops)
-          DropdownMenuItem(
-            value: o,
-            child: Text(opLabel(o), overflow: TextOverflow.ellipsis),
-          ),
-      ],
-      onChanged: (v) {
-        if (v == null) return;
-        widget.onChange(FundamentalFilter(
-          field: widget.filter.field,
-          op: v,
-          value: widget.filter.value,
-          years: widget.filter.years,
-        ));
-      },
+      hint: 'Op',
+      options: [for (final o in ops) FilterSelectOption(o, opLabel(o))],
+      onChanged: (v) => widget.onChange(FundamentalFilter(
+        field: widget.filter.field,
+        op: v,
+        value: widget.filter.value,
+        years: widget.filter.years,
+      )),
     );
   }
 
@@ -166,7 +137,7 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
         Expanded(child: _numericInput(_v1, suffix: _isPct ? '%' : null)),
         const SizedBox(width: 4),
         Text('to',
-            style: MyntWebTextStyles.caption(context,
+            style: MyntWebTextStyles.body(context,
                 color: resolveThemeColor(context,
                     dark: MyntColors.textSecondaryDark,
                     light: MyntColors.textSecondary))),
@@ -175,10 +146,9 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
       ]);
     }
     if (op == 'in' || op == 'not_in') {
-      return TextField(
+      return FilterTextField(
         controller: _v1,
-        style: MyntWebTextStyles.body(context),
-        decoration: _box().copyWith(hintText: 'a, b, c'),
+        hint: 'a, b, c',
         onChanged: (txt) => widget.onChange(FundamentalFilter(
           field: widget.filter.field,
           op: op,
@@ -212,29 +182,21 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
   }
 
   Widget _numericInput(TextEditingController c, {String? suffix}) {
-    return TextField(
+    return FilterTextField(
       controller: c,
+      hint: 'value',
+      suffix: suffix,
       keyboardType:
           const TextInputType.numberWithOptions(decimal: true, signed: true),
-      style: MyntWebTextStyles.body(context),
-      decoration: _box().copyWith(
-        hintText: 'value',
-        suffixText: suffix,
-        suffixStyle: MyntWebTextStyles.caption(context,
-            color: resolveThemeColor(context,
-                dark: MyntColors.textSecondaryDark,
-                light: MyntColors.textSecondary)),
-      ),
       onChanged: (_) => _emit(),
     );
   }
 
   Widget _yearsInput() {
-    return TextField(
+    return FilterTextField(
       controller: _years,
+      hint: 'yrs',
       keyboardType: TextInputType.number,
-      style: MyntWebTextStyles.body(context),
-      decoration: _box().copyWith(hintText: 'yrs'),
       onChanged: (_) => _emit(),
     );
   }
@@ -268,32 +230,5 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
       value: value,
       years: int.tryParse(_years.text),
     ));
-  }
-}
-
-/// Tinted, uppercase group header used inside grouped DropdownMenuItem lists
-/// so sections (Valuation / Profitability / ...) read as separators rather
-/// than as another row.
-class _GroupHeader extends StatelessWidget {
-  final String label;
-  const _GroupHeader({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final tint = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final tertiary = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: -16),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      color: tint,
-      child: Text(
-        label.toUpperCase(),
-        style: MyntWebTextStyles.caption(context,
-                fontWeight: MyntFonts.semiBold, color: tertiary)
-            .copyWith(letterSpacing: 1.0),
-      ),
-    );
   }
 }

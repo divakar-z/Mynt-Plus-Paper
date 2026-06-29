@@ -13,6 +13,7 @@ import 'package:mynt_plus/screens/web/scanner/widgets/index_filter_dropdown.dart
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/download_xlsx.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/open_scanner_scrip.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/empty_state.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/export_modal.dart';
@@ -230,9 +231,7 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
       );
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e')),
-      );
+      ResponsiveSnackBar.showError(context, 'Export failed: $e');
     }
   }
 }

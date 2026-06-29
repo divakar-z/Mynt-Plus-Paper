@@ -70,6 +70,18 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
   int? _sortColIdx;
   bool _sortAsc = true;
 
+  // Always-visible scrollbars (matches the financials table): horizontal for
+  // the many data columns, vertical for the rows.
+  final ScrollController _hCtrl = ScrollController();
+  final ScrollController _vCtrl = ScrollController();
+
+  @override
+  void dispose() {
+    _hCtrl.dispose();
+    _vCtrl.dispose();
+    super.dispose();
+  }
+
   List<ScanColumn> get _dataCols => [
         ...widget.standardPrefixColumns,
         ...widget.columns,
@@ -119,10 +131,9 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
     final border = shadcn.Theme.of(context).colorScheme.border;
     final dataCols = _dataCols;
     final rows = _sortedRows;
-    // Footer "Showing N matches" is commented out per request — re-enable
-    // this `secondary` together with the footer block at the bottom.
-    // final secondary = resolveThemeColor(context,
-    //     dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final thumb = secondary.withValues(alpha: 0.5);
     final headerBg = resolveThemeColor(context,
         dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
 
@@ -168,7 +179,7 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
             // Sticky header row
             Container(
               padding: const EdgeInsets.symmetric(
-                  horizontal: rowHPad, vertical: 14),
+                  horizontal: rowHPad, vertical: 10),
               decoration: BoxDecoration(
                 color: headerBg,
                 border: Border(bottom: BorderSide(color: border)),
@@ -201,54 +212,67 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
                   ),
               ]),
             ),
-            // Scrollable rows
+            // Scrollable rows with an always-visible vertical scrollbar.
             Expanded(
-              child: ListView.separated(
-                itemCount: rows.length,
-                separatorBuilder: (_, __) => Divider(
-                    height: 1, color: border.withValues(alpha: 0.4)),
-                itemBuilder: (_, i) {
-                  final r = rows[i];
-                  return _DataRow(
-                    row: r,
-                    cols: dataCols,
-                    stockNameW: stockNameW,
-                    exchW: exchW,
-                    colWidths: colWidths,
-                    customCellFormatter: widget.customCellFormatter,
-                    onTap: widget.onTickerTap == null
-                        ? null
-                        : () => widget.onTickerTap!(r.ticker),
-                    onExplainTap: widget.onExplainTap == null
-                        ? null
-                        : () => widget.onExplainTap!(r.ticker),
-                  );
-                },
+              child: RawScrollbar(
+                controller: _vCtrl,
+                thumbVisibility: true,
+                thickness: 6,
+                radius: const Radius.circular(8),
+                thumbColor: thumb,
+                notificationPredicate: (n) => n.metrics.axis == Axis.vertical,
+                child: ListView.separated(
+                  controller: _vCtrl,
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => Divider(
+                      height: 1, color: border.withValues(alpha: 0.4)),
+                  itemBuilder: (_, i) {
+                    final r = rows[i];
+                    return _DataRow(
+                      row: r,
+                      cols: dataCols,
+                      stockNameW: stockNameW,
+                      exchW: exchW,
+                      colWidths: colWidths,
+                      customCellFormatter: widget.customCellFormatter,
+                      onTap: widget.onTickerTap == null
+                          ? null
+                          : () => widget.onTickerTap!(r.ticker),
+                      onExplainTap: widget.onExplainTap == null
+                          ? null
+                          : () => widget.onExplainTap!(r.ticker),
+                    );
+                  },
+                ),
               ),
             ),
           ],
         ),
       );
 
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: shadcn.OutlinedContainer(
-              clipBehavior: Clip.antiAlias,
-              child: needsScroll
-                  ? SingleChildScrollView(
-                      scrollDirection: Axis.horizontal, child: table)
-                  : table,
+      // Outer horizontal scrollbar (visible only when the columns overflow)
+      // wrapping the table; the rows carry their own vertical scrollbar above.
+      return shadcn.OutlinedContainer(
+        clipBehavior: Clip.antiAlias,
+        child: ScrollConfiguration(
+          behavior: const MaterialScrollBehavior().copyWith(scrollbars: false),
+          child: RawScrollbar(
+            controller: _hCtrl,
+            thumbVisibility: needsScroll,
+            thickness: 6,
+            radius: const Radius.circular(8),
+            thumbColor: thumb,
+            notificationPredicate: (n) => n.metrics.axis == Axis.horizontal,
+            child: SingleChildScrollView(
+              controller: _hCtrl,
+              scrollDirection: Axis.horizontal,
+              physics: needsScroll
+                  ? const ClampingScrollPhysics()
+                  : const NeverScrollableScrollPhysics(),
+              child: table,
             ),
           ),
-          // const SizedBox(height: 8),
-          // Padding(
-          //   padding: const EdgeInsets.only(left: 4),
-          //   child: Text(widget.footer,
-          //       style: MyntWebTextStyles.caption(context, color: secondary)),
-          // ),
-        ],
+        ),
       );
     });
   }
