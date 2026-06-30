@@ -6636,7 +6636,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             }
                                                                           }
                                                                         } else {
-                                                                          if (_hasValidCircuitBreakerValues &&
+                                                                          if (SafeParse.toDouble(triggerPriceCtrl.text) <
+                                                                              SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                            ResponsiveSnackBar.showWarning(context,
+                                                                                "Trigger should be greater than LTP");
+                                                                          } else if (_hasValidCircuitBreakerValues &&
                                                                               SafeParse.toDouble(triggerPriceCtrl.text) < SafeParse.toDouble(widget.scripInfo.lc)) {
                                                                             ResponsiveSnackBar.showWarning(context,
                                                                                 "Trigger cannot be lesser than lower circuit limit of ${widget.scripInfo.lc}");
@@ -6675,7 +6679,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             }
                                                                           }
                                                                         } else {
-                                                                          if (_hasValidCircuitBreakerValues &&
+                                                                          if (SafeParse.toDouble(triggerPriceCtrl.text) >
+                                                                              SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                            ResponsiveSnackBar.showWarning(context,
+                                                                                "Trigger should be lesser than LTP");
+                                                                          } else if (_hasValidCircuitBreakerValues &&
                                                                               SafeParse.toDouble(triggerPriceCtrl.text) > SafeParse.toDouble(widget.scripInfo.uc)) {
                                                                             ResponsiveSnackBar.showWarning(context,
                                                                                 "Trigger cannot be greater than upper circuit limit of ${widget.scripInfo.uc ?? 0.00}");
@@ -6813,6 +6821,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     } else {
                                                                       if (isBuy!) {
                                                                         if (userTriggerPrice <
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be greater than LTP");
+                                                                        } else if (userTriggerPrice <
                                                                             lc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -6843,6 +6856,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         }
                                                                       } else {
                                                                         if (userTriggerPrice >
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be lesser than LTP");
+                                                                        } else if (userTriggerPrice >
                                                                             uc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -7012,6 +7030,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     } else {
                                                                       if (isBuy!) {
                                                                         if (userTriggerPrice <
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be greater than LTP");
+                                                                        } else if (userTriggerPrice <
                                                                             lc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -7042,6 +7065,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         }
                                                                       } else {
                                                                         if (userTriggerPrice >
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be lesser than LTP");
+                                                                        } else if (userTriggerPrice >
                                                                             uc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
