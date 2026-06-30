@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
+import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -96,6 +97,9 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header — back + a live title ("New scan" until named, then the
+          // typed name) on the left, and a limited-width styled name field on
+          // the right to set / rename it.
           Row(children: [
             IconButton(
               icon: const Icon(Icons.arrow_back, size: 18),
@@ -104,11 +108,24 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: TextField(
+              child: Text(
+                builder.name.trim().isEmpty ? 'New scan' : builder.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: MyntWebTextStyles.head(context,
+                    fontWeight: MyntFonts.bold,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary)),
+              ),
+            ),
+            const SizedBox(width: 16),
+            SizedBox(
+              width: 300,
+              child: MyntFormTextField(
                 controller: _nameCtl,
-                decoration: const InputDecoration(hintText: 'Scan name'),
-                style: MyntWebTextStyles.body(context,
-                    fontWeight: MyntFonts.semiBold),
+                placeholder: 'Scan name',
+                height: 40,
               ),
             ),
           ]),

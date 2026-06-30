@@ -87,29 +87,37 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
                     loading: () => const LinearProgressIndicator(),
                     error: (e, _) => Text(e.toString(),
                         style: MyntWebTextStyles.caption(context)),
-                    data: (list) => list.isEmpty
-                        ? Text('None yet — save a screen to reuse it.',
-                            style: MyntWebTextStyles.caption(context,
-                                color: resolveThemeColor(context,
-                                    dark: MyntColors.textSecondaryDark,
-                                    light: MyntColors.textSecondary)))
-                        : Wrap(spacing: 8, runSpacing: 8, children: [
-                            for (final s in list)
-                              _SavedScreenChip(
-                                name: s.name,
-                                onApply: () => _setBuilder(_state.copyWith(
-                                  filters: s.filters,
-                                  treatNullAs: s.treatNullAs,
-                                )),
-                                onDelete: () async {
-                                  if (await _confirmDelete(s.name)) {
-                                    await locator<ApiExporter>()
-                                        .deleteSavedScreen(s.id);
-                                    ref.invalidate(savedScreensProvider);
-                                  }
-                                },
-                              ),
-                          ]),
+                    data: (list) => Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        // Start-fresh card — clears the FILTERS builder so the
+                        // user can build (then name via Save as…) a new screen.
+                        _CreateScreenCard(
+                          onTap: () => _setBuilder(
+                              _state.copyWith(filters: const [])),
+                        ),
+                        // One card per saved screen: tap to apply (its filters
+                        // load into the builder below), trash to delete.
+                        for (final s in list)
+                          _SavedScreenCard(
+                            name: s.name,
+                            filterCount: s.filters.length,
+                            treatNullAs: s.treatNullAs,
+                            onApply: () => _setBuilder(_state.copyWith(
+                              filters: s.filters,
+                              treatNullAs: s.treatNullAs,
+                            )),
+                            onDelete: () async {
+                              if (await _confirmDelete(s.name)) {
+                                await locator<ApiExporter>()
+                                    .deleteSavedScreen(s.id);
+                                ref.invalidate(savedScreensProvider);
+                              }
+                            },
+                          ),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -750,63 +758,151 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-/// Saved-screen chip — the boxed scalper-style chip used by the scanner index
-/// filter (light fill, primary border, radius 6): tap the body to apply the
-/// screen, the × to delete it.
-class _SavedScreenChip extends StatelessWidget {
+/// Saved-screen card (MF-strategy style): the screen name + a small meta line
+/// (how many filters it loads and its missing-data rule). Tap the card to apply
+/// it — its filters fill the FILTERS builder below — or the trash to delete it.
+class _SavedScreenCard extends StatefulWidget {
   final String name;
+  final int filterCount;
+  final String treatNullAs; // 'fail' | 'pass'
   final VoidCallback onApply;
   final VoidCallback onDelete;
-  const _SavedScreenChip({
+  const _SavedScreenCard({
     required this.name,
+    required this.filterCount,
+    required this.treatNullAs,
     required this.onApply,
     required this.onDelete,
   });
 
   @override
+  State<_SavedScreenCard> createState() => _SavedScreenCardState();
+}
+
+class _SavedScreenCardState extends State<_SavedScreenCard> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
+    final border = shadcn.Theme.of(context).colorScheme.border;
     final textColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: resolveThemeColor(context,
-            dark: Colors.transparent, light: const Color(0xFFF1F3F8)),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: resolveThemeColor(context,
-              dark: MyntColors.textSecondaryDark, light: MyntColors.primary),
+    final hoverBg = resolveThemeColor(context,
+        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+    final missing = widget.treatNullAs == 'pass' ? 'Include' : 'Exclude';
+    final countLabel =
+        '${widget.filterCount} ${widget.filterCount == 1 ? 'filter' : 'filters'}';
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onApply,
+        child: Container(
+          width: 260,
+          height: 64,
+          padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+          decoration: BoxDecoration(
+            color: _hover
+                ? hoverBg
+                : resolveThemeColor(context,
+                    dark: MyntColors.cardDark, light: MyntColors.card),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: _hover ? MyntColors.primary : border, width: 1),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.bookmark_border, size: 18, color: muted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(widget.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.semiBold, color: textColor)),
+                    const SizedBox(height: 3),
+                    Text('$countLabel · $missing missing',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            MyntWebTextStyles.caption(context, color: muted)),
+                  ],
+                ),
+              ),
+              // Trash — its own gesture wins, so tapping it never also fires
+              // the card's "apply".
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: widget.onDelete,
+                  borderRadius: BorderRadius.circular(4),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.delete_outline, size: 18),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Tap the body to apply the saved screen.
-          InkWell(
-            onTap: onApply,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 7, 6, 7),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(name,
-                      style: MyntWebTextStyles.body(context,
-                          fontWeight: MyntFonts.medium, color: textColor)),
-                ],
-              ),
-            ),
+    );
+  }
+}
+
+/// Start-fresh card shown first in the SAVED SCREENS grid — a primary-tinted
+/// "Create new screen" tile. Tapping it clears the FILTERS builder so the user
+/// starts a new screen (then names it via Save as…).
+class _CreateScreenCard extends StatefulWidget {
+  final VoidCallback onTap;
+  const _CreateScreenCard({required this.onTap});
+
+  @override
+  State<_CreateScreenCard> createState() => _CreateScreenCardState();
+}
+
+class _CreateScreenCardState extends State<_CreateScreenCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: 260,
+          height: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: primary.withValues(alpha: _hover ? 0.10 : 0.05),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: primary, width: 1),
           ),
-          // × to delete.
-          InkWell(
-            onTap: onDelete,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(2, 7, 8, 7),
-              child: Icon(shadcn.LucideIcons.x, size: 14, color: muted),
-            ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.add_circle_outline, size: 18, color: primary),
+              const SizedBox(width: 8),
+              Text('Create new screen',
+                  style: MyntWebTextStyles.body(context,
+                      fontWeight: MyntFonts.semiBold, color: primary)),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
