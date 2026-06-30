@@ -301,6 +301,18 @@ class Chart {
         // the whole gap, not just the tail.
         this._healFromSec = Math.floor(Date.now() / 1000);
       } else if (document.visibilityState === 'visible') {
+        // A backgrounded tab SUSPENDS requestAnimationFrame, so the handle in
+        // this._frame never fired and scheduleRedraw()'s `if (this._frame) return`
+        // guard is now stuck truthy — the chart would otherwise stay frozen
+        // FOREVER on return (ticks keep arriving and mutating candles, but every
+        // redraw bails at the guard). Cancel the dead handle, clear the guard,
+        // and force ONE synchronous repaint so the chart updates the instant we
+        // return; the next tick's scheduleRedraw() then re-arms a normal rAF.
+        if (this._frame) {
+          cancelAnimationFrame(this._frame);
+          this._frame = null;
+        }
+        this.draw();
         this._refreshRecent('visible');
       }
     };
