@@ -1200,9 +1200,10 @@ class WebSocketProvider extends ChangeNotifier {
         }
         break;
       case 'TRIGGER_PENDING':
-        // Stop-loss orders rest in TRIGGER_PENDING. This previously fell into
-        // default with no web toast, so modifying an SL order showed nothing.
-        message = '$tranType order for $symbol ($exchange) modified successfully';
+        // An SL order rests in TRIGGER_PENDING after BOTH place and modify, and the
+        // websocket can't distinguish them (both end with a TriggerPending report).
+        // So report the status neutrally, like the vendor, instead of "modified".
+        message = '$tranType order for $symbol ($exchange) is Trigger Pending';
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(_context!, message);
         } else {
