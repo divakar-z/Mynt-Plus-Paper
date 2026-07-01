@@ -4,9 +4,11 @@ import 'package:mynt_plus/api/insta_options/dashboard/dashboard_api.dart'
 import 'package:mynt_plus/api/insta_options/option_chain/option_chain_api.dart';
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/insta_options/dashboard/dates_response.dart';
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/expiry_option.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/option_chain_data.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/insta_options/live_polling.dart';
 
 final optionChainProvider = ChangeNotifierProvider.autoDispose(
   (ref) => OptionChainProvider(),
@@ -14,11 +16,13 @@ final optionChainProvider = ChangeNotifierProvider.autoDispose(
 
 /// Powers the date-based **Option Chain** (Screen 2).
 ///
-/// On mount: `/dates` → latest → `/expiries` (pick near) → `/option-chain`.
-/// Changing **underlying** or **date** refetches expiries then the chain;
-/// changing **expiry** refetches only the chain. Data is historical (immutable
-/// per day), so there is no polling.
-class OptionChainProvider extends DefaultChangeNotifier {
+/// On mount: `/dates` → if today's live snapshot is held, default to **Live /
+/// Today** (polled); else the latest finalized day. `/expiries` (pick near) →
+/// `/option-chain`. Changing **underlying** or **date** refetches expiries then
+/// the chain; changing **expiry** refetches only the chain — all in the current
+/// mode. A cold live symbol/expiry's first load may take ~1–4s (server warm-up)
+/// — that surfaces as the normal loading state, not an error.
+class OptionChainProvider extends DefaultChangeNotifier with LivePolling {
   final OptionChainApi _api = locator<OptionChainApi>();
 
   static const String _defaultUnderlying = 'NIFTY';
@@ -26,6 +30,7 @@ class OptionChainProvider extends DefaultChangeNotifier {
   String _underlying = _defaultUnderlying;
   DatesResponse _dates = DatesResponse.empty;
   String? _selectedDate;
+  bool _liveMode = false;
   List<ExpiryOption> _expiries = const [];
   String? _selectedExpiry;
   OptionChainData? _data;
@@ -36,14 +41,15 @@ class OptionChainProvider extends DefaultChangeNotifier {
   bool _loadingChain = false;
   String? _error;
 
-  // ---- selectors ----
+  // ---- selectors / mode ----
   String get underlying => _underlying;
   DatesResponse get dates => _dates;
+  LiveChannel? get liveChannel => _dates.live;
+  bool get liveMode => _liveMode;
   String? get selectedDate => _selectedDate;
   List<ExpiryOption> get expiries => _expiries;
   String? get selectedExpiry => _selectedExpiry;
 
-  /// Available trading days parsed to [DateTime] for the calendar.
   List<DateTime> get availableDates {
     final out = <DateTime>[];
     for (final s in _dates.dates) {
@@ -55,6 +61,9 @@ class OptionChainProvider extends DefaultChangeNotifier {
 
   DateTime? get selectedDateTime =>
       _selectedDate == null ? null : DateTime.tryParse(_selectedDate!);
+
+  Freshness get freshness => _data?.freshness ?? Freshness.empty;
+  String? get freshnessHm => _liveMode ? freshness.hm : null;
 
   // ---- data ----
   OptionChainData? get data => _data;
@@ -74,31 +83,56 @@ class OptionChainProvider extends DefaultChangeNotifier {
     _init();
   }
 
-  void stop() => _started = false;
+  void stop() {
+    _started = false;
+    stopPolling();
+  }
 
   Future<void> _init() async {
     await _loadDates();
-    _selectedDate = _dates.latest ??
-        (_dates.dates.isNotEmpty ? _dates.dates.last : null);
+    if (_dates.hasLive) {
+      _liveMode = true;
+      _selectedDate = null;
+    } else {
+      _liveMode = false;
+      _selectedDate =
+          _dates.latest ?? (_dates.dates.isNotEmpty ? _dates.dates.last : null);
+    }
     await _loadExpiries(resetExpiry: true);
     await _loadChain();
+    _syncPolling();
   }
 
-  /// Underlying change → reload expiries + chain (different strike universe).
+  Future<void> selectLive() async {
+    if (_liveMode) return;
+    _liveMode = true;
+    _selectedDate = null;
+    _data = null;
+    notifyListeners();
+    await _loadExpiries(resetExpiry: true);
+    await _loadChain();
+    _syncPolling();
+  }
+
+  /// Underlying change → reload expiries + chain (different strike universe),
+  /// keeping the current mode.
   Future<void> selectUnderlying(String underlying) async {
     if (underlying == _underlying) return;
     _underlying = underlying;
-    _data = null; // clear stale chain while the new one loads
+    _data = null; // clear stale chain while the new one loads (cold = slow)
     notifyListeners();
     await _loadExpiries(resetExpiry: true);
     await _loadChain();
+    _syncPolling();
   }
 
-  /// Date change → expiries differ per day, so refetch both.
+  /// Pick a finalized day → immutable, polling stops.
   Future<void> selectDate(String isoDate) async {
-    if (isoDate == _selectedDate) return;
+    if (!_liveMode && isoDate == _selectedDate) return;
+    _liveMode = false;
     _selectedDate = isoDate;
     notifyListeners();
+    stopPolling();
     await _loadExpiries(resetExpiry: true);
     await _loadChain();
   }
@@ -115,6 +149,15 @@ class OptionChainProvider extends DefaultChangeNotifier {
     await _loadDates();
     await _loadExpiries(resetExpiry: false);
     await _loadChain();
+    _syncPolling();
+  }
+
+  void _syncPolling() {
+    if (_liveMode) {
+      startPolling(() => _loadChain(silent: true));
+    } else {
+      stopPolling();
+    }
   }
 
   // ---- loaders ----
@@ -124,8 +167,8 @@ class OptionChainProvider extends DefaultChangeNotifier {
     try {
       _dates = await _api.getDates();
     } catch (_) {
-      // Non-fatal: the chain still loads the latest day; the calendar just
-      // can't restrict selectable days until /dates succeeds.
+      // Non-fatal: the chain still loads; the calendar/live option just can't
+      // populate until /dates succeeds.
     } finally {
       _loadingDates = false;
       notifyListeners();
@@ -136,8 +179,10 @@ class OptionChainProvider extends DefaultChangeNotifier {
     _loadingExpiries = true;
     notifyListeners();
     try {
-      _expiries =
-          await _api.getExpiries(underlying: _underlying, date: _selectedDate);
+      _expiries = await _api.getExpiries(
+          underlying: _underlying,
+          date: _liveMode ? null : _selectedDate,
+          live: _liveMode);
       if (resetExpiry ||
           _selectedExpiry == null ||
           !_expiries.any((e) => e.expiry == _selectedExpiry)) {
@@ -159,28 +204,37 @@ class OptionChainProvider extends DefaultChangeNotifier {
     return near.expiry;
   }
 
-  Future<void> _loadChain() async {
-    _loadingChain = true;
-    _error = null;
-    notifyListeners();
+  /// [silent] = a background poll: keep the last good chain on a transient
+  /// failure, no loader flash.
+  Future<void> _loadChain({bool silent = false}) async {
+    if (!silent) {
+      _loadingChain = true;
+      _error = null;
+      notifyListeners();
+    }
     try {
-      _data = await _api.getChain(
+      final data = await _api.getChain(
         underlying: _underlying,
-        date: _selectedDate,
+        date: _liveMode ? null : _selectedDate,
         expiry: _selectedExpiry,
+        live: _liveMode,
       );
-      // Sync selections from the authoritative response.
-      if (_data!.tradeDate.isNotEmpty) _selectedDate = _data!.tradeDate;
-      if (_data!.expiry != null) _selectedExpiry = _data!.expiry;
-      if (_data!.availableExpiries.isNotEmpty) {
-        _expiries = _data!.availableExpiries;
+      _data = data;
+      // Asked live but the server fell back to a finalized day → historical.
+      if (_liveMode && !data.freshness.isLive) {
+        _liveMode = false;
+        stopPolling();
       }
+      // Sync selections from the authoritative response.
+      if (!_liveMode && data.tradeDate.isNotEmpty) _selectedDate = data.tradeDate;
+      if (data.expiry != null) _selectedExpiry = data.expiry;
+      if (data.availableExpiries.isNotEmpty) _expiries = data.availableExpiries;
     } on DashboardApiException catch (e) {
-      _error = e.message;
+      if (!silent) _error = e.message;
     } catch (e) {
-      _error = e.toString();
+      if (!silent) _error = e.toString();
     } finally {
-      _loadingChain = false;
+      if (!silent) _loadingChain = false;
       notifyListeners();
     }
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/insta_options/insta_live_ticks.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/buildup_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/chain_screen.dart';
@@ -34,6 +35,13 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
   void _onSelect(InstaSubScreen sub) {
     if (sub == _active) return;
     setState(() => _active = sub);
+  }
+
+  @override
+  void dispose() {
+    // Leaving the module → drop every InstaOptions socket subscription.
+    ref.read(instaLiveTicksProvider).clear();
+    super.dispose();
   }
 
   Widget _buildActiveSubScreen() {

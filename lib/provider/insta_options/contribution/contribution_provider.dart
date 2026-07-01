@@ -5,7 +5,9 @@ import 'package:mynt_plus/api/insta_options/dashboard/dashboard_api.dart'
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/insta_options/contribution/index_contribution.dart';
 import 'package:mynt_plus/models/insta_options/dashboard/dates_response.dart';
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/insta_options/live_polling.dart';
 
 final contributionProvider = ChangeNotifierProvider.autoDispose(
   (ref) => ContributionProvider(),
@@ -13,10 +15,11 @@ final contributionProvider = ChangeNotifierProvider.autoDispose(
 
 /// Powers the date-based **Index Contribution** (Screen 3).
 ///
-/// On mount: `/dates` → latest → `/contribution?index=&date=`. Changing the
-/// **index** or the **date** refetches the single contribution call. Data is
-/// historical (immutable per day), so there is no polling.
-class ContributionProvider extends DefaultChangeNotifier {
+/// On mount: `/dates` → if today's live snapshot is held, default to **Live /
+/// Today** (polled); else the latest finalized day. `/contribution?index=&...`.
+/// Changing the **index** or the **date** refetches the single contribution call
+/// in the current mode.
+class ContributionProvider extends DefaultChangeNotifier with LivePolling {
   final ContributionApi _api = locator<ContributionApi>();
 
   static const String _defaultIndex = 'NIFTY';
@@ -24,6 +27,7 @@ class ContributionProvider extends DefaultChangeNotifier {
   String _index = _defaultIndex;
   DatesResponse _dates = DatesResponse.empty;
   String? _selectedDate;
+  bool _liveMode = false;
   IndexContribution? _data;
 
   bool _started = false;
@@ -31,12 +35,13 @@ class ContributionProvider extends DefaultChangeNotifier {
   bool _loadingData = false;
   String? _error;
 
-  // ---- selectors ----
+  // ---- selectors / mode ----
   String get index => _index;
   DatesResponse get dates => _dates;
+  LiveChannel? get liveChannel => _dates.live;
+  bool get liveMode => _liveMode;
   String? get selectedDate => _selectedDate;
 
-  /// Available trading days parsed to [DateTime] for the calendar.
   List<DateTime> get availableDates {
     final out = <DateTime>[];
     for (final s in _dates.dates) {
@@ -49,6 +54,9 @@ class ContributionProvider extends DefaultChangeNotifier {
   DateTime? get selectedDateTime =>
       _selectedDate == null ? null : DateTime.tryParse(_selectedDate!);
 
+  Freshness get freshness => _data?.freshness ?? Freshness.empty;
+  String? get freshnessHm => _liveMode ? freshness.hm : null;
+
   // ---- data ----
   IndexContribution? get data => _data;
   String get tradeDate => _data?.tradeDate ?? _selectedDate ?? '';
@@ -56,8 +64,7 @@ class ContributionProvider extends DefaultChangeNotifier {
   // ---- status ----
   bool get loadingData => _loadingData;
   String? get error => _error;
-  bool get isInitialLoading =>
-      _data == null && (_loadingDates || _loadingData);
+  bool get isInitialLoading => _data == null && (_loadingDates || _loadingData);
   bool get isFatalError => _data == null && _error != null;
 
   void start() {
@@ -66,35 +73,67 @@ class ContributionProvider extends DefaultChangeNotifier {
     _init();
   }
 
-  void stop() => _started = false;
+  void stop() {
+    _started = false;
+    stopPolling();
+  }
 
   Future<void> _init() async {
     await _loadDates();
-    _selectedDate = _dates.latest ??
-        (_dates.dates.isNotEmpty ? _dates.dates.last : null);
+    if (_dates.hasLive) {
+      _liveMode = true;
+      _selectedDate = null;
+    } else {
+      _liveMode = false;
+      _selectedDate =
+          _dates.latest ?? (_dates.dates.isNotEmpty ? _dates.dates.last : null);
+    }
     await _loadData();
+    _syncPolling();
   }
 
-  /// Index change → refetch the contribution call for the new index.
+  Future<void> selectLive() async {
+    if (_liveMode) return;
+    _liveMode = true;
+    _selectedDate = null;
+    _data = null;
+    notifyListeners();
+    await _loadData();
+    _syncPolling();
+  }
+
+  /// Index change → refetch for the new index, keeping the current mode.
   Future<void> selectIndex(String index) async {
     if (index == _index) return;
     _index = index;
     _data = null; // clear stale data while the new index loads
     notifyListeners();
     await _loadData();
+    _syncPolling();
   }
 
-  /// Date change → refetch the contribution call for the new day.
+  /// Pick a finalized day → immutable, polling stops.
   Future<void> selectDate(String isoDate) async {
-    if (isoDate == _selectedDate) return;
+    if (!_liveMode && isoDate == _selectedDate) return;
+    _liveMode = false;
     _selectedDate = isoDate;
     notifyListeners();
+    stopPolling();
     await _loadData();
   }
 
   Future<void> refresh() async {
     await _loadDates();
     await _loadData();
+    _syncPolling();
+  }
+
+  void _syncPolling() {
+    if (_liveMode) {
+      startPolling(() => _loadData(silent: true));
+    } else {
+      stopPolling();
+    }
   }
 
   // ---- loaders ----
@@ -104,28 +143,38 @@ class ContributionProvider extends DefaultChangeNotifier {
     try {
       _dates = await _api.getDates();
     } catch (_) {
-      // Non-fatal: the contribution call still loads the latest day; the
-      // calendar just can't restrict selectable days until /dates succeeds.
+      // Non-fatal: the contribution call still loads; the calendar/live option
+      // just can't populate until /dates succeeds.
     } finally {
       _loadingDates = false;
       notifyListeners();
     }
   }
 
-  Future<void> _loadData() async {
-    _loadingData = true;
-    _error = null;
-    notifyListeners();
+  /// [silent] = a background poll: keep the last good data on a transient
+  /// failure, no loader flash.
+  Future<void> _loadData({bool silent = false}) async {
+    if (!silent) {
+      _loadingData = true;
+      _error = null;
+      notifyListeners();
+    }
     try {
-      _data = await _api.getContribution(index: _index, date: _selectedDate);
-      // Sync the selected day from the authoritative response.
-      if (_data!.tradeDate.isNotEmpty) _selectedDate = _data!.tradeDate;
+      final data = await _api.getContribution(
+          index: _index, date: _liveMode ? null : _selectedDate, live: _liveMode);
+      _data = data;
+      // Asked live but the server fell back to a finalized day → historical.
+      if (_liveMode && !data.freshness.isLive) {
+        _liveMode = false;
+        stopPolling();
+      }
+      if (!_liveMode && data.tradeDate.isNotEmpty) _selectedDate = data.tradeDate;
     } on DashboardApiException catch (e) {
-      _error = e.message;
+      if (!silent) _error = e.message;
     } catch (e) {
-      _error = e.toString();
+      if (!silent) _error = e.toString();
     } finally {
-      _loadingData = false;
+      if (!silent) _loadingData = false;
       notifyListeners();
     }
   }

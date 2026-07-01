@@ -15,6 +15,16 @@ class GainerLoserRow {
     required this.category,
   });
 
+  /// Overlay the socket-live LTP (`lastClose` column) + price%; the buildup
+  /// category stays the API snapshot.
+  GainerLoserRow copyWith({double? lastClose, double? priceChangePct}) =>
+      GainerLoserRow(
+        symbol: symbol,
+        priceChangePct: priceChangePct ?? this.priceChangePct,
+        lastClose: lastClose ?? this.lastClose,
+        category: category,
+      );
+
   factory GainerLoserRow.fromJson(Map<String, dynamic> json) => GainerLoserRow(
         symbol: json['symbol'] as String? ?? '',
         priceChangePct: (json['price_change_pct'] as num?)?.toDouble(),

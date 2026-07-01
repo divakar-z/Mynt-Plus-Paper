@@ -3,6 +3,7 @@ import 'package:mynt_plus/models/insta_options/contribution/constituent.dart';
 import 'package:mynt_plus/models/insta_options/contribution/index_future_oi.dart';
 import 'package:mynt_plus/models/insta_options/contribution/index_options.dart';
 import 'package:mynt_plus/models/insta_options/contribution/sector_contribution.dart';
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 
 /// Full `GET /api/v1/contribution?index=&date=` payload: how each constituent
 /// moved the index that day (their `point_contribution` sum to [pointChange]),
@@ -30,6 +31,7 @@ class IndexContribution {
   final List<SectorContribution> sectorContribution;
   final IndexFutureOi? indexOi;
   final IndexOptions? options;
+  final Freshness freshness;
 
   const IndexContribution({
     required this.tradeDate,
@@ -48,9 +50,39 @@ class IndexContribution {
     required this.sectorContribution,
     required this.indexOi,
     required this.options,
+    required this.freshness,
   });
 
   bool get hasConstituents => constituents.isNotEmpty;
+
+  /// Overlay the socket-live index headline (level / point-change / change%) and
+  /// the live constituents; point-contribution / share / weight / OI / PCR /
+  /// sector / concentration stay the API snapshot.
+  IndexContribution copyWith({
+    double? level,
+    double? pointChange,
+    double? changePct,
+    List<Constituent>? constituents,
+  }) =>
+      IndexContribution(
+        tradeDate: tradeDate,
+        index: index,
+        underlyingId: underlyingId,
+        level: level ?? this.level,
+        prevLevel: prevLevel,
+        changePct: changePct ?? this.changePct,
+        pointChange: pointChange ?? this.pointChange,
+        weightageAvailable: weightageAvailable,
+        reconciled: reconciled,
+        explainedPointChange: explainedPointChange,
+        coveragePct: coveragePct,
+        constituents: constituents ?? this.constituents,
+        concentration: concentration,
+        sectorContribution: sectorContribution,
+        indexOi: indexOi,
+        options: options,
+        freshness: freshness,
+      );
 
   /// Contributors (positive points), in the API's descending order.
   List<Constituent> get contributors => constituents
@@ -107,5 +139,6 @@ class IndexContribution {
         options: j['options'] == null
             ? null
             : IndexOptions.fromJson(j['options'] as Map<String, dynamic>),
+        freshness: Freshness.fromJson(j['freshness'] as Map<String, dynamic>?),
       );
 }

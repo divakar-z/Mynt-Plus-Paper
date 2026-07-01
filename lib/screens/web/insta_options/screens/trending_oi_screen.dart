@@ -31,9 +31,16 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
   @override
   void initState() {
     super.initState();
+    ref.read(oiChartsProvider).activate();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) ref.read(oiChartsProvider).openOiTimeline();
     });
+  }
+
+  @override
+  void dispose() {
+    ref.read(oiChartsProvider).deactivate();
+    super.dispose();
   }
 
   @override

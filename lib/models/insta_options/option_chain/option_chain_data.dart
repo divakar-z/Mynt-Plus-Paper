@@ -1,3 +1,4 @@
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/chain_strike_row.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/expiry_option.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/oi_wall.dart';
@@ -18,6 +19,9 @@ class OptionChainData {
   final List<OiWall> support;
   final List<OiWall> resistance;
   final List<ChainStrikeRow> rows;
+  final String? futureToken; // near-future contract for live underlying price
+  final String? futureExchange;
+  final Freshness freshness;
 
   const OptionChainData({
     required this.underlying,
@@ -33,7 +37,15 @@ class OptionChainData {
     required this.support,
     required this.resistance,
     required this.rows,
+    this.futureToken,
+    this.futureExchange,
+    required this.freshness,
   });
+
+  /// `exchange|token` for the near-future, or null if untokenised.
+  String? get futureTickKey => (futureToken != null && futureExchange != null)
+      ? '$futureExchange|$futureToken'
+      : null;
 
   bool get isEmpty => rows.isEmpty;
 
@@ -79,6 +91,9 @@ class OptionChainData {
       rows: (json['rows'] as List<dynamic>? ?? const [])
           .map((e) => ChainStrikeRow.fromJson(e as Map<String, dynamic>))
           .toList(growable: false),
+      futureToken: json['future_token']?.toString(),
+      futureExchange: json['future_exchange']?.toString(),
+      freshness: Freshness.fromJson(json['freshness'] as Map<String, dynamic>?),
     );
   }
 }

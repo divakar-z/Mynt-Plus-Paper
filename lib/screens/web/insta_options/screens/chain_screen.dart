@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:mynt_plus/models/insta_options/option_chain/chain_strike_row.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/option_chain_data.dart';
+import 'package:mynt_plus/models/insta_options/option_chain/option_leg.dart';
+import 'package:mynt_plus/provider/insta_options/insta_live_ticks.dart';
 import 'package:mynt_plus/provider/insta_options/option_chain/option_chain_provider.dart';
+import 'package:mynt_plus/provider/insta_options/symbols_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
@@ -24,6 +28,7 @@ class ChainScreen extends ConsumerStatefulWidget {
 
 class _ChainScreenState extends ConsumerState<ChainScreen> {
   final GlobalKey<ChainLadderState> _ladderKey = GlobalKey<ChainLadderState>();
+  Set<String> _lastSubKeys = const <String>{};
 
   // Collapsing the overview gives the ladder ~230px more height on short
   // screens. Remembered across tab switches so it's a once-off, not per-visit.
@@ -47,6 +52,7 @@ class _ChainScreenState extends ConsumerState<ChainScreen> {
   @override
   Widget build(BuildContext context) {
     final p = ref.watch(optionChainProvider);
+    ref.watch(instaLiveTicksProvider); // rebuild the overlay on each socket tick
     final bg = resolveThemeColor(context,
         dark: MyntColors.backgroundColorDark, light: MyntColors.backgroundColor);
 
@@ -82,12 +88,15 @@ class _ChainScreenState extends ConsumerState<ChainScreen> {
     if (data == null || data.isEmpty) {
       return const _EmptyState();
     }
+    // Overlay live socket ticks onto the snapshot (price fields only) and keep
+    // this section's subscriptions in sync. OI / PCR / walls stay snapshot.
+    final effective = _liveOverlay(context, p, data);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _overviewHeader(context, data),
+          _overviewHeader(context, effective),
           AnimatedSize(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
@@ -97,23 +106,98 @@ class _ChainScreenState extends ConsumerState<ChainScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const SizedBox(height: 12),
-                      ChainRangeAxis(data: data),
+                      ChainRangeAxis(data: effective),
                       const SizedBox(height: 16),
                       ChainBalanceBar(
-                          totalCeOi: data.totalCeOi,
-                          totalPeOi: data.totalPeOi,
-                          pcr: data.pcr),
+                          totalCeOi: effective.totalCeOi,
+                          totalPeOi: effective.totalPeOi,
+                          pcr: effective.pcr),
                       const SizedBox(height: 18),
-                      ChainKeyWalls(data: data),
+                      ChainKeyWalls(data: effective),
                     ],
                   )
                 : const SizedBox(width: double.infinity),
           ),
           const SizedBox(height: 12),
-          Expanded(child: ChainLadder(key: _ladderKey, data: data)),
+          Expanded(child: ChainLadder(key: _ladderKey, data: effective)),
         ],
       ),
     );
+  }
+
+  /// Live-tick overlay: leg LTP / chg% and the underlying value take the socket
+  /// value once a tick arrives (else the snapshot); OI / OIΔ% / PCR / max-pain /
+  /// walls stay the API snapshot. Also keeps the section's socket subscriptions
+  /// in sync (live mode only).
+  OptionChainData _liveOverlay(
+      BuildContext context, OptionChainProvider p, OptionChainData data) {
+    final sym = ref.read(symbolsProvider).byId(data.underlying);
+    final isIndex = sym?.isIndex ?? false;
+    // Underlying live price: index → its spot token; stock → near-future token.
+    final underToken = isIndex ? sym?.token : data.futureToken;
+    final underKey = isIndex ? sym?.tickKey : data.futureTickKey;
+
+    final keys = <String>{if (underKey != null) underKey};
+    for (final r in data.rows) {
+      final ce = r.ce?.tickKey;
+      final pe = r.pe?.tickKey;
+      if (ce != null) keys.add(ce);
+      if (pe != null) keys.add(pe);
+    }
+    _syncSubs(context, p.liveMode ? keys : const <String>{});
+
+    if (!p.liveMode) return data; // finalized day → no live ticks
+
+    final t = ref.read(instaLiveTicksProvider);
+    OptionLeg? overlay(OptionLeg? l) => l == null
+        ? null
+        : OptionLeg(
+            ltp: t.ltpOr(l.token, l.ltp),
+            change: t.liveChange(l.token) ?? l.change,
+            changePct: t.liveChangePct(l.token) ?? l.changePct,
+            volume: l.volume,
+            oi: l.oi,
+            oiChangePct: l.oiChangePct,
+            token: l.token,
+            exchange: l.exchange,
+          );
+    return OptionChainData(
+      underlying: data.underlying,
+      tradeDate: data.tradeDate,
+      expiry: data.expiry,
+      availableExpiries: data.availableExpiries,
+      underlyingValue: t.ltpOr(underToken, data.underlyingValue),
+      atmStrike: data.atmStrike,
+      totalCeOi: data.totalCeOi,
+      totalPeOi: data.totalPeOi,
+      pcr: data.pcr,
+      maxPain: data.maxPain,
+      support: data.support,
+      resistance: data.resistance,
+      rows: [
+        for (final r in data.rows)
+          ChainStrikeRow(
+              strike: r.strike,
+              isAtm: r.isAtm,
+              ce: overlay(r.ce),
+              pe: overlay(r.pe))
+      ],
+      futureToken: data.futureToken,
+      futureExchange: data.futureExchange,
+      freshness: data.freshness,
+    );
+  }
+
+  /// Diff-and-apply the section's live subscriptions (post-frame, off the build).
+  void _syncSubs(BuildContext context, Set<String> keys) {
+    if (keys.length == _lastSubKeys.length &&
+        keys.containsAll(_lastSubKeys)) {
+      return;
+    }
+    _lastSubKeys = keys;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(instaLiveTicksProvider).setActive(keys, context);
+    });
   }
 
   /// Slim tappable bar that collapses the overview block. When collapsed it

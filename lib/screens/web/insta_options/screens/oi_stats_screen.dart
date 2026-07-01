@@ -25,9 +25,16 @@ class _OiStatsScreenState extends ConsumerState<OiStatsScreen> {
   @override
   void initState() {
     super.initState();
+    ref.read(oiChartsProvider).activate();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) ref.read(oiChartsProvider).openOiByStrike();
     });
+  }
+
+  @override
+  void dispose() {
+    ref.read(oiChartsProvider).deactivate();
+    super.dispose();
   }
 
   @override

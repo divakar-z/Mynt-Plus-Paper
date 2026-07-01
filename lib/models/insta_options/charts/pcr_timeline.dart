@@ -1,3 +1,4 @@
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/expiry_option.dart';
 
 /// One intraday bucket of chain-wide PCR (`GET /api/v1/charts/pcr-timeline`
@@ -34,6 +35,7 @@ class PcrTimeline {
   final double? openPcr;
   final double? closePcr;
   final List<PcrPoint> points; // chronological
+  final Freshness freshness;
 
   const PcrTimeline({
     required this.underlying,
@@ -44,6 +46,7 @@ class PcrTimeline {
     required this.openPcr,
     required this.closePcr,
     required this.points,
+    required this.freshness,
   });
 
   bool get isEmpty => points.isEmpty;
@@ -62,5 +65,6 @@ class PcrTimeline {
         points: (j['points'] as List<dynamic>? ?? const [])
             .map((e) => PcrPoint.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),
+        freshness: Freshness.fromJson(j['freshness'] as Map<String, dynamic>?),
       );
 }

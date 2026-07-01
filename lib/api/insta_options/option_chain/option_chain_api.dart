@@ -35,10 +35,12 @@ class OptionChainApi {
   Future<List<ExpiryOption>> getExpiries({
     required String underlying,
     String? date,
+    bool live = false,
   }) async {
     final body = await _get('/expiries', query: {
       'underlying': underlying,
       if (date != null) 'date': date,
+      if (live) 'live': 'true',
     });
     final list = body as List<dynamic>? ?? const [];
     return list
@@ -52,11 +54,13 @@ class OptionChainApi {
     required String underlying,
     String? date,
     String? expiry,
+    bool live = false,
   }) async {
     final body = await _get('', query: {
       'underlying': underlying,
       if (date != null) 'date': date,
       if (expiry != null) 'expiry': expiry,
+      if (live) 'live': 'true',
     });
     return OptionChainData.fromJson(body as Map<String, dynamic>);
   }

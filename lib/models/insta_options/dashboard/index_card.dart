@@ -31,6 +31,21 @@ class IndexCard {
   bool get hasBreadth =>
       advances != null && declines != null && unchanged != null;
 
+  /// Overlay the socket-live level / change%; PCR / max-pain / breadth stay
+  /// the API snapshot.
+  IndexCard copyWith({double? level, double? changePct}) => IndexCard(
+        index: index,
+        underlyingId: underlyingId,
+        level: level ?? this.level,
+        changePct: changePct ?? this.changePct,
+        pcr: pcr,
+        expiry: expiry,
+        maxPain: maxPain,
+        advances: advances,
+        declines: declines,
+        unchanged: unchanged,
+      );
+
   factory IndexCard.fromJson(Map<String, dynamic> json) => IndexCard(
         index: json['index'] as String? ?? '',
         underlyingId: json['underlying_id'] as String? ?? '',

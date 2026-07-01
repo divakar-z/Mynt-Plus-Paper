@@ -115,14 +115,6 @@ class ConstituentsTable extends StatelessWidget {
             ? _dash(c)
             : DashCategoryChip(category: BuildupCategory.fromWire(r.category)),
       ),
-      DashCol(
-        label: 'PCR',
-        width: 60,
-        numeric: true,
-        sortKey: (r) => r.pcr ?? 0,
-        cell: (c, r) =>
-            r.pcr == null ? _dash(c) : Text(InstaOptionsFormat.pcr(r.pcr), style: _cell(c)),
-      ),
     ];
   }
 

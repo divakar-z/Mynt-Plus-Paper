@@ -1,3 +1,4 @@
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/expiry_option.dart';
 
 /// One intraday bucket of a strike-leg's OI + LTP (`oi-timeline` series point).
@@ -152,6 +153,9 @@ class OiTimeline {
   final List<PriceTick> spotSeries; // intraday underlying price, bucket-aligned
   final List<PriceTick> futureSeries; // intraday near-future price
   final String? futureExpiry;
+  final String? futureToken; // near-future contract for live future-line ticks
+  final String? futureExchange;
+  final Freshness freshness;
 
   const OiTimeline({
     required this.underlying,
@@ -168,7 +172,15 @@ class OiTimeline {
     required this.spotSeries,
     required this.futureSeries,
     required this.futureExpiry,
+    this.futureToken,
+    this.futureExchange,
+    required this.freshness,
   });
+
+  /// `exchange|token` for the near-future, or null if untokenised.
+  String? get futureTickKey => (futureToken != null && futureExchange != null)
+      ? '$futureExchange|$futureToken'
+      : null;
 
   bool get isEmpty => series.isEmpty && table.isEmpty;
 
@@ -209,5 +221,8 @@ class OiTimeline {
             .map((e) => PriceTick.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),
         futureExpiry: j['future_expiry'] as String?,
+        futureToken: j['future_token']?.toString(),
+        futureExchange: j['future_exchange']?.toString(),
+        freshness: Freshness.fromJson(j['freshness'] as Map<String, dynamic>?),
       );
 }

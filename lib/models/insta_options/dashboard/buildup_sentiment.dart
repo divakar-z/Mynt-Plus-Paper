@@ -20,6 +20,17 @@ class BuildupRow {
     required this.category,
   });
 
+  /// Overlay the socket-live LTP (`lastClose` column) + price%; OI / OIΔ% /
+  /// category stay the API snapshot.
+  BuildupRow copyWith({double? lastClose, double? priceChangePct}) => BuildupRow(
+        symbol: symbol,
+        lastClose: lastClose ?? this.lastClose,
+        oi: oi,
+        priceChangePct: priceChangePct ?? this.priceChangePct,
+        oiChangePct: oiChangePct,
+        category: category,
+      );
+
   factory BuildupRow.fromJson(Map<String, dynamic> json) => BuildupRow(
         symbol: json['symbol'] as String? ?? '',
         lastClose: (json['last_close'] as num?)?.toDouble(),
@@ -71,6 +82,19 @@ class BuildupSentiment {
   );
 
   bool get isEmpty => total == 0;
+
+  /// Overlay the live-priced [rows]; the quadrant counts stay the API snapshot.
+  BuildupSentiment copyWith({List<BuildupRow>? rows}) => BuildupSentiment(
+        longBuildup: longBuildup,
+        shortBuildup: shortBuildup,
+        shortCovering: shortCovering,
+        longCovering: longCovering,
+        na: na,
+        total: total,
+        bullish: bullish,
+        bearish: bearish,
+        rows: rows ?? this.rows,
+      );
 
   /// Count for a quadrant (drives the filter chips).
   int countFor(BuildupCategory c) {

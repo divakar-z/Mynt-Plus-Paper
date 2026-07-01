@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/models/insta_options/dashboard/dates_response.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/date_calendar.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/live_date_selector.dart';
 
-/// §5.1 App bar — title + date picker (anchored calendar limited to available
-/// trading days, default `latest`) + refresh.
+/// §5.1 App bar — title + LIVE/date selector (Live-Today when held, else the
+/// calendar limited to finalized days) + refresh.
 class DashboardAppBar extends StatelessWidget {
   final String? tradeDate;
   final DateTime? selectedDate;
   final List<DateTime> availableDates;
+  final bool liveMode;
+  final LiveChannel? liveChannel;
+  final String? freshnessHm;
   final bool loading;
+  final VoidCallback onSelectLive;
   final void Function(DateTime) onDateSelected;
   final VoidCallback onRefresh;
 
@@ -18,7 +23,11 @@ class DashboardAppBar extends StatelessWidget {
     required this.tradeDate,
     required this.selectedDate,
     required this.availableDates,
+    required this.liveMode,
+    required this.liveChannel,
+    required this.freshnessHm,
     required this.loading,
+    required this.onSelectLive,
     required this.onDateSelected,
     required this.onRefresh,
   });
@@ -37,11 +46,15 @@ class DashboardAppBar extends StatelessWidget {
           ),
         ),
         const Spacer(),
-        DashDateButton(
+        LiveDateSelector(
+          liveMode: liveMode,
+          liveChannel: liveChannel,
+          freshnessHm: freshnessHm,
           tradeDate: tradeDate,
           selectedDate: selectedDate,
           availableDates: availableDates,
-          onSelected: onDateSelected,
+          onSelectLive: onSelectLive,
+          onSelectDate: onDateSelected,
         ),
         const SizedBox(width: 10),
         _RefreshButton(loading: loading, onRefresh: onRefresh),

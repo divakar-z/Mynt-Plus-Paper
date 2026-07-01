@@ -29,13 +29,16 @@ class ContributionApi {
   }
 
   /// `GET /api/v1/contribution?index=&date=` (omit [date] for the latest day).
+  /// Pass [live] for today's intraday snapshot (`?live=true`, no `date`).
   Future<IndexContribution> getContribution({
     required String index,
     String? date,
+    bool live = false,
   }) async {
     final body = await _getUrl(_config.contributionBase, query: {
       'index': index,
       if (date != null) 'date': date,
+      if (live) 'live': 'true',
     });
     return IndexContribution.fromJson(body as Map<String, dynamic>);
   }

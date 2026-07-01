@@ -32,6 +32,14 @@ class SymbolsProvider extends DefaultChangeNotifier {
   List<InstrumentSymbol> get stocks =>
       _all.where((s) => !s.isIndex).toList(growable: false);
 
+  /// The instrument for [underlyingId] (for its spot/index token), or null.
+  InstrumentSymbol? byId(String underlyingId) {
+    for (final s in _all) {
+      if (s.underlyingId == underlyingId) return s;
+    }
+    return null;
+  }
+
   /// Indices (pinned) then stocks, filtered by [query] over id / name.
   List<InstrumentSymbol> search(String query) {
     final q = query.trim().toLowerCase();

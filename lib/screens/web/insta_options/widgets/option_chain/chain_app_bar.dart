@@ -7,8 +7,8 @@ import 'package:mynt_plus/provider/insta_options/option_chain/option_chain_provi
 import 'package:mynt_plus/provider/insta_options/symbols_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/date_calendar.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/live_date_selector.dart';
 
 /// Option Chain app bar: searchable underlying picker (indices pinned) + expiry
 /// pills + trade-date calendar + recenter-to-ATM + refresh.
@@ -52,11 +52,15 @@ class ChainAppBar extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 12),
-          DashDateButton(
+          LiveDateSelector(
+            liveMode: p.liveMode,
+            liveChannel: p.liveChannel,
+            freshnessHm: p.freshnessHm,
             tradeDate: p.tradeDate.isEmpty ? null : p.tradeDate,
             selectedDate: p.selectedDateTime,
             availableDates: p.availableDates,
-            onSelected: (d) =>
+            onSelectLive: () => ref.read(optionChainProvider).selectLive(),
+            onSelectDate: (d) =>
                 ref.read(optionChainProvider).selectDate(_iso(d)),
           ),
           const SizedBox(width: 8),

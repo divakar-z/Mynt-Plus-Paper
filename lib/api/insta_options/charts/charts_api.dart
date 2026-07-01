@@ -29,11 +29,13 @@ class ChartsApi {
     required String underlying,
     String? date,
     String? expiry,
+    bool live = false,
   }) async {
     final body = await _getUrl('${_config.chartsBase}/oi-by-strike', query: {
       'underlying': underlying,
       if (date != null) 'date': date,
       if (expiry != null) 'expiry': expiry,
+      if (live) 'live': 'true',
     });
     return OiByStrike.fromJson(body as Map<String, dynamic>);
   }
@@ -43,12 +45,14 @@ class ChartsApi {
     String? date,
     String? expiry,
     String interval = '5m',
+    bool live = false,
   }) async {
     final body = await _getUrl('${_config.chartsBase}/pcr-timeline', query: {
       'underlying': underlying,
       if (date != null) 'date': date,
       if (expiry != null) 'expiry': expiry,
       'interval': interval,
+      if (live) 'live': 'true',
     });
     return PcrTimeline.fromJson(body as Map<String, dynamic>);
   }
@@ -59,6 +63,7 @@ class ChartsApi {
     String? expiry,
     String interval = '5m',
     List<double>? strikes,
+    bool live = false,
   }) async {
     final body = await _getUrl('${_config.chartsBase}/oi-timeline', query: {
       'underlying': underlying,
@@ -67,6 +72,7 @@ class ChartsApi {
       'interval': interval,
       if (strikes != null && strikes.isNotEmpty)
         'strikes': strikes.map(_fmtStrike).join(','),
+      if (live) 'live': 'true',
     });
     return OiTimeline.fromJson(body as Map<String, dynamic>);
   }

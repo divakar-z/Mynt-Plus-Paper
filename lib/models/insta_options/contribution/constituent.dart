@@ -1,6 +1,6 @@
 /// One index constituent's contribution to the index's point move for a day,
-/// with a positioning overlay (OI buildup + PCR). An element of the
-/// `constituents` array in `GET /api/v1/contribution`.
+/// with a positioning overlay (OI buildup). An element of the `constituents`
+/// array in `GET /api/v1/contribution`.
 class Constituent {
   final String symbol;
   final String name;
@@ -18,7 +18,6 @@ class Constituent {
   final int? oi;
   final double? oiChangePct;
   final String? category; // OI-buildup wire value; null if outside F&O universe
-  final double? pcr;
 
   const Constituent({
     required this.symbol,
@@ -37,11 +36,35 @@ class Constituent {
     required this.oi,
     required this.oiChangePct,
     required this.category,
-    required this.pcr,
   });
 
   bool get isContributor => direction == 'contributor';
   bool get isDetractor => direction == 'detractor';
+
+  /// `exchange|token` subscription key for the constituent's live spot price.
+  String? get tickKey =>
+      (token != null && exchange != null) ? '$exchange|$token' : null;
+
+  /// Overlay the socket-live price fields; everything else (points, share,
+  /// weight, OI, buildup) stays the API snapshot.
+  Constituent copyWith({double? ltp, double? priceChangePct}) => Constituent(
+        symbol: symbol,
+        name: name,
+        sector: sector,
+        token: token,
+        exchange: exchange,
+        weightPct: weightPct,
+        ltp: ltp ?? this.ltp,
+        change: change,
+        priceChangePct: priceChangePct ?? this.priceChangePct,
+        marketCap: marketCap,
+        pointContribution: pointContribution,
+        sharePct: sharePct,
+        direction: direction,
+        oi: oi,
+        oiChangePct: oiChangePct,
+        category: category,
+      );
 
   factory Constituent.fromJson(Map<String, dynamic> j) => Constituent(
         symbol: (j['symbol'] ?? '').toString(),
@@ -60,6 +83,5 @@ class Constituent {
         oi: (j['oi'] as num?)?.toInt(),
         oiChangePct: (j['oi_change_pct'] as num?)?.toDouble(),
         category: j['category'] as String?,
-        pcr: (j['pcr'] as num?)?.toDouble(),
       );
 }

@@ -1,3 +1,4 @@
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/expiry_option.dart';
 
 /// One strike's CE/PE open interest and its day-over-day change
@@ -49,6 +50,7 @@ class OiByStrike {
   final double? pcr;
   final double? maxPain;
   final List<OiStrikeRow> rows; // sorted by strike ascending
+  final Freshness freshness;
 
   const OiByStrike({
     required this.underlying,
@@ -62,6 +64,7 @@ class OiByStrike {
     required this.pcr,
     required this.maxPain,
     required this.rows,
+    required this.freshness,
   });
 
   bool get isEmpty => rows.isEmpty;
@@ -83,5 +86,6 @@ class OiByStrike {
         rows: (j['rows'] as List<dynamic>? ?? const [])
             .map((e) => OiStrikeRow.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),
+        freshness: Freshness.fromJson(j['freshness'] as Map<String, dynamic>?),
       );
 }

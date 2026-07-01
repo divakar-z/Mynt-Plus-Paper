@@ -5,7 +5,7 @@ import 'package:mynt_plus/provider/insta_options/contribution/contribution_provi
 import 'package:mynt_plus/provider/insta_options/symbols_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
-import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/date_calendar.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/live_date_selector.dart';
 
 /// Index Contribution app bar: index picker (indices only, from `/symbols`) +
 /// trade-date calendar + refresh.
@@ -38,11 +38,15 @@ class ContributionAppBar extends ConsumerWidget {
             onSelect: (i) => ref.read(contributionProvider).selectIndex(i),
           ),
           const Spacer(),
-          DashDateButton(
+          LiveDateSelector(
+            liveMode: p.liveMode,
+            liveChannel: p.liveChannel,
+            freshnessHm: p.freshnessHm,
             tradeDate: p.tradeDate.isEmpty ? null : p.tradeDate,
             selectedDate: p.selectedDateTime,
             availableDates: p.availableDates,
-            onSelected: (d) =>
+            onSelectLive: () => ref.read(contributionProvider).selectLive(),
+            onSelectDate: (d) =>
                 ref.read(contributionProvider).selectDate(_iso(d)),
           ),
           const SizedBox(width: 8),

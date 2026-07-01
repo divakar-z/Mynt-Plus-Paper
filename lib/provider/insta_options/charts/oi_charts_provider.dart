@@ -8,19 +8,26 @@ import 'package:mynt_plus/models/insta_options/charts/oi_by_strike.dart';
 import 'package:mynt_plus/models/insta_options/charts/oi_timeline.dart';
 import 'package:mynt_plus/models/insta_options/charts/pcr_timeline.dart';
 import 'package:mynt_plus/models/insta_options/dashboard/dates_response.dart';
+import 'package:mynt_plus/models/insta_options/freshness.dart';
 import 'package:mynt_plus/models/insta_options/option_chain/expiry_option.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/insta_options/live_polling.dart';
 
 /// One source of truth for the three OI-chart screens (OI Statistics, PCR Ratio,
-/// Trending OI). Holds the shared `underlying / date / expiry / interval /
+/// Trending OI). Holds the shared `underlying / date|live / expiry / interval /
 /// strikes` selection plus a slot per endpoint, fetched on demand: a screen
 /// calls its `open*()` on mount, and selection changes refetch only the slots
 /// that have been opened. Dates + expiries reuse [OptionChainApi]; not
-/// auto-disposed so the selection persists as the user moves between the three
-/// screens.
+/// auto-disposed so the selection persists across the three screens.
+///
+/// **Live:** when `/dates` holds today's snapshot the trio defaults to live and
+/// polls (every ~90s) the opened slices — but only while at least one chart
+/// screen is mounted (the screens [activate]/[deactivate] a refcount), since the
+/// provider itself never auto-disposes. Timelines grow through the session, so
+/// each poll replaces the whole series.
 final oiChartsProvider = ChangeNotifierProvider((ref) => OiChartsProvider());
 
-class OiChartsProvider extends DefaultChangeNotifier {
+class OiChartsProvider extends DefaultChangeNotifier with LivePolling {
   final ChartsApi _api = locator<ChartsApi>();
   final OptionChainApi _ocApi = locator<OptionChainApi>();
 
@@ -30,6 +37,7 @@ class OiChartsProvider extends DefaultChangeNotifier {
   String _underlying = _defaultUnderlying;
   DatesResponse _dates = DatesResponse.empty;
   String? _selectedDate;
+  bool _liveMode = false;
   List<ExpiryOption> _expiries = const [];
   String? _selectedExpiry;
   String _interval = '5m';
@@ -40,6 +48,7 @@ class OiChartsProvider extends DefaultChangeNotifier {
   OiTimeline? _oiTimeline;
 
   bool _started = false;
+  int _activeScreens = 0; // mounted chart screens — gates polling
   bool _loadingDates = false;
   bool _loadingExpiries = false;
   bool _loadingOiByStrike = false;
@@ -53,9 +62,11 @@ class OiChartsProvider extends DefaultChangeNotifier {
   bool _wantPcr = false;
   bool _wantOiTimeline = false;
 
-  // ---- shared selection ----
+  // ---- shared selection / mode ----
   String get underlying => _underlying;
   DatesResponse get dates => _dates;
+  LiveChannel? get liveChannel => _dates.live;
+  bool get liveMode => _liveMode;
   String? get selectedDate => _selectedDate;
   List<ExpiryOption> get expiries => _expiries;
   String? get selectedExpiry => _selectedExpiry;
@@ -82,6 +93,13 @@ class OiChartsProvider extends DefaultChangeNotifier {
       _selectedDate ??
       '';
 
+  Freshness get freshness =>
+      _oiByStrike?.freshness ??
+      _pcr?.freshness ??
+      _oiTimeline?.freshness ??
+      Freshness.empty;
+  String? get freshnessHm => _liveMode ? freshness.hm : null;
+
   // ---- data + status ----
   OiByStrike? get oiByStrike => _oiByStrike;
   bool get loadingOiByStrike => _loadingOiByStrike;
@@ -106,35 +124,65 @@ class OiChartsProvider extends DefaultChangeNotifier {
       (_loadingDates || _loadingExpiries || _loadingOiTimeline);
   bool get isOiTimelineFatal => _oiTimeline == null && _oiTimelineError != null;
 
+  // ---- screen lifecycle (refcount for polling) ----
+  void activate() {
+    _activeScreens++;
+    _syncPolling();
+  }
+
+  void deactivate() {
+    if (_activeScreens > 0) _activeScreens--;
+    _syncPolling();
+  }
+
   // ---- screen entry points (call from initState) ----
   Future<void> openOiByStrike() async {
     _wantOiByStrike = true;
     await _ensureStarted();
     await _loadOiByStrike();
+    _syncPolling();
   }
 
   Future<void> openPcr() async {
     _wantPcr = true;
     await _ensureStarted();
     await _loadPcr();
+    _syncPolling();
   }
 
   Future<void> openOiTimeline() async {
     _wantOiTimeline = true;
     await _ensureStarted();
     await _loadOiTimeline();
+    _syncPolling();
   }
 
   Future<void> _ensureStarted() async {
     if (_started) return;
     _started = true;
     await _loadDates();
-    _selectedDate =
-        _dates.latest ?? (_dates.dates.isNotEmpty ? _dates.dates.last : null);
+    if (_dates.hasLive) {
+      _liveMode = true;
+      _selectedDate = null;
+    } else {
+      _liveMode = false;
+      _selectedDate =
+          _dates.latest ?? (_dates.dates.isNotEmpty ? _dates.dates.last : null);
+    }
     await _loadExpiries(resetExpiry: true);
   }
 
   // ---- selection mutations ----
+  Future<void> selectLive() async {
+    if (_liveMode) return;
+    _liveMode = true;
+    _selectedDate = null;
+    notifyListeners();
+    await _loadExpiries(resetExpiry: false);
+    await _refetchWanted();
+    _syncPolling();
+  }
+
   Future<void> selectUnderlying(String u) async {
     if (u == _underlying) return;
     _underlying = u;
@@ -145,12 +193,16 @@ class OiChartsProvider extends DefaultChangeNotifier {
     notifyListeners();
     await _loadExpiries(resetExpiry: true);
     await _refetchWanted();
+    _syncPolling();
   }
 
+  /// Pick a finalized day → immutable, polling stops.
   Future<void> selectDate(String iso) async {
-    if (iso == _selectedDate) return;
+    if (!_liveMode && iso == _selectedDate) return;
+    _liveMode = false;
     _selectedDate = iso;
     notifyListeners();
+    stopPolling();
     await _loadExpiries(resetExpiry: true);
     await _refetchWanted();
   }
@@ -178,12 +230,33 @@ class OiChartsProvider extends DefaultChangeNotifier {
     if (_wantOiTimeline) await _loadOiTimeline();
   }
 
-  Future<void> refresh() async => _refetchWanted();
+  Future<void> refresh() async {
+    await _loadDates();
+    await _refetchWanted();
+    _syncPolling();
+  }
 
-  Future<void> _refetchWanted() async {
-    if (_wantOiByStrike) await _loadOiByStrike();
-    if (_wantPcr) await _loadPcr();
-    if (_wantOiTimeline) await _loadOiTimeline();
+  Future<void> _refetchWanted({bool silent = false}) async {
+    if (_wantOiByStrike) await _loadOiByStrike(silent: silent);
+    if (_wantPcr) await _loadPcr(silent: silent);
+    if (_wantOiTimeline) await _loadOiTimeline(silent: silent);
+  }
+
+  void _syncPolling() {
+    if (_liveMode && _activeScreens > 0) {
+      startPolling(() => _refetchWanted(silent: true));
+    } else {
+      stopPolling();
+    }
+  }
+
+  /// Live fetch came back finalized (no live data) → drop to historical.
+  void _handleFreshness(Freshness f) {
+    if (_liveMode && !f.isLive) {
+      _liveMode = false;
+      if (f.tradeDate.isNotEmpty) _selectedDate = f.tradeDate;
+      stopPolling();
+    }
   }
 
   // ---- loaders ----
@@ -193,8 +266,8 @@ class OiChartsProvider extends DefaultChangeNotifier {
     try {
       _dates = await _ocApi.getDates();
     } catch (_) {
-      // Non-fatal: charts still load the latest day; the calendar just can't
-      // restrict selectable days until /dates succeeds.
+      // Non-fatal: charts still load; the calendar/live option just can't
+      // populate until /dates succeeds.
     } finally {
       _loadingDates = false;
       notifyListeners();
@@ -205,8 +278,10 @@ class OiChartsProvider extends DefaultChangeNotifier {
     _loadingExpiries = true;
     notifyListeners();
     try {
-      _expiries =
-          await _ocApi.getExpiries(underlying: _underlying, date: _selectedDate);
+      _expiries = await _ocApi.getExpiries(
+          underlying: _underlying,
+          date: _liveMode ? null : _selectedDate,
+          live: _liveMode);
       if (resetExpiry ||
           _selectedExpiry == null ||
           !_expiries.any((e) => e.expiry == _selectedExpiry)) {
@@ -228,75 +303,90 @@ class OiChartsProvider extends DefaultChangeNotifier {
         .expiry;
   }
 
-  Future<void> _loadOiByStrike() async {
-    _loadingOiByStrike = true;
-    _oiByStrikeError = null;
-    notifyListeners();
-    try {
-      _oiByStrike = await _api.getOiByStrike(
-          underlying: _underlying, date: _selectedDate, expiry: _selectedExpiry);
-      _syncFrom(_oiByStrike!.tradeDate, _oiByStrike!.expiry,
-          _oiByStrike!.availableExpiries);
-    } on DashboardApiException catch (e) {
-      _oiByStrikeError = e.message;
-    } catch (e) {
-      _oiByStrikeError = e.toString();
-    } finally {
-      _loadingOiByStrike = false;
+  Future<void> _loadOiByStrike({bool silent = false}) async {
+    if (!silent) {
+      _loadingOiByStrike = true;
+      _oiByStrikeError = null;
       notifyListeners();
     }
-  }
-
-  Future<void> _loadPcr() async {
-    _loadingPcr = true;
-    _pcrError = null;
-    notifyListeners();
     try {
-      _pcr = await _api.getPcrTimeline(
+      final d = await _api.getOiByStrike(
           underlying: _underlying,
-          date: _selectedDate,
+          date: _liveMode ? null : _selectedDate,
           expiry: _selectedExpiry,
-          interval: _interval);
-      _syncFrom(_pcr!.tradeDate, _pcr!.expiry, _pcr!.availableExpiries);
+          live: _liveMode);
+      _oiByStrike = d;
+      _handleFreshness(d.freshness);
+      _syncFrom(d.tradeDate, d.expiry, d.availableExpiries);
     } on DashboardApiException catch (e) {
-      _pcrError = e.message;
+      if (!silent) _oiByStrikeError = e.message;
     } catch (e) {
-      _pcrError = e.toString();
+      if (!silent) _oiByStrikeError = e.toString();
     } finally {
-      _loadingPcr = false;
+      if (!silent) _loadingOiByStrike = false;
       notifyListeners();
     }
   }
 
-  Future<void> _loadOiTimeline() async {
-    _loadingOiTimeline = true;
-    _oiTimelineError = null;
-    notifyListeners();
+  Future<void> _loadPcr({bool silent = false}) async {
+    if (!silent) {
+      _loadingPcr = true;
+      _pcrError = null;
+      notifyListeners();
+    }
     try {
-      _oiTimeline = await _api.getOiTimeline(
+      final d = await _api.getPcrTimeline(
           underlying: _underlying,
-          date: _selectedDate,
+          date: _liveMode ? null : _selectedDate,
           expiry: _selectedExpiry,
           interval: _interval,
-          strikes: _selectedStrikes);
-      if (_oiTimeline!.selectedStrikes.isNotEmpty) {
-        _selectedStrikes = _oiTimeline!.selectedStrikes;
-      }
-      _syncFrom(_oiTimeline!.tradeDate, _oiTimeline!.expiry,
-          _oiTimeline!.availableExpiries);
+          live: _liveMode);
+      _pcr = d;
+      _handleFreshness(d.freshness);
+      _syncFrom(d.tradeDate, d.expiry, d.availableExpiries);
     } on DashboardApiException catch (e) {
-      _oiTimelineError = e.message;
+      if (!silent) _pcrError = e.message;
     } catch (e) {
-      _oiTimelineError = e.toString();
+      if (!silent) _pcrError = e.toString();
     } finally {
-      _loadingOiTimeline = false;
+      if (!silent) _loadingPcr = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _loadOiTimeline({bool silent = false}) async {
+    if (!silent) {
+      _loadingOiTimeline = true;
+      _oiTimelineError = null;
+      notifyListeners();
+    }
+    try {
+      final d = await _api.getOiTimeline(
+          underlying: _underlying,
+          date: _liveMode ? null : _selectedDate,
+          expiry: _selectedExpiry,
+          interval: _interval,
+          strikes: _selectedStrikes,
+          live: _liveMode);
+      _oiTimeline = d;
+      if (d.selectedStrikes.isNotEmpty) _selectedStrikes = d.selectedStrikes;
+      _handleFreshness(d.freshness);
+      _syncFrom(d.tradeDate, d.expiry, d.availableExpiries);
+    } on DashboardApiException catch (e) {
+      if (!silent) _oiTimelineError = e.message;
+    } catch (e) {
+      if (!silent) _oiTimelineError = e.toString();
+    } finally {
+      if (!silent) _loadingOiTimeline = false;
       notifyListeners();
     }
   }
 
   void _syncFrom(
       String tradeDate, String? expiry, List<ExpiryOption> available) {
-    if (tradeDate.isNotEmpty) _selectedDate = tradeDate;
+    // In live mode keep _selectedDate null (the live marker) — only sync the
+    // finalized day back into the calendar when historical.
+    if (!_liveMode && tradeDate.isNotEmpty) _selectedDate = tradeDate;
     if (expiry != null) _selectedExpiry = expiry;
     if (available.isNotEmpty) _expiries = available;
   }

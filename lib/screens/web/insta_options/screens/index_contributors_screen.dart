@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/insta_options/contribution/index_contribution.dart';
 import 'package:mynt_plus/provider/insta_options/contribution/contribution_provider.dart';
+import 'package:mynt_plus/provider/insta_options/insta_live_ticks.dart';
+import 'package:mynt_plus/provider/insta_options/symbols_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
@@ -26,6 +28,8 @@ class IndexContributorsScreen extends ConsumerStatefulWidget {
 
 class _IndexContributorsScreenState
     extends ConsumerState<IndexContributorsScreen> {
+  Set<String> _lastSubKeys = const <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -37,6 +41,7 @@ class _IndexContributorsScreenState
   @override
   Widget build(BuildContext context) {
     final p = ref.watch(contributionProvider);
+    ref.watch(instaLiveTicksProvider); // rebuild overlay on each socket tick
     final bg = resolveThemeColor(context,
         dark: MyntColors.backgroundColorDark,
         light: MyntColors.backgroundColor);
@@ -70,25 +75,69 @@ class _IndexContributorsScreenState
     }
     final data = p.data;
     if (data == null) return const _EmptyState();
+    final effective = _liveOverlay(context, p, data);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ContributionHeader(data: data),
+          ContributionHeader(data: effective),
           const SizedBox(height: 16),
-          if (data.hasConstituents) ...[
-            ContributionMovers(data: data),
+          if (effective.hasConstituents) ...[
+            ContributionMovers(data: effective),
             const SizedBox(height: 16),
-            ConcentrationCard(data: data),
+            ConcentrationCard(data: effective),
             const SizedBox(height: 16),
-            ContributionDetailTabs(data: data),
+            ContributionDetailTabs(data: effective),
           ] else
-            _ContributionUnavailable(data: data),
+            _ContributionUnavailable(data: effective),
         ],
       ),
     );
+  }
+
+  /// Live-tick overlay: the index level / point-change / change% (index token)
+  /// and each constituent's LTP / price% (its token) take the socket value once
+  /// a tick arrives; point-contribution / share / weight / OI / PCR / sector /
+  /// concentration stay the API snapshot. Also keeps subscriptions in sync.
+  IndexContribution _liveOverlay(
+      BuildContext context, ContributionProvider p, IndexContribution data) {
+    final idx = ref.read(symbolsProvider).byId(data.underlyingId);
+    final idxToken = idx?.token;
+
+    final keys = <String>{if (idx?.tickKey != null) idx!.tickKey!};
+    for (final c in data.constituents) {
+      final k = c.tickKey;
+      if (k != null) keys.add(k);
+    }
+    _syncSubs(context, p.liveMode ? keys : const <String>{});
+
+    if (!p.liveMode) return data;
+
+    final t = ref.read(instaLiveTicksProvider);
+    return data.copyWith(
+      level: t.ltpOr(idxToken, data.level),
+      pointChange: t.liveChange(idxToken) ?? data.pointChange,
+      changePct: t.liveChangePct(idxToken) ?? data.changePct,
+      constituents: [
+        for (final c in data.constituents)
+          c.copyWith(
+            ltp: t.ltpOr(c.token, c.ltp),
+            priceChangePct: t.liveChangePct(c.token) ?? c.priceChangePct,
+          )
+      ],
+    );
+  }
+
+  void _syncSubs(BuildContext context, Set<String> keys) {
+    if (keys.length == _lastSubKeys.length && keys.containsAll(_lastSubKeys)) {
+      return;
+    }
+    _lastSubKeys = keys;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(instaLiveTicksProvider).setActive(keys, context);
+    });
   }
 }
 

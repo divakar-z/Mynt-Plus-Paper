@@ -40,9 +40,13 @@ class DashboardApi {
     return DatesResponse.fromJson(body as Map<String, dynamic>);
   }
 
-  /// `GET /api/v1/dashboard?date=...` (omit [date] for the latest day).
-  Future<DashboardData> getDashboard({String? date}) async {
-    final body = await _get('', query: {if (date != null) 'date': date});
+  /// `GET /api/v1/dashboard?date=...` (omit [date] for the latest day). Pass
+  /// [live] to request today's intraday snapshot (`?live=true`, no `date`).
+  Future<DashboardData> getDashboard({String? date, bool live = false}) async {
+    final body = await _get('', query: {
+      if (date != null) 'date': date,
+      if (live) 'live': 'true',
+    });
     return DashboardData.fromJson(body as Map<String, dynamic>);
   }
 
