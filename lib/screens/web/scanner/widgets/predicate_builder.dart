@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/models/scanner_model/indicator_catalog.dart';
@@ -7,7 +8,9 @@ import 'package:mynt_plus/models/scanner_model/predicate.dart';
 import 'package:mynt_plus/provider/scanner/custom_scans_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/empty_state.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/filter_inputs.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/indicator_picker.dart';
 
 // ---------------------------------------------------------------------------
@@ -181,13 +184,14 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
     final border = shadcn.Theme.of(context).colorScheme.border;
     final cardBg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
-    final nestedBg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+    // final nestedBg = resolveThemeColor(context,
+    //     dark: MyntColors.primaryDark.withValues(alpha: 0.05), light: MyntColors.primary.withValues(alpha: 0.05));
 
     return Container(
       margin: EdgeInsets.symmetric(vertical: depth == 0 ? 0 : 6),
       decoration: BoxDecoration(
-        color: depth == 0 ? Colors.transparent : nestedBg,
+        // color: depth == 0 ? Colors.transparent : nestedBg,
+        color:  Colors.transparent,
         border: Border.all(
             color: depth == 0 ? border.withValues(alpha: 0.5) : border),
         borderRadius: BorderRadius.circular(10),
@@ -233,9 +237,9 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
 
   Widget _groupHeader(_BGroup g) {
     final headerBg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+        dark: MyntColors.primaryDark.withValues(alpha: 0.09), light: MyntColors.primary.withValues(alpha: 0.09));
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
@@ -246,10 +250,10 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
         ),
       ),
       child: Row(children: [
-        Text('MATCH',
-            style: MyntWebTextStyles.caption(context,
-                    fontWeight: MyntFonts.semiBold, color: secondary)
-                .copyWith(letterSpacing: 1.0)),
+        Text('Match',
+            style: MyntWebTextStyles.body(context,
+                     color: primary)
+                ),
         const SizedBox(width: 10),
         _CombinatorSegmented(
           value: g.op,
@@ -260,20 +264,20 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
         ),
         const SizedBox(width: 10),
         Text('of the following:',
-            style: MyntWebTextStyles.caption(context, color: secondary)),
+            style: MyntWebTextStyles.body(context, color:  primary)),
         const Spacer(),
-        TextButton.icon(
-          icon: const Icon(shadcn.LucideIcons.plus, size: 14),
-          label: const Text('Condition'),
+        MyntIconTextButton(
+          label: 'Condition',
+          iconAsset: assets.addCircleIcon,
           onPressed: () => setState(() {
             g.children.add(_BLeaf());
             _emit();
           }),
         ),
-        const SizedBox(width: 4),
-        TextButton.icon(
-          icon: const Icon(shadcn.LucideIcons.layers, size: 14),
-          label: const Text('Group'),
+        const SizedBox(width: 8),
+        MyntIconTextButton(
+          label: 'Group',
+          icon: shadcn.LucideIcons.layers,
           onPressed: () => setState(() {
             g.children.add(_BGroup(op: 'all', children: [_BLeaf()]));
             _emit();
@@ -348,7 +352,7 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
               children: [
                 _indicatorSection(catalog, l, leftDef),
                 if (leftDef != null) ...[
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 16),
                   _kindSpecificSection(catalog, leftDef, l),
                 ],
               ],
@@ -377,11 +381,11 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
                 Text(
                   leftDef?.label ?? 'New condition',
                   style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.semiBold),
+                      fontWeight: MyntFonts.bold),
                 ),
                 if (category != null)
                   Text(category.label,
-                      style: MyntWebTextStyles.caption(context,
+                      style: MyntWebTextStyles.para(context,
                           color: secondary)),
               ],
             ),
@@ -403,18 +407,24 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
 
   Widget _indicatorSection(
       IndicatorCatalog catalog, _BLeaf l, CatalogIndicator? leftDef) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // The indicator picker gets its own inline label so it is the same height
+    // as the param columns (label + 40px field) - that keeps the picker and
+    // every param field on one aligned line instead of the picker sitting
+    // higher than the labelled params.
+    return Wrap(
+      spacing: 20,
+      runSpacing: 20,
+      crossAxisAlignment: WrapCrossAlignment.start,
       children: [
-        const _FieldLabel('INDICATOR'),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          crossAxisAlignment: WrapCrossAlignment.center,
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
+            const _FieldLabel('Indicator'),
+            const SizedBox(height: 8),
             SizedBox(
               width: 240,
+              height: 40,
               child: IndicatorPicker(
                 catalog: catalog,
                 value: l.leftIndicator,
@@ -425,10 +435,10 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
                 }),
               ),
             ),
-            if (leftDef != null)
-              ..._paramInputs(leftDef, l.leftParams, () => _emit()),
           ],
         ),
+        if (leftDef != null)
+          ..._paramInputs(leftDef, l.leftParams, () => _emit()),
       ],
     );
   }
@@ -451,24 +461,14 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _FieldLabel('PATTERN'),
+        const _FieldLabel('Pattern'),
         const SizedBox(height: 6),
-        SegmentedButton<String>(
-          segments: const [
-            ButtonSegment(
-              value: '!=',
-              icon: Icon(Icons.check, size: 14),
-              label: Text('Formed'),
-            ),
-            ButtonSegment(
-              value: '==',
-              icon: Icon(Icons.close, size: 14),
-              label: Text('Not formed'),
-            ),
-          ],
-          selected: {l.op == '==' ? '==' : '!='},
-          onSelectionChanged: (s) => setState(() {
-            l.op = s.first;
+        _PillSegmented(
+          value: l.op == '==' ? '==' : '!=',
+          options: const ['!=', '=='],
+          labels: const ['Formed', 'Not formed'],
+          onChanged: (v) => setState(() {
+            l.op = v;
             l.rightIsValue = true;
             l.rightValueA = 0;
             _emit();
@@ -486,16 +486,14 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _FieldLabel('IS'),
+          const _FieldLabel('is'),
           const SizedBox(height: 6),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: '==', label: Text('equal to')),
-              ButtonSegment(value: '!=', label: Text('not equal to')),
-            ],
-            selected: {kEnumOperators.contains(l.op) ? l.op : '=='},
-            onSelectionChanged: (s) => setState(() {
-              l.op = s.first;
+          _PillSegmented(
+            value: kEnumOperators.contains(l.op) ? l.op : '==',
+            options: const ['==', '!='],
+            labels: const ['equal to', 'not equal to'],
+            onChanged: (v) => setState(() {
+              l.op = v;
               _emit();
             }),
           ),
@@ -504,26 +502,25 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _FieldLabel('VALUE'),
+          const _FieldLabel('Value'),
           const SizedBox(height: 6),
           SizedBox(
             width: 220,
-            child: DropdownButtonFormField<num>(
-              isDense: true,
-              isExpanded: true,
-              decoration: _boxDecoration(),
-              value: l.rightValueA != null &&
-                      values.any((v) => v.value == l.rightValueA)
-                  ? l.rightValueA
-                  : (values.isNotEmpty ? values.first.value : null),
-              hint: const Text('Pick value'),
-              items: [
+            child: FilterSelect(
+              value: (l.rightValueA != null &&
+                      values.any((v) => v.value == l.rightValueA))
+                  ? l.rightValueA.toString()
+                  : (values.isNotEmpty
+                      ? values.first.value.toString()
+                      : null),
+              hint: 'Pick value',
+              options: [
                 for (final v in values)
-                  DropdownMenuItem(value: v.value, child: Text(v.label)),
+                  FilterSelectOption(v.value.toString(), v.label),
               ],
               onChanged: (v) => setState(() {
                 l.rightIsValue = true;
-                l.rightValueA = v;
+                l.rightValueA = num.tryParse(v);
                 _emit();
               }),
             ),
@@ -536,54 +533,62 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
   // ----- FLOAT: op dropdown + Value/Indicator toggle -----------------------
 
   Widget _floatSection(IndicatorCatalog catalog, _BLeaf l) {
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Wrap(spacing: 14, runSpacing: 10, children: [
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _FieldLabel('OPERATOR'),
-          const SizedBox(height: 6),
-          SizedBox(
-            width: 150,
-            child: DropdownButtonFormField<String>(
-              isDense: true,
-              isExpanded: true,
-              decoration: _boxDecoration(),
-              value: kFloatOperators.contains(l.op) ? l.op : '<',
-              items: [
-                for (final o in kFloatOperators)
-                  DropdownMenuItem(value: o, child: Text(_opLabel(o))),
-              ],
-              onChanged: (v) => setState(() {
-                if (v != null) l.op = v;
-                _emit();
-              }),
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    // One bottom-aligned row so the Operator dropdown, the Value/Indicator
+    // toggle, the indicator picker, "with", and the params all line up on the
+    // same field line (no stepped-down params).
+    return Wrap(
+      spacing: 14,
+      runSpacing: 10,
+      crossAxisAlignment: WrapCrossAlignment.end,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const _FieldLabel('Operator'),
+            const SizedBox(height: 6),
+            SizedBox(
+              width: 180,
+              height: 40,
+              child: FilterSelect(
+                value: kFloatOperators.contains(l.op) ? l.op : '<',
+                hint: 'Operator',
+                options: [
+                  for (final o in kFloatOperators)
+                    FilterSelectOption(o, _opLabel(o)),
+                ],
+                onChanged: (v) => setState(() {
+                  l.op = v;
+                  _emit();
+                }),
+              ),
             ),
+          ],
+        ),
+        SizedBox(
+          height: 40,
+          child: _PillSegmented(
+            value: l.rightIsValue ? 'value' : 'indicator',
+            options: const ['value', 'indicator'],
+            labels: const ['Value', 'Indicator'],
+            onChanged: (v) => setState(() {
+              l.rightIsValue = v == 'value';
+              _emit();
+            }),
           ),
-        ],
-      ),
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _FieldLabel(l.rightIsValue ? 'VALUE' : 'INDICATOR'),
-          const SizedBox(height: 6),
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: true, label: Text('Value')),
-                ButtonSegment(value: false, label: Text('Indicator')),
-              ],
-              selected: {l.rightIsValue},
-              onSelectionChanged: (s) => setState(() {
-                l.rightIsValue = s.first;
-                _emit();
-              }),
-            ),
-            const SizedBox(width: 10),
-            if (l.rightIsValue)
+        ),
+        if (l.rightIsValue)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const _FieldLabel('Value'),
+              const SizedBox(height: 6),
               SizedBox(
                 width: 140,
+                height: 40,
                 child: TextFormField(
                   initialValue: l.rightValueA?.toString() ?? '',
                   decoration: _boxDecoration().copyWith(hintText: 'value'),
@@ -595,10 +600,19 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
                     _emit();
                   },
                 ),
-              )
-            else
+              ),
+            ],
+          )
+        else ...[
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const _FieldLabel('Indicator'),
+              const SizedBox(height: 6),
               SizedBox(
                 width: 220,
+                height: 40,
                 child: IndicatorPicker(
                   catalog: catalog,
                   value: l.rightIndicator,
@@ -609,31 +623,27 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
                   }),
                 ),
               ),
-          ]),
-          if (!l.rightIsValue && l.rightIndicator != null) ...[
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.only(left: 220),
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text('with',
-                      style: MyntWebTextStyles.caption(context,
-                          color: secondary)),
-                  ..._paramInputs(
-                      catalog.byName(l.rightIndicator!) ??
-                          _emptyIndicator(l.rightIndicator!),
-                      l.rightParams,
-                      () => _emit()),
-                ],
+            ],
+          ),
+          if (l.rightIndicator != null) ...[
+            SizedBox(
+              height: 40,
+              child: Align(
+                alignment: Alignment.center,
+                widthFactor: 1.0,
+                child: Text('with',
+                    style: MyntWebTextStyles.body(context, color: primary)),
               ),
             ),
+            ..._paramInputs(
+                catalog.byName(l.rightIndicator!) ??
+                    _emptyIndicator(l.rightIndicator!),
+                l.rightParams,
+                () => _emit()),
           ],
         ],
-      ),
-    ]);
+      ],
+    );
   }
 
   String _opLabel(String op) {
@@ -655,21 +665,27 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
     }
   }
 
-  InputDecoration _boxDecoration() => InputDecoration(
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide:
-              BorderSide(color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide:
-              BorderSide(color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-      );
+  // Our standard text-field look (matches FilterTextField): light fill,
+  // primary border, radius 5.
+  InputDecoration _boxDecoration() {
+    final shape = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(5),
+      borderSide: BorderSide(
+          color: resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark, light: MyntColors.primary)),
+    );
+    return InputDecoration(
+      filled: true,
+      fillColor: resolveThemeColor(context,
+          dark: const Color(0xffB5C0CF).withValues(alpha: 0.15),
+          light: const Color(0xFFF1F3F8)),
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: shape,
+      enabledBorder: shape,
+      focusedBorder: shape,
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Param inputs (unchanged behavior, lightly restyled to match _boxDecoration)
@@ -680,9 +696,18 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
     if (def.params.isEmpty) return const [];
     return [
       for (final p in def.params)
-        SizedBox(
-          width: _paramWidthFor(p),
-          child: _paramInput(p, store, onChange),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _FieldLabel(p.label),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: _paramWidthFor(p),
+              height: 40,
+              child: _paramInput(p, store, onChange),
+            ),
+          ],
         ),
     ];
   }
@@ -690,14 +715,12 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
   Widget _paramInput(CatalogParam p, Map<String, dynamic> store,
       VoidCallback onChange) {
     final current = store[p.name] ?? p.defaultValue;
-    final label = p.label;
-    final dec = _boxDecoration().copyWith(labelText: label);
     switch (p.type) {
       case CatalogParamType.intType:
       case CatalogParamType.floatType:
         return TextFormField(
           initialValue: current?.toString() ?? '',
-          decoration: dec,
+          decoration: _boxDecoration(),
           style: MyntWebTextStyles.body(context),
           keyboardType: TextInputType.numberWithOptions(
             decimal: p.type == CatalogParamType.floatType,
@@ -717,24 +740,19 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
         );
       case CatalogParamType.stringType:
         if (p.options != null && p.options!.isNotEmpty) {
-          return DropdownButtonFormField<String>(
-            isDense: true,
-            isExpanded: true,
+          return FilterSelect(
             value: p.options!.contains(current) ? current as String : null,
-            decoration: dec,
-            items: [
-              for (final o in p.options!)
-                DropdownMenuItem(value: o, child: Text(o)),
-            ],
+            hint: p.label,
+            options: [for (final o in p.options!) FilterSelectOption(o, o)],
             onChanged: (v) {
-              if (v != null) store[p.name] = v;
+              store[p.name] = v;
               onChange();
             },
           );
         }
         return TextFormField(
           initialValue: current?.toString() ?? '',
-          decoration: dec,
+          decoration: _boxDecoration(),
           style: MyntWebTextStyles.body(context),
           onChanged: (v) {
             if (v.isEmpty) {
@@ -746,20 +764,16 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
           },
         );
       case CatalogParamType.columnType:
-        final opts = p.options ??
-            const ['close', 'open', 'high', 'low', 'volume'];
-        return DropdownButtonFormField<String>(
-          isDense: true,
-          isExpanded: true,
+        final opts =
+            p.options ?? const ['close', 'open', 'high', 'low', 'volume'];
+        return FilterSelect(
           value: opts.contains(current)
               ? current as String
               : (opts.isNotEmpty ? opts.first : null),
-          decoration: dec,
-          items: [
-            for (final o in opts) DropdownMenuItem(value: o, child: Text(o)),
-          ],
+          hint: p.label,
+          options: [for (final o in opts) FilterSelectOption(o, o)],
           onChanged: (v) {
-            if (v != null) store[p.name] = v;
+            store[p.name] = v;
             onChange();
           },
         );
@@ -818,12 +832,12 @@ class _FieldLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tertiary = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     return Text(
       text,
-      style: MyntWebTextStyles.caption(context,
-              fontWeight: MyntFonts.semiBold, color: tertiary)
-          .copyWith(letterSpacing: 0.9),
+      style: MyntWebTextStyles.body(context,
+              fontWeight: MyntFonts.medium, color: tertiary)              
+         ,
     );
   }
 }
@@ -898,7 +912,7 @@ class _ConnectorChip extends StatelessWidget {
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.12),
             border: Border.all(color: color.withValues(alpha: 0.3)),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(5),
           ),
           child: Text(
             _label,
@@ -914,8 +928,7 @@ class _ConnectorChip extends StatelessWidget {
   }
 }
 
-/// Segmented control for the group combinator — replaces the cramped
-/// dropdown.
+/// Segmented control for the group combinator — All / Any / None.
 class _CombinatorSegmented extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
@@ -923,18 +936,93 @@ class _CombinatorSegmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SegmentedButton<String>(
-      segments: const [
-        ButtonSegment(value: 'all', label: Text('All (AND)')),
-        ButtonSegment(value: 'any', label: Text('Any (OR)')),
-        ButtonSegment(value: 'none', label: Text('None (NOT)')),
-      ],
-      selected: {value},
-      onSelectionChanged: (s) => onChanged(s.first),
-      style: ButtonStyle(
-        visualDensity: VisualDensity.compact,
-        padding: WidgetStateProperty.all(
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 4)),
+    return _PillSegmented(
+      value: value,
+      options: const ['all', 'any', 'none'],
+      labels: const ['All (AND)', 'Any (OR)', 'None (NOT)'],
+      onChanged: onChanged,
+      height: 32,
+    );
+  }
+}
+
+/// Financials-tab-style segmented toggle: a bordered container where the
+/// selected segment is a brand-blue fill with white text and the rest are
+/// transparent with muted text. Shared by every combinator / mode toggle in
+/// the predicate builder.
+class _PillSegmented extends StatelessWidget {
+  final String value;
+  final List<String> options;
+  final List<String> labels;
+  final ValueChanged<String> onChanged;
+  final double height;
+  const _PillSegmented({
+    required this.value,
+    required this.options,
+    required this.labels,
+    required this.onChanged,
+    this.height = 40,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final border = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final textSecondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        for (int i = 0; i < options.length; i++)
+          _seg(
+            context,
+            label: labels[i],
+            selected: value == options[i],
+            isFirst: i == 0,
+            isLast: i == options.length - 1,
+            textSecondary: textSecondary,
+            onTap: () => onChanged(options[i]),
+          ),
+      ]),
+    );
+  }
+
+  Widget _seg(
+    BuildContext context, {
+    required String label,
+    required bool selected,
+    required bool isFirst,
+    required bool isLast,
+    required Color textSecondary,
+    required VoidCallback onTap,
+  }) {
+    // Selected = brand-blue fill + white text. Outer corners round to match
+    // the container so the first/last segment respects the border radius.
+    const r = Radius.circular(5);
+    final radius = BorderRadius.only(
+      topLeft: isFirst ? r : Radius.zero,
+      bottomLeft: isFirst ? r : Radius.zero,
+      topRight: isLast ? r : Radius.zero,
+      bottomRight: isLast ? r : Radius.zero,
+    );
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        height: height,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: selected ? MyntColors.primary : Colors.transparent,
+          borderRadius: radius,
+        ),
+        child: Text(label,
+            style: MyntWebTextStyles.para(context,
+                fontWeight: selected ? MyntFonts.semiBold : MyntFonts.medium,
+                color: selected ? Colors.white : textSecondary)),
       ),
     );
   }

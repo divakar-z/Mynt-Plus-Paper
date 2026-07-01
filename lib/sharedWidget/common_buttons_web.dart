@@ -795,7 +795,7 @@ class MyntIconTextButton extends StatelessWidget {
             children: [
               iconWidget,
               if (label != null && label!.isNotEmpty) ...[
-                // const SizedBox(width: 6),
+                const SizedBox(width: 6),
                 Text(
                   label!,
                   style: _getTextStyle(context, defaultTextColor),

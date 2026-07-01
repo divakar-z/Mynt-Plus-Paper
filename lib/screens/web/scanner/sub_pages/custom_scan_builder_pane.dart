@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
@@ -61,10 +63,75 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
         .updateBuilder((b) => b.copyWith(predicate: p));
   }
 
-  void _setShowJson(bool v) {
-    ref
-        .read(customScansSessionProvider.notifier)
-        .updateBuilder((b) => b.copyWith(showJson: v));
+  /// Show the current predicate as formatted JSON in a dialog (app-style
+  /// shell: header + close, scrollable monospace body).
+  void _showJsonDialog(Map<String, dynamic> predicate) {
+    final json = const JsonEncoder.withIndent('  ').convert(predicate);
+    final border = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    showDialog<void>(
+      context: context,
+      builder: (dCtx) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Container(
+          width: 560,
+          constraints: const BoxConstraints(maxHeight: 600),
+          decoration: BoxDecoration(
+            color: resolveThemeColor(dCtx,
+                dark: MyntColors.dialogDark, light: MyntColors.dialog),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: border),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: border)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Predicate JSON',
+                        style:
+                            MyntWebTextStyles.title(dCtx, color: textPrimary)),
+                    Row(mainAxisSize: MainAxisSize.min, children: [
+                      IconButton(
+                        icon: const Icon(Icons.copy, size: 18),
+                        tooltip: 'Copy JSON',
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: json));
+                          ResponsiveSnackBar.showSuccess(
+                              context, 'JSON copied to clipboard');
+                        },
+                      ),
+                      MyntCloseButton(
+                          onPressed: () => Navigator.of(dCtx).pop()),
+                    ]),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: SelectableText(
+                    json,
+                    style: MyntWebTextStyles.para(dCtx)
+                        ,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _setResult(AsyncValue<CustomScanRunResult>? r) {
@@ -92,89 +159,85 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
       _nameCtl.addListener(_pushName);
     }
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header — back + a live title ("New scan" until named, then the
-          // typed name) on the left, and a limited-width styled name field on
-          // the right to set / rename it.
-          Row(children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back, size: 18),
-              onPressed: widget.onClose,
-              tooltip: 'Back to list',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Fixed header — back + live title + name field + the Run / Save /
+        // Preview JSON actions. Stays put while the builder body scrolls.
+        Row(children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back, size: 18),
+            onPressed: widget.onClose,
+            tooltip: 'Back to list',
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              builder.name.trim().isEmpty ? 'New scan' : builder.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: MyntWebTextStyles.head(context,
+                  fontWeight: MyntFonts.bold,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary)),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                builder.name.trim().isEmpty ? 'New scan' : builder.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: MyntWebTextStyles.head(context,
-                    fontWeight: MyntFonts.bold,
-                    color: resolveThemeColor(context,
-                        dark: MyntColors.textPrimaryDark,
-                        light: MyntColors.textPrimary)),
-              ),
-            ),
+          ),
+          // Name field only while the scan is new (unsaved). Once saved, the
+          // name shows as the title above, so the field would just repeat it.
+          if (builder.editing == null) ...[
             const SizedBox(width: 16),
             SizedBox(
-              width: 300,
+              width: 260,
               child: MyntFormTextField(
                 controller: _nameCtl,
                 placeholder: 'Scan name',
                 height: 40,
               ),
             ),
-          ]),
-          const SizedBox(height: 16),
-          PredicateBuilder(
-            initial: builder.predicate,
-            onChange: _setPredicate,
-          ),
-          const SizedBox(height: 16),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            FilledButton.icon(
-              icon: const Icon(Icons.play_arrow, size: 14),
-              label: const Text('Run inline'),
-              onPressed: _runInline,
-            ),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.save, size: 14),
-              label: Text(
-                  builder.editing == null ? 'Save' : 'Save changes'),
-              onPressed: _save,
-            ),
-            TextButton.icon(
-              icon: Icon(builder.showJson ? Icons.expand_less : Icons.code,
-                  size: 14),
-              label: Text(builder.showJson ? 'Hide JSON' : 'Preview JSON'),
-              onPressed: () => _setShowJson(!builder.showJson),
-            ),
-          ]),
-          if (builder.showJson) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: resolveThemeColor(context,
-                    dark: MyntColors.cardHoverDark,
-                    light: MyntColors.cardHover),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: SelectableText(
-                const JsonEncoder.withIndent('  ').convert(builder.predicate),
-                style: MyntWebTextStyles.caption(context)
-                    .copyWith(fontFamily: 'monospace'),
-              ),
-            ),
           ],
-          const SizedBox(height: 24),
-          if (builder.result != null) _resultArea(builder.result!),
-        ],
-      ),
+          const SizedBox(width: 16),
+          MyntButton(
+            type: MyntButtonType.primary,
+            label: 'Run inline',
+            icon: Icons.play_arrow,
+            onPressed: _runInline,
+          ),
+          const SizedBox(width: 8),
+          MyntButton(
+            type: MyntButtonType.outlined,
+            label: builder.editing == null ? 'Save' : 'Save changes',
+            icon: Icons.save,
+            onPressed: _save,
+          ),
+          const SizedBox(width: 8),
+          MyntButton(
+            type: MyntButtonType.outlined,
+            label: 'Preview JSON',
+            icon: Icons.code,
+            onPressed: () => _showJsonDialog(builder.predicate),
+          ),
+        ]),
+        const SizedBox(height: 16),
+        // Scrolling body — the predicate builder, optional JSON preview and
+        // the inline results.
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(right: 12, bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                PredicateBuilder(
+                  initial: builder.predicate,
+                  onChange: _setPredicate,
+                ),
+                const SizedBox(height: 24),
+                if (builder.result != null) _resultArea(builder.result!),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -251,12 +314,12 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Results — ${r.matches.length} matches  ·  as of ${r.asOf}',
-                  style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.semiBold,
+                  style: MyntWebTextStyles.title(context,
+                      fontWeight: MyntFonts.bold,
                       color: resolveThemeColor(context,
                           dark: MyntColors.textPrimaryDark,
                           light: MyntColors.textPrimary))),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               SizedBox(
                 height: 520,
                 child: ScannerResultsTable(

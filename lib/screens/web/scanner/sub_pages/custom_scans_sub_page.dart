@@ -18,6 +18,20 @@ import 'package:mynt_plus/screens/web/scanner/widgets/index_filter_dropdown.dart
 import 'package:mynt_plus/screens/web/scanner/widgets/scanner_results_table.dart';
 import 'custom_scan_builder_pane.dart';
 
+/// Accent palette for the per-scan `<>` card tile — each saved scan gets a
+/// stable colour from this list (shown at low opacity behind the icon).
+const List<Color> _kScanAccents = [
+  Color(0xFF6366F1), // indigo
+  Color(0xFF14B8A6), // teal
+  Color(0xFFF97316), // orange
+  Color(0xFFEC4899), // pink
+  Color(0xFF0EA5E9), // sky
+  Color(0xFFA855F7), // purple
+  Color(0xFF84CC16), // lime
+  Color(0xFFEF4444), // red
+  Color(0xFFF59E0B), // amber
+];
+
 class CustomScansSubPage extends ConsumerWidget {
   const CustomScansSubPage({super.key});
 
@@ -169,6 +183,10 @@ class _ScanCardState extends ConsumerState<_ScanCard> {
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final primary = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
+    // Per-scan accent for the `<>` tile — a stable palette pick so each card
+    // gets its own colour (same low opacity as before).
+    final accent =
+        _kScanAccents[scan.name.hashCode.abs() % _kScanAccents.length];
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -199,10 +217,10 @@ class _ScanCardState extends ConsumerState<_ScanCard> {
                     height: 32,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: primary.withValues(alpha: 0.10),
+                      color: accent.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Icon(Icons.code, size: 18, color: primary),
+                    child: Icon(Icons.code, size: 18, color: accent),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -234,15 +252,15 @@ class _ScanCardState extends ConsumerState<_ScanCard> {
               ),
               const SizedBox(height: 12),
               // Tap-to-run hint.
-              Row(
-                children: [
-                  Icon(Icons.play_arrow_rounded, size: 16, color: primary),
-                  const SizedBox(width: 4),
-                  Text('Run scan',
-                      style: MyntWebTextStyles.caption(context,
-                          color: primary, fontWeight: MyntFonts.semiBold)),
-                ],
-              ),
+              // Row(
+              //   children: [
+              //     Icon(Icons.play_arrow_rounded, size: 16, color: primary),
+              //     const SizedBox(width: 4),
+              //     Text('Run scan',
+              //         style: MyntWebTextStyles.caption(context,
+              //             color: primary, fontWeight: MyntFonts.semiBold)),
+              //   ],
+              // ),
             ],
           ),
         ),
@@ -533,35 +551,49 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
         // dropdown drops onto a second line on narrow viewports
         // instead of being pushed off the right edge by the Expanded
         // column. Matches the built-in scanner detail pane's layout.
-        Row(children: [
+        // Header — back + scan name (head bold) with a match-count subtitle,
+        // and the index filter on the right. Matches the other screen headers.
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           IconButton(
             onPressed: () => ref
                 .read(customScansSessionProvider.notifier)
                 .closeResults(),
             icon: const Icon(Icons.arrow_back, size: 18),
             tooltip: 'Back to custom scans',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(scan.name,
-                    style: MyntWebTextStyles.body(context,
-                        fontWeight: MyntFonts.bold)),
+                Text(
+                  scan.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: MyntWebTextStyles.head(context,
+                      fontWeight: MyntFonts.bold,
+                      color: resolveThemeColor(context,
+                          dark: MyntColors.textPrimaryDark,
+                          light: MyntColors.textPrimary)),
+                ),
                 view.result.maybeWhen(
-                  data: (r) => Text(
-                    '${r.matches.length} matches · as of ${r.asOf}',
-                    style: MyntWebTextStyles.caption(context),
+                  data: (r) => Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      '${r.matches.length} matches · as of ${r.asOf}',
+                      style: MyntWebTextStyles.para(context,
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.textSecondaryDark,
+                              light: MyntColors.textSecondary)),
+                    ),
                   ),
-                  orElse: () => const Text(''),
+                  orElse: () => const SizedBox.shrink(),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 16),
           IndexFilterDropdown(
             selected: selectedIndices,
             onChanged: _onFilterChanged,

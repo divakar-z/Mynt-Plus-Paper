@@ -224,7 +224,7 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
                                           },
                                         ),
                                         if (i < _state.filters.length - 1)
-                                          const SizedBox(height: 8),
+                                          const SizedBox(height: 20),
                                       ],
                                     ],
                                   ),
@@ -232,7 +232,7 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
                               ),
                             ),
                           ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
                         Divider(
                             height: 1,
                             color: shadcn.Theme.of(context).colorScheme.border),
