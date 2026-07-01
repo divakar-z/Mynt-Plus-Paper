@@ -2,7 +2,7 @@
 
 > **Read this first**: [INSTAOPTIONS_FLOW.md](INSTAOPTIONS_FLOW.md) — workflow playbook + 9-section catalog. Then check [INSTAOPTIONS_PLAN.md](INSTAOPTIONS_PLAN.md) for the active section. This HANDOFF is the cross-session status tracker.
 
-Last updated: 2026-06-26 (date-based rebuild — OI Statistics on the zdf charts API)
+Last updated: 2026-07-01 (live intraday mode — snapshot polling + Noren socket tick overlay)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Audit: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) (OptionZ vs our backend; mirrored at `.claude/insta-options-qa/data-audit.md` for local working copy)
 Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) (also mirrored at `.claude/insta-options-qa/backend-tickets.md`)
@@ -69,15 +69,41 @@ The InstaOptions screens are being rebuilt **screen-by-screen** onto a new **dat
 | Option Chain v2 (ladder + mirrored OI bars + analysis header) | ✅ verified | `d222178a` | `/api/v1/option-chain` (+ `/expiries`) |
 | Global-dates migration (Dashboard + Chain repoint) | ✅ verified | `01d76a8b` | `/api/v1/dates` |
 | Index Contribution (movers/concentration/sector/constituents) | ✅ verified | `01d76a8b` | `/api/v1/contribution` |
-| **OI Statistics** (zoomable OI-by-strike chart) | ✅ verified | _this commit_ | `/api/v1/charts/oi-by-strike` |
-| PCR Ratio | ☐ todo | — | `/api/v1/charts/pcr-timeline` |
-| Trending OI | ☐ todo | — | `/api/v1/charts/oi-timeline` |
+| **OI Statistics** (zoomable OI-by-strike chart) | ✅ verified | `b29dc9fc` | `/api/v1/charts/oi-by-strike` |
+| PCR Ratio (intraday PCR line + bullish/bearish zones) | ✅ verified | `8032a90e` | `/api/v1/charts/pcr-timeline` |
+| Trending OI (multi-line OI + spot/future dual-axis overlay + sentiment table) | ✅ verified | `8032a90e` | `/api/v1/charts/oi-timeline` |
+| Option Chain collapsible overview · rail trimmed to the 6 rebuilt screens | ✅ verified | `8032a90e` | — |
+| **Live intraday mode** (snapshot polling + socket tick overlay) | ✅ verified | `47cbd2c0` | see 2026-07 section |
 
 **OI Statistics** — rebuilt as a zoomable vertical column chart on the new shared **charts data layer** (covers all 3 chart endpoints): `ChartsApi`, models under `models/insta_options/charts/` (`OiByStrike` / `PcrTimeline` / `OiTimeline`), `OiChartsProvider` (one source of truth for `underlying / date / expiry / interval / strikes`, on-demand per-slice load + refetch-loaded-slices on selection change), `chartsBase` config getter, `ChartsApi` registered in the locator.
 - `oi_stats_screen.dart` rewritten on `oiChartsProvider`: `ChartsAppBar` (underlying + expiry + date + refresh) → summary tiles (Spot · ATM · PCR band-coloured · Max-pain · Total CE/PE OI) → Syncfusion `SfCartesianChart`. **Indexed x-axis** (strikes plotted by index, so the irregular 50→1500 strike spacing doesn't distort the bars; labels formatted back to the real strike), **CE green / PE red** columns, **OI ⇄ OI-change** toggle, dashed **spot line** at the true fractional spot, mouse-wheel/pinch zoom + pan (`ZoomPanBehavior`, x-mode), default-zoomed to **ATM ± 12 strikes**, compact L/Cr y-axis + hover tooltip.
 - Shell: `oiStats` added to the `_showSymbolExpiryBar` exclusion (the screen owns its app bar; the legacy selection bar no longer shows above it).
 - Live Playwright QA (NIFTY · 25-Jun · 30-Jun expiry): CE-green resistance above spot / PE-red support below, real strike labels, spot line at 24,052.95, summary tiles populated, zoom/pan working. `flutter analyze` clean on the insta_options paths.
 - **Next:** PCR Ratio (`pcr-timeline` intraday line) + Trending OI (`oi-timeline` per-strike OI lines + sentiment table) reuse this data layer; then retire the legacy `insta_options_aggregate_provider` once all three chart screens are off it.
+
+---
+
+## 2026-07 — Live intraday mode (snapshot polling + Noren socket overlay)
+
+Commit `47cbd2c0`. Two live layers over the date-based screens; **today** (`freshness.is_live`) vs an immutable **finalized day** by `?date=`.
+
+**Snapshot LIVE mode (all six screens).** `GET /api/v1/dates` gains a `live` channel (`{date, as_of}` or null); every payload carries `freshness{is_live, as_of, trade_date}` (`Freshness` model). Each provider defaults to Live when `dates.live` is held, else the latest finalized day; a `?live=true` response with `is_live:false` falls back to that finalized day. A shared **`LivePolling`** mixin polls the opened slice(s) ~90s (silent — no loader flash), pausing while the browser tab is hidden and cancelling on dispose (the charts trio gates polling on a mounted-screen refcount). **`LiveDateSelector`** (one control for every app bar) shows a pulsing `● LIVE · HH:mm` pill beside the finalized-day calendar. All 7 endpoints take `?live=true`.
+
+**Socket tick overlay (price-heavy screens).** **`InstaLiveTicks`** subscribes the active section's `exchange|token` set over the app's existing Noren socket (`websocketProvider.connectTouchLine`), diff-swapping on section change and clearing on module exit (protected-symbol-aware `WebSubscriptionManager.unsubscribeTokens`, so it never kills the watchlist/positions/ticker feeds). It overlays each instrument's own live `lp`/`chng`/`pc` onto the snapshot:
+- **Option Chain** — CE/PE leg LTP + chg% (NFO leg tokens) + the underlying value (index spot / stock future token).
+- **Contribution** — index level/pts/% (index token) + constituent LTP/% (embedded token).
+- **Dashboard** — index-card level/% + gainer/loser/buildup LTP/% (stock tokens via `/symbols`).
+- **OI Statistics / Trending OI / PCR Ratio** — no socket overlay: OI/PCR-only, which a socket can't produce; snapshot-live is the correct mechanism.
+
+**Correctness rule:** a value goes live only if it maps to one tradable instrument's own tick (using that instrument's `lp` + its own `chng`/`pc` — never the socket `lp` paired with the snapshot's prev-close). **OI / PCR / max-pain / buildup / breadth / point-contribution stay the backend snapshot, never recomputed** (they need OI / the index methodology). Missing/stale tick → the snapshot value, never a phantom `0`.
+
+**Tokens (backend-supplied):** `/symbols.token` (spot, per underlying); option-chain per-leg `token`+`exchange:NFO` + top-level `future_token`; oi-timeline `future_token`. Modelled on `InstrumentSymbol` / `OptionLeg` / `OptionChainData` / `OiTimeline` (`tickKey` = `exchange|token`).
+
+**§8 removals:** dashboard `StockPcr` block (model + section deleted) and the per-stock constituent PCR (index PCR kept). **Hardening:** `DefaultChangeNotifier.notifyListeners` now guards `_disposed` (a poll/fetch completing after an autoDispose provider is torn down no longer throws).
+
+**Verified live (2026-07-01, market open):** LIVE pill + freshness advancing on all six screens; socket overlay ticking on Option Chain (leg LTPs), Dashboard (index levels + buildup LTPs), Contribution (index level/pts/%) — with OI / aggregates correctly frozen. QA frames under `.claude/insta-options-qa/live/`.
+
+**Open follow-up:** Contribution attribution consistency — the header level/pts/% + constituent price% tick live while the contribution bars / Net / sector / points stay snapshot, so they don't reconcile mid-poll (each value is accurate; the decomposition just lags). Optional switch to a **prices-only-tick / coherent-attribution-snapshot** model.
 
 ---
 
