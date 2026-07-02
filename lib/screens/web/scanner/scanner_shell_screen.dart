@@ -12,6 +12,7 @@ import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart'
     show ScannerSubPage;
 import 'package:mynt_plus/screens/web/market_watch/chart_with_depth_web.dart';
 import 'sub_pages/custom_scans_sub_page.dart';
+import 'sub_pages/fundamentals_new_sub_page.dart';
 import 'sub_pages/fundamentals_sub_page.dart';
 import 'sub_pages/scan_explain_screen.dart';
 import 'sub_pages/scanners_sub_page.dart';
@@ -153,6 +154,7 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
                 ScannersSubPage(),
                 FundamentalsSubPage(),
                 CustomScansSubPage(),
+                FundamentalsNewSubPage(),
               ],
             ),
           ),
@@ -213,6 +215,8 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
         return 'Fundamentals';
       case ScannerSubPage.customScans:
         return 'Custom Scans';
+      case ScannerSubPage.fundamentalsNew:
+        return 'Fundamentals New';
     }
   }
 }

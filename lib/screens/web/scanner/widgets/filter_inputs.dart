@@ -259,3 +259,246 @@ class FilterTextField extends StatelessWidget {
     );
   }
 }
+
+/// Searchable multi-select (scalper-overlay style, matching [FilterSelect]) —
+/// a boxed trigger showing "N selected" that opens an overlay with a search box
+/// and a checkbox list. Used by the Sector / Industry filters, which build an
+/// `in` filter from the checked values.
+class FilterMultiSelect extends StatefulWidget {
+  final List<String> options;
+  final List<String> selected;
+  final String hint;
+  final ValueChanged<List<String>> onChanged;
+  const FilterMultiSelect({
+    super.key,
+    required this.options,
+    required this.selected,
+    required this.hint,
+    required this.onChanged,
+  });
+
+  @override
+  State<FilterMultiSelect> createState() => _FilterMultiSelectState();
+}
+
+class _FilterMultiSelectState extends State<FilterMultiSelect> {
+  final GlobalKey _key = GlobalKey();
+  final TextEditingController _search = TextEditingController();
+  OverlayEntry? _overlay;
+  late Set<String> _working;
+
+  @override
+  void dispose() {
+    _remove();
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _remove() {
+    _overlay?.remove();
+    _overlay = null;
+  }
+
+  void _toggle(String value) {
+    if (_working.contains(value)) {
+      _working.remove(value);
+    } else {
+      _working.add(value);
+    }
+    widget.onChanged(_working.toList());
+    _overlay?.markNeedsBuild();
+    if (mounted) setState(() {});
+  }
+
+  void _open() {
+    if (_overlay != null) {
+      _remove();
+      setState(() {});
+      return;
+    }
+    _working = {...widget.selected};
+    _search.clear();
+    final box = _key.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? MyntColors.overlayBgDark : Colors.white;
+    final borderColor =
+        isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0);
+    final textColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    _overlay = OverlayEntry(
+      builder: (_) {
+        final q = _search.text.trim().toLowerCase();
+        final filtered = q.isEmpty
+            ? widget.options
+            : widget.options
+                .where((o) => o.toLowerCase().contains(q))
+                .toList();
+        final searchShape = OutlineInputBorder(
+          borderRadius: BorderRadius.circular(5),
+          borderSide: BorderSide(color: borderColor),
+        );
+        return Stack(children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                _remove();
+                if (mounted) setState(() {});
+              },
+              child: const SizedBox.expand(),
+            ),
+          ),
+          Positioned(
+            left: pos.dx,
+            top: pos.dy + size.height + 4,
+            width: size.width,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(6),
+              color: bg,
+              child: Container(
+                constraints: const BoxConstraints(maxHeight: 340),
+                decoration: BoxDecoration(
+                  border: Border.all(color: borderColor),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                      child: SizedBox(
+                        height: 38,
+                        child: TextField(
+                          controller: _search,
+                          autofocus: true,
+                          style: MyntWebTextStyles.body(context),
+                          onChanged: (_) => _overlay?.markNeedsBuild(),
+                          decoration: InputDecoration(
+                            isDense: true,
+                            prefixIcon:
+                                Icon(Icons.search, size: 18, color: muted),
+                            hintText: 'Search…',
+                            hintStyle: MyntWebTextStyles.body(context,
+                                color: muted.withValues(alpha: 0.6)),
+                            contentPadding:
+                                const EdgeInsets.symmetric(vertical: 8),
+                            enabledBorder: searchShape,
+                            focusedBorder: searchShape,
+                            border: searchShape,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Flexible(
+                      child: filtered.isEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text('No matches',
+                                  style: MyntWebTextStyles.body(context,
+                                      color: muted)),
+                            )
+                          : SingleChildScrollView(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  for (final o in filtered)
+                                    Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        onTap: () => _toggle(o),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 8),
+                                          child: Row(children: [
+                                            Icon(
+                                              _working.contains(o)
+                                                  ? Icons.check_box
+                                                  : Icons
+                                                      .check_box_outline_blank,
+                                              size: 18,
+                                              color: _working.contains(o)
+                                                  ? MyntColors.primary
+                                                  : muted,
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Text(o,
+                                                  style:
+                                                      MyntWebTextStyles.body(
+                                                          context,
+                                                          color: textColor),
+                                                  overflow:
+                                                      TextOverflow.ellipsis),
+                                            ),
+                                          ]),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ]);
+      },
+    );
+    Overlay.of(context).insert(_overlay!);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final n = widget.selected.length;
+    final label =
+        n == 0 ? widget.hint : (n == 1 ? widget.selected.first : '$n selected');
+    return GestureDetector(
+      key: _key,
+      onTap: _open,
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: resolveThemeColor(context,
+              dark: Colors.transparent, light: const Color(0xFFF1F3F8)),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textSecondaryDark,
+                  light: MyntColors.primary)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: MyntWebTextStyles.body(context,
+                    fontWeight: MyntFonts.medium,
+                    color: n == 0 ? muted : textColor),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Icon(Icons.keyboard_arrow_down, size: 20, color: muted),
+          ],
+        ),
+      ),
+    );
+  }
+}

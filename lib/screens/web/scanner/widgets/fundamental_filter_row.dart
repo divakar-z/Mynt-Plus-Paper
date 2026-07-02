@@ -1,17 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_field.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/filter_inputs.dart';
+import 'package:mynt_plus/provider/scanner/fundamentals_provider.dart';
 import 'package:mynt_plus/screens/web/scanner/sub_pages/fundamentals_builder_state.dart';
 
-class FundamentalFilterRow extends StatefulWidget {
+class FundamentalFilterRow extends ConsumerStatefulWidget {
   final List<FundamentalField> fields;
   final FundamentalFilter filter;
   final ValueChanged<FundamentalFilter> onChange;
   final VoidCallback onRemove;
+
+  /// When true, render the field / operator / value controls stacked
+  /// vertically (for the redesigned left filter sidebar) instead of one
+  /// horizontal row. The current screen keeps the default horizontal layout.
+  final bool stacked;
 
   const FundamentalFilterRow({
     super.key,
@@ -19,13 +26,15 @@ class FundamentalFilterRow extends StatefulWidget {
     required this.filter,
     required this.onChange,
     required this.onRemove,
+    this.stacked = false,
   });
 
   @override
-  State<FundamentalFilterRow> createState() => _FundamentalFilterRowState();
+  ConsumerState<FundamentalFilterRow> createState() =>
+      _FundamentalFilterRowState();
 }
 
-class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
+class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
   late final TextEditingController _v1 = TextEditingController();
   late final TextEditingController _v2 = TextEditingController();
   late final TextEditingController _years = TextEditingController();
@@ -62,6 +71,24 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
   @override
   Widget build(BuildContext context) {
     final field = _field;
+    if (widget.stacked) return _buildStacked(field);
+    // Sector / Industry: no operator, no typing — a searchable multiselect
+    // that builds an `in` filter from the checked values.
+    if (widget.filter.field == 'sector' ||
+        widget.filter.field == 'industry') {
+      return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        SizedBox(width: 200, child: _fieldDropdown()),
+        const SizedBox(width: 8),
+        SizedBox(width: 320, child: _categoryMultiSelect()),
+        const SizedBox(width: 4),
+        IconButton(
+          onPressed: widget.onRemove,
+          icon: const Icon(shadcn.LucideIcons.x, size: 14),
+          tooltip: 'Remove',
+          visualDensity: VisualDensity.compact,
+        ),
+      ]);
+    }
     final ops = field == null
         ? const <String>[]
         : validOpsForDtype(field.dtype, multiYear: _isMultiYear);
@@ -93,6 +120,48 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
     ]);
   }
 
+  /// Stacked (vertical) layout for the redesigned left filter sidebar: field on
+  /// top with the remove ×, then the operator, then the value input(s) — each
+  /// full-width so it fits a narrow column.
+  Widget _buildStacked(FundamentalField? field) {
+    final isCat =
+        widget.filter.field == 'sector' || widget.filter.field == 'industry';
+    final ops = field == null
+        ? const <String>[]
+        : validOpsForDtype(field.dtype, multiYear: _isMultiYear);
+    final op = widget.filter.op;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(children: [
+          Expanded(child: _fieldDropdown()),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed: widget.onRemove,
+            icon: const Icon(shadcn.LucideIcons.x, size: 14),
+            tooltip: 'Remove',
+            visualDensity: VisualDensity.compact,
+          ),
+        ]),
+        if (isCat) ...[
+          const SizedBox(height: 8),
+          _categoryMultiSelect(),
+        ] else ...[
+          const SizedBox(height: 8),
+          _opDropdown(ops),
+          if (op != 'is_null' && op != 'is_not_null') ...[
+            const SizedBox(height: 8),
+            _valueInputs(field),
+          ],
+          if (_isMultiYear && op != 'min_years') ...[
+            const SizedBox(height: 8),
+            SizedBox(width: 120, child: _yearsInput()),
+          ],
+        ],
+      ],
+    );
+  }
+
   Widget _fieldDropdown() {
     final byGroup = <String, List<FundamentalField>>{};
     for (final f in widget.fields) {
@@ -108,8 +177,37 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
       value: widget.filter.field.isEmpty ? null : widget.filter.field,
       hint: 'Field…',
       options: opts,
-      onChanged: (v) =>
-          widget.onChange(FundamentalFilter(field: v, op: widget.filter.op)),
+      onChanged: (v) {
+        // Sector / Industry default to the `in` operator (multiselect); every
+        // other field keeps the current operator.
+        final isCat = v == 'sector' || v == 'industry';
+        widget.onChange(FundamentalFilter(
+            field: v, op: isCat ? 'in' : widget.filter.op));
+      },
+    );
+  }
+
+  Widget _categoryMultiSelect() {
+    final cats = ref.watch(fundamentalCategoriesProvider);
+    final options = cats.maybeWhen(
+      data: (c) =>
+          widget.filter.field == 'sector' ? c.sectors : c.industries,
+      orElse: () => const <String>[],
+    );
+    final selected = widget.filter.value is List
+        ? (widget.filter.value as List).map((e) => e.toString()).toList()
+        : const <String>[];
+    return FilterMultiSelect(
+      options: options,
+      selected: selected,
+      hint: widget.filter.field == 'sector'
+          ? 'Select sectors…'
+          : 'Select industries…',
+      onChanged: (list) => widget.onChange(FundamentalFilter(
+        field: widget.filter.field,
+        op: 'in',
+        value: list.isEmpty ? null : list,
+      )),
     );
   }
 

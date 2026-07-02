@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/models/scanner_model/fundamental_categories.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_field.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/models/scanner_model/saved_screen.dart';
@@ -13,6 +14,11 @@ final fundamentalFieldsProvider = FutureProvider<List<FundamentalField>>(
 
 final fundamentalPresetsProvider = FutureProvider<List<FundamentalPreset>>(
     (_) => _api.fetchFundamentalPresets());
+
+/// Sector + industry option lists for the Sector/Industry multiselect filters.
+/// Fetched once and cached.
+final fundamentalCategoriesProvider = FutureProvider<FundamentalCategories>(
+    (_) => _api.fetchFundamentalCategories());
 
 final savedScreensProvider = FutureProvider<List<SavedFundamentalScreen>>(
     (_) => _api.listSavedScreens());
@@ -66,6 +72,14 @@ class FundamentalsSessionNotifier extends Notifier<FundamentalsSession> {
 }
 
 final fundamentalsSessionProvider =
+    NotifierProvider<FundamentalsSessionNotifier, FundamentalsSession>(
+  FundamentalsSessionNotifier.new,
+);
+
+/// Independent session for the redesigned Fundamentals tab, so building a
+/// screen there never disturbs the current Fundamentals tab (separate provider
+/// instance, same notifier class → isolated state).
+final fundamentalsNewSessionProvider =
     NotifierProvider<FundamentalsSessionNotifier, FundamentalsSession>(
   FundamentalsSessionNotifier.new,
 );

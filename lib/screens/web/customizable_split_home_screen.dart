@@ -190,6 +190,7 @@ enum ScannerSubPage {
   scanners,
   fundamentals,
   customScans,
+  fundamentalsNew,
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -2276,6 +2277,10 @@ class _CustomizableSplitHomeScreenState
         return WebRoutes.scannerFundamentals;
       case ScannerSubPage.customScans:
         return WebRoutes.scannerCustom;
+      case ScannerSubPage.fundamentalsNew:
+        // Redesign scaffold — reuse the fundamentals route for now; a dedicated
+        // route is added when this tab replaces the old Fundamentals screen.
+        return WebRoutes.scannerFundamentals;
     }
   }
 

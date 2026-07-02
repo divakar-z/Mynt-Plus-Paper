@@ -28,6 +28,8 @@ class ScannerLeftRail extends StatelessWidget {
     _RailItem(ScannerSubPage.scanners, 'Scanners', shadcn.LucideIcons.radar),
     _RailItem(ScannerSubPage.fundamentals, 'Fundamentals',
         shadcn.LucideIcons.chartBar),
+    _RailItem(ScannerSubPage.fundamentalsNew, 'Fundamentals New',
+        shadcn.LucideIcons.sparkles),
     _RailItem(ScannerSubPage.customScans, 'Custom Scans',
         shadcn.LucideIcons.code),
   ];

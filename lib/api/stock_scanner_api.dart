@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 import 'package:mynt_plus/models/scanner_model/custom_scan.dart';
 import 'package:mynt_plus/models/scanner_model/financials.dart';
+import 'package:mynt_plus/models/scanner_model/fundamental_categories.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_field.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_score.dart';
@@ -377,6 +378,13 @@ mixin StockScannerApi on ApiCore {
         .cast<Map<String, dynamic>>()
         .map(FundamentalPreset.fromJson)
         .toList();
+  }
+
+  /// Sector + industry option lists for the Sector / Industry multiselect
+  /// filters — global reference data, fetched once and cached by the provider.
+  Future<FundamentalCategories> fetchFundamentalCategories() async {
+    final j = await _get('/scans/fundamental/categories');
+    return FundamentalCategories.fromJson(j as Map<String, dynamic>);
   }
 
   Future<FundamentalScanResponse> runFundamentalScan(
