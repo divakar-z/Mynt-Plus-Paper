@@ -44,23 +44,44 @@ class ParsedOption {
 ///
 /// Weekly expiries (e.g. NIFTY07SEP25C25250) parse identically — the 2-digit
 /// day field covers 01–31.
-final RegExp _kOptionTsymRe =
-    RegExp(r'^([A-Z]+?)(\d{2})([A-Z]{3})(\d{2})([CP])(\d+(?:\.\d+)?)$');
+// Two orderings cover the common broker formats:
+//   1) <UND><DD><MON><YY><C|CE|P|PE><STRIKE>   e.g. NATGASMINI23JUN26C305
+//   2) <UND><DD><MON><YY><STRIKE><C|CE|P|PE>   e.g. NIFTY25JUN2425000CE
+final RegExp _kOptReTypeFirst =
+    RegExp(r'^([A-Z]+?)(\d{2})([A-Z]{3})(\d{2})([CP])E?(\d+(?:\.\d+)?)$');
+final RegExp _kOptReStrikeFirst =
+    RegExp(r'^([A-Z]+?)(\d{2})([A-Z]{3})(\d{2})(\d+(?:\.\d+)?)([CP])E?$');
 
 ParsedOption? parseOptionTsym(String? tsym) {
   if (tsym == null || tsym.isEmpty) return null;
-  final m = _kOptionTsymRe.firstMatch(tsym.toUpperCase());
-  if (m == null) return null;
-  final strike = double.tryParse(m.group(6)!);
-  if (strike == null || strike <= 0) return null;
-  return ParsedOption(
-    underlying: m.group(1)!,
-    expiryDay: m.group(2)!,
-    expiryMon: m.group(3)!,
-    expiryYr: m.group(4)!,
-    optType: m.group(5)! == 'C' ? 'CE' : 'PE',
-    strike: strike,
-  );
+  final t = tsym.toUpperCase();
+  var m = _kOptReTypeFirst.firstMatch(t);
+  if (m != null) {
+    final strike = double.tryParse(m.group(6)!);
+    if (strike == null || strike <= 0) return null;
+    return ParsedOption(
+      underlying: m.group(1)!,
+      expiryDay: m.group(2)!,
+      expiryMon: m.group(3)!,
+      expiryYr: m.group(4)!,
+      optType: m.group(5)! == 'C' ? 'CE' : 'PE',
+      strike: strike,
+    );
+  }
+  m = _kOptReStrikeFirst.firstMatch(t);
+  if (m != null) {
+    final strike = double.tryParse(m.group(5)!);
+    if (strike == null || strike <= 0) return null;
+    return ParsedOption(
+      underlying: m.group(1)!,
+      expiryDay: m.group(2)!,
+      expiryMon: m.group(3)!,
+      expiryYr: m.group(4)!,
+      optType: m.group(6)! == 'C' ? 'CE' : 'PE',
+      strike: strike,
+    );
+  }
+  return null;
 }
 
 /// Maps each option underlying name (as it appears in the option tsym) to
@@ -92,19 +113,83 @@ class _UnderlyingScrip {
 ///
 /// Returns the parsed option metadata as a side effect via [parsedOut] so
 /// the caller can reuse it for the overlay label without re-parsing.
+/// Robustly extracts (strike, CE/PE) without depending on the expiry format —
+/// some tsyms have no 2-digit year (e.g. BFO `SENSEX26JUN77100CE`), which makes
+/// the strict DD-MON-YY regex mis-read the strike. Order of trust:
+///   1) `dname` — space-separated and unambiguous, e.g. `SENSEX 25 JUN 77100 CE`
+///   2) tsym tail `77100CE` (strike then CE/PE) — e.g. `SENSEX26JUN77100CE`
+///   3) tsym tail `C305` (C/P then strike) — e.g. `NATGASMINI23JUN26C305`
+({double strike, String optType})? _strikeAndType({String? tsym, String? dname}) {
+  final d = (dname ?? '').toUpperCase().trim();
+  if (d.isNotEmpty) {
+    final parts = d.split(RegExp(r'\s+'));
+    for (var i = parts.length - 1; i > 0; i--) {
+      if (parts[i] == 'CE' || parts[i] == 'PE') {
+        final s = double.tryParse(parts[i - 1].replaceAll(',', ''));
+        if (s != null && s > 0) return (strike: s, optType: parts[i]);
+      }
+    }
+  }
+  final t = (tsym ?? '').toUpperCase();
+  var m = RegExp(r'(\d+(?:\.\d+)?)(CE|PE)$').firstMatch(t);
+  if (m != null) {
+    final s = double.tryParse(m.group(1)!);
+    if (s != null && s > 0) return (strike: s, optType: m.group(2)!);
+  }
+  m = RegExp(r'([CP])(\d+(?:\.\d+)?)$').firstMatch(t);
+  if (m != null) {
+    final s = double.tryParse(m.group(2)!);
+    if (s != null && s > 0) {
+      return (strike: s, optType: m.group(1)! == 'C' ? 'CE' : 'PE');
+    }
+  }
+  return null;
+}
+
 bool positionOptionMatchesPane({
   required ChartScrip paneScrip,
   required PositionBookModel pos,
   required void Function(ParsedOption) parsedOut,
 }) {
-  final parsed = parseOptionTsym(pos.tsym);
-  if (parsed == null) return false;
+  // Strike + CE/PE for the line/label (format-tolerant, dname-first).
+  final st = _strikeAndType(tsym: pos.tsym, dname: pos.dname);
+  if (st == null) return false; // can't place a line without a strike
+  // Underlying NAME (only needed for the index-map fallback) — best effort from
+  // the strict parse; the wrong-strike case there is irrelevant, we use `st`.
+  final strict = parseOptionTsym(pos.tsym);
+  final parsed = ParsedOption(
+    underlying: strict?.underlying ?? (pos.symname ?? '').toUpperCase(),
+    expiryDay: strict?.expiryDay ?? '',
+    expiryMon: strict?.expiryMon ?? '',
+    expiryYr: strict?.expiryYr ?? '',
+    optType: st.optType,
+    strike: st.strike,
+  );
+
+  // PRIMARY — broker-provided underlying linkage. OPTFUT/OPTSTK positions carry
+  // `und_exch`/`und_tk` = the underlying future/spot scrip, so we match it
+  // directly to the pane. No tsym-format guessing; works for any symbol
+  // (NATGASMINI, stock futures, etc.).
+  final undTk = pos.undTk;
+  final undExch = pos.undExch;
+  if (undTk != null && undTk.isNotEmpty &&
+      undExch != null && undExch.isNotEmpty &&
+      undTk == paneScrip.token && undExch == paneScrip.exch) {
+    parsedOut(parsed);
+    return true;
+  }
+
+  // FALLBACK — index/spot map, for NSE/BSE index options shown on the SPOT
+  // index chart (where und_tk may point to the future rather than the spot).
   final underlying = _kIndexUnderlyings[parsed.underlying];
-  if (underlying == null) return false;
-  if (underlying.exch != paneScrip.exch) return false;
-  if (underlying.token != paneScrip.token) return false;
-  parsedOut(parsed);
-  return true;
+  if (underlying != null &&
+      underlying.exch == paneScrip.exch &&
+      underlying.token == paneScrip.token) {
+    parsedOut(parsed);
+    return true;
+  }
+
+  return false;
 }
 
 /// Maps each supported index underlying name to the exchange code used by

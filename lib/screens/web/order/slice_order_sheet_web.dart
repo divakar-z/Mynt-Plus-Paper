@@ -410,7 +410,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
                                 elevation: 0,
                                 backgroundColor: widget.isBuy
                                     ? (theme.isDarkMode ? MyntColors.secondary : MyntColors.primary)
-                                    : (theme.isDarkMode ? MyntColors.lossDark : MyntColors.error),
+                                    : (theme.isDarkMode ? MyntColors.errorDark : MyntColors.tertiary),
                                 disabledBackgroundColor: (theme.isDarkMode ? MyntColors.secondary : MyntColors.primary).withOpacity(0.5),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(5),
