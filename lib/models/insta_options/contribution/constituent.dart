@@ -45,9 +45,19 @@ class Constituent {
   String? get tickKey =>
       (token != null && exchange != null) ? '$exchange|$token' : null;
 
-  /// Overlay the socket-live price fields; everything else (points, share,
-  /// weight, OI, buildup) stays the API snapshot.
-  Constituent copyWith({double? ltp, double? priceChangePct}) => Constituent(
+  /// Overlay live fields. Price fields (ltp / change / price%) come straight
+  /// from the socket; point-contribution / share / direction carry the exact
+  /// live recompute (see [IndexContribution.recomputeLive]). Weight / OI /
+  /// buildup always stay the API snapshot.
+  Constituent copyWith({
+    double? ltp,
+    double? change,
+    double? priceChangePct,
+    double? pointContribution,
+    double? sharePct,
+    String? direction,
+  }) =>
+      Constituent(
         symbol: symbol,
         name: name,
         sector: sector,
@@ -55,12 +65,12 @@ class Constituent {
         exchange: exchange,
         weightPct: weightPct,
         ltp: ltp ?? this.ltp,
-        change: change,
+        change: change ?? this.change,
         priceChangePct: priceChangePct ?? this.priceChangePct,
         marketCap: marketCap,
-        pointContribution: pointContribution,
-        sharePct: sharePct,
-        direction: direction,
+        pointContribution: pointContribution ?? this.pointContribution,
+        sharePct: sharePct ?? this.sharePct,
+        direction: direction ?? this.direction,
         oi: oi,
         oiChangePct: oiChangePct,
         category: category,

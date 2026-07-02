@@ -2,7 +2,7 @@
 
 > **Read this first**: [INSTAOPTIONS_FLOW.md](INSTAOPTIONS_FLOW.md) — workflow playbook + 9-section catalog. Then check [INSTAOPTIONS_PLAN.md](INSTAOPTIONS_PLAN.md) for the active section. This HANDOFF is the cross-session status tracker.
 
-Last updated: 2026-07-01 (live intraday mode — snapshot polling + Noren socket tick overlay)
+Last updated: 2026-07-02 (live Contribution attribution recompute + repaint throttle)
 Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
 Audit: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) (OptionZ vs our backend; mirrored at `.claude/insta-options-qa/data-audit.md` for local working copy)
 Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) (also mirrored at `.claude/insta-options-qa/backend-tickets.md`)
@@ -91,11 +91,11 @@ Commit `47cbd2c0`. Two live layers over the date-based screens; **today** (`fres
 
 **Socket tick overlay (price-heavy screens).** **`InstaLiveTicks`** subscribes the active section's `exchange|token` set over the app's existing Noren socket (`websocketProvider.connectTouchLine`), diff-swapping on section change and clearing on module exit (protected-symbol-aware `WebSubscriptionManager.unsubscribeTokens`, so it never kills the watchlist/positions/ticker feeds). It overlays each instrument's own live `lp`/`chng`/`pc` onto the snapshot:
 - **Option Chain** — CE/PE leg LTP + chg% (NFO leg tokens) + the underlying value (index spot / stock future token).
-- **Contribution** — index level/pts/% (index token) + constituent LTP/% (embedded token).
+- **Contribution** — index level/pts/% (index token) + constituent LTP/%, **plus the full point attribution recomputed live** (see the 2026-07-02 resolution below).
 - **Dashboard** — index-card level/% + gainer/loser/buildup LTP/% (stock tokens via `/symbols`).
 - **OI Statistics / Trending OI / PCR Ratio** — no socket overlay: OI/PCR-only, which a socket can't produce; snapshot-live is the correct mechanism.
 
-**Correctness rule:** a value goes live only if it maps to one tradable instrument's own tick (using that instrument's `lp` + its own `chng`/`pc` — never the socket `lp` paired with the snapshot's prev-close). **OI / PCR / max-pain / buildup / breadth / point-contribution stay the backend snapshot, never recomputed** (they need OI / the index methodology). Missing/stale tick → the snapshot value, never a phantom `0`.
+**Correctness rule:** a value goes live only if it maps to one tradable instrument's own tick (using that instrument's `lp` + its own `chng`/`pc` — never the socket `lp` paired with the snapshot's prev-close). **OI / PCR / max-pain / buildup / breadth stay the backend snapshot, never recomputed** (they need OI / the index methodology). The lone exception is **Index Contribution's point attribution** — exactly linear in price, so it *is* recomputed live (2026-07-02 resolution below). Missing/stale tick → the snapshot value, never a phantom `0`.
 
 **Tokens (backend-supplied):** `/symbols.token` (spot, per underlying); option-chain per-leg `token`+`exchange:NFO` + top-level `future_token`; oi-timeline `future_token`. Modelled on `InstrumentSymbol` / `OptionLeg` / `OptionChainData` / `OiTimeline` (`tickKey` = `exchange|token`).
 
@@ -103,7 +103,10 @@ Commit `47cbd2c0`. Two live layers over the date-based screens; **today** (`fres
 
 **Verified live (2026-07-01, market open):** LIVE pill + freshness advancing on all six screens; socket overlay ticking on Option Chain (leg LTPs), Dashboard (index levels + buildup LTPs), Contribution (index level/pts/%) — with OI / aggregates correctly frozen. QA frames under `.claude/insta-options-qa/live/`.
 
-**Open follow-up:** Contribution attribution consistency — the header level/pts/% + constituent price% tick live while the contribution bars / Net / sector / points stay snapshot, so they don't reconcile mid-poll (each value is accurate; the decomposition just lags). Optional switch to a **prices-only-tick / coherent-attribution-snapshot** model.
+**Resolved 2026-07-02 — live Contribution attribution + repaint throttle (this commit).** The 5-min snapshot cadence was too slow to read intraday moves, so Index Contribution now **recomputes the whole decomposition from live constituent prices**, exactly. A stock's index point-contribution is linear in price, so its points-per-₹ slope is read back out of each snapshot (`point_contribution ÷ change`; `prevLevel × weight ÷ prevClose` fallback when flat at snapshot) and applied to the live move — `IndexContribution.recomputeLive`. Constituent points / share / direction, sector sums, advances/declines and top-N concentration all re-derive from those live points (self-consistent); HHI / breadth and the headline (official index tick) are left as-is; Σ constituents = the *explained* portion, so the coverage residual vs the headline is preserved. Re-anchors to backend truth every ~90s poll.
+- **Repaint throttle** — `InstaLiveTicks` now coalesces the Noren feed to **≤1 notify / 700 ms** (leading + trailing); `socketDatas` still ingests every tick. Caps compute+paint for *every* live screen (was: one rebuild per raw tick).
+- **Throttled re-rank** — the Contribution screen settles row/bar **order every ~4 s** (values/bars still move each repaint), so movers don't reshuffle constantly; small live order-inversions between re-ranks are expected, not a bug.
+- Verified live (2026-07-02, market open): points / sectors / advances-declines / concentration all ticking; measured repaint rate **1.58/s (avg gap 691 ms, min 600 ms)**; order re-ranking on the ~4 s cadence; Net = official index. QA frames in `.claude/insta-options-qa/live/`.
 
 ---
 

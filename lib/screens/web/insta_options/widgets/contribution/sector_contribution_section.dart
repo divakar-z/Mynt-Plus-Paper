@@ -14,9 +14,8 @@ class SectorContributionSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sectors = [...data.sectorContribution]
-      ..sort((a, b) =>
-          (b.pointContribution ?? 0).compareTo(a.pointContribution ?? 0));
+    // Already ordered by the caller (live: throttled re-rank; snapshot: desc).
+    final sectors = data.sectorContribution;
     final maxAbs = sectors.fold<double>(0, (m, s) {
       final v = (s.pointContribution ?? 0).abs();
       return v > m ? v : m;

@@ -23,6 +23,28 @@ class Concentration {
   bool get isNarrow => breadth == 'narrow';
   int get total => advances + declines + unchanged;
 
+  /// Re-derive the definitional fields from live points (top-N share of the
+  /// live magnitude, advances/declines, A/D ratio). HHI and the narrow/broad
+  /// verdict use backend-specific formulas we don't recompute — kept as-is.
+  Concentration copyWith({
+    double? top3SharePct,
+    double? top5SharePct,
+    int? advances,
+    int? declines,
+    int? unchanged,
+    double? adRatio,
+  }) =>
+      Concentration(
+        top3SharePct: top3SharePct ?? this.top3SharePct,
+        top5SharePct: top5SharePct ?? this.top5SharePct,
+        hhi: hhi,
+        breadth: breadth,
+        advances: advances ?? this.advances,
+        declines: declines ?? this.declines,
+        unchanged: unchanged ?? this.unchanged,
+        adRatio: adRatio ?? this.adRatio,
+      );
+
   factory Concentration.fromJson(Map<String, dynamic> j) => Concentration(
         top3SharePct: (j['top3_share_pct'] as num?)?.toDouble(),
         top5SharePct: (j['top5_share_pct'] as num?)?.toDouble(),

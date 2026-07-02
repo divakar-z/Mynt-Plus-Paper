@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -29,11 +31,41 @@ class InstaLiveTicks extends ChangeNotifier {
   BuildContext? _ctx;
   VoidCallback? _wsListener;
 
+  /// Repaint rate-limit. The Noren socket ticks many times a second across all
+  /// subscribed tokens; rebuilding every overlay screen on each raw tick is a
+  /// heavy compute + paint cost for no visible gain. [socketDatas] already holds
+  /// the latest values (the ws provider updates it on every tick) — we only
+  /// coalesce the *notify* so watchers repaint at most once per [_notifyWindow].
+  static const Duration _notifyWindow = Duration(milliseconds: 700);
+  Timer? _notifyThrottle;
+  bool _notifyPending = false;
+
   InstaLiveTicks(this.ref) {
-    // Re-emit on every socket tick so overlay widgets watching us rebuild.
+    // Coalesce socket ticks into a bounded-rate repaint (see _onSocketTick).
     final ws = ref.read(websocketProvider);
-    _wsListener = notifyListeners;
+    _wsListener = _onSocketTick;
     ws.addListener(_wsListener!);
+  }
+
+  /// Leading-edge + trailing throttle: the first tick notifies immediately (so
+  /// updates feel instant), further ticks inside the window collapse into a
+  /// single trailing notify at the window boundary. Steady state under a busy
+  /// feed = one repaint per [_notifyWindow], not one per tick.
+  void _onSocketTick() {
+    if (_notifyThrottle != null) {
+      _notifyPending = true;
+      return;
+    }
+    notifyListeners();
+    _notifyThrottle = Timer(_notifyWindow, _flushNotify);
+  }
+
+  void _flushNotify() {
+    _notifyThrottle = null;
+    if (_notifyPending) {
+      _notifyPending = false;
+      _onSocketTick();
+    }
   }
 
   Set<String> get subscribed => Set.unmodifiable(_subscribed);
@@ -114,6 +146,8 @@ class InstaLiveTicks extends ChangeNotifier {
 
   @override
   void dispose() {
+    _notifyThrottle?.cancel();
+    _notifyThrottle = null;
     try {
       if (_wsListener != null) {
         ref.read(websocketProvider).removeListener(_wsListener!);

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/models/insta_options/contribution/constituent.dart';
 import 'package:mynt_plus/models/insta_options/contribution/index_contribution.dart';
+import 'package:mynt_plus/models/insta_options/contribution/sector_contribution.dart';
 import 'package:mynt_plus/provider/insta_options/contribution/contribution_provider.dart';
 import 'package:mynt_plus/provider/insta_options/insta_live_ticks.dart';
 import 'package:mynt_plus/provider/insta_options/symbols_provider.dart';
@@ -29,6 +31,15 @@ class IndexContributorsScreen extends ConsumerStatefulWidget {
 class _IndexContributorsScreenState
     extends ConsumerState<IndexContributorsScreen> {
   Set<String> _lastSubKeys = const <String>{};
+
+  // Throttled re-rank: constituent + sector display order settle every ~4s, so
+  // rows/bars don't reshuffle on every (already rate-limited) tick — only their
+  // values/bar-lengths do.
+  static const Duration _rankWindow = Duration(seconds: 4);
+  List<String>? _rankOrder; // constituent symbols, |points| desc
+  List<String>? _sectorOrder; // sector names, points desc
+  DateTime _rankedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  String _orderKey = '';
 
   @override
   void initState() {
@@ -75,7 +86,7 @@ class _IndexContributorsScreenState
     }
     final data = p.data;
     if (data == null) return const _EmptyState();
-    final effective = _liveOverlay(context, p, data);
+    final effective = _effective(context, p, data);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
@@ -97,11 +108,15 @@ class _IndexContributorsScreenState
     );
   }
 
-  /// Live-tick overlay: the index level / point-change / change% (index token)
-  /// and each constituent's LTP / price% (its token) take the socket value once
-  /// a tick arrives; point-contribution / share / weight / OI / PCR / sector /
-  /// concentration stay the API snapshot. Also keeps subscriptions in sync.
-  IndexContribution _liveOverlay(
+  /// Build the effective (rendered) contribution:
+  /// - **Header** (level / point-change / change%) = the official index-token
+  ///   tick — the most accurate index number.
+  /// - **Decomposition** (constituents / sectors / concentration / explained)
+  ///   = the exact live recompute from constituent prices ([recomputeLive]).
+  /// - **Order** = throttled: values + bars update every (rate-limited) tick,
+  ///   but row/bar order only re-ranks every [_rankWindow].
+  /// Also keeps the socket subscriptions in sync.
+  IndexContribution _effective(
       BuildContext context, ContributionProvider p, IndexContribution data) {
     final idx = ref.read(symbolsProvider).byId(data.underlyingId);
     final idxToken = idx?.token;
@@ -113,21 +128,77 @@ class _IndexContributorsScreenState
     }
     _syncSubs(context, p.liveMode ? keys : const <String>{});
 
-    if (!p.liveMode) return data;
+    if (!p.liveMode) return _orderedStatic(data);
 
     final t = ref.read(instaLiveTicksProvider);
-    return data.copyWith(
+    // 1) official index tick drives the headline.
+    var live = data.copyWith(
       level: t.ltpOr(idxToken, data.level),
       pointChange: t.liveChange(idxToken) ?? data.pointChange,
       changePct: t.liveChangePct(idxToken) ?? data.changePct,
-      constituents: [
-        for (final c in data.constituents)
-          c.copyWith(
-            ltp: t.ltpOr(c.token, c.ltp),
-            priceChangePct: t.liveChangePct(c.token) ?? c.priceChangePct,
-          )
-      ],
     );
+    // 2) exact live decomposition from constituent prices.
+    live = live.recomputeLive((c) => t.liveLtp(c.token));
+    // 3) throttled ordering.
+    return _applyThrottledOrder(live);
+  }
+
+  /// Historical / non-live: static data ordered once — |points| desc for the
+  /// waterfall getters, points desc for sectors.
+  IndexContribution _orderedStatic(IndexContribution d) {
+    if (d.constituents.isEmpty) return d;
+    final cons = [...d.constituents]
+      ..sort((a, b) => (b.pointContribution ?? 0)
+          .abs()
+          .compareTo((a.pointContribution ?? 0).abs()));
+    final secs = [...d.sectorContribution]
+      ..sort((a, b) =>
+          (b.pointContribution ?? 0).compareTo(a.pointContribution ?? 0));
+    return d.copyWith(constituents: cons, sectorContribution: secs);
+  }
+
+  /// Reorder the live-recomputed [live] by a cached rank that refreshes at most
+  /// once per [_rankWindow] (or immediately on index/date change). Between
+  /// refreshes the same order is reused, so only values/bars move — not rows.
+  IndexContribution _applyThrottledOrder(IndexContribution live) {
+    final key = '${live.index}|${live.tradeDate}';
+    final now = DateTime.now();
+    if (_rankOrder == null ||
+        _orderKey != key ||
+        now.difference(_rankedAt) > _rankWindow) {
+      final cons = [...live.constituents]
+        ..sort((a, b) => (b.pointContribution ?? 0)
+            .abs()
+            .compareTo((a.pointContribution ?? 0).abs()));
+      _rankOrder = [for (final c in cons) c.symbol];
+      final secs = [...live.sectorContribution]
+        ..sort((a, b) =>
+            (b.pointContribution ?? 0).compareTo(a.pointContribution ?? 0));
+      _sectorOrder = [for (final s in secs) s.sector];
+      _rankedAt = now;
+      _orderKey = key;
+    }
+
+    final consBySym = {for (final c in live.constituents) c.symbol: c};
+    final consSeen = _rankOrder!.toSet();
+    final orderedCons = <Constituent>[
+      for (final s in _rankOrder!)
+        if (consBySym[s] != null) consBySym[s]!,
+      for (final c in live.constituents)
+        if (!consSeen.contains(c.symbol)) c,
+    ];
+
+    final secBySector = {for (final s in live.sectorContribution) s.sector: s};
+    final secSeen = _sectorOrder!.toSet();
+    final orderedSecs = <SectorContribution>[
+      for (final n in _sectorOrder!)
+        if (secBySector[n] != null) secBySector[n]!,
+      for (final s in live.sectorContribution)
+        if (!secSeen.contains(s.sector)) s,
+    ];
+
+    return live.copyWith(
+        constituents: orderedCons, sectorContribution: orderedSecs);
   }
 
   void _syncSubs(BuildContext context, Set<String> keys) {

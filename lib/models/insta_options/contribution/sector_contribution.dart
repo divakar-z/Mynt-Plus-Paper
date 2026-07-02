@@ -17,6 +17,22 @@ class SectorContribution {
     required this.declines,
   });
 
+  /// Re-summed sector totals from live constituent points; stocks / weight stay
+  /// the API snapshot.
+  SectorContribution copyWith({
+    double? pointContribution,
+    int? advances,
+    int? declines,
+  }) =>
+      SectorContribution(
+        sector: sector,
+        stocks: stocks,
+        weightPct: weightPct,
+        pointContribution: pointContribution ?? this.pointContribution,
+        advances: advances ?? this.advances,
+        declines: declines ?? this.declines,
+      );
+
   factory SectorContribution.fromJson(Map<String, dynamic> j) =>
       SectorContribution(
         sector: (j['sector'] ?? '').toString(),
