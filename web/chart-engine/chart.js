@@ -3435,7 +3435,7 @@ class Chart {
     const first = Math.ceil(lo / stride) * stride;
     // Skip the axis label whose price is closest to the LTP — the LTP chip
     // covers that slot and showing both creates a "ghost" double-render.
-    const ltp = this.candles.length ? this.candles[this.candles.length - 1].c : null;
+    const ltp = this._ltpLevel();
     this.ctx.fillStyle = this.palette.axisText;
     this.ctx.font = '500 10px Geist, sans-serif';
     this.ctx.textAlign = 'left';
@@ -4945,10 +4945,22 @@ class Chart {
 
   // ── End Phase 18 ──────────────────────────────────────────────────────────
 
+  // Price level the live-price line/chip sits at. In Heikin-Ashi mode the
+  // candle bodies are HA-transformed, so the line must track the last bar's
+  // HA close (o+h+l+c)/4 rather than the raw close — otherwise it floats off
+  // the candles. Every other style uses the raw close.
+  _ltpLevel() {
+    if (this.candles.length === 0) return null;
+    const last = this.candles[this.candles.length - 1];
+    return this.candleStyle === 'heikin-ashi'
+        ? (last.o + last.h + last.l + last.c) / 4
+        : last.c;
+  }
+
   _drawLtpLine(plot, priceToY, lo, hi) {
     if (this.candles.length === 0) return;
     const last = this.candles[this.candles.length - 1];
-    const ltp = last.c;
+    const ltp = this._ltpLevel();
     if (ltp < lo || ltp > hi) return; // off-screen vertically (user panned away)
     const y = priceToY(ltp);
     // Dashed horizontal line across the plot.
@@ -4965,7 +4977,9 @@ class Chart {
     // Clamp chip's Y into the main plot so when LTP sits near the bottom
     // of the candle range the chip doesn't bleed into the sub-pane area
     // below (used to overlap with sub-pane axis labels / value chips).
-    const up = last.c >= last.o;
+    const up = this.candleStyle === 'heikin-ashi' && this._haPrev
+        ? ltp >= this._haPrev.haOpen
+        : last.c >= last.o;
     const color = up ? this.palette.bull : this.palette.bear;
     this.ctx.font = '500 11px Geist, sans-serif';
     this.ctx.textBaseline = 'middle';
