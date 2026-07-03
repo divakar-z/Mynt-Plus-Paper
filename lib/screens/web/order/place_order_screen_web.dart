@@ -1219,14 +1219,19 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                       mainAxisAlignment:
                                           MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Column(
+                                        Flexible(
+                                          child: Column(
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
                                             Padding(
                                               padding: const EdgeInsets.only(
                                                   bottom: 4.0),
-                                              child: Row(children: [
+                                              child: Wrap(
+                                                  crossAxisAlignment:
+                                                      WrapCrossAlignment.center,
+                                                  runSpacing: 2,
+                                                  children: [
                                                 Text(
                                                   "${widget.scripInfo.symbol!.replaceAll("-EQ", "")} ",
                                                   style: WebTextStyles.title(
@@ -1371,27 +1376,45 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   ),
                                                 ),
                                               ),
-                                              ]else...[
-                                                Text(
-                                                  " ${stockExchangeSelected.exch ?? widget.scripInfo.exch}",
-                                                  style: WebTextStyles.para(
-                                                    isDarkTheme:
-                                                        theme.isDarkMode,
-                                                    color: resolveThemeColor(context,
-                                                        dark:
-                                                            MyntColors.textPrimaryDark,
-                                                        light: MyntColors.textPrimary),
-                                                    fontWeight: WebFonts.medium,
-                                                  ),
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  maxLines: 1,
-                                                ),
-                                            ],
+                                              ],
                                               ]),
                                             ),
                                             Row(
                                               children: [
+                                                if (!(_isStock &&
+                                                    _stockExchangesList
+                                                        .isNotEmpty &&
+                                                    (orderType == "Delivery" ||
+                                                        orderType ==
+                                                            "Intraday" ||
+                                                        orderType ==
+                                                            "CO - BO")))
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            right: 6),
+                                                    child: Text(
+                                                      "${stockExchangeSelected.exch ?? widget.scripInfo.exch}",
+                                                      style:
+                                                          WebTextStyles.para(
+                                                        isDarkTheme:
+                                                            theme.isDarkMode,
+                                                        color:
+                                                            resolveThemeColor(
+                                                          context,
+                                                          dark: MyntColors
+                                                              .textPrimaryDark,
+                                                          light: MyntColors
+                                                              .textPrimary,
+                                                        ),
+                                                        fontWeight:
+                                                            WebFonts.medium,
+                                                      ),
+                                                      overflow: TextOverflow
+                                                          .ellipsis,
+                                                      maxLines: 1,
+                                                    ),
+                                                  ),
                                                 OrderScreenHeaderWeb(
                                                   headerData: stockExchangeSelected.exch == null ? widget.orderArg : selectedStockSubscribe,
                                                 ),
@@ -1399,7 +1422,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                             ),
                                             
                                           ],
-                                        ),
+                                        )),
                                            // NSE/BSE Exchange Switch
                                             
                                         // const SizedBox(width: 12),
@@ -8177,6 +8200,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
             widget.scripInfo.exch != 'MCX') {
           ResponsiveSnackBar.showWarning(context,
               "Quantity should be multiple of lot size $lotSize => $q");
+        } else if ((priceType == "Limit" || priceType == "SL Limit") &&
+            SafeParse.toDouble(priceCtrl.text) !=
+                SafeParse.toDouble(
+                    roundOffWithInterval(SafeParse.toDouble(priceCtrl.text), tik)
+                        .toStringAsFixed(2))) {
+          ResponsiveSnackBar.showWarning(context,
+              "Price should be multiple of tick size $tik => ${roundOffWithInterval(SafeParse.toDouble(priceCtrl.text), tik).toStringAsFixed(2)}");
+        } else if ((priceType == "SL Limit" || priceType == "SL MKT") &&
+            SafeParse.toDouble(triggerPriceCtrl.text) !=
+                SafeParse.toDouble(roundOffWithInterval(
+                        SafeParse.toDouble(triggerPriceCtrl.text), tik)
+                    .toStringAsFixed(2))) {
+          ResponsiveSnackBar.showWarning(context,
+              "Trigger should be multiple of tick size $tik => ${roundOffWithInterval(SafeParse.toDouble(triggerPriceCtrl.text), tik).toStringAsFixed(2)}");
         } else if (frezQtyOrderSliceMaxLimit < quantity) {
           ResponsiveSnackBar.showWarning(context,
               "Quantity can only be split into a maximum of $frezQtyOrderSliceMaxLimit slice. (Ex: $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQty * frezQtyOrderSliceMaxLimit})");

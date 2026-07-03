@@ -71,6 +71,11 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   ];
   String _actDeptBtn = "Overview";
   String get actDeptBtn => _actDeptBtn;
+
+  // When true, the next ChartWithDepthWeb panel that opens lands on the Chart
+  // tab (index 1) instead of its default. Set by the watchlist option-chain
+  // "Chart" action; consumed (reset) by ChartWithDepthWeb once it switches.
+  bool openOnChartTab = false;
   final List<Tab> _scipOverViewTab = [
     const Tab(text: "Overview"),
     const Tab(text: "Chart")
