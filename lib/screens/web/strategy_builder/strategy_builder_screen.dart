@@ -6,6 +6,9 @@ import 'package:mynt_plus/models/marketwatch_model/opt_chain_model.dart';
 import 'package:mynt_plus/provider/strategy_builder_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
+import 'package:mynt_plus/provider/market_watch_provider.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
+import 'package:mynt_plus/models/marketwatch_model/get_quotes.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 
@@ -367,14 +370,15 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
               ),
               const SizedBox(width: 12),
               _buildMetricItemSmall(context, 'MARGIN', provider.totalMargin, null, isDark),
-              const SizedBox(width: 12),
-              _buildMetricItemSmall(
-                context,
-                'MARGIN BENEFIT',
-                provider.marginBenefit,
-                isDark ? MyntColors.profitDark : MyntColors.profit,
-                isDark,
-              ),
+              // MARGIN BENEFIT hidden
+              // const SizedBox(width: 12),
+              // _buildMetricItemSmall(
+              //   context,
+              //   'MARGIN BENEFIT',
+              //   provider.marginBenefit,
+              //   isDark ? MyntColors.profitDark : MyntColors.profit,
+              //   isDark,
+              // ),
             ],
           ),
           const SizedBox(height: 8),
@@ -3048,7 +3052,8 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
                   isDark,
                 ),
                 _buildMetricItem(context, 'MARGIN', provider.totalMargin, null, isDark),
-                _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
+                // MARGIN BENEFIT hidden
+                // _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
               ],
             ),
             const SizedBox(height: 12),
@@ -4731,11 +4736,12 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
             ],
           ),
           const SizedBox(height: 8),
-          // Row 2: MARGIN BENEFIT, POP, REWARD/RISK, BREAKEVEN
+          // Row 2: POP, REWARD/RISK, BREAKEVEN (MARGIN BENEFIT hidden)
           Row(
             children: [
-              _buildMetricItemNarrow(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
-              const SizedBox(width: 8),
+              // MARGIN BENEFIT hidden
+              // _buildMetricItemNarrow(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
+              // const SizedBox(width: 8),
               _buildMetricItemNarrow(context, 'POP', '${provider.metrics.popPercent.toStringAsFixed(0)}%', null, isDark),
               const SizedBox(width: 8),
               _buildMetricItemNarrow(context, 'REWARD/RISK', provider.metrics.riskRewardRatio, null, isDark),
@@ -5456,9 +5462,16 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
         ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss) 
         : (perChange == "0.00" ? Colors.grey : resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit));
         
-    final oiChangeColor = oiPerChng.startsWith("-") 
-        ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss) 
+    final oiChangeColor = oiPerChng.startsWith("-")
+        ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss)
         : (oiPerChng == "0.00" ? Colors.grey : resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit));
+
+    // Watchlist state for the bookmark action
+    final scripToken = "${option.exch}|${option.token}";
+    final isInWatchlist = ref
+        .read(marketWatchProvider)
+        .scrips
+        .any((s) => "${s['exch']}|${s['token']}" == scripToken);
 
     // Hover mechanism with Square Buttons
     return HoverActionsWrapper(
@@ -5492,6 +5505,56 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
               borderRadius: BorderRadius.circular(4),
             ),
             child: const Text('S', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+          ),
+        ),
+        const SizedBox(width: 2),
+        // Chart Button — navigates to home and opens the option's chart
+        InkWell(
+          onTap: () => _handleChartTapSB(option),
+          child: Container(
+            width: 25,
+            height: 25,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF2A2A2A) : Colors.white,
+              border: Border.all(
+                color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
+              ),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Icon(
+              Icons.candlestick_chart,
+              size: 15,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textPrimaryDark, light: MyntColors.textBlack),
+            ),
+          ),
+        ),
+        const SizedBox(width: 2),
+        // Add to Watchlist Button
+        InkWell(
+          onTap: () => _handleSaveToWatchlistSB(option),
+          child: Container(
+            width: 25,
+            height: 25,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF2A2A2A) : Colors.white,
+              border: Border.all(
+                color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
+              ),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Icon(
+              isInWatchlist ? Icons.bookmark : Icons.bookmark_border,
+              size: 15,
+              color: isInWatchlist
+                  ? resolveThemeColor(context,
+                      dark: MyntColors.primaryDark, light: MyntColors.primary)
+                  : resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textBlack),
+            ),
           ),
         ),
       ],
@@ -5541,6 +5604,72 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
         ),
       ],
     );
+  }
+
+  /// Open this option's chart. The strategy builder is hosted inside
+  /// CustomizableSplitHomeScreen, which owns the chart panel — so we close the
+  /// option-chain dialog and open the chart in that panel (on the Chart tab),
+  /// the same mechanism the watchlist option chain uses. No navigation, so the
+  /// strategy (basket) is untouched.
+  void _handleChartTapSB(OptionValues option) {
+    if (option.tsym?.contains("|||") ?? false) {
+      ResponsiveSnackBar.showWarning(
+          context, "Symbol not available for trading");
+      return;
+    }
+
+    final marketWatch = ref.read(marketWatchProvider);
+    final depthArgs = DepthInputArgs(
+      exch: option.exch?.toString() ?? '',
+      token: option.token?.toString() ?? '',
+      tsym: option.tsym?.toString() ?? '',
+      instname: '',
+      symbol: option.symbol?.toString() ?? option.tsym?.toString() ?? '',
+      expDate: option.expDate?.toString() ?? '',
+      option: option.option?.toString() ?? '',
+      isOption: true,
+    );
+
+    // Close the option-chain dialog so the chart panel is visible.
+    Navigator.of(context).pop();
+    marketWatch.openOnChartTab = true;
+    marketWatch.scripdepthsize(false);
+    marketWatch.calldepthApis(context, depthArgs, "");
+  }
+
+  /// Add / remove this option to the current watchlist — mirrors the
+  /// watchlist option-chain "Add to Watchlist" action.
+  Future<void> _handleSaveToWatchlistSB(OptionValues option) async {
+    final scripData = ref.read(marketWatchProvider);
+
+    if (scripData.isPreDefWLs == "Yes") {
+      ResponsiveSnackBar.showWarning(
+          context, "This is a pre-defined watchlist that cannot be edited!");
+      return;
+    }
+
+    final scripToken = "${option.exch}|${option.token}";
+    final isCurrentlyInWatchlist = scripData.scrips
+        .any((scrip) => "${scrip['exch']}|${scrip['token']}" == scripToken);
+
+    if (isCurrentlyInWatchlist) {
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, false, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showInfo(context, 'Removed from ${scripData.wlName}');
+      }
+    } else {
+      ref.read(websocketProvider).establishConnection(
+            channelInput: scripToken,
+            task: "d",
+            context: context,
+          );
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, true, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Added to ${scripData.wlName}');
+      }
+    }
   }
 
   Widget _buildBasketTable(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
@@ -7264,7 +7393,8 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                 isDark,
               ),
               _buildMetricItem(context, 'MARGIN', provider.totalMargin, null, isDark),
-              _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
+              // MARGIN BENEFIT hidden
+              // _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
             ],
           ),
           const SizedBox(height: 8),

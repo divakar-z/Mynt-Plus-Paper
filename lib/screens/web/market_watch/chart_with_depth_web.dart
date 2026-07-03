@@ -232,7 +232,12 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       // 1. If we had a previous selection, try to preserve it (clamped to valid range)
       // 2. Otherwise, use Options tab (index 2) if isOption, else Overview (index 0)
       int initialIndex;
-      if (previousIndex > 0 && previousIndex < targetLength) {
+      if (ref.read(marketWatchProvider).openOnChartTab && targetLength > 1) {
+        // A Chart-tab open was requested (watchlist option-chain "Chart" action).
+        // Force the Chart tab (index 1) even across controller recreations that
+        // happen while scrip data loads; the flag is cleared after the panel settles.
+        initialIndex = 1;
+      } else if (previousIndex > 0 && previousIndex < targetLength) {
         // Preserve current tab if it's still valid
         initialIndex = previousIndex;
       } else if (previousIndex >= targetLength) {
@@ -453,6 +458,22 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final hasFundamentalData = mw.fundamentalData != null &&
         mw.fundamentalData?.msg != "no data found";
     _setupTabControllerIfNeeded(hasOptions: hasOptions, hasFundamentalData: hasFundamentalData);
+
+    // If a Chart-tab open was requested (e.g. from the watchlist option-chain
+    // "Chart" action, which opens this panel fresh), switch to the Chart tab
+    // (index 1) once — mirroring the in-panel onChartRequested behaviour — then
+    // consume the flag so it doesn't affect later opens.
+    if (mw.openOnChartTab) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_tabController != null &&
+            _tabController!.length > 1 &&
+            _tabController!.index != 1) {
+          _tabController!.animateTo(1);
+        }
+        ref.read(marketWatchProvider).openOnChartTab = false;
+      });
+    }
 
     return Container(
       color: resolveThemeColor(context,
