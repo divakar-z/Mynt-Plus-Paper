@@ -670,8 +670,8 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
         false, // Set isOptionStike to false to prevent provider's Fluttertoast
       );
       if (success && mounted) {
-        ResponsiveSnackBar.showInfo(
-            context, 'Removed from ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(
+            context, 'Removed from your watchlist "${scripData.wlName}"');
       }
     } else {
       // Add to watchlist - using depth subscription for web
@@ -691,7 +691,7 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
         false, // Set isOptionStike to false to prevent provider's Fluttertoast
       );
       if (success && mounted) {
-        ResponsiveSnackBar.showSuccess(context, 'Added to ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
       }
     }
   }

@@ -291,6 +291,23 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     }
   }
 
+  /// Re-enable any chart iframe left at pointer-events:none by the app's
+  /// dropdown/menu cursor-bleed guard (whose restore can race), so the chart is
+  /// interactive again. Cheap and idempotent — only touches a stuck iframe.
+  void _ensureChartIframesEnabled() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (final f in iframes) {
+        if (f is html.IFrameElement &&
+            f.id.contains('chart-iframe') &&
+            f.style.pointerEvents != 'auto') {
+          f.style.pointerEvents = 'auto';
+          f.style.cursor = '';
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<void> _placeOrderInput(
       BuildContext ctx, GetQuotes? depthData, bool transType) async {
     if (depthData == null) return;
@@ -1213,10 +1230,20 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         // Return placeholder target that the portal follows
         return CompositedTransformTarget(
           link: _chartLayerLink,
-          child: Container(
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            color: Colors.transparent, // Transparent placeholder, chart renders via portal
+          child: MouseRegion(
+            // The chart iframe can be left at pointer-events:none by the app's
+            // dropdown/menu cursor-bleed guard when its restore doesn't fire
+            // (confirmed root cause of the "frozen chart" bug). While disabled,
+            // the iframe passes pointer events through to this placeholder — so
+            // re-enable it the instant the cursor is over the chart. Self-heals
+            // for every chart flow.
+            onEnter: (_) => _ensureChartIframesEnabled(),
+            onHover: (_) => _ensureChartIframesEnabled(),
+            child: Container(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              color: Colors.transparent, // Transparent placeholder, chart renders via portal
+            ),
           ),
         );
       },

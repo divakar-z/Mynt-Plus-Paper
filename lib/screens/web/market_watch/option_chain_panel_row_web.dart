@@ -514,7 +514,7 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
       final success = await scripData.addDelMarketScrip(
           scripData.wlName, scripToken, context, false, true, false, false);
       if (success && mounted) {
-        ResponsiveSnackBar.showInfo(context, 'Removed from ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(context, 'Removed from your watchlist "${scripData.wlName}"');
       }
     } else {
       ref.read(websocketProvider).establishConnection(
@@ -525,7 +525,7 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
       final success = await scripData.addDelMarketScrip(
           scripData.wlName, scripToken, context, true, true, false, false);
       if (success && mounted) {
-        ResponsiveSnackBar.showSuccess(context, 'Added to ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
       }
     }
   }
