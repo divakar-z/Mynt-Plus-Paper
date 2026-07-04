@@ -7,6 +7,7 @@ import '../../../../../res/global_font_web.dart';
 import '../../../../../res/mynt_web_color_styles.dart';
 import '../../../../../sharedWidget/cust_text_formfield.dart';
 import '../../../../../sharedWidget/mynt_loader.dart';
+import '../../../../../sharedWidget/snack_bar.dart';
 
 class RedemptionBottomSheetWeb extends ConsumerStatefulWidget {
   const RedemptionBottomSheetWeb({super.key});
@@ -269,7 +270,7 @@ class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheet
     }
   }
 
-  void _handleRedemption(dynamic holding, MFProvider mfData) {
+  Future<void> _handleRedemption(dynamic holding, MFProvider mfData) async {
     final redemptionQty = _redemptionQtyController.text.trim();
 
     if (redemptionQty.isEmpty) {
@@ -301,7 +302,18 @@ class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheet
 
       if (mfData.checkRedemption(redemptionQty, minRedemptionQty, netUnits, navStr)) {
         final schemeCode = holding.sCHEMECODE ?? 'DefaultScheme';
-        mfData.mfRedemption(context, schemeCode, redemptionQty);
+        await mfData.mfRedemption(context, schemeCode, redemptionQty);
+        // On success mfRedemption pops this sheet; on failure it stays open and
+        // leaves the backend error on redemptionData — surface it as a toast.
+        if (!mounted) return;
+        final res = mfData.redemptionData;
+        if (res?.stat != 'Ok') {
+          final err = res?.emsg;
+          final msg = (err != null && err.isNotEmpty && err != 'null')
+              ? err
+              : 'Unable to process the redemption.';
+          warningMessage(context, "$msg\nPlease contact our support team.");
+        }
       } else {
         _showErrorDialog('Please check the data you have provided');
       }

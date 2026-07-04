@@ -1199,6 +1199,17 @@ class WebSocketProvider extends ChangeNotifier {
           successMessage(_context!, message);
         }
         break;
+      case 'TRIGGER_PENDING':
+        // An SL order rests in TRIGGER_PENDING after BOTH place and modify, and the
+        // websocket can't distinguish them (both end with a TriggerPending report).
+        // So report the status neutrally, like the vendor, instead of "modified".
+        message = '$tranType order for $symbol ($exchange) is Trigger Pending';
+        if (kIsWeb) {
+          ResponsiveSnackBar.showSuccess(_context!, message);
+        } else {
+          successMessage(_context!, message);
+        }
+        break;
       case 'PENDING':
         // Skip PENDING notification to avoid duplicate with OPEN
         break;
@@ -1206,7 +1217,7 @@ class WebSocketProvider extends ChangeNotifier {
         // Skip CANCELED notification - cancel action already shows success snackbar
         break;
       default:
-        // For other statuses like TRIGGER_PENDING, etc.
+        // For other statuses, etc.
         if (status.isNotEmpty) {
           message = '$tranType order for $symbol ($exchange): $status';
           if (kIsWeb) {

@@ -11,6 +11,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+.superpowers/
 
 # IntelliJ related
 *.iml
@@ -46,7 +47,7 @@ app.*.map.json
 /.claude
 /NUL
 /firebase.json
-.firebaserc.playwright-mcp/
-
-
+.firebaserc
 /.playwright-mcp
+
+*.cache

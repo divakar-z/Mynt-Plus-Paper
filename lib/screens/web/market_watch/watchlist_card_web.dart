@@ -33,6 +33,8 @@ import '../../../utils/responsive_snackbar.dart';
 import '../../Mobile/market_watch/new_fundamental_screen.dart';
 import 'set_alert_web.dart';
 import 'watchlist_screen_web.dart' show deleteModeProvider;
+import '../chart_engine/state/active_pane_symbol_request.dart';
+import '../chart_engine/state/chart_engine_store.dart' show ChartScrip;
 
 // Provider to manage expanded watchlist item
 final expandedWatchlistItemProvider =
@@ -212,6 +214,32 @@ class _WatchlistCardWebState extends ConsumerState<WatchlistCardWeb> {
                     // Call depth APIs which handles everything including tab management
                     marketWatch.scripdepthsize(false);
                     await marketWatch.calldepthApis(context, depthArgs, "");
+
+                    // Apply the picked symbol to the chart's CURRENTLY-focused
+                    // pane via the engine (it reads its live `.pane.active` marker
+                    // at apply time) — same robust path as the index strip. This
+                    // is an EXPLICIT "apply now" signal, so it works even when the
+                    // picked symbol equals the details symbol or one already shown
+                    // in another pane (e.g. focus the 2nd pane and pick SENSEX
+                    // while the 1st pane is SENSEX) — cases the embedded-chart
+                    // symbol mirror dedups away. Harmless when no chart is mounted.
+                    if (mounted &&
+                        depthArgs.token.isNotEmpty &&
+                        depthArgs.exch.isNotEmpty) {
+                      ref
+                          .read(activePaneSymbolRequestProvider.notifier)
+                          .request(
+                            ChartScrip(
+                              exch: depthArgs.exch,
+                              token: depthArgs.token,
+                              tsym: depthArgs.tsym,
+                              dispName: depthArgs.tsym,
+                              ls: 1,
+                              ti: 0.05,
+                              instname: depthArgs.instname,
+                            ).toJson(),
+                          );
+                    }
                   } catch (e) {
                   } finally {
                     if (mounted) {
@@ -658,14 +686,11 @@ if (_isExpiryToday(widget.watchListData['expDate'])) ...[
                                                     false,
                                                     false,
                                                     false);
-                                            if (mounted) {
-                                              showResponsiveSuccess(context,
-                                                  'Scrip removed from watchlist');
-                                            }
+                                          
                                           } catch (e) {
                                             if (mounted) {
                                               showResponsiveError(context,
-                                                  'Failed to delete scrip');
+                                                  'Failed to delete stock');
                                             }
                                           } finally {
                                             if (mounted) {

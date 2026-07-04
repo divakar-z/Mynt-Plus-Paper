@@ -28,11 +28,14 @@ import 'my_positions/positions_screen_web.dart';
 import 'watchlist_card_web.dart';
 import 'search_dialog_web.dart';
 import 'edit_scrip_web.dart';
+import '../../../utils/responsive_snackbar.dart';
 import '../../../provider/websocket_provider.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import 'index/index_bottom_sheet_web.dart';
 import 'option_chain_panel_web.dart';
 import '../../../provider/watchlist_oc_provider.dart';
+import '../chart_engine/state/chart_engine_store.dart';
+import '../chart_engine/state/active_pane_symbol_request.dart';
 
 // Provider to manage delete mode state
 final deleteModeProvider =
@@ -868,7 +871,7 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'Add Symbol',
+                          'Add Stock',
                           style: MyntWebTextStyles.body(context,
                             color: resolveThemeColor(context,
                               dark: MyntColors.textPrimary,
@@ -883,7 +886,7 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
 
               const SizedBox(height: 12),
               Text(
-                'No symbol in this watchlist',
+                'No stocks in the watchlist',
                 style: MyntWebTextStyles.bodyMedium(
                   context,
                   color: resolveThemeColor(
@@ -1304,25 +1307,34 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (watchlist.length - preDefWl.length < 10)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                      bottom: 6, right: 10, left: 16),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      MyntIconTextButton(
-                                        label: 'New Watchlist',
-                                        iconAsset: assets.addCircleIcon,
-                                        onPressed: () {
-                                          Navigator.of(context).pop();
-                                          _showCreateWatchlistDialog(
-                                              context, ref);
-                                        },
-                                      ),
-                                    ],
-                                  ),
+                           
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                    bottom: 6, right: 10, left: 16),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    MyntIconTextButton(
+                                      label: 'New Watchlist',
+                                      iconAsset: assets.addCircleIcon,
+                                      onPressed: () {
+                                        final customCount =
+                                            watchlist.length - preDefWl.length;
+                                        if (customCount >= 10) {
+                                          ResponsiveSnackBar.showWarning(
+                                            context,
+                                            "Maximum watchlist limit reached, you can create up to 10 watchlist",
+                                          );
+                                          return;
+                                        }
+                                        Navigator.of(context).pop();
+                                        _showCreateWatchlistDialog(
+                                            context, ref);
+                                      },
+                                    ),
+                                  ],
                                 ),
+                              ),
                               Flexible(
                                 child: ScrollConfiguration(
                                   behavior: const MaterialScrollBehavior()
@@ -1573,6 +1585,8 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
         TextEditingController(text: watchlistName);
     final FocusNode focusNode = FocusNode();
 
+    String? errorText;
+
     // Request focus after dialog animation completes (web autofocus fix)
     // For edit dialog, position cursor at end instead of selecting all text
     Future.delayed(const Duration(milliseconds: 250), () {
@@ -1659,48 +1673,95 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                           ],
                         ),
                       ),
-                      // Content
+                      // Content. Wrapped in StatefulBuilder so the inline
+                      // error state (empty-name validation) can live within
+                      // the dialog without bubbling up to the parent screen.
                       Flexible(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              MyntFormTextField(
-                                controller: controller,
-                                focusNode: focusNode,
-                                placeholder: 'Enter watchlist name',
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.allow(
-                                    RegExp(r'[a-zA-Z0-9 ]'),
+                        child: StatefulBuilder(
+                          builder: (context, setDialogState) {
+                            void clearError() {
+                              if (errorText != null) {
+                                setDialogState(() => errorText = null);
+                              }
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  MyntFormTextField(
+                                    controller: controller,
+                                    focusNode: focusNode,
+                                    placeholder: 'Enter watchlist name',
+                                    inputFormatters: [
+                                      FilteringTextInputFormatter.allow(
+                                        RegExp(r'[a-zA-Z0-9 ]'),
+                                      ),
+                                    ],
+                                    onChanged: (_) => clearError(),
+                                  ),
+                                  if (errorText != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      errorText!,
+                                      style: MyntWebTextStyles.para(
+                                        context,
+                                        color: resolveThemeColor(
+                                          context,
+                                          dark: MyntColors.lossDark,
+                                          light: MyntColors.loss,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 24),
+                                  MyntPrimaryButton(
+                                    size: MyntButtonSize.large,
+                                    label: 'Save',
+                                    isFullWidth: true,
+                                    onPressed: () async {
+                                      final newName = controller.text.trim();
+                                      if (newName.isEmpty) {
+                                        // Client-side validation → inline
+                                        // red error per the established
+                                        // error-display pattern (toasts are
+                                        // reserved for backend errors).
+                                        setDialogState(() {
+                                          errorText =
+                                              'Watchlist name cannot be empty';
+                                        });
+                                        return;
+                                      }
+                                      if (newName != watchlistName) {
+                                        // Capture the screen's context BEFORE popping
+                                        // the dialog. The dialog's `context` becomes
+                                        // stale after pop, and passing it into the
+                                        // async provider call hits the Navigator
+                                        // _debugLocked assertion during finalizeTree.
+                                        final screenContext = this.context;
+                                        Navigator.of(context).pop();
+                                        if (!mounted) return;
+                                        await _handleWatchlistRename(
+                                            watchlistName,
+                                            newName,
+                                            ref,
+                                            screenContext);
+                                      } else {
+                                        // Save clicked without renaming — no
+                                        // API call (nothing changed at the
+                                        // broker). Close the dialog silently;
+                                        // a "renamed successfully" toast would
+                                        // be misleading because nothing was
+                                        // actually renamed.
+                                        Navigator.of(context).pop();
+                                      }
+                                    },
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 24),
-                              MyntPrimaryButton(
-                                size: MyntButtonSize.large,
-                                label: 'Save',
-                                isFullWidth: true,
-                                onPressed: () async {
-                                  final newName = controller.text.trim();
-                                  if (newName.isNotEmpty &&
-                                      newName != watchlistName) {
-                                    // Capture the screen's context BEFORE popping
-                                    // the dialog. The dialog's `context` becomes
-                                    // stale after pop, and passing it into the
-                                    // async provider call hits the Navigator
-                                    // _debugLocked assertion during finalizeTree.
-                                    final screenContext = this.context;
-                                    Navigator.of(context).pop();
-                                    if (!mounted) return;
-                                    await _handleWatchlistRename(watchlistName,
-                                        newName, ref, screenContext);
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
                       ),
                     ],
@@ -1877,6 +1938,8 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
   void _showCreateWatchlistDialog(BuildContext context, WidgetRef ref) {
     final TextEditingController controller = TextEditingController();
     final FocusNode focusNode = FocusNode();
+  
+    String? errorText;
 
     // Request focus after dialog animation completes (web autofocus fix)
     Future.delayed(const Duration(milliseconds: 250), () {
@@ -1954,39 +2017,74 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                           ],
                         ),
                       ),
-                      // Content
+                      // Content. Wrapped in StatefulBuilder so the inline
+                      // error state (empty-name validation) can live within
+                      // the dialog without bubbling up to the parent screen.
                       Flexible(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              MyntFormTextField(
-                                controller: controller,
-                                focusNode: focusNode,
-                                placeholder: 'Enter watchlist name',
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.allow(
-                                    RegExp(r'[a-zA-Z0-9 ]'),
+                        child: StatefulBuilder(
+                          builder: (context, setDialogState) {
+                            void clearError() {
+                              if (errorText != null) {
+                                setDialogState(() => errorText = null);
+                              }
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  MyntFormTextField(
+                                    controller: controller,
+                                    focusNode: focusNode,
+                                    placeholder: 'Enter watchlist name',
+                                    inputFormatters: [
+                                      FilteringTextInputFormatter.allow(
+                                        RegExp(r'[a-zA-Z0-9 ]'),
+                                      ),
+                                    ],
+                                    onChanged: (_) => clearError(),
+                                  ),
+                                  if (errorText != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      errorText!,
+                                      style: MyntWebTextStyles.para(
+                                        context,
+                                        color: resolveThemeColor(
+                                          context,
+                                          dark: MyntColors.lossDark,
+                                          light: MyntColors.loss,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 24),
+                                  MyntPrimaryButton(
+                                    size: MyntButtonSize.large,
+                                    label: 'Create',
+                                    isFullWidth: true,
+                                    onPressed: () async {
+                                      final name = controller.text.trim();
+                                      if (name.isEmpty) {
+                                        // Client-side validation → inline
+                                        // red error per the established
+                                        // error-display pattern (toasts are
+                                        // reserved for backend errors).
+                                        setDialogState(() {
+                                          errorText =
+                                              'Watchlist name cannot be empty';
+                                        });
+                                        return;
+                                      }
+                                      Navigator.of(context).pop();
+                                      await _handleWatchlistCreate(name, ref);
+                                    },
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 24),
-                              MyntPrimaryButton(
-                                size: MyntButtonSize.large,
-                                label: 'Create',
-                                isFullWidth: true,
-                                onPressed: () async {
-                                  final name = controller.text.trim();
-                                  if (name.isNotEmpty) {
-                                    Navigator.of(context).pop();
-                                    await _handleWatchlistCreate(name, ref);
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
                       ),
                     ],
@@ -2169,6 +2267,28 @@ class _WatchlistIndexSlotWebState
       // Call depth APIs with the safely constructed arguments
       if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
         await widget.marketWatch.calldepthApis(context, depthArgs, "");
+      }
+
+      // Apply the picked symbol to the chart's CURRENTLY-focused pane. Routed
+      // through the engine (which reads its live `.pane.active` marker at apply
+      // time) rather than Flutter's `activePaneIndex`, so a pick reliably lands
+      // on the focused pane — including re-picking a symbol already shown in
+      // another pane. Harmless when no chart/iframe is mounted (the shell's
+      // listener no-ops). ls/ti unknown here; the engine's GetSecurityInfo
+      // fetch backfills the real lot/tick.
+      if (!mounted) return;
+      if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
+        ref.read(activePaneSymbolRequestProvider.notifier).request(
+              ChartScrip(
+                exch: depthArgs.exch,
+                token: depthArgs.token,
+                tsym: depthArgs.tsym,
+                dispName: depthArgs.tsym,
+                ls: 1,
+                ti: 0.05,
+                instname: depthArgs.instname,
+              ).toJson(),
+            );
       }
     } catch (e) {
     }

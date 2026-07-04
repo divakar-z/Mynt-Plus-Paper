@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -24,6 +25,7 @@ import '../../../../res/responsive_extensions.dart';
 import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_search_fields_web.dart';
+import '../../../../sharedWidget/custom_text_form_field.dart' show UpperCaseTextFormatter;
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../sharedWidget/snack_bar.dart';
@@ -490,6 +492,14 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 controller: _searchController,
                 placeholder: context.isMobile ? 'Search' : 'Search positions',
                 leadingIcon: assets.searchIcon,
+                inputFormatters: [
+                  UpperCaseTextFormatter(),
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9& \-]')),
+                  TextInputFormatter.withFunction((oldValue, newValue) {
+                    if (newValue.text.startsWith(' ')) return oldValue;
+                    return newValue;
+                  }),
+                ],
                 onClear: () => _searchController.clear(),
               ),
             ),
@@ -632,6 +642,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 _handleManualRefresh();
               },
               theme: theme,
+              tooltip: 'Refresh',
             ),
             SizedBox(width: context.responsive<double>(mobile: 4, tablet: 6, desktop: 8)),
             // Groups toggle icon - show posgrp icon to navigate to groups
@@ -639,6 +650,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           ],
           // Show Create Group button and close icon when Position Groups view is shown
           if (_showGroupsView) ...[
+            _buildGroupFilterButton(theme, positionBook),
+            SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             MyntIconTextButton(
               label: 'New Group',
               // iconAsset: assets.addCircleIcon,
@@ -705,6 +718,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     required IconData icon,
     required VoidCallback onPressed,
     required ThemesProvider theme,
+    String? tooltip,
   }) {
     final buttonSize = context.responsive<double>(
       mobile: 32,
@@ -717,7 +731,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
       desktop: 28,
     );
 
-    return Container(
+    final button = Container(
       width: buttonSize,
       height: buttonSize,
       decoration: BoxDecoration(
@@ -742,6 +756,9 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
         ),
       ),
     );
+
+    if (tooltip == null) return button;
+    return Tooltip(message: tooltip, child: button);
   }
 
   /// PiP toggle icon — reflects active state via pipVisibilityNotifier.
@@ -768,6 +785,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             );
           },
           theme: theme,
+          tooltip: 'Picture in Picture',
         );
       },
     );
@@ -889,29 +907,193 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
 
     return Builder(
       builder: (buttonContext) {
-        return MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => _showFilterPopup(buttonContext, theme),
-            child: Container(
-              width: buttonSize,
-              height: buttonSize,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(
-                child: SvgPicture.asset(
-                  assets.searchFilter,
-                  width: iconSize,
-                  colorFilter: ColorFilter.mode(
-                    resolveThemeColor(
-                      context,
-                      dark: MyntColors.iconDark,
-                      light: MyntColors.icon,
+        return Tooltip(
+          message: 'Filter',
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => _showFilterPopup(buttonContext, theme),
+              child: Container(
+                width: buttonSize,
+                height: buttonSize,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: SvgPicture.asset(
+                    assets.searchFilter,
+                    width: iconSize,
+                    colorFilter: ColorFilter.mode(
+                      resolveThemeColor(
+                        context,
+                        dark: MyntColors.iconDark,
+                        light: MyntColors.icon,
+                      ),
+                      BlendMode.srcIn,
                     ),
-                    BlendMode.srcIn,
                   ),
                 ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Filter dropdown for position groups: underlying vs underlying + expiry
+  Widget _buildGroupFilterButton(
+      ThemesProvider theme, PortfolioProvider positionBook) {
+    final buttonSize = context.responsive<double>(
+      mobile: 32,
+      tablet: 36,
+      desktop: 40,
+    );
+    final iconSize = context.responsive<double>(
+      mobile: 16,
+      tablet: 18,
+      desktop: 20,
+    );
+
+    return Builder(
+      builder: (buttonContext) {
+        return Tooltip(
+          message: positionBook.positionGroupFilter == 'underlying_expiry'
+              ? 'Group: Underlying + Expiry'
+              : 'Group: Underlying',
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => _showGroupFilterPopup(buttonContext, theme),
+              child: Container(
+                width: buttonSize,
+                height: buttonSize,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: SvgPicture.asset(
+                    assets.searchFilter,
+                    width: iconSize,
+                    colorFilter: ColorFilter.mode(
+                      resolveThemeColor(
+                        context,
+                        dark: MyntColors.iconDark,
+                        light: MyntColors.icon,
+                      ),
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showGroupFilterPopup(BuildContext context, ThemesProvider theme) {
+    shadcn.showPopover(
+      context: context,
+      alignment: Alignment.topCenter,
+      offset: const Offset(0, 8),
+      overlayBarrier: shadcn.OverlayBarrier(
+        borderRadius: shadcn.Theme.of(context).borderRadiusLg,
+      ),
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: shadcn.Theme.of(context).borderRadiusLg,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 12,
+                spreadRadius: 2,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: shadcn.ModalContainer(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              width: 200,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildGroupFilterMenuItem('Underlying', 'underlying', theme),
+                  _buildGroupFilterMenuItem(
+                      'Underlying + Expiry', 'underlying_expiry', theme),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGroupFilterMenuItem(
+      String label, String value, ThemesProvider theme) {
+    return Consumer(
+      builder: (context, ref, _) {
+        final currentFilter = ref
+            .watch(portfolioProvider.select((p) => p.positionGroupFilter));
+        final isSelected = currentFilter == value;
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              ref.read(portfolioProvider).setPositionGroupFilter(value);
+              shadcn.closeOverlay(context);
+            },
+            splashColor: resolveThemeColor(
+              context,
+              dark: MyntColors.rippleDark,
+              light: MyntColors.rippleLight,
+            ),
+            highlightColor: resolveThemeColor(
+              context,
+              dark: MyntColors.highlightDark,
+              light: MyntColors.highlightLight,
+            ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(4),
+                color: isSelected
+                    ? resolveThemeColor(
+                        context,
+                        dark: MyntColors.primaryDark.withOpacity(0.12),
+                        light: const Color(0xFFE8F0FE),
+                      )
+                    : Colors.transparent,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: MyntWebTextStyles.body(
+                        context,
+                        fontWeight:
+                            isSelected ? MyntFonts.semiBold : MyntFonts.medium,
+                        color: isSelected
+                            ? resolveThemeColor(
+                                context,
+                                dark: MyntColors.primaryDark,
+                                light: MyntColors.primary,
+                              )
+                            : resolveThemeColor(
+                                context,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary,
+                              ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

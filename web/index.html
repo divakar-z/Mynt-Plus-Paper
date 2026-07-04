@@ -221,8 +221,10 @@
       }
     });
   </script>
-  <!-- Digio eSign SDK -->
-  <script src="https://app.digio.in/sdk/v11/digio.js"></script>
+  <!-- Digio eSign SDK is lazy-loaded on demand by lib/utils/digio_esign_web.dart
+       (only when the user actually starts an eSign flow). Loading it eagerly here
+       blocked the initial render on a third-party origin, so it is intentionally
+       NOT included on the critical path. -->
 </head>
 <body>
   <!-- MYNT splash shown during initialization -->

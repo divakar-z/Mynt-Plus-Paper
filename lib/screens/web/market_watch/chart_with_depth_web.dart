@@ -9,7 +9,9 @@ import 'package:mynt_plus/provider/user_profile_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/screens/web/chart/web_chart_manager.dart';
 import 'package:mynt_plus/screens/web/market_watch/scrip_depth_info_web.dart';
+import 'package:mynt_plus/screens/web/market_watch/state/trade_from_chart_mode_provider.dart';
 import 'package:mynt_plus/screens/web/market_watch/tv_chart/webview_chart.dart';
+import 'package:mynt_plus/screens/web/market_watch/widgets/embedded_chart_view.dart';
 import 'package:mynt_plus/screens/web/market_watch/options/option_chain_ss_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/search_dialog_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/set_alert_web.dart';
@@ -230,7 +232,12 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       // 1. If we had a previous selection, try to preserve it (clamped to valid range)
       // 2. Otherwise, use Options tab (index 2) if isOption, else Overview (index 0)
       int initialIndex;
-      if (previousIndex > 0 && previousIndex < targetLength) {
+      if (ref.read(marketWatchProvider).openOnChartTab && targetLength > 1) {
+        // A Chart-tab open was requested (watchlist option-chain "Chart" action).
+        // Force the Chart tab (index 1) even across controller recreations that
+        // happen while scrip data loads; the flag is cleared after the panel settles.
+        initialIndex = 1;
+      } else if (previousIndex > 0 && previousIndex < targetLength) {
         // Preserve current tab if it's still valid
         initialIndex = previousIndex;
       } else if (previousIndex >= targetLength) {
@@ -452,6 +459,22 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         mw.fundamentalData?.msg != "no data found";
     _setupTabControllerIfNeeded(hasOptions: hasOptions, hasFundamentalData: hasFundamentalData);
 
+    // If a Chart-tab open was requested (e.g. from the watchlist option-chain
+    // "Chart" action, which opens this panel fresh), switch to the Chart tab
+    // (index 1) once — mirroring the in-panel onChartRequested behaviour — then
+    // consume the flag so it doesn't affect later opens.
+    if (mw.openOnChartTab) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_tabController != null &&
+            _tabController!.length > 1 &&
+            _tabController!.index != 1) {
+          _tabController!.animateTo(1);
+        }
+        ref.read(marketWatchProvider).openOnChartTab = false;
+      });
+    }
+
     return Container(
       color: resolveThemeColor(context,
           dark: MyntColors.backgroundColorDark,
@@ -618,7 +641,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             ),
                             const SizedBox(width: 8),
                           ],
-                          // Sidebar toggle icon
+                          // Sidebar toggle icon — always visible. The depth
+                          // panel is user-controlled and stays open/closed
+                          // independent of the Trade-from-Chart mode.
                           Material(
                             color: Colors.transparent,
                             child: InkWell(
@@ -1150,6 +1175,19 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     }
 
     // Overview (index 0) and Chart (index 1) tabs - show chart via persistent portal
+    // UNLESS the user has toggled "Trade from Chart" on, in which case the
+    // in-house chart engine replaces the TradingView portal here.
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider);
+    if (tradeFromChart) {
+      // Hide the TradingView portal so it doesn't bleed through behind the
+      // embedded iframe. The portal stays mounted (its state persists) —
+      // we just flip its visibility flag.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(userProfileProvider).hideInlineChart();
+      });
+      return EmbeddedChartView(wlValue: widget.wlValue);
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         // Set up the portal target and update symbol
@@ -1194,6 +1232,12 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final theme = shadcn.Theme.of(context);
     final isDark = isDarkMode(context);
 
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider);
+    // The Trade from Chart pill only makes sense when the chart area is
+    // actually visible — Overview (0) and Chart (1) tabs. Hidden on
+    // Options / Stock Report tabs where the chart isn't shown.
+    final showTradeFromChartPill =
+        _selectedTabIndex == 0 || _selectedTabIndex == 1;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1235,6 +1279,75 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
             ),
           ),
           if (index < tabs.length - 1) const SizedBox(width: 8),
+        ],
+        // "Trade from Chart" toggle pill — swaps the chart area between
+        // the TradingView portal (OFF, default) and our in-house chart
+        // engine (ON). Persisted via SharedPreferences per session. Only
+        // visible on Overview/Chart tabs (chart-bearing tabs).
+        if (showTradeFromChartPill) ...[
+          const SizedBox(width: 8),
+          MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () =>
+                ref.read(tradeFromChartModeProvider.notifier).toggle(),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: tradeFromChart
+                      ? (isDark
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.black.withValues(alpha: 0.05))
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: null,
+               ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.candlestick_chart,
+                    size: 14,
+                    color: tradeFromChart
+                          ? theme.colorScheme.foreground
+                          : theme.colorScheme.mutedForeground,
+                    ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Trade from Chart',
+                    style: MyntWebTextStyles.body(
+                      context,
+                        fontWeight: tradeFromChart
+                            ? MyntFonts.semiBold
+                            : MyntFonts.medium,
+                      ).copyWith(
+                        color: tradeFromChart
+                            ? theme.colorScheme.foreground
+                            : theme.colorScheme.mutedForeground,
+                      ),
+                  ),
+                  const SizedBox(width: 4),
+                  Transform.translate(
+                    offset: const Offset(0, -6),
+                    child: Text(
+                      'Beta',
+                      style: MyntWebTextStyles.caption(
+                        context,
+                        color: resolveThemeColor(
+                          context,
+                          dark: MyntColors.primaryDark,
+                          light: MyntColors.primary,
+                        ),
+                        fontWeight: MyntFonts.semiBold,
+                      ).copyWith(fontSize: 10),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
         ],
       ],
     );

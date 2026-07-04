@@ -15,6 +15,24 @@ class Preferences {
     await _prefInstance?.remove(_clientSession);
   }
 
+  /// Clears the OAuth-only session. Leaves the main web session intact.
+  Future clearOauthSession() async {
+    await _prefInstance?.remove(_oauthSession);
+  }
+
+  /// Clears the logged-in user's identity + session keys (the "Client Details"
+  /// group) while leaving device, theme, and filter prefs intact. Used by the
+  /// URL token-based auto-login so a new user can never inherit the previous
+  /// user's session, profile token, or mobile number.
+  Future clearUserSession() async {
+    await _prefInstance?.remove(_clientId);
+    await _prefInstance?.remove(_clientSession);
+    await _prefInstance?.remove(_apiToken);
+    await _prefInstance?.remove(_clientMob);
+    await _prefInstance?.remove(_clientName);
+    await _prefInstance?.remove(_clientList);
+  }
+
   // QR session invalidation — stores the device UUID of the currently active
   // QR login session so we can tell the backend to invalidate it when the
   // user refreshes the browser, closes the tab, or re-enters the QR screen
@@ -47,6 +65,22 @@ class Preferences {
     await _prefInstance!.setString(_userAppTheme, theme);
   }
 
+  Future setChartEngineSession(String json) async {
+    await _prefInstance!.setString(_chartEngineSession, json);
+  }
+
+  String? getChartEngineSession() =>
+      _prefInstance?.getString(_chartEngineSession);
+
+  // Generic accessors used by chart-engine modules that own their own keys
+  // (e.g. chartEngineOrderDefaultsV1). Avoid adding bespoke wrappers per key
+  // when the data shape is opaque JSON owned by the calling notifier.
+  SharedPreferences? get sharedPreferences => _prefInstance;
+
+  Future<void> setString(String key, String value) async {
+    await _prefInstance!.setString(key, value);
+  }
+
   Future setDeviceName(String deviceName) async {
     await _prefInstance!.setString(_deviceName, deviceName);
   }
@@ -59,6 +93,10 @@ class Preferences {
       await _prefInstance!.setString(_clientSession, session);
   Future setApiToken(String session) async =>
       await _prefInstance!.setString(_apiToken, session);
+  // OAuth session — stored separately so the OAuth flow never overwrites the
+  // main web session (clientSession).
+  Future setOauthSession(String session) async =>
+      await _prefInstance!.setString(_oauthSession, session);
   Future setClientName(String name) async =>
       await _prefInstance!.setString(_clientName, name);
   Future setImei(String val) async =>
@@ -312,6 +350,7 @@ class Preferences {
   String? get clientId => _prefInstance?.getString(_clientId) ?? "";
   String? get clientSession => _prefInstance?.getString(_clientSession) ?? "";
   String? get token => _prefInstance?.getString(_apiToken) ?? "";
+  String? get oauthSession => _prefInstance?.getString(_oauthSession) ?? "";
   String? get clientMob => _prefInstance?.getString(_clientMob) ?? "";
   String? get clientName => _prefInstance?.getString(_clientName) ?? "";
 
@@ -565,6 +604,10 @@ const String _clientId = 'clientId';
 const String _clientSession = 'clientSession';
 const String _apiToken = 'apiToken';
 
+// OAuth session — kept separate from the main web session so the OAuth flow
+// never overwrites clientId / clientSession.
+const String _oauthSession = 'oauthSession';
+
 const String _clientMob = 'clientMob';
 const String _clientName = 'clientName';
 const String _clientList = 'clientList';
@@ -669,3 +712,6 @@ const String _scalperDefaultSymbol = "scalperDefaultSymbol";
 const String _scalperMktProtEnabled = "scalperMktProtEnabled";
 const String _scalperMktProtPoints = "scalperMktProtPoints";
 const String _scalperPosFilter = "scalperPosFilter";
+
+//// CHART ENGINE SESSION
+const String _chartEngineSession = 'chartEngineSessionV1';

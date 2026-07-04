@@ -1255,7 +1255,8 @@ class LDProvider extends DefaultChangeNotifier {
           // Search for matching order details
           for (var j = 0; j < _orderdetailsdatacop!.msg!.length; j++) {
             final data2 = _orderdetailsdatacop!.msg![j];
-            if (data.symbol == data2.symbol) {
+            if (data.symbol == data2.symbol &&
+                data.issueType == data2.series) {
               // Match found - set order details
               data.orderstatus = data2.status;
               data.bidqty = data2.bidQuan;

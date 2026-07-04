@@ -14,6 +14,8 @@ import 'package:mynt_plus/screens/web/market_watch/tv_chart/webview_chart.dart';
 // import 'package:mynt_plus/screens/web/chart/web_chart_overlay.dart'; // Commented out - using panel chart only
 import 'package:mynt_plus/screens/web/insta_options/insta_options_shell.dart';
 import 'package:mynt_plus/screens/web/ordersbook/order_book_screen_web.dart';
+import 'package:mynt_plus/screens/web/scanner/scanner_shell_screen.dart';
+import 'package:mynt_plus/screens/web/orderflow/orderflow_shell_screen.dart';
 import 'package:mynt_plus/screens/web/funds/secure_fund_web.dart';
 import '../../../locator/constant.dart';
 import '../../../locator/locator.dart';
@@ -473,6 +475,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return const SizedBox.shrink(); // Strategy Builder opens as separate route
       case ScreenType.scalper:
         return const ScalperScreenWeb(embedded: true);
+      case ScreenType.charts:
+        return const SizedBox.shrink();
       case ScreenType.tradingViewWebHook:
         return const WebHookTradingViewScreen();
       case ScreenType.basketDashboard:
@@ -520,6 +524,10 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: () => _showScreenInWindow(ScreenType.myAccount));
       case ScreenType.instaOptions:
         return const InstaOptionsShell();
+      case ScreenType.scanner:
+        return const ScannerShellScreen();
+      case ScreenType.orderflow:
+        return const OrderflowShellScreen();
     }
   }
 
@@ -585,6 +593,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Strategy Builder';
       case ScreenType.scalper:
         return 'Scalper';
+      case ScreenType.charts:
+        return 'Charts';
       case ScreenType.tradingViewWebHook:
         return 'WebHook';
       case ScreenType.basketDashboard:
@@ -631,6 +641,10 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Closure';
       case ScreenType.instaOptions:
         return 'InstaOptions Analytics';
+      case ScreenType.scanner:
+        return 'Scanner';
+      case ScreenType.orderflow:
+        return 'Orderflow';
     }
   }
 

@@ -1556,14 +1556,14 @@ class IPOProvider extends DefaultChangeNotifier {
 
   Future fetchIpoPreClose() async {
     try {
-      togglefundLoadingOn(true);
+      // togglefundLoadingOn(true);
       _ipoPreClose = await api.fetchIpoPreCloseApi();
       // print("object :::: ${_ipoPreClose}");
       notifyListeners();
       return _ipoPreClose;
     } catch (e) {
-    } finally {
-      togglefundLoadingOn(false);
+    // } finally {
+      // togglefundLoadingOn(false);
     }
   }
 

@@ -932,11 +932,15 @@ class ProfileProvider extends DefaultChangeNotifier {
 
   Future<dynamic> closeaccfinalspro(String dpid, String boid, String filepath,
       String reason, fulldataprf, bankdata,
-      {bool hasHoldings = false}) async {
+      {bool hasHoldings = false,
+      Uint8List? fileBytes,
+      String? fileName}) async {
     try {
       dynamic chackaccClosureResp = await api.acccloserapi(
           dpid, boid, filepath, reason, fulldataprf, bankdata,
-          hasHoldings: hasHoldings);
+          hasHoldings: hasHoldings,
+          fileBytes: fileBytes,
+          fileName: fileName);
       notifyListeners();
       return chackaccClosureResp;
     } catch (e) {

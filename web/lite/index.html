@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="Sign in with MYNT" />
+<title>Sign in with MYNT</title>
+<link rel="icon" href="/favicon.png" />
+<script>
+  /* Theme parity with the Flutter app. The app does NOT follow the OS theme: it
+     reads the saved `userAppTheme` preference (shared_preferences-web key
+     `flutter.userAppTheme`, a JSON-encoded string) and defaults to Light when it
+     is anything other than "Dark" (incl. "Light", "System Default", or absent).
+     Mirror that here, and set it before first paint so there is no theme flash. */
+  (function(){
+    try {
+      var raw = localStorage.getItem('flutter.userAppTheme');
+      var v = raw; try { v = JSON.parse(raw); } catch(e){}
+      document.documentElement.setAttribute('data-theme', v === 'Dark' ? 'dark' : 'light');
+    } catch(e) {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  })();
+</script>
+<style>
+  /* Geist, async (font-display:swap) so paint never blocks on fonts */
+  @font-face{font-family:'Geist';font-weight:400;font-display:swap;src:url('/assets/fonts/Geist/Geist-Regular.ttf') format('truetype')}
+  @font-face{font-family:'Geist';font-weight:500;font-display:swap;src:url('/assets/fonts/Geist/Geist-Medium.ttf') format('truetype')}
+  @font-face{font-family:'Geist';font-weight:600;font-display:swap;src:url('/assets/fonts/Geist/Geist-SemiBold.ttf') format('truetype')}
+  @font-face{font-family:'Geist';font-weight:700;font-display:swap;src:url('/assets/fonts/Geist/Geist-Bold.ttf') format('truetype')}
+
+  :root{
+    --fs:1;
+    --primary:#0037B7; --secondary:#0052CC; --btn:#0037B7; --focus:#0037B7;
+    --bg:#FFFFFF; --panel:#FFFFFF; --inner:#FFFFFF; --inner-border:#E0E0E0;
+    --divider:#DDE2E7; --text:#121212; --text2:#4A4A4A; --loss:#FF1717; --white:#FFFFFF;
+  }
+  /* No prefers-color-scheme rule on purpose: the Flutter app ignores the OS
+     theme, so the lite page must too. Theme is driven solely by the data-theme
+     attribute, set from the saved userAppTheme preference by the head script.
+     With no attribute (JS disabled) the base :root above => Light, matching the
+     Flutter default. */
+  :root[data-theme=dark]{
+    --primary:#58A6FF; --secondary:#388BFD; --btn:#0052CC; --focus:#58A6FF;
+    --bg:#0D0F11; --panel:#161B22; --inner:#0D0F11; --inner-border:#30363D;
+    --divider:#30363D; --text:#C9D1D9; --text2:#8B949E; --loss:#F85149; --white:#FFFFFF;
+  }
+  :root[data-theme=light]{
+    --primary:#0037B7; --secondary:#0052CC; --btn:#0037B7; --focus:#0037B7;
+    --bg:#FFFFFF; --panel:#FFFFFF; --inner:#FFFFFF; --inner-border:#E0E0E0;
+    --divider:#DDE2E7; --text:#121212; --text2:#4A4A4A; --loss:#FF1717; --white:#FFFFFF;
+  }
+  /* fontScaleFactor: <1000 -> .8, 1000-1299 -> .9, >=1300 -> 1.0 */
+  @media (max-width:1299px){:root{--fs:.9}}
+  @media (max-width:999px){:root{--fs:.8}}
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;min-height:100%}
+  body{font-family:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  .w4{font-weight:400}.w5{font-weight:500}.w6{font-weight:600}.w7{font-weight:700}
+
+  .wrap{min-height:100vh;display:flex;align-items:flex-start;justify-content:center}
+  .panel{position:relative;width:min(600px,95vw);min-height:calc(100vh - 40px);margin:20px auto;background:var(--panel);display:flex;flex-direction:column}
+  .inner{position:relative;flex:1;min-height:calc(100vh - 40px);padding:20px;background:var(--inner);border:.5px solid var(--inner-border);display:flex;flex-direction:column}
+  .logo{height:calc(40px*var(--fs))}.logo svg{height:100%;width:auto;display:block}
+  .h-title{font-size:calc(22px*var(--fs));font-weight:700;color:var(--text);margin:24px 0 0}
+  @media(max-width:600px){.h-title{font-size:calc(18px*var(--fs))}}
+  .spacer{height:140px}
+
+  .field{margin-top:28px}
+  .field .lbl{display:block;color:var(--text2);font-size:calc(14px*var(--fs));margin-bottom:4px}
+  .inp{display:flex;align-items:center;border-bottom:1px solid var(--divider)}
+  .inp:focus-within{border-bottom:1px solid var(--focus)}
+  .inp input{flex:1;border:none;outline:none;background:transparent;color:var(--text);font-size:calc(16px*var(--fs));font-weight:500;padding:8px 0;font-family:inherit}
+  .inp .suffix{display:flex;align-items:center;color:var(--text2);font-size:calc(10px*var(--fs));text-align:right;white-space:nowrap}
+  .inp button.icobtn{border:none;background:transparent;cursor:pointer;color:var(--text2);display:flex;align-items:center;padding:6px}
+  .inp .resend{cursor:pointer;color:var(--secondary);font-weight:700;font-size:calc(10px*var(--fs))}
+  .inp .resend.disabled{cursor:default;color:var(--text2);font-weight:500;line-height:1.3;text-align:right}
+  .err{color:var(--loss);font-size:calc(12px*var(--fs));font-weight:500;margin-top:5px;min-height:14px}
+
+  .btn{height:48px;border:none;border-radius:6px;background:var(--btn);color:var(--white);font-size:calc(16px*var(--fs));font-weight:700;cursor:pointer;width:100%;font-family:inherit;margin-top:32px;display:flex;align-items:center;justify-content:center}
+  .btn[disabled]{opacity:.6;cursor:not-allowed}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-top:24px}
+  .link{color:var(--secondary);font-weight:700;cursor:pointer;background:none;border:none;font-family:inherit;font-size:calc(12px*var(--fs));display:inline-flex;align-items:center;gap:4px}
+  .link.body{font-size:calc(14px*var(--fs))}
+  .signup{text-align:center;margin-top:auto;padding-top:64px;font-size:calc(14px*var(--fs));color:var(--text)}
+  .signup a{color:var(--secondary);font-weight:700;text-decoration:none}
+  .foot{position:absolute;left:0;right:0;bottom:0;padding:20px 0;text-align:center}
+  .foot .co{font-size:calc(14px*var(--fs));font-weight:700;color:var(--text)}
+  .foot .reg{font-size:calc(12px*var(--fs));font-weight:500;color:var(--text2);line-height:1.5;margin:8px 16px 0}
+
+  .idcap .c1{font-size:calc(10px*var(--fs));color:var(--text2)}
+  .idcap .c2{font-size:calc(16px*var(--fs));font-weight:500;color:var(--text)}
+  .idcap .change{font-size:calc(14px*var(--fs));font-weight:600;color:var(--secondary);cursor:pointer}
+  .divider{height:1px;background:var(--divider);margin:12px 0}
+
+  .saved{display:flex;flex-direction:column;align-items:center;margin-top:8px}
+  .avatar{width:100px;height:100px;border-radius:50%;background:var(--bg);border:1.5px solid var(--primary);display:flex;align-items:center;justify-content:center;color:var(--primary);font-size:calc(20px*var(--fs));font-weight:700}
+  .saved .nm{font-size:calc(18px*var(--fs));font-weight:700;color:var(--text);margin-top:16px}
+  .saved .cid{font-size:calc(16px*var(--fs));font-weight:600;color:var(--text);margin-top:6px}
+
+  .consent-wrap{max-width:560px;width:100%;padding:48px 24px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--inner-border);border-radius:5px;padding:36px 40px}
+  .card.restricted{padding:28px 32px}
+  .card .clogo{display:flex;justify-content:center;margin-bottom:24px}.card .clogo svg{height:44px;width:auto}
+  .card h2{font-size:calc(18px*var(--fs));font-weight:700;text-align:center;margin:0;color:var(--text)}
+  .card .csub{font-size:calc(14px*var(--fs));color:var(--text2);text-align:center;margin:6px 0 0}
+  .card .allow{font-size:calc(16px*var(--fs));font-weight:700;margin:32px 0 14px;color:var(--text)}
+  .bullet{display:flex;align-items:flex-start;padding:4px 0;font-size:calc(14px*var(--fs));color:var(--text)}
+  .bullet .dot{width:5px;height:5px;border-radius:50%;background:var(--text);margin:8px 12px 0 8px;flex:none}
+  .authbtn{height:48px;border:none;border-radius:8px;background:#0037B7;color:#fff;font-size:calc(16px*var(--fs));font-weight:700;cursor:pointer;width:100%;margin-top:28px;font-family:inherit}
+  .outbtn{height:44px;border:1px solid var(--primary);border-radius:6px;background:transparent;color:var(--primary);font-size:calc(16px*var(--fs));font-weight:600;cursor:pointer;width:100%;margin-top:24px;font-family:inherit}
+
+  .qrbox{width:295px;height:295px;margin:16px auto;display:flex;align-items:center;justify-content:center;position:relative}
+  .qrbox img{width:295px;height:295px;background:#fff}
+  .qr-expired{width:96px;height:96px;border-radius:50%;border:1px solid var(--divider);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);font-size:40px}
+  .qr-cap{text-align:center;color:var(--text2);font-size:calc(14px*var(--fs))}
+  .qr-exp{text-align:center;color:var(--text);font-weight:600;font-size:calc(14px*var(--fs));margin-top:8px}
+
+  .center{display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .spinner{width:34px;height:34px;border:4px solid var(--divider);border-top-color:var(--primary);border-radius:50%;animation:spin 1s linear infinite}
+  .spinner.sm{width:20px;height:20px;border-width:3px;border-top-color:#fff}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  #toasts{position:fixed;top:24px;right:24px;display:flex;flex-direction:column;gap:10px;z-index:1000;max-width:360px}
+  .toast{padding:12px 16px;border-radius:8px;color:#fff;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+  .toast .tt{font-weight:700;margin-bottom:2px}
+  .toast.success{background:#4CAF50}.toast.error{background:#EF5350}.toast.warning{background:#FF9800}.toast.info{background:#2196F3}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="app" class="wrap"></div>
+<div id="toasts"></div>
+
+<template id="logo-svg"><svg width="299" height="135" viewBox="0 0 299 135" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="MYNT">
+<path d="M107.381 43.4033V95.2617H87.6521V49.7447C87.6521 38.612 82.7199 34.9481 76.9422 34.9481C67.0778 34.9481 63.5548 41.4304 63.5548 50.3083V95.2617H43.826V50.1674C43.826 43.826 43.826 34.9481 31.9888 34.9481C22.6881 34.9481 19.7288 41.4304 19.7288 49.6037V95.2617H0V20.2924H18.8832V31.2842H19.1651C21.7016 26.352 27.1975 18.3196 40.444 18.3196C51.2948 18.3196 56.227 22.2653 61.3001 30.2977C63.8366 26.6338 69.3325 18.3196 81.3107 18.3196C95.9663 18.3196 107.381 26.9157 107.381 43.4033Z" fill="#0037B7"/>
+<path d="M180.856 20.2924L155.068 93.9934C145.767 121.755 143.231 125.419 126.038 125.419C123.361 125.419 119.979 125.278 117.16 125.137V109.354C118.006 109.495 119.274 109.636 120.965 109.636C128.152 109.636 132.098 108.649 133.93 98.3619L106.31 20.2924H128.293L144.358 75.533H144.64L160 20.2924H180.856Z" fill="#0037B7"/>
+<path d="M253.101 43.4033V95.2617H233.372V49.7447C233.372 44.2488 233.09 34.9481 220.548 34.9481C211.811 34.9481 205.047 40.8667 205.047 52.2812V95.2617H185.318V20.2924H204.201V31.2842H204.483C207.161 26.7747 212.798 18.3196 227.03 18.3196C241.686 18.3196 253.101 26.9157 253.101 43.4033Z" fill="#0037B7"/>
+<path d="M286.545 0V20.2924H298.805V34.3844H286.545V75.1102C286.545 79.4787 286.686 81.1697 294.718 81.1697C295.986 81.1697 297.396 81.0288 298.805 80.8879V95.8254C295.705 95.9663 292.604 96.1072 289.504 96.1072H286.968C269.916 96.1072 266.816 89.6249 266.816 79.9015V34.3844H256.67V20.2924H266.816V8.17334L286.545 0Z" fill="#0037B7"/>
+<path d="M204.79 121.7H207.85C208.49 121.7 208.94 121.57 209.2 121.31C209.48 121.03 209.62 120.57 209.62 119.93V114.71C209.62 114.07 209.48 113.62 209.2 113.36C208.94 113.08 208.49 112.94 207.85 112.94H206.53C205.15 112.94 204.46 113.7 204.46 115.22V121.37C204.46 121.59 204.57 121.7 204.79 121.7ZM200.65 124.37V104.54C200.65 104.12 200.86 103.91 201.28 103.91H203.83C204.25 103.91 204.46 104.12 204.46 104.54V111.29H204.58C204.8 110.75 205.19 110.34 205.75 110.06C206.31 109.78 206.9 109.64 207.52 109.64H208.48C210.06 109.64 211.28 110.06 212.14 110.9C213 111.74 213.43 112.95 213.43 114.53V120.11C213.43 121.69 213 122.9 212.14 123.74C211.28 124.58 210.06 125 208.48 125H201.28C200.86 125 200.65 124.79 200.65 124.37ZM218.931 130.07H217.011C216.611 130.07 216.411 129.85 216.411 129.41V127.4C216.411 126.96 216.611 126.74 217.011 126.74H217.641C218.901 126.74 219.751 126.56 220.191 126.2C220.651 125.86 221.001 125.19 221.241 124.19H219.651C219.271 124.19 219.021 123.98 218.901 123.56L215.391 110.33C215.271 109.91 215.421 109.7 215.841 109.7H218.511C218.911 109.7 219.161 109.91 219.261 110.33L221.841 121.4H221.961L224.511 110.33C224.591 109.91 224.841 109.7 225.261 109.7H227.781C228.281 109.7 228.481 109.92 228.381 110.36L224.721 125C224.281 126.66 223.601 127.92 222.681 128.78C221.761 129.64 220.511 130.07 218.931 130.07ZM236.944 124.37V122.57C236.944 121.91 237.074 121.42 237.334 121.1L245.284 109.37V109.25H238.114C237.694 109.25 237.484 109.04 237.484 108.62V106.34C237.484 105.92 237.694 105.71 238.114 105.71H248.764C249.164 105.71 249.364 105.92 249.364 106.34V108.92C249.364 109.52 249.214 110.04 248.914 110.48L241.444 121.34V121.46H249.064C249.464 121.46 249.664 121.65 249.664 122.03V124.31C249.664 124.77 249.464 125 249.064 125H237.574C237.154 125 236.944 124.79 236.944 124.37ZM263.538 125H253.728C253.308 125 253.098 124.79 253.098 124.37V106.34C253.098 105.92 253.308 105.71 253.728 105.71H263.538C263.938 105.71 264.138 105.92 264.138 106.34V108.38C264.138 108.8 263.938 109.01 263.538 109.01H257.268C257.028 109.01 256.908 109.12 256.908 109.34V113.24C256.908 113.46 257.028 113.57 257.268 113.57H262.398C262.818 113.57 263.028 113.78 263.028 114.2V116.24C263.028 116.66 262.818 116.87 262.398 116.87H257.268C257.028 116.87 256.908 116.98 256.908 117.2V121.37C256.908 121.59 257.028 121.7 257.268 121.7H263.538C263.938 121.7 264.138 121.91 264.138 122.33V124.37C264.138 124.79 263.938 125 263.538 125ZM271.594 121.82H274.954C275.614 121.82 276.084 121.69 276.364 121.43C276.664 121.15 276.814 120.7 276.814 120.08V118.34C276.814 117.72 276.664 117.28 276.364 117.02C276.064 116.76 275.574 116.63 274.894 116.63H271.594C271.374 116.63 271.264 116.74 271.264 116.96V121.49C271.264 121.71 271.374 121.82 271.594 121.82ZM271.594 113.54H274.654C275.294 113.54 275.764 113.41 276.064 113.15C276.364 112.87 276.514 112.42 276.514 111.8V110.63C276.514 110.01 276.364 109.57 276.064 109.31C275.784 109.03 275.324 108.89 274.684 108.89H271.594C271.374 108.89 271.264 109 271.264 109.22V113.21C271.264 113.43 271.374 113.54 271.594 113.54ZM267.454 124.37V106.34C267.454 105.92 267.664 105.71 268.084 105.71H275.284C276.864 105.71 278.084 106.13 278.944 106.97C279.804 107.81 280.234 109.01 280.234 110.57V111.8C280.234 113.5 279.444 114.6 277.864 115.1C278.664 115.22 279.304 115.55 279.784 116.09C280.264 116.61 280.504 117.36 280.504 118.34V120.14C280.504 121.7 280.074 122.9 279.214 123.74C278.354 124.58 277.144 125 275.584 125H268.084C267.664 125 267.454 124.79 267.454 124.37ZM293.965 105.71H296.485C296.925 105.71 297.145 105.91 297.145 106.31V120.11C297.145 121.67 296.705 122.88 295.825 123.74C294.965 124.58 293.755 125 292.195 125H288.895C287.315 125 286.095 124.58 285.235 123.74C284.375 122.9 283.945 121.69 283.945 120.11V106.34C283.945 105.92 284.155 105.71 284.575 105.71H287.125C287.545 105.71 287.755 105.92 287.755 106.34V119.93C287.755 120.57 287.885 121.03 288.145 121.31C288.425 121.57 288.875 121.7 289.495 121.7H291.565C292.205 121.7 292.655 121.57 292.915 121.31C293.195 121.03 293.335 120.57 293.335 119.93V106.34C293.335 105.92 293.545 105.71 293.965 105.71Z" fill="#686A69"/>
+</svg></template>
+
+<script>
+"use strict";
+(function(){
+  const LOGIN_BASE="https://ws.mynt.in/login";
+  const URL_VALIDATE="https://ws.mynt.in/login/api/mynt-validate";
+  const URL_AUTH="https://ws.mynt.in/login/api/mynt-auth";
+  const CHANGE_PW_URL="https://go.mynt.in/NorenWClientWeb/Changepwd";
+  const QR_IMG="https://ws.mynt.in/login/get_login_qr";
+  const SIGNUP="https://oa.mynt.in/?ref=zws";
+  const PREFIX="flutter.";
+
+  const params=new URLSearchParams(location.search);
+  const CLIENT_ID=(params.get("client_id")||"").trim();
+  const IS_OAUTH=CLIENT_ID.length>0;
+  const WANT_CONSENT=/oauthlogin/i.test(location.pathname)||params.get("view")==="consent";
+
+  const app=document.getElementById("app");
+  const logoSvg=()=>document.getElementById("logo-svg").innerHTML;
+  const uuid=()=>crypto.randomUUID?crypto.randomUUID():"xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==="x"?r:(r&0x3|0x8)).toString(16);});
+  const deviceUuid=uuid();
+
+  // shared_preferences-web stores String values JSON-encoded (e.g. "ZP00231" with
+  // quotes) and bools unquoted (true/false). MUST match that encoding or Flutter's
+  // pref.init() throws decoding our values and the app crashes before runApp.
+  const ls={
+    get:k=>{try{const v=localStorage.getItem(PREFIX+k); if(v===null)return null; try{return JSON.parse(v);}catch(e){return v;}}catch(e){return null;}},
+    set:(k,v)=>{try{localStorage.setItem(PREFIX+k,JSON.stringify(v));}catch(e){}}
+  };
+  const inputType=raw=>/^[0-9]+$/.test(raw)?"mobile":"clientid";
+  const upper=raw=>raw.trim().toUpperCase();
+  const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  function el(html){const t=document.createElement("template");t.innerHTML=html.trim();return t.content.firstElementChild;}
+  function fmtTime(s){const m=String(Math.floor(s/60)).padStart(2,"0");const ss=String(s%60).padStart(2,"0");return m+" : "+ss;}
+  async function sha256hex(str){const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");}
+
+  function toast(type,msg){
+    const box=document.getElementById("toasts");
+    const tt={success:"Success",error:"Error",warning:"Warning",info:"Info"}[type]||"Info";
+    const node=el(`<div class="toast ${type}"><div class="tt">${tt}</div><div>${escapeHtml(msg)}</div></div>`);
+    box.appendChild(node); while(box.children.length>3) box.removeChild(box.firstChild);
+    setTimeout(()=>{if(node.parentNode)node.parentNode.removeChild(node);}, type==="warning"||type==="info"?3000:4000);
+  }
+  const showSuccess=m=>toast("success",m), showError=m=>toast("error",m), showWarning=m=>toast("warning",m);
+
+  async function postJson(url,body){
+    const res=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    let json=null; try{json=await res.json();}catch(e){}
+    return {ok:res.status===200,status:res.status,json};
+  }
+
+  function prefetchFlutter(){
+    if(IS_OAUTH) return; // gateway users bounce to the partner; never load Flutter
+    // Warm the ENTIRE Flutter first-frame critical path during the login interaction:
+    // the JS bundle, the CanvasKit renderer, and EVERY font. CanvasKit blocks its
+    // first frame until canvaskit.wasm AND all FontManifest fonts have downloaded, so
+    // warming only main.dart.js still left ~5-6MB (wasm + fonts) to download after the
+    // handoff. All of these are SAME-ORIGIN, so we prefetch them WITHOUT crossOrigin —
+    // a CORS-mode prefetch poisons the cache with a response canvaskit's same-origin
+    // fetch cannot instantiate and crashes the engine. Everything is rel=prefetch
+    // (lowest priority, so it never delays the login API calls); if still in flight at
+    // submit, the navigation cancels the rest (no harm) and whatever finished is reused
+    // warm. (Repeat visits are also warmed by the Flutter service worker.)
+    setTimeout(()=>{
+      function pf(href, as){
+        const l=document.createElement("link");
+        l.rel="prefetch"; if(as) l.as=as; l.href=href;
+        document.head.appendChild(l);
+      }
+      pf("/main.dart.js","script");      // ~2MB JS bundle (as=script matches Flutter's <script>)
+      pf("/assets/AssetManifest.bin");    // read on engine startup
+      // CanvasKit ships a browser-specific renderer variant. Flutter loads
+      // canvaskit/chromium/* when the browser has Intl.v8BreakIterator + Intl.Segmenter
+      // + ImageDecoder (Chromium), else canvaskit/*. We must warm the SAME file the
+      // engine will fetch — warming the wrong variant just wastes ~1.5MB. Use fetch()
+      // (not <link rel=prefetch>) for the .wasm so the request mirrors the engine's own
+      // fetch() (same mode/Accept-Encoding) and the brotli response is reused warm.
+      var chromium = (typeof Intl!=="undefined" && typeof Intl.v8BreakIterator!=="undefined"
+                      && typeof Intl.Segmenter!=="undefined" && typeof ImageDecoder!=="undefined");
+      var ckBase = chromium ? "/canvaskit/chromium/" : "/canvaskit/";
+      fetch(ckBase+"canvaskit.wasm").then(r=>r.arrayBuffer()).catch(()=>{}); // the renderer
+      pf(ckBase+"canvaskit.js","script");
+      // Warm every font CanvasKit must load before first paint. Reading FontManifest
+      // (also warms it) keeps this in lock-step with the pruned font set automatically.
+      fetch("/assets/FontManifest.json").then(r=>r.json()).then(fams=>{
+        const seen={};
+        fams.forEach(fam=>(fam.fonts||[]).forEach(f=>{
+          if(f.asset && !seen[f.asset]){ seen[f.asset]=1; pf("/assets/"+f.asset); }
+        }));
+      }).catch(()=>{});
+    }, 400);
+  }
+
+  const S={ id:"", pwd:"", isTotp:true, topflow:false, showPwd:false,
+            resend:0, resendTimer:null, otpBusy:false, loginBusy:false,
+            fId:"", fResend:0, fHandle:null,
+            isExpired:false, generatedFlow:false, oldPw:"", showOld:false, showNew:false,
+            qrUuid:"", qrPoll:null, qrCountdown:null, qrStart:89, qrRefresh:0, qrExpired:false };
+  let memSession=null;
+
+  function panel(innerHtml, withFooter){
+    app.className="wrap"; app.innerHTML="";
+    const p=el(`<div class="panel"><div class="inner">
+      <div class="logo">${logoSvg()}</div>
+      ${innerHtml}
+      ${withFooter?`<div class="foot">
+        <div class="co">Zebu Share and Wealth Managements Pvt. Ltd.</div>
+        <div class="reg">SEBI Registration No: INZ000174634 | NSE : 13179 | BSE : 6550 | MCX : 55730 | CDSL : 12080400 | AMFI ARN : 113118 | Research Analyst : INH200006044</div>
+      </div>`:``}
+    </div></div>`);
+    app.appendChild(p);
+    return p.querySelector(".inner");
+  }
+  function eyeIcon(open){
+    return open
+      ?'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>'
+      :'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10 10 0 0 1 12 19c-6.5 0-10-7-10-7a18 18 0 0 1 5.06-5.94M9.9 4.24A9 9 0 0 1 12 4c6.5 0 10 7 10 7a18 18 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/></svg>';
+  }
+  const qrIco='<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm13-2h3v2h-3v-2zm0 4h3v4h-2v-2h-1v-2zm-5-4h2v3h-2v-3zm0 5h2v3h-2v-3z"/></svg>';
+  const sanId=v=>v.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,10);
+  const sanPwd=v=>v.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,"").replace(/[π£•₹€℅™∆√¶/,]/g,"").replace(/\s/g,"");
+
+  // ---------- LOGIN ----------
+  function savedAccount(){
+    if(IS_OAUTH) return null;
+    const lo=ls.get("isLogout"); const isLogout=(lo===true||lo==="true");
+    const cid=(ls.get("clientId")||"").trim(); const mob=(ls.get("clientMob")||"").trim();
+    if(isLogout && (cid||mob)) return {cid, name:(ls.get("clientName")||"").trim()};
+    return null;
+  }
+  function renderLogin(){
+    const saved=savedAccount();
+    if(saved && !S.id) S.id=saved.cid;
+    const inner=panel(`
+      ${saved?``:`<h1 class="h-title">Sign in with MYNT</h1>`}
+      ${IS_OAUTH?`<div class="w4" style="color:var(--text2);margin-top:8px;font-size:calc(14px*var(--fs))">to continue to the requesting application</div>`:``}
+      ${saved?`<div class="saved">
+        <div class="avatar">${saved.name?escapeHtml(saved.name.split(/\s+/).slice(0,2).map(w=>w[0]||"").join("")):""}</div>
+        <div class="nm">${escapeHtml(saved.name)}</div>
+        <div class="cid">${escapeHtml(saved.cid)}</div>
+      </div>`:`
+      <div class="field"><span class="lbl">Mobile / Client ID</span>
+        <div class="inp"><input id="id" type="text" autocomplete="username" maxlength="10" autocapitalize="characters" value="${escapeHtml(S.id)}"/></div>
+        <div class="err" id="id-err"></div>
+      </div>`}
+      <div class="field" style="margin-top:20px"><span class="lbl">Password</span>
+        <div class="inp"><input id="pwd" type="password" autocomplete="current-password"/>
+          <button class="icobtn" id="eye" type="button" aria-label="Toggle password">${eyeIcon(false)}</button></div>
+        <div class="err" id="pwd-err"></div>
+      </div>
+      <button class="btn" id="login-btn">Login</button>
+      <div class="row">
+        <button class="link" id="left-action">${saved?"Switch account":"Forgot password"}</button>
+        <button class="link" id="scan-qr">Scan QR ${qrIco}</button>
+      </div>
+      <div class="signup">Don't have an account yet? <a href="${SIGNUP}">Sign Up</a></div>
+      <div class="spacer"></div>
+    `, true);
+
+    if(!saved){ const idEl=inner.querySelector("#id"); idEl.addEventListener("input",()=>{idEl.value=sanId(idEl.value);}); }
+    const pwdEl=inner.querySelector("#pwd");
+    pwdEl.addEventListener("input",()=>{pwdEl.value=sanPwd(pwdEl.value);});
+    inner.querySelector("#eye").addEventListener("click",e=>{S.showPwd=!S.showPwd;pwdEl.type=S.showPwd?"text":"password";e.currentTarget.innerHTML=eyeIcon(S.showPwd);});
+    pwdEl.addEventListener("keydown",e=>{if(e.key==="Enter")submitLogin(inner);});
+    inner.querySelector("#login-btn").addEventListener("click",()=>submitLogin(inner));
+    inner.querySelector("#scan-qr").addEventListener("click",startQr);
+    inner.querySelector("#left-action").addEventListener("click",()=>{
+      if(saved){ ls.set("isLogout", false); S.id=""; renderLogin(); }
+      else { S.fId=S.id; renderForgot1(); }
+    });
+  }
+
+  async function submitLogin(inner){
+    if(S.loginBusy) return;
+    const id=savedAccount()?upper(S.id):upper(inner.querySelector("#id").value);
+    const pwd=inner.querySelector("#pwd").value;
+    const idErr=inner.querySelector("#id-err"); if(idErr) idErr.textContent=id?"":"Your mobile / client id is required";
+    inner.querySelector("#pwd-err").textContent=pwd?"":"Please enter the password";
+    if(!id||!pwd) return;
+    S.id=id; S.pwd=pwd; S.loginBusy=true;
+    const btn=inner.querySelector("#login-btn"); btn.disabled=true; btn.innerHTML='<div class="spinner sm"></div>';
+    try{
+      const body={device:IS_OAUTH?"OAUTH":"WEB",[inputType(id)]:id,password:pwd};
+      if(IS_OAUTH) body.authid=CLIENT_ID;
+      const {ok,json}=await postJson(`${LOGIN_BASE}/MobileLogin`,body);
+      if(!ok){ showError("Server error. Please try again later."); return; }
+      if(!json){ showError("An error occurred. Please try again."); return; }
+      if(json.stat==="Ok"){
+        // NOTE: do not write any flutter.* prefs on the normal path — the URL
+        // auto-login handoff lets Flutter create the session itself. imei is
+        // already sent directly in the otp_verify log below.
+        if(json.apitoken&&json.token){ return onLoginSuccess(json); }
+        S.isTotp=true; S.topflow=false; renderOtp(); return;
+      }
+      const emsg=(json.emsg||"").toString(), msg=(json.msg||"").toString();
+      const low=(emsg+" "+msg).toLowerCase();
+      if(low.includes("wrong password")){ showError("Wrong Password, Please Try again"); return; }
+      if(low.includes("user blocked")||low.includes("multiple wrong attempts")){ showError(emsg||msg||"User blocked"); S.fId=id; setTimeout(()=>renderForgot1(),3000); return; }
+      if(low.includes("change password")||low.includes("password expired")){ showError(emsg||msg||"Change password"); S.id=(json.clientid||id); S.isExpired=low.includes("password expired"); S.generatedFlow=false; if(S.isExpired)S.oldPw=pwd; renderChangePw(); return; }
+      showWarning(emsg||msg||"Login failed. Please check your credentials.");
+    }catch(e){ showWarning("Login failed. Please try again."); console.error(e); }
+    finally{ S.loginBusy=false; const b=document.getElementById("login-btn"); if(b){b.disabled=false;b.textContent="Login";} }
+  }
+
+  // ---------- OTP / TOTP ----------
+  function startResendTimer(){ clearInterval(S.resendTimer); S.resend=89; paintResend(); S.resendTimer=setInterval(()=>{S.resend--; if(S.resend<=0)clearInterval(S.resendTimer); paintResend();},1000); }
+  function paintResend(){
+    const sfx=document.getElementById("otp-suffix"); if(!sfx) return;
+    if(S.isTotp){ sfx.innerHTML=`<span class="resend" id="setup-totp">Set up TOTP</span>`; sfx.querySelector("#setup-totp").onclick=startTotpSetup; return; }
+    if(S.resend>0){ sfx.innerHTML=`<span class="resend disabled">Resend<br>in ${fmtTime(S.resend)}</span>`; }
+    else { sfx.innerHTML=`<span class="resend" id="resend">${S.topflow?"Resend Setup OTP":"Resend OTP"}</span>`; sfx.querySelector("#resend").onclick=resendOtp; }
+  }
+  function renderOtp(){
+    const len=S.isTotp?6:4;
+    const heading=S.isTotp?"Enter the 6-digit TOTP":(S.topflow?"Enter OTP to set up TOTP":"Enter the 4-digit OTP");
+    const lbl=S.topflow?"Enter the 4-digit OTP to complete TOTP setup":`Enter ${S.isTotp?6:4} digit ${S.isTotp?"TOTP":"OTP"}`;
+    const inner=panel(`
+      <h1 class="h-title">${heading}</h1>
+      <div class="idcap" style="margin-top:24px">
+        <div class="c1">Mobile / Client ID</div>
+        <div style="display:flex;justify-content:space-between;align-items:center"><span class="c2">${escapeHtml(S.id)}</span><span class="change" id="change-id">Change</span></div>
+        <div class="divider"></div>
+      </div>
+      <div class="field" style="margin-top:8px"><span class="lbl">${lbl}</span>
+        <div class="inp"><input id="otp" type="text" inputmode="numeric" maxlength="${len}" autofocus/><span class="suffix" id="otp-suffix"></span></div>
+        <div class="err" id="otp-err"></div>
+      </div>
+      <button class="btn" id="verify-btn">Verify</button>
+      <div class="row">
+        <button class="link body" id="toggle-mode">${S.isTotp?"Enter OTP":"Enter TOTP"}</button>
+        <button class="link body" id="scan-qr">Scan QR ${qrIco}</button>
+      </div>
+      <div class="spacer"></div>
+    `, true);
+    const otpEl=inner.querySelector("#otp");
+    otpEl.addEventListener("input",()=>{otpEl.value=otpEl.value.replace(/[^0-9]/g,"").slice(0,len); inner.querySelector("#otp-err").textContent=""; if(otpEl.value.length===len) submitOtp(inner);});
+    inner.querySelector("#verify-btn").addEventListener("click",()=>submitOtp(inner));
+    inner.querySelector("#change-id").addEventListener("click",()=>{clearInterval(S.resendTimer);S.resendTimer=null;renderLogin();});
+    inner.querySelector("#scan-qr").addEventListener("click",startQr);
+    inner.querySelector("#toggle-mode").addEventListener("click",toggleMode);
+    paintResend(); otpEl.focus();
+  }
+  async function toggleMode(){
+    S.isTotp=!S.isTotp; S.topflow=false;
+    if(!S.isTotp){ const okk=await sendOtp(false); renderOtp(); if(okk) startResendTimer(); }
+    else { clearInterval(S.resendTimer); S.resendTimer=null; renderOtp(); }
+  }
+  async function sendOtp(isTotpSetup){
+    try{
+      const body={device:"WEB",[inputType(S.id)]:S.id}; if(isTotpSetup) body.is_totp=true;
+      const {json}=await postJson(`${LOGIN_BASE}/otp_send`,body);
+      if(json && (json.stat==="Ok" || (json.msg||"").toLowerCase().includes("otp"))){ showSuccess(isTotpSetup?"4-digit TOTP Setup code sent successfully":"OTP sent successfully"); return true; }
+      if(json && json.emsg) showWarning(json.emsg);
+      return false;
+    }catch(e){ showWarning("Failed to send OTP"); return false; }
+  }
+  async function resendOtp(){ const okk=await sendOtp(S.topflow); if(okk) startResendTimer(); }
+  async function submitOtp(inner){
+    if(S.otpBusy) return;
+    const code=inner.querySelector("#otp").value.trim(); const len=S.isTotp?6:4;
+    if(code.length!==len){ inner.querySelector("#otp-err").textContent=`Please enter ${len} digit ${S.isTotp?"TOTP":"OTP"}`; return; }
+    S.otpBusy=true; const btn=inner.querySelector("#verify-btn"); btn.disabled=true; btn.innerHTML='<div class="spinner sm"></div>';
+    try{
+      const log={datetime:new Date().toISOString(),login_type:S.isTotp?"totp":"otp",src:"flutter web app",IP_address:"web",app:"MYNT Web",platform:"web",imei:deviceUuid};
+      const body={source:IS_OAUTH?"OAUTH":"WEB",otp:code,[inputType(S.id)]:S.id,log}; if(IS_OAUTH) body.authid=CLIENT_ID;
+      const {ok,json}=await postJson(`${LOGIN_BASE}/otp_verify`,body);
+      if(!ok){ showError("Server error. Please try again later."); return; }
+      if(!json){ showError("OTP verification failed. Please try again."); return; }
+      if(json.stat==="Ok"&&json.apitoken){ clearInterval(S.resendTimer); return onLoginSuccess(json); }
+      const e=(json.emsg||"").toLowerCase(); const otpLabel=S.isTotp?"TOTP":"OTP";
+      if(e.includes("change password")||e.includes("password expired")){ S.id=(json.clientid||S.id); S.isExpired=e.includes("password expired"); S.generatedFlow=false; if(S.isExpired)S.oldPw=S.pwd; showWarning(json.emsg); clearInterval(S.resendTimer); renderChangePw(); return; }
+      if(e.includes("invalid user")){ showError((json.emsg.split(":").pop()||json.emsg).trim()); return; }
+      if(e.includes("otp not valid")||e.includes("invalid otp")||e.includes("invalid input")){ showError(`Invalid ${otpLabel}, Please Try again`); return; }
+      showError(json.emsg||`Invalid ${otpLabel}, Please Try again`);
+    }catch(e){ showWarning("Verification failed. Please try again."); console.error(e); }
+    finally{ S.otpBusy=false; const b=document.getElementById("verify-btn"); if(b){b.disabled=false;b.textContent="Verify";} }
+  }
+  function startTotpSetup(){ S.topflow=true; S.isTotp=false; renderOtp(); sendOtp(true).then(okk=>{ if(okk) startResendTimer(); }); }
+
+  // ---------- FORGOT PASSWORD ----------
+  function renderForgot1(){
+    const inner=panel(`
+      <h1 class="h-title">Forgot Password</h1>
+      <div class="field"><span class="lbl">Mobile / Client ID</span>
+        <div class="inp"><input id="fid" type="text" maxlength="10" autocapitalize="characters" value="${escapeHtml(S.fId)}"/></div>
+        <div class="err" id="fid-err"></div>
+      </div>
+      <button class="btn" id="reset-btn">Reset</button>
+      <div class="row"><button class="link" id="back">Back to login</button></div>
+      <div class="spacer"></div>
+    `, true);
+    const fidEl=inner.querySelector("#fid"); fidEl.addEventListener("input",()=>{fidEl.value=sanId(fidEl.value);});
+    inner.querySelector("#back").addEventListener("click",()=>{S.id=S.fId;renderLogin();});
+    inner.querySelector("#reset-btn").addEventListener("click",async()=>{
+      const id=upper(fidEl.value); inner.querySelector("#fid-err").textContent=id?"":"Your mobile / client id is required"; if(!id) return;
+      S.fId=id; const btn=inner.querySelector("#reset-btn"); btn.disabled=true; btn.innerHTML='<div class="spinner sm"></div>';
+      try{
+        const {json}=await postJson(`${LOGIN_BASE}/ForgetPasswordOtpSend`,{field:inputType(id),value:id});
+        if(json && json.msg==="otp sended"){ showSuccess("OTP sent to your registered mobile/email"); renderForgot2(); return; }
+        if(!json) showError("Failed to send OTP. Please try again.");
+        else showError(json.emsg || (json.msg==="No data found"?"No account found with this Mobile / Client ID":"Failed to send OTP. Please try again."));
+      }catch(e){ showError("An error occurred. Please try again."); }
+      finally{ const b=document.getElementById("reset-btn"); if(b){b.disabled=false;b.textContent="Reset";} }
+    });
+  }
+  function renderForgot2(){
+    const inner=panel(`
+      <h1 class="h-title">Enter the 4-digit OTP</h1>
+      <div class="field"><span class="lbl">Enter the 4-digit OTP</span>
+        <div class="inp"><input id="fotp" type="text" inputmode="numeric" maxlength="4" autofocus/><span class="suffix" id="fotp-suffix"></span></div>
+        <div class="err" id="fotp-err"></div>
+      </div>
+      <button class="btn" id="fverify-btn">Verify</button>
+      <div class="row"><button class="link" id="back">Back to login</button></div>
+      <div class="spacer"></div>
+    `, true);
+    const otpEl=inner.querySelector("#fotp");
+    otpEl.addEventListener("input",()=>{otpEl.value=otpEl.value.replace(/[^0-9]/g,"").slice(0,4); inner.querySelector("#fotp-err").textContent=""; if(otpEl.value.length===4) fverify();});
+    inner.querySelector("#fverify-btn").addEventListener("click",fverify);
+    inner.querySelector("#back").addEventListener("click",()=>{clearInterval(S.fHandle);S.id=S.fId;renderLogin();});
+    fStartResend(); otpEl.focus();
+    async function fverify(){
+      const otp=otpEl.value.trim(); if(otp.length!==4){inner.querySelector("#fotp-err").textContent="Please enter the 4-digit OTP";return;}
+      const btn=inner.querySelector("#fverify-btn"); btn.disabled=true; btn.innerHTML='<div class="spinner sm"></div>';
+      try{
+        const {json}=await postJson(`${LOGIN_BASE}/ForgetPasswordOtpVerify`,{field:inputType(S.fId),value:S.fId,otp});
+        if(!json){ showError("OTP verification failed. Please try again."); return; }
+        if(json.stat==="Ok" || !json.emsg){ S.id=(json.clientid||S.fId).toUpperCase(); S.generatedFlow=true; S.isExpired=false; S.oldPw=""; showSuccess("Generated Password has been sent to Your Mobile Number and Email"); clearInterval(S.fHandle); renderChangePw(); return; }
+        showError(json.emsg);
+      }catch(e){ showError("An error occurred. Please try again."); }
+      finally{ const b=document.getElementById("fverify-btn"); if(b){b.disabled=false;b.textContent="Verify";} }
+    }
+    function fStartResend(){ clearInterval(S.fHandle); S.fResend=89; fpaint(); S.fHandle=setInterval(()=>{S.fResend--; if(S.fResend<=0)clearInterval(S.fHandle); fpaint();},1000); }
+    function fpaint(){
+      const sfx=document.getElementById("fotp-suffix"); if(!sfx) return;
+      if(S.fResend>0){ sfx.innerHTML=`<span class="resend disabled">Resend<br>in ${fmtTime(S.fResend)}</span>`; }
+      else{ sfx.innerHTML=`<span class="resend" id="fresend">Resend OTP</span>`; sfx.querySelector("#fresend").onclick=async()=>{ const {json}=await postJson(`${LOGIN_BASE}/ForgetPasswordOtpSend`,{field:inputType(S.fId),value:S.fId}); if(json&&json.msg==="otp sended"){ showSuccess("OTP sent to your registered mobile/email"); fStartResend(); } }; }
+    }
+  }
+
+  // ---------- CHANGE PASSWORD ----------
+  function validateNewPw(v){
+    v=v.replace(/\s/g,""); if(!v) return "Please enter the new password";
+    const miss=[]; if(!/[A-Z]/.test(v))miss.push("an uppercase letter"); if(!/[a-z]/.test(v))miss.push("a lowercase letter");
+    if(!/[0-9]/.test(v))miss.push("a number"); if(!/[#$\-*@]/.test(v))miss.push("a special character (#, $, -, *, @)");
+    if(v.length<7)miss.push("at least 7 characters");
+    return miss.length?("Please enter "+miss.join(", ")):"";
+  }
+  function renderChangePw(){
+    const oldLbl=S.isExpired?"Old Password":"Generated Password";
+    const inner=panel(`
+      <h1 class="h-title">Change Your Password</h1>
+      <div class="field"><span class="lbl">${oldLbl}</span>
+        <div class="inp"><input id="oldpw" type="password"/><button class="icobtn" id="eye-old" type="button">${eyeIcon(false)}</button></div>
+        <div class="err" id="old-err"></div>
+      </div>
+      <div class="field" style="margin-top:20px"><span class="lbl">New Password</span>
+        <div class="inp"><input id="newpw" type="password"/><button class="icobtn" id="eye-new" type="button">${eyeIcon(false)}</button></div>
+        <div class="err" id="new-err"></div>
+      </div>
+      <button class="btn" id="setpw-btn">Set New Password</button>
+      <div class="row"><button class="link" id="back">Back to login</button></div>
+      <div class="spacer"></div>
+    `, true);
+    const oldEl=inner.querySelector("#oldpw"), newEl=inner.querySelector("#newpw");
+    if(S.oldPw) oldEl.value=S.oldPw;
+    newEl.addEventListener("input",()=>{ let v=newEl.value.replace(/[^A-Za-z0-9#$\-*@]/g,""); if(v.length>12){v=v.slice(0,12); const ne=inner.querySelector("#new-err"); ne.textContent="Password must be exactly 12 characters"; setTimeout(()=>{if(ne.textContent==="Password must be exactly 12 characters")ne.textContent="";},2000);} newEl.value=v; });
+    inner.querySelector("#eye-old").addEventListener("click",e=>{S.showOld=!S.showOld;oldEl.type=S.showOld?"text":"password";e.currentTarget.innerHTML=eyeIcon(S.showOld);});
+    inner.querySelector("#eye-new").addEventListener("click",e=>{S.showNew=!S.showNew;newEl.type=S.showNew?"text":"password";e.currentTarget.innerHTML=eyeIcon(S.showNew);});
+    inner.querySelector("#back").addEventListener("click",()=>{S.id=S.id||S.fId;renderLogin();});
+    inner.querySelector("#setpw-btn").addEventListener("click",async()=>{
+      const oldv=oldEl.value.replace(/\s/g,""), newv=newEl.value.replace(/\s/g,"");
+      inner.querySelector("#old-err").textContent=oldv?"":(S.isExpired?"Please enter the Old Password":"Please enter the Generated Password");
+      const ne=validateNewPw(newv); inner.querySelector("#new-err").textContent=ne;
+      if(!oldv||ne) return;
+      const btn=inner.querySelector("#setpw-btn"); btn.disabled=true; btn.innerHTML='<div class="spinner sm"></div>';
+      try{
+        const oldHash=await sha256hex(oldv);
+        const jData=JSON.stringify({uid:upper(S.id),oldpwd:oldHash,pwd:newv});
+        const res=await fetch(CHANGE_PW_URL,{method:"POST",headers:{"Content-Type":"text/plain"},body:"jData="+jData});
+        let json=null; try{json=await res.json();}catch(e){}
+        if(json && json.stat==="Ok"){ const dmsg=(json.dmsg||"Password changed successfully").replace(/password change success/i,"Password changed successfully"); showSuccess(dmsg); S.pwd=""; renderLogin(); return; }
+        if(json && json.emsg){ let raw=json.emsg.replace(/Error Occurred :/i,"").trim(); if(/previous 3 passwords|last 3 passwords/i.test(raw)) raw="New password cannot match your last 3 passwords"; else if(S.generatedFlow) raw=raw.replace(/old password/ig,"Generated Password"); showError(raw); }
+        else showError("Failed to change password. Please try again.");
+      }catch(e){ showError("An error occurred. Please try again."); console.error(e); }
+      finally{ const b=document.getElementById("setpw-btn"); if(b){b.disabled=false;b.textContent="Set New Password";} }
+    });
+  }
+
+  // ---------- QR LOGIN ----------
+  function stopQr(){ clearInterval(S.qrPoll); clearInterval(S.qrCountdown); S.qrPoll=null; S.qrCountdown=null; }
+  function startQr(){ stopQr(); S.qrRefresh=0; S.qrExpired=false; beginQrSession(); renderQr(); }
+  function beginQrSession(){ S.qrUuid=uuid(); ls.set("pendingQrUuid",S.qrUuid); S.qrExpired=false; S.qrPoll=setInterval(pollQr,2000); }
+  function renderQr(){
+    const inner=panel(`
+      <h1 class="h-title">Scan QR to login</h1>
+      <div class="qrbox">${S.qrExpired?`<div class="qr-expired" id="qr-refresh">&#x21bb;</div>`:`<img id="qrimg" src="${QR_IMG}?unique_id=${S.qrUuid}&source=WEB" alt="QR"/>`}</div>
+      <div class="qr-cap">${S.qrExpired?"Click to refresh QR code":"Scan QR code from profile tab top appbar of MYNT to login."}</div>
+      <div class="qr-exp" id="qr-exp"></div>
+      <div class="row" style="justify-content:flex-end"><button class="link" id="back">Back to login</button></div>
+      <div class="spacer"></div>
+    `, true);
+    inner.querySelector("#back").addEventListener("click",()=>{stopQr();renderLogin();});
+    if(S.qrExpired){ inner.querySelector("#qr-refresh").addEventListener("click",startQr); return; }
+    const img=inner.querySelector("#qrimg"); img.addEventListener("load",()=>{ if(!S.qrCountdown) startQrCountdown(); });
+  }
+  function startQrCountdown(){
+    S.qrStart=89; const exp=document.getElementById("qr-exp"); if(exp) exp.textContent="QR expires in "+fmtTime(S.qrStart);
+    S.qrCountdown=setInterval(()=>{ S.qrStart--; const e=document.getElementById("qr-exp"); if(e) e.textContent="QR expires in "+fmtTime(S.qrStart);
+      if(S.qrStart<=1){ clearInterval(S.qrCountdown); S.qrCountdown=null; if(S.qrRefresh<2){ S.qrRefresh++; clearInterval(S.qrPoll); beginQrSession(); renderQr(); } else { stopQr(); S.qrExpired=true; renderQr(); } }
+    },1000);
+  }
+  async function pollQr(){ try{ const {json}=await postJson(`${LOGIN_BASE}/QRlogin`,{unique_id:S.qrUuid,source:"WEB",imei:S.qrUuid}); if(json && json.stat==="Ok" && json.apitoken){ stopQr(); onLoginSuccess(json); } }catch(e){} }
+
+  // ---------- SUCCESS / HANDOFF ----------
+  function onLoginSuccess(resp){
+    if(IS_OAUTH){ memSession=resp.apitoken; ls.set("oauthSession",resp.apitoken); ls.set("oauthClientId",CLIENT_ID); runConsent(); return; }
+    const cid=(resp.clientid||S.id||"").toString().trim(); const token=(resp.apitoken||"").toString().trim();
+    if(!cid||!token){ showError("Signed in, but the session data was incomplete. Please try again."); return; }
+    location.replace("/?uid="+encodeURIComponent(cid)+"&token="+encodeURIComponent(token));
+  }
+
+  // ---------- OAUTH CONSENT ----------
+  function candidateSessions(){
+    const out=[]; if(memSession) out.push(memSession);
+    const main=(ls.get("clientSession")||"").trim(); if(main&&!out.includes(main)) out.push(main);
+    const oauth=(ls.get("oauthSession")||"").trim(); const oauthFor=(ls.get("oauthClientId")||"").trim();
+    if(oauth&&oauthFor===CLIENT_ID&&!out.includes(oauth)) out.push(oauth);
+    return out;
+  }
+  function spinner(){ app.className="center"; app.innerHTML=""; app.appendChild(el('<div class="spinner"></div>')); }
+  async function runConsent(){
+    if(!CLIENT_ID) return renderInvalid();
+    spinner();
+    const sessions=candidateSessions(); const toTry=sessions.length?sessions:[deviceUuid];
+    let authNwc=null,dname="",uid="";
+    try{
+      for(const nwc of toTry){
+        const {ok,json}=await postJson(URL_VALIDATE,{client_id:CLIENT_ID,nwc_id:nwc});
+        if(!ok||!json) return renderInvalid();
+        const stat=json.stat,u=(json.uid||"").toString(),emsg=(json.emsg||"").toString().toLowerCase();
+        if(stat==="Ok"&&u){ authNwc=nwc; dname=(json.dname||"").toString(); uid=u; break; }
+        if(stat==="Not_Ok"&&emsg.includes("no data")) return renderRestricted();
+      }
+    }catch(e){ showError("Network error reaching validate."); return renderInvalid(); }
+    if(!authNwc){ memSession=null; return renderLogin(); }
+    renderConsent(dname,uid,authNwc);
+  }
+  const prettyDname=raw=>(raw||"").replace(/\s+s\s+api\s*key\s*$/i," API Key");
+  function renderConsent(dname,uid,nwc){
+    const appName=dname?prettyDname(dname):"this app";
+    app.className="wrap"; app.innerHTML="";
+    const wrap=el(`<div class="consent-wrap"><div class="card">
+      <div class="clogo">${logoSvg()}</div>
+      <h2>${escapeHtml(appName)}</h2>
+      <div class="csub">wants to access your account${uid?(" "+escapeHtml(uid)):""}</div>
+      <div class="allow">This will allow ${escapeHtml(appName)} to :</div>
+      <div class="bullet"><span class="dot"></span><span>View your profile details, including account balance.</span></div>
+      <div class="bullet"><span class="dot"></span><span>Access your portfolio, including positions and holdings.</span></div>
+      <div class="bullet"><span class="dot"></span><span>Place, modify, and cancel orders.</span></div>
+      <button class="authbtn" id="authorize">Authorize</button>
+    </div></div>`);
+    app.appendChild(wrap);
+    wrap.querySelector("#authorize").addEventListener("click",()=>doAuthorize(nwc));
+  }
+  function doAuthorize(nwc){
+    if(!CLIENT_ID||!nwc){ showError("Session not found."); return; }
+    const form=document.createElement("form"); form.action=URL_AUTH; form.method="POST"; form.target="_self"; form.style.display="none";
+    const f1=document.createElement("input"); f1.type="hidden"; f1.name="client_id"; f1.value=CLIENT_ID; form.appendChild(f1);
+    const f2=document.createElement("input"); f2.type="hidden"; f2.name="nwc_id"; f2.value=nwc; form.appendChild(f2);
+    document.body.appendChild(form); form.submit();
+  }
+  function renderRestricted(){
+    app.className="wrap"; app.innerHTML="";
+    app.appendChild(el(`<div class="consent-wrap"><div class="card restricted"><div class="clogo">${logoSvg()}</div><h2>Access Restricted for API Only Users</h2><button class="outbtn" id="close">Close</button></div></div>`));
+    app.querySelector("#close").addEventListener("click",()=>location.href="/");
+  }
+  function renderInvalid(){
+    app.className="wrap"; app.innerHTML="";
+    app.appendChild(el(`<div class="consent-wrap"><div class="card"><div class="clogo">${logoSvg()}</div><h2>Invalid link</h2><div class="csub">This authorization link is missing required information.</div></div></div>`));
+  }
+
+  // ---- boot ----
+  prefetchFlutter();
+  if(WANT_CONSENT) runConsent(); else renderLogin();
+})();
+</script>
+</body>
+</html>

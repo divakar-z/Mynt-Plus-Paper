@@ -161,6 +161,15 @@ class OrderProvider extends DefaultChangeNotifier {
   int _selectedTab = 0;
   int get selectedTab => _selectedTab;
 
+
+  void setSelectedTabSilent(int index) {
+    if (_selectedTab == index) return;
+    _selectedTab = index;
+    tabCtrl?.animateTo(index);
+    _updateTabNamesSilent();
+    notifyListeners();
+  }
+
   List<Tab> _orderTabName = [];
   List<Tab> get orderTabName => _orderTabName;
 
@@ -379,6 +388,13 @@ class OrderProvider extends DefaultChangeNotifier {
     // --- Batch state changes: set internal state directly, single notifyListeners at the end ---
     // Update tab names without notifying (batched)
     _updateTabNamesSilent();
+
+    // Lazily sort the tab being opened: the fetch only sorts the visible
+    // tab's list (performance), so Open/Executed need their sort applied on
+    // switch or they render in raw API order.
+    if ((index == 0 || index == 1) && _lastOrderSortMethod.isNotEmpty) {
+      _applySortingSilent(_lastOrderSortMethod);
+    }
 
     // Reset search states without triggering notifyListeners
     _showSearchOrder = false;
@@ -1311,7 +1327,8 @@ class OrderProvider extends DefaultChangeNotifier {
       BuildContext context,
       List<PlaceOrderInput> placeOrderInputs,
       int quantity,
-      int reminder) async {
+      int reminder,
+      {VoidCallback? onWebParentClose}) async {
     try {
       _sliceOrderResults.clear();
       List<Future<PlaceOrderModel?>> orderFutures = [];
@@ -1360,6 +1377,9 @@ class OrderProvider extends DefaultChangeNotifier {
         if (kIsWeb) {
           // On web, slice order uses Overlay, so close it using the static method
           SliceOrderSheetWeb.closeOverlay();
+          // Also close the parent Place Order window (caller passes a
+          // sticky-gated callback; mobile closes it via the double pop below).
+          onWebParentClose?.call();
         } else {
           Navigator.pop(context);
           Navigator.pop(context);
@@ -1425,6 +1445,69 @@ class OrderProvider extends DefaultChangeNotifier {
       return result;
     } catch (e) {
       return null;
+    }
+  }
+
+  /// Places a set of pre-sliced child orders for INSTANT mode (no confirmation
+  /// UI). Each input already carries a freeze-qty-bounded quantity. Fires them
+  /// in parallel (same as [slicePlaceOrderWithConfirmation]), refreshes the
+  /// order book, and shows a single summary toast. Unlike the confirmation
+  /// variant, this opens/closes no overlay and performs no navigation — it is
+  /// the headless slicing path the chart's instant orders use.
+  Future<void> placeInstantSlices(
+      BuildContext context, List<PlaceOrderInput> inputs) async {
+    if (inputs.isEmpty) return;
+    try {
+      _sliceOrderResults.clear();
+      final results = await Future.wait(
+          inputs.map((inp) => _placeSliceOrderInternal(inp)));
+      int ok = 0;
+      int fail = 0;
+      bool sessionExpired = false;
+      for (final r in results) {
+        if (r == null) {
+          fail++;
+          continue;
+        }
+        if (r.emsg == "Session Expired :  Invalid Session Key") {
+          sessionExpired = true;
+          break;
+        }
+        if (r.stat == "Ok") {
+          ok++;
+          _sliceOrderResults.add(r);
+        } else {
+          fail++;
+        }
+      }
+      if (sessionExpired) {
+        if (context.mounted) ref.read(authProvider).ifSessionExpired(context);
+        return;
+      }
+      if (ok > 0) fetchOrderBook(context, true);
+      if (context.mounted) {
+        if (fail == 0) {
+          ResponsiveSnackBar.showSuccess(
+              context, "Placed $ok slice order${ok == 1 ? '' : 's'}.");
+        } else if (ok > 0) {
+          ResponsiveSnackBar.showWarning(context,
+              "Placed $ok of ${inputs.length} slices; $fail failed.");
+        } else {
+          ResponsiveSnackBar.showWarning(
+              context, "Failed to place sliced order. Please try again.");
+        }
+      }
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Instant Slice Order", "Error": "$e"});
+      if (context.mounted) {
+        ResponsiveSnackBar.showWarning(
+            context, "Error placing sliced order: ${e.toString()}");
+      }
+    } finally {
+      notifyListeners();
     }
   }
 
@@ -1503,7 +1586,9 @@ class OrderProvider extends DefaultChangeNotifier {
           _openOrder = tempOpen;
           _allOrder = tempAll;
 
-          // Reapply the last sort method without notifying (batched)
+          // Reapply the last sort method without notifying (batched).
+          // Performance: only the visible tab's list is sorted here; the
+          // other tabs are sorted lazily on switch (see changeTabIndex).
           if (_lastOrderSortMethod.isNotEmpty) {
             _applySortingSilent(_lastOrderSortMethod);
           }
@@ -2257,27 +2342,38 @@ class OrderProvider extends DefaultChangeNotifier {
         });
         break;
       case "TIMEASC":
-        listToSort.sort((a, b) {
-          final aDate = DateTime.tryParse(formatToDateTime(a.norentm ?? '')) ??
-              DateTime(1970);
-          final bDate = DateTime.tryParse(formatToDateTime(b.norentm ?? '')) ??
-              DateTime(1970);
-          return aDate.compareTo(bDate);
-        });
-        break;
       case "TIMEDSC":
-        listToSort.sort((a, b) {
-          final aDate = DateTime.tryParse(formatToDateTime(a.norentm ?? '')) ??
-              DateTime(1970);
-          final bDate = DateTime.tryParse(formatToDateTime(b.norentm ?? '')) ??
-              DateTime(1970);
-          return bDate.compareTo(aDate);
-        });
+        // Parse each timestamp ONCE (N parses) instead of inside the
+        // comparator (2 × N·logN parses) — keeps tab switches snappy on
+        // large order books.
+        final bool descending = sorting == "TIMEDSC";
+        final keyed = listToSort
+            .map((o) => MapEntry(_orderTimeSortKey(o.norentm), o))
+            .toList();
+        keyed.sort((a, b) => descending
+            ? b.key.compareTo(a.key)
+            : a.key.compareTo(b.key));
+        for (int i = 0; i < keyed.length; i++) {
+          listToSort[i] = keyed[i].value;
+        }
         break;
       default:
         // No sorting
         break;
     }
+  }
+
+  /// Converts the API's "HH:mm:ss dd-MM-yyyy" order timestamp into a
+  /// sortable DateTime; malformed/empty values sort to the very end.
+  DateTime _orderTimeSortKey(String? value) {
+    if (value == null || value.isEmpty) return DateTime(1970);
+    final parts = value.split(' ');
+    if (parts.length != 2) return DateTime(1970);
+    final dateParts = parts[1].split('-');
+    if (dateParts.length != 3) return DateTime(1970);
+    return DateTime.tryParse(
+            '${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[0]}') ??
+        DateTime(1970);
   }
 
   void _sortTradeBook(String sorting) {
