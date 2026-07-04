@@ -1014,10 +1014,10 @@ class _FutureScreenWebState extends ConsumerState<FutureScreenWeb> {
                 if (success && mounted) {
                   if (add) {
                     ResponsiveSnackBar.showSuccess(
-                        context, 'Added to ${future.wlName}');
+                        context, 'Added to your watchlist "${future.wlName}"');
                   } else {
-                    ResponsiveSnackBar.showInfo(
-                        context, 'Removed from ${future.wlName}');
+                    ResponsiveSnackBar.showSuccess(
+                        context, 'Removed from your watchlist "${future.wlName}"');
                   }
                   setState(() {});
                 }

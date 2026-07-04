@@ -5395,7 +5395,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                         ? Border(right: BorderSide(color: ceBasketBorder, width: 3))
                         : null,
                   ),
-                  child: _buildSideCell(context, provider, row.callOption, callSocketData, isDark, true),
+                  child: _buildSideCell(context, provider, row.callOption, callSocketData, isDark, true, ceBasketBg != null),
                 ),
               ),
               
@@ -5428,7 +5428,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                         ? Border(left: BorderSide(color: peBasketBorder, width: 3))
                         : null,
                   ),
-                  child: _buildSideCell(context, provider, row.putOption, putSocketData, isDark, false),
+                  child: _buildSideCell(context, provider, row.putOption, putSocketData, isDark, false, peBasketBg != null),
                 ),
               ),
             ],
@@ -5438,7 +5438,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
     );
   }
 
-  Widget _buildSideCell(BuildContext context, StrategyBuilderProvider provider, OptionValues? option, dynamic socketData, bool isDark, bool isCall) {
+  Widget _buildSideCell(BuildContext context, StrategyBuilderProvider provider, OptionValues? option, dynamic socketData, bool isDark, bool isCall, bool isSelected) {
     if (option == null) return const SizedBox();
 
     final Map<String, dynamic>? sData = (socketData is Map) ? socketData as Map<String, dynamic> : null;
@@ -5466,96 +5466,55 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
         ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss)
         : (oiPerChng == "0.00" ? Colors.grey : resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit));
 
-    // Watchlist state for the bookmark action
-    final scripToken = "${option.exch}|${option.token}";
-    final isInWatchlist = ref
-        .read(marketWatchProvider)
-        .scrips
-        .any((s) => "${s['exch']}|${s['token']}" == scripToken);
+    // Watch so the bookmark icon updates immediately.
+    final isInWatchlist = ref.watch(
+      marketWatchProvider.select(
+        (p) => p.scrips.any(
+          (s) => "${s['exch']}|${s['token']}" == "${option.exch}|${option.token}",
+        ),
+      ),
+    );
 
-    // Hover mechanism with Square Buttons
+    // Reuse the same hover action button UI as the watchlist option chain.
     return HoverActionsWrapper(
       actionsAlignment: isCall ? Alignment.centerRight : Alignment.centerLeft,
       actionsPadding: const EdgeInsets.symmetric(horizontal: 2),
+      // Blue hover background (matches the watchlist option chain), but only
+      // when this leg isn't already selected — a selected Buy/Sell leg keeps
+      // its green/red selection background instead.
+      hoverBackgroundColor: isSelected
+          ? null
+          : resolveThemeColor(context,
+                  dark: MyntColors.primaryDark, light: MyntColors.primary)
+              .withValues(alpha: 0.10),
       actionsBuilder: (ctx) => [
-        // Buy Button
-        InkWell(
-          onTap: () => provider.addToBasket(option, 'BUY', context),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.secondary : MyntColors.primary,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: const Text('B', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+        HoverActionButton.buy(
+          context: ctx,
+          onPressed: () => provider.addToBasket(option, 'BUY', context),
         ),
-        const SizedBox(width: 2),
-        // Sell Button
-        InkWell(
-          onTap: () => provider.addToBasket(option, 'SELL', context),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.lossDark : MyntColors.loss,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: const Text('S', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+        HoverActionButton.sell(
+          context: ctx,
+          onPressed: () => provider.addToBasket(option, 'SELL', context),
         ),
-        const SizedBox(width: 2),
         // Chart Button — navigates to home and opens the option's chart
-        InkWell(
-          onTap: () => _handleChartTapSB(option),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF2A2A2A) : Colors.white,
-              border: Border.all(
-                color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
-              ),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Icon(
-              Icons.candlestick_chart,
-              size: 15,
-              color: resolveThemeColor(context,
-                  dark: MyntColors.textPrimaryDark, light: MyntColors.textBlack),
-            ),
-          ),
+        HoverActionButton.icon(
+          context: ctx,
+          iconAsset: assets.chartnew,
+          onPressed: () => _handleChartTapSB(option),
         ),
-        const SizedBox(width: 2),
-        // Add to Watchlist Button
-        InkWell(
-          onTap: () => _handleSaveToWatchlistSB(option),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF2A2A2A) : Colors.white,
-              border: Border.all(
-                color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
-              ),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Icon(
-              isInWatchlist ? Icons.bookmark : Icons.bookmark_border,
-              size: 15,
-              color: isInWatchlist
-                  ? resolveThemeColor(context,
-                      dark: MyntColors.primaryDark, light: MyntColors.primary)
-                  : resolveThemeColor(context,
-                      dark: MyntColors.textPrimaryDark,
-                      light: MyntColors.textBlack),
-            ),
-          ),
+        HoverActionButton.icon(
+          context: ctx,
+          iconAsset: isInWatchlist
+              ? assets.bookmarkIcon
+              : assets.bookmarkLineIcon,
+          iconColor: isInWatchlist
+              ? resolveThemeColor(
+                  ctx,
+                  dark: MyntColors.primaryDark,
+                  light: MyntColors.primary,
+                )
+              : null,
+          onPressed: () => _handleSaveToWatchlistSB(option),
         ),
       ],
       child: Row(
@@ -5656,7 +5615,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       final success = await scripData.addDelMarketScrip(
           scripData.wlName, scripToken, context, false, true, false, false);
       if (success && mounted) {
-        ResponsiveSnackBar.showInfo(context, 'Removed from ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(context, 'Removed from your watchlist "${scripData.wlName}"');
       }
     } else {
       ref.read(websocketProvider).establishConnection(
@@ -5667,7 +5626,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       final success = await scripData.addDelMarketScrip(
           scripData.wlName, scripToken, context, true, true, false, false);
       if (success && mounted) {
-        ResponsiveSnackBar.showSuccess(context, 'Added to ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
       }
     }
   }

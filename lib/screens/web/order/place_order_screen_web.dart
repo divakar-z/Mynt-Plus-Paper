@@ -516,6 +516,22 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     return SafeParse.toInt(getGTTFinalQuantity(value).trim()) > cap;
   }
 
+  /// GTT freeze cap expressed in the qty field's OWN units, so the +/- buttons
+  /// can compare directly against `qtyCtrl.text`. GTT has NO slicing, so the
+  /// cap is a single freeze qty (`frezQty`), NOT the sliced max.
+  ///   - Qty mode (`_isGTTLotToQty`)  → units (frezQty)
+  ///   - Lot mode (`!_isGTTLotToQty`) → lots  (frezQty ~/ lotSize)
+  ///   - MCX (field is always lots)   → lots  (frezQty)
+  /// Returns a large sentinel (999999) when the scrip has no real freeze limit.
+  int _gttCapInFieldUnits() {
+    if (widget.scripInfo.exch == "MCX") {
+      return frezQty <= 1 ? 999999 : frezQty;
+    }
+    if (frezQty <= lotSize) return 999999;
+    if (_isGTTLotToQty) return frezQty; // Qty mode → units
+    return lotSize > 0 ? frezQty ~/ lotSize : frezQty; // Lot mode → lots
+  }
+
   Map userOrderPreference = {};
   bool isUserOrderPreferenceAvailable = false;
   final GlobalKey<TooltipState> tooltipKey = GlobalKey<TooltipState>();
@@ -2555,6 +2571,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     ? ((currentValue / multiplayer).floor()) * multiplayer
                                                                     : multiplayer;
 
+                                                                  // GTT has no slicing — snap an over-cap value down to
+                                                                  // the GTT cap so - lands on the cap (like +) instead of
+                                                                  // an over-cap boundary (Qty -> units, Lot -> lots).
+                                                                  final int gttCap = _gttCapInFieldUnits();
+                                                                  if (adjustedQty > gttCap) {
+                                                                    adjustedQty = gttCap;
+                                                                  }
+
                                                                   if (_isGTTLotToQty) {
                                                                     if (currentValue != adjustedQty) {
                                                                       orderInput.qtyCtrl.text = adjustedQty.toString();
@@ -2564,12 +2588,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       orderInput.qtyCtrl.text = "$multiplayer";
                                                                     }
                                                                   } else {
-                                                                    if (currentValue > 1) {
+                                                                    if (currentValue > gttCap) {
+                                                                      orderInput.qtyCtrl.text = gttCap.toString();
+                                                                    } else if (currentValue > 1) {
                                                                       orderInput.qtyCtrl.text = (currentValue - 1).toString();
                                                                     } else {
                                                                       orderInput.qtyCtrl.text = "1";
                                                                     }
                                                                   }
+                                                                  // Collapse cursor to end so the value isn't left
+                                                                  // fully selected (grey highlight) after +/-.
+                                                                  orderInput.qtyCtrl.selection = TextSelection.collapsed(offset: orderInput.qtyCtrl.text.length);
                                                                 });
                                                               },
                                                               child: Icon(
@@ -2583,12 +2612,25 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 setState(() {
                                                                   String input = orderInput.qtyCtrl.text;
                                                                   int currentValue = int.tryParse(input) ?? 0;
+                                                                  // + snaps a non-lot-multiple qty UP to the next lot
+                                                                  // multiple (ceil) so clicking + always increases
+                                                                  // (e.g. lot 65: 1690 -> 1755, not down).
                                                                   int adjustedQty = currentValue >= multiplayer
-                                                                    ? ((currentValue / multiplayer).floor()) * multiplayer
+                                                                    ? ((currentValue / multiplayer).ceil()) * multiplayer
                                                                     : multiplayer;
 
-                                                                  bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                  bool withinLimit = hasNoFreezeLimit || currentValue < frezQtyOrderSliceMaxLimit * frezQty;
+                                                                  // GTT has NO slicing — the cap is a single freeze qty
+                                                                  // (frezQty), NOT the sliced max. _gttCapInFieldUnits()
+                                                                  // returns the cap in the field's units (Qty -> units,
+                                                                  // Lot -> lots), matching _gttFreezeCapMessage().
+                                                                  final int gttCap = _gttCapInFieldUnits();
+                                                                  final bool hasNoFreezeLimit = gttCap >= 999999;
+                                                                  // Cap the snapped-up qty at the GTT max so + never
+                                                                  // overshoots (e.g. 1756 -> 1755, not 1820).
+                                                                  if (adjustedQty > gttCap) {
+                                                                    adjustedQty = gttCap;
+                                                                  }
+                                                                  bool withinLimit = currentValue < gttCap;
 
                                                                   if (_isGTTLotToQty) {
                                                                     if (currentValue != adjustedQty) {
@@ -2598,24 +2640,25 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     } else if (input.isEmpty) {
                                                                       orderInput.qtyCtrl.text = "$multiplayer";
                                                                     } else if (!hasNoFreezeLimit) {
-                                                                      ResponsiveSnackBar.showWarning(context,
-                                                                        "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                      ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                     }
                                                                   } else {
-                                                                    bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                    int maxAllowedLots = hasNoFreezeLimit
-                                                                      ? 999999
-                                                                      : (frezQtyOrderSliceMaxLimit * frezQty) ~/ lotSize;
+                                                                    int maxAllowedLots = gttCap;
 
                                                                     if (input.isEmpty) {
                                                                       orderInput.qtyCtrl.text = "1";
                                                                     } else if (currentValue < maxAllowedLots) {
                                                                       orderInput.qtyCtrl.text = (currentValue + 1).toString();
+                                                                    } else if (currentValue > maxAllowedLots) {
+                                                                      // over max → snap down to the max (like Qty mode)
+                                                                      orderInput.qtyCtrl.text = maxAllowedLots.toString();
                                                                     } else {
-                                                                      ResponsiveSnackBar.showWarning(context,
-                                                                        "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                      ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                     }
                                                                   }
+                                                                  // Collapse cursor to end so the value isn't left
+                                                                  // fully selected (grey highlight) after +/-.
+                                                                  orderInput.qtyCtrl.selection = TextSelection.collapsed(offset: orderInput.qtyCtrl.text.length);
                                                                 });
                                                               },
                                                               child: Icon(
@@ -2650,10 +2693,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   _showDebouncedWarning(
                                                                       "Minimum Allowed Amount should be greater than $ltp");
                                                                 } else {
-                                                                  bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                  if (!hasNoFreezeLimit && number > frezQtyOrderSliceMaxLimit * frezQty) {
-                                                                    _showDebouncedWarning(
-                                                                        "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                  // GTT has no slicing — validate the typed value against
+                                                                  // the single-freeze cap so an over-limit qty warns the
+                                                                  // moment it is typed (same "1755" message as submit).
+                                                                  if (_gttExceedsCap(newValue)) {
+                                                                    _showDebouncedWarning(_gttFreezeCapMessage());
                                                                   } else {
                                                                     _cancelPendingWarning();
                                                                   }
@@ -3349,6 +3393,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       ? ((currentValue / multiplayer).floor()) * multiplayer
                                                                       : multiplayer;
 
+                                                                    // GTT-OCO has no slicing — snap an over-cap value down
+                                                                    // to the GTT cap so - lands on the cap (like +) instead
+                                                                    // of an over-cap boundary (Qty -> units, Lot -> lots).
+                                                                    final int gttCap = _gttCapInFieldUnits();
+                                                                    if (adjustedQty > gttCap) {
+                                                                      adjustedQty = gttCap;
+                                                                    }
+
                                                                     if (_isGTTLotToQty) {
                                                                       if (currentValue != adjustedQty) {
                                                                         orderInput.ocoQtyCtrl.text = adjustedQty.toString();
@@ -3358,12 +3410,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         orderInput.ocoQtyCtrl.text = "$multiplayer";
                                                                       }
                                                                     } else {
-                                                                      if (currentValue > 1) {
+                                                                      if (currentValue > gttCap) {
+                                                                        orderInput.ocoQtyCtrl.text = gttCap.toString();
+                                                                      } else if (currentValue > 1) {
                                                                         orderInput.ocoQtyCtrl.text = (currentValue - 1).toString();
                                                                       } else {
                                                                         orderInput.ocoQtyCtrl.text = "1";
                                                                       }
                                                                     }
+                                                                    // Collapse cursor to end so the value isn't left
+                                                                    // fully selected (grey highlight) after +/-.
+                                                                    orderInput.ocoQtyCtrl.selection = TextSelection.collapsed(offset: orderInput.ocoQtyCtrl.text.length);
                                                                   });
                                                                 },
                                                                 child: Icon(
@@ -3377,12 +3434,24 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   setState(() {
                                                                     String input = orderInput.ocoQtyCtrl.text;
                                                                     int currentValue = int.tryParse(input) ?? 0;
+                                                                    // + snaps a non-lot-multiple qty UP to the next lot
+                                                                    // multiple (ceil) so clicking + always increases.
                                                                     int adjustedQty = currentValue >= multiplayer
-                                                                      ? ((currentValue / multiplayer).floor()) * multiplayer
+                                                                      ? ((currentValue / multiplayer).ceil()) * multiplayer
                                                                       : multiplayer;
 
-                                                                    bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                    bool withinLimit = hasNoFreezeLimit || currentValue < frezQtyOrderSliceMaxLimit * frezQty;
+                                                                    // GTT-OCO has NO slicing — cap is a single freeze qty
+                                                                    // (frezQty), NOT the sliced max. _gttCapInFieldUnits()
+                                                                    // returns the cap in the field's units (Qty -> units,
+                                                                    // Lot -> lots), matching _gttFreezeCapMessage().
+                                                                    final int gttCap = _gttCapInFieldUnits();
+                                                                    final bool hasNoFreezeLimit = gttCap >= 999999;
+                                                                    // Cap the snapped-up qty at the GTT max so + never
+                                                                    // overshoots (e.g. 1756 -> 1755, not 1820).
+                                                                    if (adjustedQty > gttCap) {
+                                                                      adjustedQty = gttCap;
+                                                                    }
+                                                                    bool withinLimit = currentValue < gttCap;
 
                                                                     if (_isGTTLotToQty) {
                                                                       if (currentValue != adjustedQty) {
@@ -3392,24 +3461,25 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       } else if (input.isEmpty) {
                                                                         orderInput.ocoQtyCtrl.text = "$multiplayer";
                                                                       } else if (!hasNoFreezeLimit) {
-                                                                        ResponsiveSnackBar.showWarning(context,
-                                                                          "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                        ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                       }
                                                                     } else {
-                                                                      bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                      int maxAllowedLots = hasNoFreezeLimit
-                                                                        ? 999999
-                                                                        : (frezQtyOrderSliceMaxLimit * frezQty) ~/ lotSize;
+                                                                      int maxAllowedLots = gttCap;
 
                                                                       if (input.isEmpty) {
                                                                         orderInput.ocoQtyCtrl.text = "1";
                                                                       } else if (currentValue < maxAllowedLots) {
                                                                         orderInput.ocoQtyCtrl.text = (currentValue + 1).toString();
+                                                                      } else if (currentValue > maxAllowedLots) {
+                                                                        // over max → snap down to the max (like Qty mode)
+                                                                        orderInput.ocoQtyCtrl.text = maxAllowedLots.toString();
                                                                       } else {
-                                                                        ResponsiveSnackBar.showWarning(context,
-                                                                          "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                        ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                       }
                                                                     }
+                                                                    // Collapse cursor to end so the value isn't left
+                                                                    // fully selected (grey highlight) after +/-.
+                                                                    orderInput.ocoQtyCtrl.selection = TextSelection.collapsed(offset: orderInput.ocoQtyCtrl.text.length);
                                                                   });
                                                                 },
                                                                 child: Icon(
@@ -3444,10 +3514,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     _showDebouncedWarning(
                                                                         "Minimum Allowed Amount should be greater than $ltp");
                                                                   } else {
-                                                                    bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                    if (!hasNoFreezeLimit && number > frezQtyOrderSliceMaxLimit * frezQty) {
-                                                                      _showDebouncedWarning(
-                                                                          "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                    // GTT-OCO has no slicing — validate against the single-
+                                                                    // freeze cap so an over-limit qty warns as it is typed.
+                                                                    if (_gttExceedsCap(newValue)) {
+                                                                      _showDebouncedWarning(_gttFreezeCapMessage());
                                                                     } else {
                                                                       _cancelPendingWarning();
                                                                     }
@@ -4531,7 +4601,21 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           : multiplayer;
 
                                                                       if (_isLotToQty) {
-                                                                        // Qty mode: decrement by Lot size
+                                                                        // Qty mode: decrement by Lot size. Snap the
+                                                                        // floored value down to the max when the typed
+                                                                        // qty is over the freeze limit, so - lands on the
+                                                                        // max (like +) instead of an over-max boundary
+                                                                        // (e.g. 79000 -> 70200, not 78975).
+                                                                        // MCX stores frezQty in LOTS, so its "no cap"
+                                                                        // test is frezQty <= 1 (see initState).
+                                                                        bool hasNoFreezeLimit =
+                                                                            widget.scripInfo.exch == "MCX"
+                                                                                ? frezQty <= 1
+                                                                                : frezQty <= lotSize;
+                                                                        if (!hasNoFreezeLimit &&
+                                                                            adjustedQty > frezQtyOrderSliceMaxLimit * frezQty) {
+                                                                          adjustedQty = frezQtyOrderSliceMaxLimit * frezQty;
+                                                                        }
                                                                         if (currentValue !=
                                                                             adjustedQty) {
                                                                           qtyCtrl.text =
@@ -4546,8 +4630,19 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               "$multiplayer";
                                                                         }
                                                                       } else {
-                                                                        // Lot mode: decrement by 1
-                                                                        if (currentValue >
+                                                                        // Lot mode: snap an over-max value down to the
+                                                                        // max first (consistent with Qty mode and the +
+                                                                        // button), otherwise decrement by 1.
+                                                                        bool hasNoFreezeLimit =
+                                                                            frezQty <= lotSize;
+                                                                        int maxAllowedLots = hasNoFreezeLimit
+                                                                            ? 999999
+                                                                            : (frezQtyOrderSliceMaxLimit * frezQty) ~/
+                                                                                lotSize;
+                                                                        if (currentValue > maxAllowedLots) {
+                                                                          qtyCtrl.text =
+                                                                              maxAllowedLots.toString();
+                                                                        } else if (currentValue >
                                                                             1) {
                                                                           qtyCtrl.text =
                                                                               (currentValue - 1).toString();
@@ -4582,16 +4677,26 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       int currentValue =
                                                                           int.tryParse(input) ??
                                                                               0;
+                                                                      // + snaps a non-lot-multiple qty UP to the next
+                                                                      // lot multiple (ceil) so + always increases.
                                                                       int adjustedQty = currentValue >=
                                                                               multiplayer
-                                                                          ? ((currentValue / multiplayer).floor()) *
+                                                                          ? ((currentValue / multiplayer).ceil()) *
                                                                               multiplayer
                                                                           : multiplayer;
 
-                                                                      bool
-                                                                          hasNoFreezeLimit =
-                                                                          frezQty <=
-                                                                              lotSize;
+                                                                      // MCX stores frezQty in LOTS, so its "no cap"
+                                                                      // test is frezQty <= 1 (see initState).
+                                                                      bool hasNoFreezeLimit =
+                                                                          widget.scripInfo.exch == "MCX"
+                                                                              ? frezQty <= 1
+                                                                              : frezQty <= lotSize;
+                                                                      // Cap the snapped-up qty at the max so + never
+                                                                      // overshoots the freeze limit (e.g. 70201 -> 70200).
+                                                                      if (!hasNoFreezeLimit &&
+                                                                          adjustedQty > frezQtyOrderSliceMaxLimit * frezQty) {
+                                                                        adjustedQty = frezQtyOrderSliceMaxLimit * frezQty;
+                                                                      }
                                                                       bool
                                                                           withinLimit =
                                                                           hasNoFreezeLimit ||
@@ -4637,6 +4742,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             maxAllowedLots) {
                                                                           qtyCtrl.text =
                                                                               (currentValue + 1).toString();
+                                                                        } else if (currentValue >
+                                                                            maxAllowedLots) {
+                                                                          // over max → snap to max (like Qty mode)
+                                                                          qtyCtrl.text =
+                                                                              maxAllowedLots.toString();
                                                                         } else {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -4710,14 +4820,19 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                               _showDebouncedWarning(
                                                                   "Minimum Allowed Amount should be greater than $ltp");
                                                             } else {
-                                                              bool
-                                                                  hasNoFreezeLimit =
-                                                                  frezQty <=
-                                                                      lotSize;
+                                                              // MCX stores frezQty in LOTS and its field is lots, so
+                                                              // its "no cap" test is frezQty <= 1 and the value is the
+                                                              // raw lots; NFO/BFO caps are in units.
+                                                              bool hasNoFreezeLimit =
+                                                                  widget.scripInfo.exch == "MCX"
+                                                                      ? frezQty <= 1
+                                                                      : frezQty <= lotSize;
                                                               final int valueInUnits =
-                                                                  (!_isStock && !_isLotToQty)
-                                                                      ? number * lotSize
-                                                                      : number;
+                                                                  widget.scripInfo.exch == "MCX"
+                                                                      ? (int.tryParse(newValue) ?? 0)
+                                                                      : ((!_isStock && !_isLotToQty)
+                                                                          ? number * lotSize
+                                                                          : number);
                                                               if (!hasNoFreezeLimit &&
                                                                   valueInUnits >
                                                                       frezQtyOrderSliceMaxLimit *
@@ -6153,6 +6268,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         context, _gttFreezeCapMessage());
                                                                     return;
                                                                   }
+                                                                  // Lot-multiple guard — GTT final qty must be a whole
+                                                                  // number of lots (mirrors the regular order path;
+                                                                  // Qty mode can otherwise type a non-multiple like 18).
+                                                                  final int gttFinalQty = SafeParse.toInt(
+                                                                      getGTTFinalQuantity(orderInput.qtyCtrl.text));
+                                                                  int gttLotRounded =
+                                                                      (gttFinalQty / lotSize).round() * lotSize;
+                                                                  if (gttLotRounded < lotSize) gttLotRounded = lotSize; // never suggest 0
+                                                                  if (gttFinalQty != gttLotRounded &&
+                                                                      widget.scripInfo.exch != 'MCX') {
+                                                                    ResponsiveSnackBar.showWarning(context,
+                                                                        "Quantity should be multiple of lot size $lotSize => $gttLotRounded");
+                                                                    return;
+                                                                  }
                                                                   if (orderInput.disableGTTCond) {
                                                                     final computedOcoQty = SafeParse.toDouble(
                                                                         getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
@@ -6170,6 +6299,18 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     if (_gttExceedsCap(orderInput.ocoQtyCtrl.text)) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context, _gttFreezeCapMessage());
+                                                                      return;
+                                                                    }
+                                                                    // OCO leg lot-multiple guard (same as the main GTT leg)
+                                                                    final int ocoFinalQty = SafeParse.toInt(
+                                                                        getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
+                                                                    int ocoLotRounded =
+                                                                        (ocoFinalQty / lotSize).round() * lotSize;
+                                                                    if (ocoLotRounded < lotSize) ocoLotRounded = lotSize; // never suggest 0
+                                                                    if (ocoFinalQty != ocoLotRounded &&
+                                                                        widget.scripInfo.exch != 'MCX') {
+                                                                      ResponsiveSnackBar.showWarning(context,
+                                                                          "OCO Quantity should be multiple of lot size $lotSize => $ocoLotRounded");
                                                                       return;
                                                                     }
                                                                   }
@@ -8122,6 +8263,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
         }
         int q = ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) / lotSize).round() *
             lotSize);
+        if (q < lotSize) q = lotSize; // never suggest 0 — minimum is one lot
         if (SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) != q &&
             widget.scripInfo.exch != 'MCX') {
           placeorder = false;
@@ -8196,6 +8338,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       } else {
         int q = ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) / lotSize).round() *
             lotSize);
+        if (q < lotSize) q = lotSize; // never suggest 0 — minimum is one lot
         if (SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) != q &&
             widget.scripInfo.exch != 'MCX') {
           ResponsiveSnackBar.showWarning(context,
