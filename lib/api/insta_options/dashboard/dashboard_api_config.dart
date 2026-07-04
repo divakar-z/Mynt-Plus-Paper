@@ -8,16 +8,18 @@
 /// service, so this config must never be merged into [InstaOptionsConfig].
 ///
 /// The origin resolves from `--dart-define=API_BASE=...` at build/run time,
-/// falling back to the documented local default. All dashboard endpoints sit
-/// under the `/api/v1/dashboard` prefix; `/health` sits at the service root.
+/// falling back to the hosted production origin
+/// (`https://oaapi.zebuetrade.com/data`). All endpoints sit under the
+/// `/api/v1/...` prefix (e.g. `<origin>/api/v1/dashboard`).
 class DashboardApiConfig {
   const DashboardApiConfig();
 
-  /// Override at build/run time, e.g.:
-  /// `flutter run -d chrome --dart-define=API_BASE=http://10.0.0.5:8000`
+  /// Defaults to the hosted production service. Override at build/run time for
+  /// local development, e.g.:
+  /// `flutter run -d chrome --dart-define=API_BASE=http://localhost:8000`
   static const String _envBase = String.fromEnvironment(
     'API_BASE',
-    defaultValue: 'http://localhost:8000',
+    defaultValue: 'https://oaapi.zebuetrade.com/data',
   );
 
   /// Service origin without a trailing slash, e.g. `http://localhost:8000`.
