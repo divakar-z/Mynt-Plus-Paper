@@ -15,11 +15,13 @@ import 'sub_pages/custom_scans_sub_page.dart';
 import 'sub_pages/fundamentals_new_sub_page.dart';
 import 'sub_pages/fundamentals_sub_page.dart';
 import 'sub_pages/scan_explain_screen.dart';
+import 'sub_pages/scanners_new_sub_page.dart';
 import 'sub_pages/scanners_sub_page.dart';
 import 'sub_pages/symbols_sub_page.dart';
 import 'widgets/empty_state.dart';
 // ignore: unused_import
 import 'widgets/scanner_breadcrumb.dart'; // kept for the commented breadcrumb
+// ignore: unused_import
 import 'widgets/scanner_left_rail.dart';
 
 class ScannerShellScreen extends ConsumerStatefulWidget {
@@ -57,8 +59,10 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(scannerShellProvider);
     final width = MediaQuery.of(context).size.width;
-    final collapsed = width < 1100 && width >= 760;
-    final hidden = width < 760;
+    // Sidebar hidden for now (manager request) — only the Scanners New tab is
+    // live. Restore by un-commenting these + the ScannerLeftRail below.
+    // final collapsed = width < 1100 && width >= 760;
+    // final hidden = width < 760;
 
     return Container(
       color: resolveThemeColor(context,
@@ -67,13 +71,13 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (!hidden)
-            ScannerLeftRail(
-              active: state.activeSubPage,
-              collapsed: collapsed,
-              onSelect: (p) =>
-                  ref.read(scannerShellProvider.notifier).setActiveSubPage(p),
-            ),
+          // if (!hidden)
+          //   ScannerLeftRail(
+          //     active: state.activeSubPage,
+          //     collapsed: collapsed,
+          //     onSelect: (p) =>
+          //         ref.read(scannerShellProvider.notifier).setActiveSubPage(p),
+          //   ),
           Expanded(child: _rightArea(state, width)),
         ],
       ),
@@ -148,13 +152,15 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
               // Symbols sub-page is no longer shown in the rail, but its
               // IndexedStack slot stays so ScannerSubPage.scanners (index 1)
               // etc. continue to map correctly.
-              index: state.activeSubPage.index,
+              // Locked to Scanners New — the sidebar (tab switching) is hidden.
+              index: ScannerSubPage.scannersNew.index,
               children: const [
                 SymbolsSubPage(),
                 ScannersSubPage(),
                 FundamentalsSubPage(),
                 CustomScansSubPage(),
                 FundamentalsNewSubPage(),
+                ScannersNewSubPage(),
               ],
             ),
           ),
@@ -217,6 +223,8 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
         return 'Custom Scans';
       case ScannerSubPage.fundamentalsNew:
         return 'Fundamentals New';
+      case ScannerSubPage.scannersNew:
+        return 'Scanners New';
     }
   }
 }

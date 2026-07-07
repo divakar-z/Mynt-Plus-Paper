@@ -191,6 +191,9 @@ enum ScannerSubPage {
   fundamentals,
   customScans,
   fundamentalsNew,
+  // Keep new values LAST — the shell's IndexedStack maps `.index` to child
+  // order, so inserting mid-list would misroute the existing tabs.
+  scannersNew,
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -2281,6 +2284,9 @@ class _CustomizableSplitHomeScreenState
         // Redesign scaffold — reuse the fundamentals route for now; a dedicated
         // route is added when this tab replaces the old Fundamentals screen.
         return WebRoutes.scannerFundamentals;
+      case ScannerSubPage.scannersNew:
+        // Dashboard redesign scaffold — reuse the scanners route for now.
+        return WebRoutes.scannerScanners;
     }
   }
 
@@ -2587,10 +2593,9 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
-                      // Scanner / Orderflow / Charts — hidden from the Options
-                      // dropdown for now (commented out per request). Restore by
-                      // un-commenting; handlers (_handleScannerTap etc.) remain.
-                      /*
+                      // Scanner is shown in the Options dropdown; Orderflow /
+                      // Charts stay hidden below (line-commented). Restore them
+                      // by un-commenting; handlers (_handleScannerTap etc.) remain.
                       // Scanner
                       shadcn.MenuButton(
                         onPressed: (context) {
@@ -2623,87 +2628,89 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
-                      // Orderflow — nested under Scanner in the Options menu
-                      shadcn.MenuButton(
-                        onPressed: (context) {
-                          _handleOrderflowTap();
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          child: Row(
-                            children: [
-                              Icon(
-                                shadcn.LucideIcons.activity,
-                                size: 22,
-                                color: resolveThemeColor(
-                                  context,
-                                  dark: MyntColors.iconDark,
-                                  light: MyntColors.icon,
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              Text(
-                                'Orderflow',
-                                style: MyntWebTextStyles.body(
-                                  context,
-                                  fontWeight: MyntFonts.medium,
-                                  darkColor: MyntColors.textPrimaryDark,
-                                  lightColor: MyntColors.textPrimary,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Transform.translate(
-                                offset: const Offset(0, -6),
-                                child: Text(
-                                  'Beta',
-                                  style: MyntWebTextStyles.caption(
-                                    context,
-                                    color: resolveThemeColor(
-                                      context,
-                                      dark: MyntColors.primaryDark,
-                                      light: MyntColors.primary,
-                                    ),
-                                    fontWeight: MyntFonts.semiBold,
-                                  ).copyWith(fontSize: 10),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
+
+
+                      //  Orderflow — nested under Scanner in the Options menu
+                      // shadcn.MenuButton(
+                      //   onPressed: (context) {
+                      //     _handleOrderflowTap();
+                      //   },
+                      //   child: Padding(
+                      //     padding: const EdgeInsets.symmetric(vertical: 10),
+                      //     child: Row(
+                      //       children: [
+                      //         Icon(
+                      //           shadcn.LucideIcons.activity,
+                      //           size: 22,
+                      //           color: resolveThemeColor(
+                      //             context,
+                      //             dark: MyntColors.iconDark,
+                      //             light: MyntColors.icon,
+                      //           ),
+                      //         ),
+                      //         const SizedBox(width: 14),
+                      //         Text(
+                      //           'Orderflow',
+                      //           style: MyntWebTextStyles.body(
+                      //             context,
+                      //             fontWeight: MyntFonts.medium,
+                      //             darkColor: MyntColors.textPrimaryDark,
+                      //             lightColor: MyntColors.textPrimary,
+                      //           ),
+                      //         ),
+                      //         const SizedBox(width: 6),
+                      //         Transform.translate(
+                      //           offset: const Offset(0, -6),
+                      //           child: Text(
+                      //             'Beta',
+                      //             style: MyntWebTextStyles.caption(
+                      //               context,
+                      //               color: resolveThemeColor(
+                      //                 context,
+                      //                 dark: MyntColors.primaryDark,
+                      //                 light: MyntColors.primary,
+                      //               ),
+                      //               fontWeight: MyntFonts.semiBold,
+                      //             ).copyWith(fontSize: 10),
+                      //           ),
+                      //         ),
+                      //       ],
+                      //     ),
+                      //   ),
+                      // ),
                       // Charts
-                      shadcn.MenuButton(
-                        onPressed: (context) {
-                          _handleChartsTap();
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          child: Row(
-                            children: [
-                              Icon(
-                                shadcn.LucideIcons.chartLine,
-                                size: 22,
-                                color: resolveThemeColor(
-                                  context,
-                                  dark: MyntColors.iconDark,
-                                  light: MyntColors.icon,
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              Text(
-                                'Charts',
-                                style: MyntWebTextStyles.body(
-                                  context,
-                                  fontWeight: MyntFonts.medium,
-                                  darkColor: MyntColors.textPrimaryDark,
-                                  lightColor: MyntColors.textPrimary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      */
+                      // shadcn.MenuButton(
+                      //   onPressed: (context) {
+                      //     _handleChartsTap();
+                      //   },
+                      //   child: Padding(
+                      //     padding: const EdgeInsets.symmetric(vertical: 10),
+                      //     child: Row(
+                      //       children: [
+                      //         Icon(
+                      //           shadcn.LucideIcons.chartLine,
+                      //           size: 22,
+                      //           color: resolveThemeColor(
+                      //             context,
+                      //             dark: MyntColors.iconDark,
+                      //             light: MyntColors.icon,
+                      //           ),
+                      //         ),
+                      //         const SizedBox(width: 14),
+                      //         Text(
+                      //           'Charts',
+                      //           style: MyntWebTextStyles.body(
+                      //             context,
+                      //             fontWeight: MyntFonts.medium,
+                      //             darkColor: MyntColors.textPrimaryDark,
+                      //             lightColor: MyntColors.textPrimary,
+                      //           ),
+                      //         ),
+                      //       ],
+                      //     ),
+                      //   ),
+                      // ),
+                      
                     ],
                   ),
                       ),

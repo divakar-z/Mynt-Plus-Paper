@@ -26,6 +26,8 @@ class ScannerLeftRail extends StatelessWidget {
 
   static const _items = <_RailItem>[
     _RailItem(ScannerSubPage.scanners, 'Scanners', shadcn.LucideIcons.radar),
+    _RailItem(ScannerSubPage.scannersNew, 'Scanners New',
+        shadcn.LucideIcons.layoutDashboard),
     _RailItem(ScannerSubPage.fundamentals, 'Fundamentals',
         shadcn.LucideIcons.chartBar),
     _RailItem(ScannerSubPage.fundamentalsNew, 'Fundamentals New',

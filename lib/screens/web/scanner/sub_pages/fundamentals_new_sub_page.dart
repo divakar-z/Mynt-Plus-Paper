@@ -22,6 +22,7 @@ import 'package:mynt_plus/screens/web/scanner/widgets/filter_inputs.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/fundamental_filter_row.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/scanner_results_table.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/screens_browser_modal.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/metric_picker_modal.dart';
 
 /// Redesigned Fundamental Screener (Tickertape-inspired): a fixed top toolbar,
 /// a left filter sidebar (stacked filter rows), and a right results area.
@@ -46,6 +47,18 @@ class _FundamentalsNewSubPageState
       TextEditingController(text: _state.limit.toString());
   // Local view state (UI only) — collapse the filter sidebar for more table room.
   bool _sidebarCollapsed = false;
+  // Which metric accordion rows are expanded (field keys).
+  final Set<String> _expanded = {};
+  // Operator chosen for a metric that has no value yet, so the choice sticks
+  // while the row is open even though it isn't an active filter.
+  final Map<String, String> _draftOps = {};
+  // Which metrics are shown in the sidebar (a managed subset, like Tickertape).
+  // Populated from a default set on first load; edited via the Add-filter picker.
+  final List<String> _shown = [];
+  bool _didInitShown = false;
+  // Bumped per metric on Reset so the open condition control rebuilds fresh
+  // (its text controllers re-hydrate from the now-empty filter).
+  final Map<String, int> _rowNonce = {};
 
   FundamentalsBuilderState get _state =>
       ref.read(fundamentalsNewSessionProvider).builder;
@@ -142,7 +155,9 @@ class _FundamentalsNewSubPageState
   }
 
   // ---------------------------------------------------------------------
-  // Left filter sidebar — stacked filter rows + Add filter.
+  // Left filter sidebar — Tickertape-style accordion of metrics. Each metric
+  // is a collapsible row; expanding it reveals the condition (operator + value
+  // / multiselect). A metric with a value set becomes an active filter.
   // ---------------------------------------------------------------------
   Widget _filterSidebar(AsyncValue<List<FundamentalField>> fields) {
     final border = shadcn.Theme.of(context).colorScheme.border;
@@ -173,7 +188,7 @@ class _FundamentalsNewSubPageState
             const Spacer(),
             if (_state.filters.isNotEmpty)
               InkWell(
-                onTap: () => _setBuilder(_state.copyWith(filters: const [])),
+                onTap: _resetAll,
                 borderRadius: BorderRadius.circular(4),
                 child: Padding(
                   padding:
@@ -193,7 +208,7 @@ class _FundamentalsNewSubPageState
               constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
             ),
           ]),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
           Expanded(
             child: fields.when(
               loading: () => Center(child: MyntLoader.branded()),
@@ -203,87 +218,13 @@ class _FundamentalsNewSubPageState
                 message: e.toString(),
                 onRetry: () => ref.invalidate(fundamentalFieldsProvider),
               ),
-              data: (fList) {
-                if (_state.filters.isEmpty) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        child: Center(
-                          child: Text(
-                            'No filters yet.\nAdd one to build your screen.',
-                            textAlign: TextAlign.center,
-                            style: MyntWebTextStyles.caption(context,
-                                color: secondary),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      _addFilterButton(fList),
-                    ],
-                  );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: ScrollConfiguration(
-                        behavior: const MaterialScrollBehavior()
-                            .copyWith(scrollbars: false),
-                        child: RawScrollbar(
-                          controller: _filtersScroll,
-                          thumbVisibility: true,
-                          thickness: 6,
-                          radius: const Radius.circular(8),
-                          thumbColor: secondary.withValues(alpha: 0.5),
-                          child: SingleChildScrollView(
-                            controller: _filtersScroll,
-                            padding: const EdgeInsets.only(right: 10),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                for (int i = 0;
-                                    i < _state.filters.length;
-                                    i++) ...[
-                                  FundamentalFilterRow(
-                                    stacked: true,
-                                    fields: fList,
-                                    filter: _state.filters[i],
-                                    onChange: (f) {
-                                      final nf = [..._state.filters]..[i] = f;
-                                      _setBuilder(
-                                          _state.copyWith(filters: nf));
-                                    },
-                                    onRemove: () {
-                                      final nf = [..._state.filters]
-                                        ..removeAt(i);
-                                      _setBuilder(
-                                          _state.copyWith(filters: nf));
-                                    },
-                                  ),
-                                  if (i < _state.filters.length - 1)
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 10),
-                                      child: Divider(
-                                          height: 1,
-                                          color:
-                                              border.withValues(alpha: 0.5)),
-                                    ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _addFilterButton(fList),
-                  ],
-                );
-              },
+              data: (fList) => _metricList(fList, _effectiveShown(fList)),
             ),
           ),
+          if (fields.asData != null) ...[
+            const SizedBox(height: 10),
+            _addMetricButton(fields.asData!.value),
+          ],
           const SizedBox(height: 10),
           Divider(height: 1, color: border.withValues(alpha: 0.6)),
           const SizedBox(height: 10),
@@ -293,21 +234,255 @@ class _FundamentalsNewSubPageState
     );
   }
 
-  Widget _addFilterButton(List<FundamentalField> fList) {
+  void _resetAll() {
+    setState(() {
+      _draftOps.clear();
+      _expanded.clear();
+    });
+    _setBuilder(_state.copyWith(filters: const []));
+  }
+
+  /// Metrics shown in the sidebar (a managed subset). Defaults to the first few
+  /// fields until the user adds / removes via the picker.
+  List<String> _effectiveShown(List<FundamentalField> fList) =>
+      _didInitShown ? _shown : fList.take(6).map((f) => f.key).toList();
+
+  void _ensureShownInit(List<FundamentalField> fList) {
+    if (_didInitShown) return;
+    _didInitShown = true;
+    _shown
+      ..clear()
+      ..addAll(fList.take(6).map((f) => f.key));
+  }
+
+  Future<void> _openMetricPicker(List<FundamentalField> fList) async {
+    _ensureShownInit(fList);
+    final result = await showMetricPicker(
+      context,
+      fields: fList,
+      selected: _shown.toSet(),
+    );
+    if (result == null) return;
+    // Keep existing order for still-selected metrics; append newly-added ones.
+    final kept = _shown.where(result.contains).toList();
+    for (final k in result) {
+      if (!kept.contains(k)) kept.add(k);
+    }
+    setState(() {
+      _shown
+        ..clear()
+        ..addAll(kept);
+    });
+    // Drop active filters for metrics that are no longer shown.
+    final nextFilters =
+        _state.filters.where((f) => result.contains(f.field)).toList();
+    if (nextFilters.length != _state.filters.length) {
+      _setBuilder(_state.copyWith(filters: nextFilters));
+    }
+  }
+
+  void _removeMetric(String key, List<FundamentalField> fList) {
+    _ensureShownInit(fList);
+    setState(() {
+      _shown.remove(key);
+      _expanded.remove(key);
+      _draftOps.remove(key);
+    });
+    final next = _state.filters.where((f) => f.field != key).toList();
+    if (next.length != _state.filters.length) {
+      _setBuilder(_state.copyWith(filters: next));
+    }
+  }
+
+  /// Clear a metric's value but keep the row (bump its nonce so the open input
+  /// rebuilds empty).
+  void _resetMetric(String key) {
+    setState(() {
+      _draftOps.remove(key);
+      _rowNonce[key] = (_rowNonce[key] ?? 0) + 1;
+    });
+    final next = _state.filters.where((f) => f.field != key).toList();
+    if (next.length != _state.filters.length) {
+      _setBuilder(_state.copyWith(filters: next));
+    }
+  }
+
+  Widget _addMetricButton(List<FundamentalField> fList) {
     return MyntButton(
       type: MyntButtonType.outlined,
       label: 'Add filter',
       icon: Icons.add,
       isFullWidth: true,
-      onPressed: () {
-        if (fList.isEmpty) return;
-        final nf = [
-          ..._state.filters,
-          FundamentalFilter(field: fList.first.key, op: '<'),
-        ];
-        _setBuilder(_state.copyWith(filters: nf));
-      },
+      onPressed: () => _openMetricPicker(fList),
     );
+  }
+
+  /// Scrollable list of the shown metrics (a managed subset), each a
+  /// collapsible accordion row. Add / remove metrics via the picker.
+  Widget _metricList(List<FundamentalField> fList, List<String> shown) {
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    if (shown.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Text(
+            'No filters added.\nTap "Add filter" to choose metrics.',
+            textAlign: TextAlign.center,
+            style: MyntWebTextStyles.caption(context, color: secondary),
+          ),
+        ),
+      );
+    }
+    final byKey = {for (final f in fList) f.key: f};
+    final children = <Widget>[];
+    for (final key in shown) {
+      final f = byKey[key];
+      if (f == null) continue;
+      children.add(_metricTile(f, fList));
+      children.add(Divider(height: 1, color: border.withValues(alpha: 0.5)));
+    }
+    // Drop the trailing divider so it doesn't double up with the bottom rule.
+    if (children.isNotEmpty && children.last is Divider) children.removeLast();
+
+    return ScrollConfiguration(
+      behavior: const MaterialScrollBehavior().copyWith(scrollbars: false),
+      child: RawScrollbar(
+        controller: _filtersScroll,
+        thumbVisibility: true,
+        thickness: 6,
+        radius: const Radius.circular(8),
+        thumbColor: secondary.withValues(alpha: 0.5),
+        child: SingleChildScrollView(
+          controller: _filtersScroll,
+          padding: const EdgeInsets.only(right: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One metric row. The header + hover-Remove + chevron live in [_MetricTile];
+  /// when open, the inline condition control (reused from [FundamentalFilterRow]).
+  Widget _metricTile(FundamentalField f, List<FundamentalField> fList) {
+    final existing = _filterFor(f.key);
+    final isOpen = _expanded.contains(f.key);
+    return _MetricTile(
+      label: f.label,
+      active: existing != null,
+      isOpen: isOpen,
+      summary: (existing != null && !isOpen) ? _summary(existing, f) : null,
+      onToggle: () => setState(() {
+        if (isOpen) {
+          _expanded.remove(f.key);
+        } else {
+          _expanded.add(f.key);
+        }
+      }),
+      onRemove: () => _removeMetric(f.key, fList),
+      onReset: () => _resetMetric(f.key),
+      body: isOpen
+          ? FundamentalFilterRow(
+              key: ValueKey('${f.key}#${_rowNonce[f.key] ?? 0}'),
+              stacked: true,
+              hideField: true,
+              fields: fList,
+              filter: existing ??
+                  FundamentalFilter(
+                      field: f.key, op: _draftOps[f.key] ?? _defaultOp(f)),
+              onChange: _onMetricChange,
+              onRemove: () {},
+            )
+          : null,
+    );
+  }
+
+  // --- accordion filter plumbing (state shuffling only, no new logic) -------
+
+  FundamentalFilter? _filterFor(String key) {
+    for (final f in _state.filters) {
+      if (f.field == key) return f;
+    }
+    return null;
+  }
+
+  String _defaultOp(FundamentalField f) {
+    if (f.key == 'sector' || f.key == 'industry') return 'in';
+    final ops = validOpsForDtype(f.dtype, multiYear: isMultiYearField(f.key));
+    return ops.isNotEmpty ? ops.first : '>';
+  }
+
+  /// A filter counts as active (and is stored) once it has a usable value —
+  /// null-checks need none; lists/strings must be non-empty.
+  bool _isActiveFilter(FundamentalFilter f) {
+    if (f.op == 'is_null' || f.op == 'is_not_null') return true;
+    if (f.op == 'min_years') return f.years != null;
+    final v = f.value;
+    if (v == null) return false;
+    if (v is List) return v.isNotEmpty;
+    if (v is String) return v.trim().isNotEmpty;
+    return true;
+  }
+
+  void _onMetricChange(FundamentalFilter nf) {
+    final next = _state.filters.where((x) => x.field != nf.field).toList();
+    if (_isActiveFilter(nf)) next.add(nf);
+    setState(() => _draftOps[nf.field] = nf.op);
+    _setBuilder(_state.copyWith(filters: next));
+  }
+
+  /// Compact one-line summary of an active filter, shown on the collapsed row.
+  String _summary(FundamentalFilter f, FundamentalField field) {
+    if (f.op == 'is_null') return 'is empty';
+    if (f.op == 'is_not_null') return 'not empty';
+    if (f.op == 'min_years') return 'min ${f.years ?? ''}y';
+    final pct = field.dtype == 'pct';
+    final v = f.value;
+    if (v is List) {
+      if (f.op == 'between' && v.length == 2) {
+        return '${_num(v[0], pct)} to ${_num(v[1], pct)}';
+      }
+      final n = v.length;
+      if (field.key == 'sector') return '$n sector${n == 1 ? '' : 's'} selected';
+      if (field.key == 'industry') {
+        return '$n ${n == 1 ? 'industry' : 'industries'} selected';
+      }
+      return '$n selected';
+    }
+    final yrs = f.years != null ? ' · ${f.years}y' : '';
+    return '${_opSymbol(f.op)} ${_num(v, pct)}$yrs'.trim();
+  }
+
+  String _opSymbol(String op) {
+    switch (op) {
+      case '<':
+        return '<';
+      case '<=':
+        return '≤';
+      case '>':
+        return '>';
+      case '>=':
+        return '≥';
+      case '==':
+        return '=';
+      case '!=':
+        return '≠';
+      case 'min_years':
+        return 'min';
+      default:
+        return op;
+    }
+  }
+
+  String _num(dynamic v, bool pct) {
+    if (v is! num) return v?.toString() ?? '';
+    final n = pct ? v * 100 : v;
+    final s = n == n.roundToDouble() ? n.toInt().toString() : n.toString();
+    return pct ? '$s%' : s;
   }
 
   /// Missing-data (Exclude / Include) — a match rule, so it lives with the
@@ -660,5 +835,107 @@ class _FundamentalsNewSubPageState
         ResponsiveSnackBar.showSuccess(context, 'Saved "${ctrl.text.trim()}"');
       }
     }
+  }
+}
+
+/// A single metric row in the filter sidebar: a tappable header showing the
+/// metric name, its value summary (when collapsed + active) or a Remove
+/// affordance (on hover), and a chevron; plus the inline condition [body]
+/// when expanded.
+class _MetricTile extends StatefulWidget {
+  final String label;
+  final bool active;
+  final bool isOpen;
+  final String? summary;
+  final VoidCallback onToggle;
+  final VoidCallback onRemove;
+  final VoidCallback onReset;
+  final Widget? body;
+
+  const _MetricTile({
+    required this.label,
+    required this.active,
+    required this.isOpen,
+    required this.summary,
+    required this.onToggle,
+    required this.onRemove,
+    required this.onReset,
+    required this.body,
+  });
+
+  @override
+  State<_MetricTile> createState() => _MetricTileState();
+}
+
+class _MetricTileState extends State<_MetricTile> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    const primary = MyntColors.primary;
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MouseRegion(
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: InkWell(
+            onTap: widget.onToggle,
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+              child: Row(children: [
+                Expanded(
+                  child: Text(widget.label,
+                      style: MyntWebTextStyles.body(context,
+                          fontWeight: widget.active
+                              ? MyntFonts.semiBold
+                              : MyntFonts.regular,
+                          color: widget.active ? primary : textPrimary)),
+                ),
+                if (_hover)
+                  InkWell(
+                    onTap: widget.active ? widget.onReset : widget.onRemove,
+                    borderRadius: BorderRadius.circular(4),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      child: Text(widget.active ? 'Reset' : 'Remove',
+                          style: MyntWebTextStyles.caption(context,
+                              color: secondary)),
+                    ),
+                  )
+                else if (widget.summary != null) ...[
+                  Flexible(
+                    child: Text(widget.summary!,
+                        textAlign: TextAlign.right,
+                        overflow: TextOverflow.ellipsis,
+                        style: MyntWebTextStyles.caption(context,
+                            color: secondary)),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                const SizedBox(width: 2),
+                Icon(
+                    widget.isOpen
+                        ? shadcn.LucideIcons.chevronUp
+                        : shadcn.LucideIcons.chevronDown,
+                    size: 16,
+                    color: secondary),
+              ]),
+            ),
+          ),
+        ),
+        if (widget.isOpen && widget.body != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12, top: 2),
+            child: widget.body!,
+          ),
+      ],
+    );
   }
 }

@@ -20,6 +20,11 @@ class FundamentalFilterRow extends ConsumerStatefulWidget {
   /// horizontal row. The current screen keeps the default horizontal layout.
   final bool stacked;
 
+  /// When true (only meaningful with [stacked]), drop the field dropdown and
+  /// remove-× and render only the condition (operator + value / multiselect).
+  /// Used by the metric accordion, where the field is fixed by the row itself.
+  final bool hideField;
+
   const FundamentalFilterRow({
     super.key,
     required this.fields,
@@ -27,6 +32,7 @@ class FundamentalFilterRow extends ConsumerStatefulWidget {
     required this.onChange,
     required this.onRemove,
     this.stacked = false,
+    this.hideField = false,
   });
 
   @override
@@ -120,16 +126,19 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
     ]);
   }
 
-  /// Stacked (vertical) layout for the redesigned left filter sidebar: field on
-  /// top with the remove ×, then the operator, then the value input(s) — each
-  /// full-width so it fits a narrow column.
+  /// Compact layout for the redesigned left filter sidebar: the field on its
+  /// own line with the remove ×, then the operator + value (+ optional years)
+  /// together on one line below — half the height of a fully stacked row.
   Widget _buildStacked(FundamentalField? field) {
     final isCat =
         widget.filter.field == 'sector' || widget.filter.field == 'industry';
     final ops = field == null
         ? const <String>[]
         : validOpsForDtype(field.dtype, multiYear: _isMultiYear);
-    final op = widget.filter.op;
+    final body = _conditionBody(field, ops, isCat);
+    // Accordion mode: the field is fixed by the row it lives under, so we drop
+    // the field dropdown / remove-× and render only the condition.
+    if (widget.hideField) return body;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -143,20 +152,29 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
             visualDensity: VisualDensity.compact,
           ),
         ]),
-        if (isCat) ...[
-          const SizedBox(height: 8),
-          _categoryMultiSelect(),
-        ] else ...[
-          const SizedBox(height: 8),
-          _opDropdown(ops),
-          if (op != 'is_null' && op != 'is_not_null') ...[
-            const SizedBox(height: 8),
-            _valueInputs(field),
-          ],
-          if (_isMultiYear && op != 'min_years') ...[
-            const SizedBox(height: 8),
-            SizedBox(width: 120, child: _yearsInput()),
-          ],
+        const SizedBox(height: 8),
+        body,
+      ],
+    );
+  }
+
+  /// The condition portion of a stacked row: the category multiselect, a bare
+  /// operator (for null-checks), or operator + value (+ optional years) on one
+  /// compact line.
+  Widget _conditionBody(
+      FundamentalField? field, List<String> ops, bool isCat) {
+    if (isCat) return _categoryMultiSelect();
+    final op = widget.filter.op;
+    if (op == 'is_null' || op == 'is_not_null') return _opDropdown(ops);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: _opDropdown(ops)),
+        const SizedBox(width: 8),
+        Expanded(child: _valueInputs(field)),
+        if (_isMultiYear && op != 'min_years') ...[
+          const SizedBox(width: 8),
+          SizedBox(width: 60, child: _yearsInput()),
         ],
       ],
     );

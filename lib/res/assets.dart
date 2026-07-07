@@ -250,4 +250,11 @@ class Assets {
   final String biggpay = "assets/icon/paymentIcon/gpay.svg";
   final String bigphnpay = "assets/icon/paymentIcon/phonepe.svg";
   final String bigpaytm = "assets/icon/paymentIcon/paytm.svg";
+
+  // Scanner sentiment candle images
+  final String scannerBullish = "assets/scanner/bullish.png";
+  final String scannerBearish = "assets/scanner/bearish.png";
+  final String scannerNeutral = "assets/scanner/neutral.png";
+  final String scannerAll = "assets/scanner/all.png";
+  final String scannerGreenRed = "assets/scanner/greenred.png";
 }

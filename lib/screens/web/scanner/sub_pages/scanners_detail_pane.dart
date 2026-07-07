@@ -64,77 +64,113 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Header with a bottom divider line (matches the MF detail header).
+        // Grey banner holding the header (back + title + subtitle + actions)
+        // with the scanner description tucked inside it.
         Container(
-          padding: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
+            // Flat light-blue to match the dashboard hero banner.
+            color: resolveThemeColor(context,
+                dark: MyntColors.sidebarBgDark, light: const Color(0xFFEAF1FE)),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
                 color: resolveThemeColor(context,
-                    dark: MyntColors.dividerDark, light: MyntColors.divider),
-                width: 1,
-              ),
-            ),
+                    dark: MyntColors.dividerDark, light: MyntColors.divider)),
           ),
-          child: Row(children: [
-            CustomBackBtn(onBack: onBack),
-          const SizedBox(width: 8),
-          Expanded(
-            child: meta.when(
-              loading: () =>
-                  Text('Loading…', style: MyntWebTextStyles.title(context)),
-              error: (_, __) => Text(code,
-                  style: MyntWebTextStyles.title(context,
-                      fontWeight: MyntFonts.semiBold)),
-              data: (s) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(s.displayName,
-                      style: MyntWebTextStyles.title(context,
-                          fontWeight: MyntFonts.semiBold)),
-                  Text(
-                    '${s.groupName}${s.subGroup == null ? "" : " · ${s.subGroup}"}',
-                    style: MyntWebTextStyles.caption(context),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                CustomBackBtn(onBack: onBack),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: meta.when(
+                    loading: () => Text('Loading…',
+                        style: MyntWebTextStyles.title(context)),
+                    error: (_, __) => Text(code,
+                        style: MyntWebTextStyles.title(context,
+                            fontWeight: MyntFonts.semiBold)),
+                    data: (s) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(s.displayName,
+                            style: MyntWebTextStyles.title(context,
+                                fontWeight: MyntFonts.semiBold)),
+                        const SizedBox(height: 5),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _groupColor(s.groupName)
+                                    .withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                s.groupName,
+                                style: MyntWebTextStyles.caption(context,
+                                    color: _groupColor(s.groupName),
+                                    fontWeight: MyntFonts.semiBold),
+                              ),
+                            ),
+                            if (s.subGroup != null &&
+                                s.subGroup!.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  s.subGroup!,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: MyntWebTextStyles.caption(context),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ],
+                ),
+                IndexFilterDropdown(
+                  selected: selectedIndices,
+                  onChanged: _setIndices,
+                  // Empty map = old backend without match counts → dropdown
+                  // falls back to universe size; auto-updates when it ships.
+                  matchCounts: results.maybeWhen(
+                    data: (r) => r.indexCounts,
+                    orElse: () => const <String, int>{},
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _HoverIconButton(
+                  icon: Icons.download,
+                  tooltip: 'Export',
+                  onTap: () => _export(context),
+                ),
+              ]),
+              // Description inside the same banner.
+              meta.maybeWhen(
+                data: (s) {
+                  final text = (s.descriptionLong?.isNotEmpty ?? false)
+                      ? s.descriptionLong!
+                      : s.description;
+                  if (text.isEmpty) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text(
+                      text,
+                      style: MyntWebTextStyles.body(context,
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.textSecondaryDark,
+                              light: MyntColors.textSecondary)),
+                    ),
+                  );
+                },
+                orElse: () => const SizedBox.shrink(),
               ),
-            ),
+            ],
           ),
-          IndexFilterDropdown(
-            selected: selectedIndices,
-            onChanged: _setIndices,
-            // Use whatever counts the API just returned. Empty map = old
-            // backend without the feature → dropdown falls back to
-            // universe size. When backend ships, the counts arrive and
-            // the dropdown auto-updates per scanner with no UI change.
-            matchCounts: results.maybeWhen(
-              data: (r) => r.indexCounts,
-              orElse: () => const <String, int>{},
-            ),
-          ),
-          const SizedBox(width: 8),
-          _HoverIconButton(
-            icon: Icons.download,
-            tooltip: 'Export',
-            onTap: () => _export(context),
-          ),
-          ]),
-        ),
-        // const SizedBox(height: 12),
-        meta.maybeWhen(
-          data: (s) {
-            // Prefer the backend's layman-language long description when
-            // present; fall back to the brief tagline otherwise. Either
-            // way the technical predicate JSON is no longer shown — end
-            // users don't read it and it added intimidating clutter.
-            final text =
-                (s.descriptionLong?.isNotEmpty ?? false)
-                    ? s.descriptionLong!
-                    : s.description;
-            if (text.isEmpty) return const SizedBox.shrink();
-            return _InfoCard(text: text);
-          },
-          orElse: () => const SizedBox.shrink(),
         ),
         if (selectedIndices.isNotEmpty) ...[
           const SizedBox(height: 12),
@@ -215,6 +251,22 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
     );
   }
 
+  // Category accent — mirrors the dashboard section colors.
+  Color _groupColor(String g) {
+    switch (g.toLowerCase()) {
+      case 'candlestick':
+        return const Color(0xFFDB7C26);
+      case 'price':
+        return MyntColors.primary;
+      case 'technical':
+        return const Color(0xFF0F9D7A);
+      case 'volume':
+        return MyntColors.warning;
+      default:
+        return const Color(0xFF2F6FED);
+    }
+  }
+
   Future<void> _export(BuildContext context) async {
     final res = await showExportModal(context);
     if (res == null) return;
@@ -236,39 +288,6 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
   }
 }
 
-/// Subtle violet/blue tinted info card that wraps the scanner description.
-class _InfoCard extends StatelessWidget {
-  final String text;
-  const _InfoCard({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final tint = MyntColors.primary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      // decoration: BoxDecoration(
-      //   color: tint.withValues(alpha: 0.06),
-      //   borderRadius: BorderRadius.circular(10),
-      //   border: Border.all(color: tint.withValues(alpha: 0.15)),
-      // ),
-      child: Row(
-        // crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Icon(shadcn.LucideIcons.info, size: 14, color: tint),
-          // const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: MyntWebTextStyles.body(context,
-                    color: resolveThemeColor(context,
-                    
-                        dark: MyntColors.textPrimaryDark,
-                        light: MyntColors.textPrimary))),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// Compact icon button with a grey hover circle — visually pairs with the
 /// Index filter icon in the detail header.
