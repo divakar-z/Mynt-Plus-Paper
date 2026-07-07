@@ -465,6 +465,38 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     );
   }
 
+  /// Title for the option-chain / depth header.
+  /// - Underlying index or stock (no option type) → its full display name
+  ///   (e.g. "NIFTY 50"), matching the watchlist and search. `symname` is
+  ///   skipped here because for an index that field is the base trading symbol
+  ///   ("NIFTY"), which drops the "50".
+  /// - Option contract (has an option type) → base symbol + expiry + CE/PE
+  ///   (e.g. "NIFTY 24JUL26 CE"), unchanged from before.
+  String _optionChainHeaderTitle(GetQuotes? depthData) {
+    final String option =
+        (depthData?.option ?? widget.wlValue.option).trim();
+    if (option.isEmpty) {
+      final name =
+          (depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol)
+              .replaceAll('-EQ', '')
+              .toUpperCase();
+      return "$name ";
+    }
+    // For BFO the symname is the instrument code ("BSXOPT"), so use the derived
+    // symbol ("SENSEX") as the base; other exchanges keep symname (e.g. NIFTY).
+    final primary =
+        depthData?.exch == "BFO" ? depthData?.symbol : depthData?.symname;
+    final base = (primary ??
+            depthData?.symname ??
+            depthData?.symbol ??
+            depthData?.tsym ??
+            widget.wlValue.symbol)
+        .replaceAll('-EQ', '')
+        .toUpperCase();
+    final exp = depthData?.expDate ?? widget.wlValue.expDate;
+    return "$base $exp $option ";
+  }
+
   @override
   Widget build(BuildContext context) {
     final mw = ref.watch(marketWatchProvider);
@@ -730,7 +762,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  "${(depthData?.symname ?? depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol).replaceAll('-EQ', '').toUpperCase()}${depthData?.expDate ?? widget.wlValue.expDate} ${depthData?.option ?? widget.wlValue.option} ",
+                                  _optionChainHeaderTitle(depthData),
                                   overflow: TextOverflow.ellipsis,
                                   style: MyntWebTextStyles.title(
                                     context,
