@@ -37,6 +37,193 @@ class _PayoffTooltipState {
 }
 
 /// Strategy Builder Screen - Full screen strategy builder with payoff analysis
+/// Renders a metric label, optionally followed by a tappable info (i) icon.
+/// Used to attach the Margin Info dialog to the MARGIN label only.
+Widget _labelWithInfo(
+    BuildContext context, Widget label, VoidCallback? onInfoTap) {
+  if (onInfoTap == null) return label;
+  return Row(
+    children: [
+      Flexible(child: label),
+      const SizedBox(width: 3),
+      InkWell(
+        onTap: onInfoTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Icon(Icons.info_outline, size: 16, color:  resolveThemeColor(
+                                                context,
+                                                dark:
+                                                    MyntColors.textPrimaryDark,
+                                                light: MyntColors.textPrimary,
+                                              ),),
+      ),
+    ],
+  );
+}
+
+/// Margin Info dialog — shows the SPAN-based margin breakdown for the current
+/// basket: each leg's own margin, their total, the combined margin, and the
+/// benefit (total - combined). Opened from the info icon next to the MARGIN
+/// label. (UI only)
+void showMarginInfoDialog(BuildContext context, bool isDark) {
+  final provider = ProviderScope.containerOf(context, listen: false)
+      .read(strategyBuilderProvider);
+  // Fire the SpanCalc calculation; the dialog watches the provider for results.
+  provider.calculateMarginBenefit();
+
+  final titleColor = isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack;
+  final bodyColor =
+      isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary;
+  final profitColor = isDark ? MyntColors.profitDark : MyntColors.profit;
+
+  String money(double d) => d.toIndianRupee();
+
+  Widget valueRow(String label, String value,
+          {Color? valueColor, bool strong = false, bool indent = false}) =>
+      Padding(
+        padding: EdgeInsets.fromLTRB( 0, 5, 0, 5),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                style: MyntWebTextStyles.para(context,
+                    color: strong ? titleColor : bodyColor,
+                    fontWeight: strong ? MyntFonts.semiBold : MyntFonts.medium),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              value,
+              style: MyntWebTextStyles.body(context,
+                  color: valueColor ?? titleColor,
+                  fontWeight: MyntFonts.semiBold),
+            ),
+          ],
+        ),
+      );
+
+  final Widget content = Consumer(
+    builder: (context, ref, _) {
+      final p = ref.watch(strategyBuilderProvider);
+
+      if (p.isCalcMarginBenefit) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(vertical: 30),
+          child: Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+          ),
+        );
+      }
+
+      if (p.marginBenefitError != null) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Text(
+            p.marginBenefitError!,
+            style: MyntWebTextStyles.para(context, color: bodyColor),
+          ),
+        );
+      }
+
+      final r = p.marginBenefitResult;
+      if (r == null) return const SizedBox.shrink();
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+         
+          for (final leg in r.legs)
+            valueRow(leg.name, money(leg.margin), indent: true),
+          const Divider(height: 10),
+          valueRow('Total', money(r.sumIndividual), strong: true),
+          const Divider(height: 10),
+          valueRow('As a single strategy', money(r.combined), strong: false),
+          // const SizedBox(height: 10),
+          valueRow('Margin benefit', money(r.benefit),
+              strong: false, valueColor: profitColor),
+        ],
+      );
+    },
+  );
+
+  showDialog(
+    context: context,
+    barrierColor: Colors.black54,
+    builder: (ctx) => Center(
+      child: Material(
+        color: Colors.transparent,
+        child: shadcn.Card(
+          borderRadius: BorderRadius.circular(8),
+          padding: EdgeInsets.zero,
+          child: Container(
+            width: 400,
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.75,
+            ),
+            decoration: BoxDecoration(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.dialogDark, light: MyntColors.dialog),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: shadcn.Theme.of(context).colorScheme.border,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Margin Info',
+                        style: MyntWebTextStyles.title(
+                          context,
+                          color: resolveThemeColor(
+                            context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      MyntCloseButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                ),
+                // Content
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: content,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class StrategyBuilderScreenWeb extends ConsumerStatefulWidget {
   const StrategyBuilderScreenWeb({super.key});
 
@@ -440,13 +627,20 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ),
             ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 2),
           valueWidget ?? Text(
@@ -3089,13 +3283,20 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ).copyWith(fontSize: 11),
+            ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 4),
           valueWidget ?? Text(
@@ -4795,13 +4996,20 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ).copyWith(fontSize: 11),
+            ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 2),
           valueWidget ?? Text(
@@ -7388,13 +7596,20 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
+                fontWeight: MyntFonts.medium,
+              ).copyWith(fontSize: 11),
+            ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 2),
           valueWidget ?? Text(
