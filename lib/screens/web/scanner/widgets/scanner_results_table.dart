@@ -46,6 +46,15 @@ class ScannerResultsTable extends StatefulWidget {
   final ValueChanged<String>? onExplainTap;
   final String footer;
   final List<ScanColumn> standardPrefixColumns;
+  /// Optional column pinned directly after Stock Name (before Symbol / Exch).
+  /// Used by the Fundamental Screener to surface Market Cap prominently as
+  /// the primary size metric of each match.
+  final ScanColumn? secondColumn;
+  /// Whether the fixed Symbol / Exch cells are rendered. Callers that expose
+  /// column visibility (Fundamentals) flip these from the Manage Columns
+  /// menu; older callers get the default `true` and see no change.
+  final bool showSymbol;
+  final bool showExch;
   final CellFormatter? customCellFormatter;
 
   const ScannerResultsTable({
@@ -56,6 +65,9 @@ class ScannerResultsTable extends StatefulWidget {
     this.onTickerTap,
     this.onExplainTap,
     this.standardPrefixColumns = const [],
+    this.secondColumn,
+    this.showSymbol = true,
+    this.showExch = true,
     this.customCellFormatter,
   });
 
@@ -64,11 +76,24 @@ class ScannerResultsTable extends StatefulWidget {
 }
 
 class _ScannerResultsTableState extends State<ScannerResultsTable> {
-  /// -1 = the combined "Stock Name" column (sorts by ticker).
+  /// -2 = the "Stock Name" column (sorts by name).
+  /// -1 = the "Symbol" column (sorts by ticker).
   /// 0 = EXCH (no-op).
   /// 1+ = entries from [_dataCols].
   int? _sortColIdx;
   bool _sortAsc = true;
+
+  // Always-visible scrollbars (matches the financials table): horizontal for
+  // the many data columns, vertical for the rows.
+  final ScrollController _hCtrl = ScrollController();
+  final ScrollController _vCtrl = ScrollController();
+
+  @override
+  void dispose() {
+    _hCtrl.dispose();
+    _vCtrl.dispose();
+    super.dispose();
+  }
 
   List<ScanColumn> get _dataCols => [
         ...widget.standardPrefixColumns,
@@ -78,6 +103,30 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
   List<ScanRow> get _sortedRows {
     if (_sortColIdx == null) return widget.rows;
     final sorted = [...widget.rows];
+    if (_sortColIdx == -3 && widget.secondColumn != null) {
+      // Sort by the second column's raw value (Market Cap in the Fundamental
+      // Screener). Uses the same null-first / numeric-vs-string rules as the
+      // dynamic data columns below.
+      final key = widget.secondColumn!.key;
+      sorted.sort((a, b) {
+        final av = a.values[key];
+        final bv = b.values[key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return _sortAsc ? 1 : -1;
+        if (bv == null) return _sortAsc ? -1 : 1;
+        final c = (av is num && bv is num)
+            ? av.compareTo(bv)
+            : av.toString().compareTo(bv.toString());
+        return _sortAsc ? c : -c;
+      });
+      return sorted;
+    }
+    if (_sortColIdx == -2) {
+      sorted.sort((a, b) => _sortAsc
+          ? a.name.compareTo(b.name)
+          : b.name.compareTo(a.name));
+      return sorted;
+    }
     if (_sortColIdx == -1) {
       sorted.sort((a, b) => _sortAsc
           ? a.ticker.compareTo(b.ticker)
@@ -121,46 +170,67 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
     final rows = _sortedRows;
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final thumb = secondary.withValues(alpha: 0.5);
+    final headerBg = resolveThemeColor(context,
+        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
 
-    // Fixed-width frame columns. Each data column gets a base width based on
-    // its content type (string columns need more room than numeric ones);
-    // any remaining viewport width is then distributed evenly across all
-    // data columns.
-    const stockNameW = 240.0;
-    const exchW = 64.0;
+    // Symbol, Exch and every data column share an EQUAL width so their headers
+    // and cells line up in uniform tracks. Stock Name is bumped by [stockNameExtra]
+    // above that base — its content ("RELIANCE INDUSTRIES LTD", "HITACHI ENERGY
+    // INDIA…") is the longest in the row, and the extra room lets fewer names
+    // ellipsize without stealing space from the equal-width tracks.
+    // The min width is generous enough to fit common sector / industry names
+    // ("Consumer Durables", "Media & Entertainment") on a single line; wider
+    // content still ellipsizes rather than wrapping to a second row.
     const rowHPad = 20.0;
-    double baseWidthFor(ScanColumn c) =>
-        c.fmt == 'string' ? 130.0 : 110.0;
+    const colMin = 170.0;
+    const stockNameExtra = 90.0;
 
     return LayoutBuilder(builder: (ctx, constraints) {
-      // The wrapping Container has a 1px border on each side, so the inner
-      // content area is 2px narrower than the outer constraint.
       const borderW = 1.0;
       final available =
           (constraints.maxWidth - borderW * 2).clamp(0.0, double.infinity);
-      final fixedPart = stockNameW + exchW + rowHPad * 2;
-      final totalBase = dataCols.fold<double>(
-          0.0, (sum, c) => sum + baseWidthFor(c));
-      final extra =
-          (available - fixedPart - totalBase).clamp(0.0, double.infinity);
-      final bonus =
-          dataCols.isEmpty ? 0.0 : extra / dataCols.length;
-      final colWidths = <double>[
-        for (final c in dataCols) baseWidthFor(c) + bonus,
-      ];
-      final dataColsW = colWidths.fold<double>(0.0, (s, w) => s + w);
-      final totalWidth = fixedPart + dataColsW;
+      final availableForContent =
+          (available - rowHPad * 2).clamp(0.0, double.infinity);
+
+      final numDataCols = dataCols.length;
+      // Total equal-weight columns: Stock Name (always) + Symbol (optional)
+      // + Exch (optional) + optional secondColumn + data cols. Each hidden
+      // column drops out of the count so the remaining columns get wider.
+      final hasSecondCol = widget.secondColumn != null;
+      final equalColCount = 1 +
+          numDataCols +
+          (hasSecondCol ? 1 : 0) +
+          (widget.showSymbol ? 1 : 0) +
+          (widget.showExch ? 1 : 0);
+
+      // Reserve stockNameExtra before splitting the rest so Symbol / Exch /
+      // data columns still divide the remainder evenly.
+      final naturalEqualW = equalColCount == 0
+          ? 0.0
+          : (availableForContent - stockNameExtra) / equalColCount;
+      final equalW = naturalEqualW < colMin ? colMin : naturalEqualW;
+
+      final stockNameW = equalW + stockNameExtra;
+      final secondColW = hasSecondCol ? equalW : 0.0;
+      final symbolW = widget.showSymbol ? equalW : 0.0;
+      final exchW = widget.showExch ? equalW : 0.0;
+      final colWidths = List<double>.filled(numDataCols, equalW);
+      final totalWidth =
+          rowHPad * 2 + equalColCount * equalW + stockNameExtra;
       final needsScroll = totalWidth > available + 0.5;
 
       Widget table = SizedBox(
         width: needsScroll ? totalWidth : available,
         child: Column(
           children: [
-            // Sticky header row
+            // Sticky header row — fixed 40px height matches the data-row
+            // height (line 550) so the header and rows read as uniform tracks.
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: rowHPad, vertical: 14),
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: rowHPad),
               decoration: BoxDecoration(
+                color: headerBg,
                 border: Border(bottom: BorderSide(color: border)),
               ),
               child: Row(children: [
@@ -168,81 +238,133 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
                   width: stockNameW,
                   child: _SortHeader(
                     label: 'Stock Name',
-                    active: _sortColIdx == -1,
+                    active: _sortColIdx == -2,
                     asc: _sortAsc,
-                    onTap: () => _toggleSort(-1),
+                    onTap: () => _toggleSort(-2),
                   ),
                 ),
-                SizedBox(
-                  width: exchW,
-                  child: const _HeaderText('EXCH'),
-                ),
+                if (hasSecondCol)
+                  SizedBox(
+                    width: secondColW,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _SortHeader(
+                        label: widget.secondColumn!.label,
+                        description: widget.secondColumn!.description,
+                        active: _sortColIdx == -3,
+                        asc: _sortAsc,
+                        onTap: () => _toggleSort(-3),
+                        alignEnd: widget.secondColumn!.fmt != 'string',
+                      ),
+                    ),
+                  ),
+                if (widget.showSymbol)
+                  SizedBox(
+                    width: symbolW,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _SortHeader(
+                        label: 'Symbol',
+                        active: _sortColIdx == -1,
+                        asc: _sortAsc,
+                        onTap: () => _toggleSort(-1),
+                      ),
+                    ),
+                  ),
+                if (widget.showExch)
+                  SizedBox(
+                    width: exchW,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6),
+                      child: _HeaderText('Exch'),
+                    ),
+                  ),
                 for (int i = 0; i < dataCols.length; i++)
                   SizedBox(
                     width: colWidths[i],
-                    child: _SortHeader(
-                      label: dataCols[i].label,
-                      description: dataCols[i].description,
-                      active: _sortColIdx == i + 1,
-                      asc: _sortAsc,
-                      onTap: () => _toggleSort(i + 1),
-                      alignEnd: dataCols[i].fmt != 'string',
+                    // Small internal padding so adjacent right-aligned
+                    // headers don't visually glue together ("ROERevenue
+                    // Growth (YoY)…"). 12px total gap between columns.
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _SortHeader(
+                        label: dataCols[i].label,
+                        description: dataCols[i].description,
+                        active: _sortColIdx == i + 1,
+                        asc: _sortAsc,
+                        onTap: () => _toggleSort(i + 1),
+                        alignEnd: dataCols[i].fmt != 'string',
+                      ),
                     ),
                   ),
               ]),
             ),
-            // Scrollable rows
+            // Scrollable rows with an always-visible vertical scrollbar.
             Expanded(
-              child: ListView.separated(
-                itemCount: rows.length,
-                separatorBuilder: (_, __) => Divider(
-                    height: 1, color: border.withValues(alpha: 0.4)),
-                itemBuilder: (_, i) {
-                  final r = rows[i];
-                  return _DataRow(
-                    row: r,
-                    cols: dataCols,
-                    stockNameW: stockNameW,
-                    exchW: exchW,
-                    colWidths: colWidths,
-                    customCellFormatter: widget.customCellFormatter,
-                    onTap: widget.onTickerTap == null
-                        ? null
-                        : () => widget.onTickerTap!(r.ticker),
-                    onExplainTap: widget.onExplainTap == null
-                        ? null
-                        : () => widget.onExplainTap!(r.ticker),
-                  );
-                },
+              child: RawScrollbar(
+                controller: _vCtrl,
+                thumbVisibility: true,
+                thickness: 6,
+                radius: const Radius.circular(8),
+                thumbColor: thumb,
+                notificationPredicate: (n) => n.metrics.axis == Axis.vertical,
+                child: ListView.separated(
+                  controller: _vCtrl,
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => Divider(
+                      height: 1, color: border.withValues(alpha: 0.4)),
+                  itemBuilder: (_, i) {
+                    final r = rows[i];
+                    return _DataRow(
+                      row: r,
+                      cols: dataCols,
+                      stockNameW: stockNameW,
+                      secondColumn: widget.secondColumn,
+                      secondColW: secondColW,
+                      symbolW: symbolW,
+                      exchW: exchW,
+                      showSymbol: widget.showSymbol,
+                      showExch: widget.showExch,
+                      colWidths: colWidths,
+                      customCellFormatter: widget.customCellFormatter,
+                      onTap: widget.onTickerTap == null
+                          ? null
+                          : () => widget.onTickerTap!(r.ticker),
+                      onExplainTap: widget.onExplainTap == null
+                          ? null
+                          : () => widget.onExplainTap!(r.ticker),
+                    );
+                  },
+                ),
               ),
             ),
           ],
         ),
       );
 
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: border),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: needsScroll
-                  ? SingleChildScrollView(
-                      scrollDirection: Axis.horizontal, child: table)
-                  : table,
+      // Outer horizontal scrollbar (visible only when the columns overflow)
+      // wrapping the table; the rows carry their own vertical scrollbar above.
+      return shadcn.OutlinedContainer(
+        clipBehavior: Clip.antiAlias,
+        child: ScrollConfiguration(
+          behavior: const MaterialScrollBehavior().copyWith(scrollbars: false),
+          child: RawScrollbar(
+            controller: _hCtrl,
+            thumbVisibility: needsScroll,
+            thickness: 6,
+            radius: const Radius.circular(8),
+            thumbColor: thumb,
+            notificationPredicate: (n) => n.metrics.axis == Axis.horizontal,
+            child: SingleChildScrollView(
+              controller: _hCtrl,
+              scrollDirection: Axis.horizontal,
+              physics: needsScroll
+                  ? const ClampingScrollPhysics()
+                  : const NeverScrollableScrollPhysics(),
+              child: table,
             ),
           ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Text(widget.footer,
-                style: MyntWebTextStyles.caption(context, color: secondary)),
-          ),
-        ],
+        ),
       );
     });
   }
@@ -257,24 +379,24 @@ class _HeaderText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(label,
-        style: MyntWebTextStyles.caption(context,
-                fontWeight: MyntFonts.semiBold,
-                color: resolveThemeColor(context,
-                    dark: MyntColors.textSecondaryDark,
-                    light: MyntColors.textSecondary))
-            .copyWith(letterSpacing: 0.6));
+        style: MyntWebTextStyles.tableHeader(context,
+            fontWeight: MyntFonts.semiBold,
+            color: resolveThemeColor(context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.textSecondary)));
   }
 }
 
-/// Header text with up/down sort indicator + optional info tooltip.
-class _SortHeader extends StatefulWidget {
+/// Header text with a Positions-style sort indicator (arrow shown only on
+/// the active column) plus an optional info tooltip.
+class _SortHeader extends StatelessWidget {
   final String label;
   final String? description;
   final bool active;
   final bool asc;
   final VoidCallback onTap;
   /// When true, the header fills its parent's full width and right-aligns
-  /// its content (label + arrow + info). Used for numeric data columns.
+  /// its content. Used for numeric data columns.
   final bool alignEnd;
   const _SortHeader({
     required this.label,
@@ -286,65 +408,55 @@ class _SortHeader extends StatefulWidget {
   });
 
   @override
-  State<_SortHeader> createState() => _SortHeaderState();
-}
-
-class _SortHeaderState extends State<_SortHeader> {
-  bool _hover = false;
-  @override
   Widget build(BuildContext context) {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final color = widget.active ? primary : secondary;
 
     final labelWidget = Flexible(
-      child: Text(widget.label,
-          textAlign: widget.alignEnd ? TextAlign.end : TextAlign.start,
-          maxLines: 2,
+      child: Text(label,
+          textAlign: alignEnd ? TextAlign.end : TextAlign.start,
+          maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: MyntWebTextStyles.caption(context,
-                  fontWeight: MyntFonts.semiBold, color: color)
-              .copyWith(letterSpacing: 0.6)),
-    );
-    final sortIcon = Icon(
-      widget.active
-          ? (widget.asc
-              ? shadcn.LucideIcons.arrowUp
-              : shadcn.LucideIcons.arrowDown)
-          : shadcn.LucideIcons.chevronsUpDown,
-      size: 10,
-      color: widget.active || _hover ? color : color.withValues(alpha: 0.5),
+          style: MyntWebTextStyles.tableHeader(context,
+              fontWeight: MyntFonts.semiBold, color: secondary)),
     );
 
+    // Positions pattern: the sort arrow appears ONLY on the active column
+    // (arrow_upward / arrow_downward, 16px). Numeric (right-aligned) columns
+    // place the arrow before the label; text columns after it.
+    final sortArrow = active
+        ? Icon(asc ? Icons.arrow_upward : Icons.arrow_downward,
+            size: 16, color: secondary)
+        : null;
+
     // The sort-clickable area (label + arrow) and the info tooltip are
-    // SIBLINGS — keeps the Tooltip's MouseRegion outside the sort gesture
-    // detector so hover works.
+    // SIBLINGS — keeps the Tooltip's MouseRegion outside the sort gesture.
     final sortable = MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: widget.onTap,
+        onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Inside this inner Row, Flexible has the parent Row's bounded
-            // width as its constraint — so the label can wrap to 2 lines.
+            if (alignEnd && sortArrow != null) ...[
+              sortArrow,
+              const SizedBox(width: 4),
+            ],
             labelWidget,
-            const SizedBox(width: 4),
-            sortIcon,
+            if (!alignEnd && sortArrow != null) ...[
+              const SizedBox(width: 4),
+              sortArrow,
+            ],
           ],
         ),
       ),
     );
 
-    final infoIcon = widget.description == null
+    final infoIcon = description == null
         ? null
         : Tooltip(
-            message: widget.description!,
+            message: description!,
             waitDuration: const Duration(milliseconds: 200),
             preferBelow: true,
             triggerMode: TooltipTriggerMode.tap,
@@ -353,17 +465,15 @@ class _SortHeaderState extends State<_SortHeader> {
               child: Padding(
                 padding: const EdgeInsets.all(2),
                 child: Icon(shadcn.LucideIcons.info,
-                    size: 12, color: secondary),
+                    size: 15, color: secondary),
               ),
             ),
           );
 
-    // Outer Row fills the parent's width so Flexible/Expanded inside the
-    // sortable cluster has space to flex into.
     return Row(
-      mainAxisSize: widget.alignEnd ? MainAxisSize.max : MainAxisSize.min,
+      mainAxisSize: alignEnd ? MainAxisSize.max : MainAxisSize.min,
       mainAxisAlignment:
-          widget.alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
+          alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
       children: [
         Flexible(child: sortable),
         if (infoIcon != null) ...[
@@ -379,7 +489,12 @@ class _DataRow extends StatefulWidget {
   final ScanRow row;
   final List<ScanColumn> cols;
   final double stockNameW;
+  final ScanColumn? secondColumn;
+  final double secondColW;
+  final double symbolW;
   final double exchW;
+  final bool showSymbol;
+  final bool showExch;
   final List<double> colWidths;
   final CellFormatter? customCellFormatter;
   final VoidCallback? onTap;
@@ -388,7 +503,12 @@ class _DataRow extends StatefulWidget {
     required this.row,
     required this.cols,
     required this.stockNameW,
+    this.secondColumn,
+    this.secondColW = 0,
+    required this.symbolW,
     required this.exchW,
+    this.showSymbol = true,
+    this.showExch = true,
     required this.colWidths,
     required this.onTap,
     this.onExplainTap,
@@ -406,8 +526,6 @@ class _DataRowState extends State<_DataRow> {
   Widget build(BuildContext context) {
     final hoverBg = resolveThemeColor(context,
         dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final primary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
 
@@ -426,86 +544,120 @@ class _DataRowState extends State<_DataRow> {
         behavior: HitTestBehavior.opaque,
         child: Container(
           color: _hover ? hoverBg : Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Row(children: [
-                // Stock Name (name + ticker stacked)
-                SizedBox(
-                  width: widget.stockNameW,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(widget.row.name,
-                          style: MyntWebTextStyles.body(context,
-                              fontWeight: MyntFonts.semiBold, color: primary),
-                          overflow: TextOverflow.ellipsis),
-                      const SizedBox(height: 2),
-                      Text(widget.row.ticker,
-                          style: MyntWebTextStyles.caption(context,
-                                  color: secondary)
-                              .copyWith(fontFamily: 'monospace'),
-                          overflow: TextOverflow.ellipsis),
-                    ],
+          // Fixed height so the row never grows (bounces) when the hover
+          // action buttons appear. 40 matches the Positions table row height
+          // (14px `body` text + shadcn.TableCell chrome + vertical:4 padding).
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(children: [
+            // Stock Name column — the name takes the full width, hover
+            // buttons pin to the RIGHT edge of the column so they sit BETWEEN
+            // the Stock Name text and the "NSE" of the Exch column (never
+            // overlap either). Positions-page pattern.
+            SizedBox(
+              width: widget.stockNameW,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Tooltip(
+                      message: widget.row.name,
+                      waitDuration: const Duration(milliseconds: 400),
+                      child: Text(
+                        widget.row.name,
+                        style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.medium, color: primary),
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  if (showActions) ...[
+                    const SizedBox(width: 8),
+                    if (widget.onTap != null)
+                      _RowActionButton(
+                        label: 'Overview',
+                        icon: shadcn.LucideIcons.eye,
+                        onPressed: widget.onTap!,
+                      ),
+                    if (widget.onTap != null && widget.onExplainTap != null)
+                      const SizedBox(width: 6),
+                    if (widget.onExplainTap != null)
+                      _RowActionButton(
+                        label: 'Scanner Details',
+                        icon: shadcn.LucideIcons.fileSearch,
+                        onPressed: widget.onExplainTap!,
+                      ),
+                    // Trailing gap so the button strip doesn't hug the Exch
+                    // column — visual breathing room before "NSE".
+                    const SizedBox(width: 26),
+                  ],
+                ],
+              ),
+            ),
+            // Optional second column (e.g., Market Cap) — pinned between
+            // Stock Name and Symbol so the primary size metric sits right
+            // next to the name.
+            if (widget.secondColumn != null)
+              SizedBox(
+                width: widget.secondColW,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Align(
+                    alignment: widget.secondColumn!.fmt == 'string'
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
+                    child: _buildCell(context, widget.row, widget.secondColumn!),
                   ),
                 ),
-                // EXCH
-                SizedBox(
-                  width: widget.exchW,
+              ),
+            // SYMBOL — compact tabular ticker, monospaced-friendly weight.
+            // Padding matches the other columns so Symbol doesn't sit flush
+            // against the right-aligned Market Cap number to its left.
+            if (widget.showSymbol)
+              SizedBox(
+                width: widget.symbolW,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(
+                    widget.row.ticker,
+                    style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.medium, color: primary)
+                        .copyWith(fontFeatures: const [
+                      FontFeature.tabularFigures(),
+                    ]),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            // EXCH
+            if (widget.showExch)
+              SizedBox(
+                width: widget.exchW,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: Text('NSE',
-                      style:
-                          MyntWebTextStyles.body(context, color: secondary)),
+                      style: MyntWebTextStyles.body(context,
+                          fontWeight: MyntFonts.medium, color: primary)),
                 ),
-                // Data columns — sized per-column so strings (sector/industry)
-                // get more room than numerics.
-                for (int i = 0; i < widget.cols.length; i++)
-                  SizedBox(
-                    width: widget.colWidths[i],
-                    child: Align(
-                      alignment: widget.cols[i].fmt == 'string'
-                          ? Alignment.centerLeft
-                          : Alignment.centerRight,
-                      child: _buildCell(context, widget.row, widget.cols[i]),
-                    ),
-                  ),
-              ]),
-              // Hover-only action buttons — Positioned over the trailing
-              // edge of the row, vertically centered. Their own InkWell
-              // gestures consume the click before the row GestureDetector
-              // sees it, so clicking "Explanation" never accidentally
-              // opens the Overview.
-              if (showActions)
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (widget.onTap != null)
-                          _RowActionButton(
-                            label: 'Overview',
-                            icon: shadcn.LucideIcons.eye,
-                            onPressed: widget.onTap!,
-                          ),
-                        if (widget.onTap != null &&
-                            widget.onExplainTap != null)
-                          const SizedBox(width: 6),
-                        if (widget.onExplainTap != null)
-                          _RowActionButton(
-                            label: 'Scanner Details',
-                            icon: shadcn.LucideIcons.fileSearch,
-                            onPressed: widget.onExplainTap!,
-                          ),
-                      ],
-                    ),
+              ),
+            // Data columns — mirror the header's 6px internal padding so
+            // header labels and cell values stay aligned in the same tracks.
+            for (int i = 0; i < widget.cols.length; i++)
+              SizedBox(
+                width: widget.colWidths[i],
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Align(
+                    alignment: widget.cols[i].fmt == 'string'
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
+                    child: _buildCell(context, widget.row, widget.cols[i]),
                   ),
                 ),
-            ],
-          ),
+              ),
+          ]),
         ),
       ),
     );
@@ -524,6 +676,9 @@ class _DataRowState extends State<_DataRow> {
       final res = widget.customCellFormatter!(context, c, raw);
       return Text(
         res.text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
         style: MyntWebTextStyles.body(context,
                 fontWeight: MyntFonts.medium,
                 color: res.color ?? (raw == null ? secondary : primary))
@@ -533,25 +688,44 @@ class _DataRowState extends State<_DataRow> {
 
     if (raw == null) {
       return Text('—',
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
           style: MyntWebTextStyles.body(context, color: secondary));
     }
     if (raw is num) {
       final res = formatColumn(context, raw, c.fmt);
       return Text(
         res.text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
         style: MyntWebTextStyles.body(context,
                 fontWeight: MyntFonts.medium,
                 color: res.color ?? primary)
             .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
       );
     }
-    return Text(raw.toString(),
-        style: MyntWebTextStyles.body(context, color: primary));
+    // String data (Sector, Industry, …) — wrap in a Tooltip so hover reveals
+    // the full label when the column is too narrow.
+    final text = raw.toString();
+    return Tooltip(
+      message: text,
+      waitDuration: const Duration(milliseconds: 400),
+      child: Text(
+        text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: MyntWebTextStyles.body(context,
+            fontWeight: MyntFonts.medium, color: primary),
+      ),
+    );
   }
 }
 
-/// Small white pill button surfaced on row hover. Compact (28px) so two of
-/// them fit at the trailing edge without crowding the data columns.
+/// Row-hover action — Positions-style: a small white icon square with a
+/// subtle drop shadow. The label is surfaced as a tooltip.
 class _RowActionButton extends StatelessWidget {
   final String label;
   final IconData icon;
@@ -564,31 +738,27 @@ class _RowActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final bg = resolveThemeColor(context,
-        dark: MyntColors.backgroundColorDark, light: Colors.white);
-    return Material(
-      color: bg,
-      shape: RoundedRectangleBorder(
-        side: BorderSide(color: border),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(6),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 12, color: primary),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: MyntWebTextStyles.caption(context,
-                      fontWeight: MyntFonts.semiBold, color: primary)),
-            ],
+    return Tooltip(
+      message: label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onPressed,
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(4),
+              boxShadow: [
+                BoxShadow(
+                  color: resolveThemeColor(context,
+                      dark: Colors.transparent, light: Colors.grey),
+                  blurRadius: 2,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Icon(icon, size: 16, color: MyntColors.textPrimary),
           ),
         ),
       ),

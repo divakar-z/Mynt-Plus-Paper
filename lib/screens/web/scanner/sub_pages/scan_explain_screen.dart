@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/scanner_model/scan_explain.dart';
 import 'package:mynt_plus/models/scanner_model/scanner_exception.dart';
@@ -59,7 +61,7 @@ class _ScanExplainScreenState extends ConsumerState<ScanExplainScreen>
   Widget build(BuildContext context) {
     final asyncResp = ref.watch(scanExplainProvider(widget.args));
     return asyncResp.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => Center(child: MyntLoader.branded()),
       error: (e, _) => _errorView(context, e),
       data: (r) => _layout(context, r),
     );
@@ -72,23 +74,65 @@ class _ScanExplainScreenState extends ConsumerState<ScanExplainScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _header(context, r),
-          const SizedBox(height: 8),
-          TabBar(
-            controller: _tab,
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            indicatorColor: MyntColors.primary,
-            labelColor: MyntColors.primary,
-            unselectedLabelColor: resolveThemeColor(context,
-                dark: MyntColors.textSecondaryDark,
-                light: MyntColors.textSecondary),
-            tabs: [for (final t in _tabs) Tab(text: t)],
-          ),
-          const Divider(height: 1),
           const SizedBox(height: 12),
+          // Top tab strip styled like the Watchlist tabs (shadcn underline).
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: _topTabs(context),
+          ),
+          const SizedBox(height: 16),
           Expanded(child: _activeTabBody(context, r)),
         ],
       ),
+    );
+  }
+
+  /// Top tab strip styled like the Positions page tabs: each tab is a pill
+  /// with a subtle rounded background on active, plain-text on inactive.
+  Widget _topTabs(BuildContext context) {
+    final isDark = isDarkMode(context);
+    final activeBg = isDark
+        ? Colors.white.withValues(alpha: 0.1)
+        : Colors.black.withValues(alpha: 0.05);
+    final foreground = shadcn.Theme.of(context).colorScheme.foreground;
+    final mutedForeground =
+        shadcn.Theme.of(context).colorScheme.mutedForeground;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int i = 0; i < _tabs.length; i++)
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () {
+                if (i != _tab.index) _tab.animateTo(i);
+              },
+              child: Container(
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color:
+                      i == _tab.index ? activeBg : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  _tabs[i],
+                  style: MyntWebTextStyles.body(
+                    context,
+                    fontWeight: i == _tab.index
+                        ? MyntFonts.semiBold
+                        : MyntFonts.medium,
+                  ).copyWith(
+                    color:
+                        i == _tab.index ? foreground : mutedForeground,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -143,25 +187,29 @@ class _ScanExplainScreenState extends ConsumerState<ScanExplainScreen>
   Widget _header(BuildContext context, ScanExplainResponse r) {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(r.scannerName,
+        // Name + "(as of …)" inline on the first line.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Flexible(
+              child: Text(r.scannerName,
                   style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.bold)),
-              const SizedBox(height: 2),
-              Text(r.ticker,
-                  style: MyntWebTextStyles.caption(context, color: secondary)
-                      .copyWith(fontFamily: 'monospace')),
-            ],
-          ),
+                      fontWeight: MyntFonts.bold),
+                  overflow: TextOverflow.ellipsis),
+            ),
+            const SizedBox(width: 6),
+            Text('(as of ${r.asOf})',
+                style: MyntWebTextStyles.caption(context, color: secondary)),
+          ],
         ),
-        Text('as of ${r.asOf}',
-            style: MyntWebTextStyles.caption(context, color: secondary)),
+        // const SizedBox(height: 2),
+        // Text(r.ticker,
+        //     style: MyntWebTextStyles.caption(context, color: secondary)
+        //         .copyWith(fontFamily: 'monospace')),
       ],
     );
   }

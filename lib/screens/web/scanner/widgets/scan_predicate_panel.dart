@@ -66,8 +66,8 @@ class _ExplainNodeRow extends StatelessWidget {
   }
 
   Widget _row(BuildContext context, ExplainNode n) {
-    final passColor = MyntColors.success;
-    final failColor = MyntColors.error;
+    final passColor = resolveThemeColor(context, dark: MyntColors.successDark, light: MyntColors.success);
+    final failColor = resolveThemeColor(context, dark: MyntColors.errorDark, light: MyntColors.error);
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final primary = resolveThemeColor(context,

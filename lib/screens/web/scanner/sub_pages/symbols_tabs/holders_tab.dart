@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/provider/scanner/symbols_provider.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
@@ -57,9 +58,9 @@ class _Section extends StatelessWidget {
           style: MyntWebTextStyles.body(context, fontWeight: MyntFonts.semiBold)),
       children: [
         async.when(
-          loading: () => const Padding(
+          loading: () => Padding(
               padding: EdgeInsets.all(12),
-              child: Center(child: CircularProgressIndicator())),
+              child: Center(child: MyntLoader.simple())),
           error: (e, _) => EmptyState(
             kind: EmptyStateKind.error,
             title: 'Could not load',

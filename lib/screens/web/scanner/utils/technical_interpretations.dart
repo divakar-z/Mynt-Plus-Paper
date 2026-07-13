@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
+import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 
 /// A label + color for an indicator value, used by the Technicals tab badges.
 class TechnicalBadge {
@@ -10,49 +11,56 @@ class TechnicalBadge {
 
 /// Interpret a numeric indicator value into a human-readable badge.
 TechnicalBadge? interpretIndicator({
+  required BuildContext context,
   required String key,
   required num? value,
   required Map<String, num?> allIndicators,
 }) {
   if (value == null) return null;
   final n = value.toDouble();
+  late final success = resolveThemeColor(context,
+      dark: MyntColors.successDark, light: MyntColors.success);
+  late final error = resolveThemeColor(context,
+      dark: MyntColors.errorDark, light: MyntColors.error);
+  late final warning = resolveThemeColor(context,
+      dark: MyntColors.warningDark, light: MyntColors.warning);
   switch (key) {
     case 'rsi_14':
-      if (n < 30) return const TechnicalBadge('Oversold', MyntColors.error);
-      if (n > 70) return const TechnicalBadge('Overbought', MyntColors.warning);
+      if (n < 30) return TechnicalBadge('Oversold', error);
+      if (n > 70) return TechnicalBadge('Overbought', warning);
       return null;
     case 'adx_14':
     case 'adx':
-      if (n > 25) return const TechnicalBadge('Strong trend', MyntColors.success);
-      if (n < 20) return const TechnicalBadge('Weak trend', MyntColors.warning);
+      if (n > 25) return TechnicalBadge('Strong trend', success);
+      if (n < 20) return TechnicalBadge('Weak trend', warning);
       return null;
     case 'supertrend_dir':
       return n > 0
-          ? const TechnicalBadge('Up trend', MyntColors.success)
-          : const TechnicalBadge('Down trend', MyntColors.error);
+          ? TechnicalBadge('Up trend', success)
+          : TechnicalBadge('Down trend', error);
     case 'macd_hist':
       return n >= 0
-          ? const TechnicalBadge('Bullish', MyntColors.success)
-          : const TechnicalBadge('Bearish', MyntColors.error);
+          ? TechnicalBadge('Bullish', success)
+          : TechnicalBadge('Bearish', error);
     case 'mfi_14':
-      if (n < 20) return const TechnicalBadge('Oversold', MyntColors.error);
-      if (n > 80) return const TechnicalBadge('Overbought', MyntColors.warning);
+      if (n < 20) return TechnicalBadge('Oversold', error);
+      if (n > 80) return TechnicalBadge('Overbought', warning);
       return null;
     case 'william_r_14':
-      if (n < -80) return const TechnicalBadge('Oversold', MyntColors.error);
-      if (n > -20) return const TechnicalBadge('Overbought', MyntColors.warning);
+      if (n < -80) return TechnicalBadge('Oversold', error);
+      if (n > -20) return TechnicalBadge('Overbought', warning);
       return null;
     case 'cci_20':
-      if (n < -100) return const TechnicalBadge('Oversold', MyntColors.error);
-      if (n > 100) return const TechnicalBadge('Overbought', MyntColors.warning);
+      if (n < -100) return TechnicalBadge('Oversold', error);
+      if (n > 100) return TechnicalBadge('Overbought', warning);
       return null;
   }
   if (key == 'close') {
     final sma200 = allIndicators['sma_200']?.toDouble();
     if (sma200 != null) {
       return n >= sma200
-          ? const TechnicalBadge('Above 200-DMA', MyntColors.success)
-          : const TechnicalBadge('Below 200-DMA', MyntColors.error);
+          ? TechnicalBadge('Above 200-DMA', success)
+          : TechnicalBadge('Below 200-DMA', error);
     }
   }
   return null;

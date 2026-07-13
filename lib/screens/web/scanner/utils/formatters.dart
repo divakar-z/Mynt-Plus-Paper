@@ -41,7 +41,11 @@ Color signedColor(BuildContext context, num? value) {
     return resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
   }
-  return value >= 0 ? MyntColors.success : MyntColors.error;
+  return value >= 0
+      ? resolveThemeColor(context,
+          dark: MyntColors.successDark, light: MyntColors.success)
+      : resolveThemeColor(context,
+          dark: MyntColors.errorDark, light: MyntColors.error);
 }
 
 /// Parse a backend ISO date that may be missing a timezone suffix. The
@@ -101,7 +105,8 @@ String formatDate(String? iso) {
 
   // Candlestick patterns → Yes/No (1.0 → Yes, 0.0 → No).
   if (lower.startsWith('cdl_')) {
-    final positive = MyntColors.success;
+    final positive = resolveThemeColor(context,
+        dark: MyntColors.successDark, light: MyntColors.success);
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return n >= 0.5
@@ -151,7 +156,20 @@ String formatDate(String? iso) {
       final sign = value >= 0 ? '+' : '';
       return (
         text: '$sign${value.toStringAsFixed(2)}%',
-        color: value >= 0 ? MyntColors.success : MyntColors.error,
+        color: value >= 0 ? resolveThemeColor(context, dark: MyntColors.successDark, light: MyntColors.success)
+       : resolveThemeColor(context, dark: MyntColors.errorDark, light: MyntColors.error)
+      ,
+      );
+    case 'signed_price':
+      final sign = value >= 0 ? '+' : '-';
+      return (
+        text:
+            '$sign${_indianFormat(value.abs().toDouble(), maxFractionDigits: 2)}',
+        color: value >= 0
+            ? resolveThemeColor(context,
+                dark: MyntColors.successDark, light: MyntColors.success)
+            : resolveThemeColor(context,
+                dark: MyntColors.errorDark, light: MyntColors.error),
       );
     case 'ratio':
       return (text: value.toStringAsFixed(2), color: null);

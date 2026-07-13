@@ -24,7 +24,7 @@ class ScannerShellState {
   final ExplainKey? explainArgs;
 
   const ScannerShellState({
-    this.activeSubPage = ScannerSubPage.scanners,
+    this.activeSubPage = ScannerSubPage.scannersNew,
     this.pendingScannerCode,
     this.selectedScrip,
     this.isResolvingScrip = false,
@@ -76,7 +76,7 @@ class ScannerShellNotifier extends Notifier<ScannerShellState> {
 
   void navigateToScannerDetail(String code) {
     state = state.copyWith(
-      activeSubPage: ScannerSubPage.scanners,
+      activeSubPage: ScannerSubPage.scannersNew,
       pendingScannerCode: code,
       clearSelectedScrip: true,
       clearExplainArgs: true,

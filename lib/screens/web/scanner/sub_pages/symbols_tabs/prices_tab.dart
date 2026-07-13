@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/provider/scanner/symbols_provider.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
@@ -13,7 +14,7 @@ class PricesTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(ohlcvProvider((ticker: ticker, from: null)));
     return async.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => Center(child: MyntLoader.simple()),
       error: (e, _) => EmptyState(
         kind: EmptyStateKind.error,
         title: 'Could not load prices',
