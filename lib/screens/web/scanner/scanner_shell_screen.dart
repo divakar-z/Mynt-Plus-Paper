@@ -13,11 +13,14 @@ import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart'
 import 'package:mynt_plus/screens/web/market_watch/chart_with_depth_web.dart';
 import 'sub_pages/custom_scans_sub_page.dart';
 import 'sub_pages/fundamentals_new_sub_page.dart';
-import 'sub_pages/fundamentals_sub_page.dart';
+// Legacy sub-pages — kept on disk but no longer wired into the shell.
+// Re-enable both the import and the matching IndexedStack child if the tab
+// needs to come back.
+// import 'sub_pages/fundamentals_sub_page.dart';
+// import 'sub_pages/scanners_sub_page.dart';
+// import 'sub_pages/symbols_sub_page.dart';
 import 'sub_pages/scan_explain_screen.dart';
 import 'sub_pages/scanners_new_sub_page.dart';
-import 'sub_pages/scanners_sub_page.dart';
-import 'sub_pages/symbols_sub_page.dart';
 import 'widgets/empty_state.dart';
 // ignore: unused_import
 import 'widgets/scanner_breadcrumb.dart'; // kept for the commented breadcrumb
@@ -59,28 +62,29 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(scannerShellProvider);
     final width = MediaQuery.of(context).size.width;
-    // Sidebar hidden for now (manager request) — only the Scanners New tab is
-    // live. Restore by un-commenting these + the ScannerLeftRail below.
-    // final collapsed = width < 1100 && width >= 760;
-    // final hidden = width < 760;
 
     return Container(
       color: resolveThemeColor(context,
           dark: MyntColors.backgroundColorDark,
           light: MyntColors.backgroundColor),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // if (!hidden)
-          //   ScannerLeftRail(
-          //     active: state.activeSubPage,
-          //     collapsed: collapsed,
-          //     onSelect: (p) =>
-          //         ref.read(scannerShellProvider.notifier).setActiveSubPage(p),
-          //   ),
-          Expanded(child: _rightArea(state, width)),
-        ],
-      ),
+      // Sidebar (ScannerLeftRail) intentionally disabled — navigation now
+      // happens via the top tab bar. Kept commented for easy re-enable.
+      // child: Row(
+      //   crossAxisAlignment: CrossAxisAlignment.stretch,
+      //   children: [
+      //     final collapsed = width < 1100 && width >= 760;
+      //     final hidden = width < 760;
+      //     if (!hidden)
+      //       ScannerLeftRail(
+      //         active: state.activeSubPage,
+      //         collapsed: collapsed,
+      //         onSelect: (p) =>
+      //             ref.read(scannerShellProvider.notifier).setActiveSubPage(p),
+      //       ),
+      //     Expanded(child: _rightArea(state, width)),
+      //   ],
+      // ),
+      child: _rightArea(state, width),
     );
   }
 
@@ -147,17 +151,20 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
           //   ],
           // ),
           // const SizedBox(height: 12),
+          _buildTabs(state.activeSubPage),
+          const SizedBox(height: 12),
           Expanded(
             child: IndexedStack(
-              // Symbols sub-page is no longer shown in the rail, but its
-              // IndexedStack slot stays so ScannerSubPage.scanners (index 1)
-              // etc. continue to map correctly.
-              // Locked to Scanners New — the sidebar (tab switching) is hidden.
-              index: ScannerSubPage.scannersNew.index,
+              // IndexedStack maps `.index` to child order — child list MUST
+              // stay aligned with the ScannerSubPage enum declaration order.
+              // Commented children mirror the commented enum values in
+              // customizable_split_home_screen.dart — re-enable in both places
+              // together.
+              index: state.activeSubPage.index,
               children: const [
-                SymbolsSubPage(),
-                ScannersSubPage(),
-                FundamentalsSubPage(),
+                // SymbolsSubPage(),      // legacy — hidden from tab bar
+                // ScannersSubPage(),     // legacy — hidden from tab bar
+                // FundamentalsSubPage(), // legacy — hidden from tab bar
                 CustomScansSubPage(),
                 FundamentalsNewSubPage(),
                 ScannersNewSubPage(),
@@ -165,6 +172,66 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Top tab bar — styled like the Positions screen chip tabs. Each tab maps
+  /// to a ScannerSubPage:
+  ///   Dashboard    → scannersNew
+  ///   Fundamentals → fundamentalsNew
+  ///   Custom Scans → customScans (saved list + full predicate builder)
+  Widget _buildTabs(ScannerSubPage active) {
+    const tabs = <_ScannerTab>[
+      _ScannerTab('Dashboard', ScannerSubPage.scannersNew),
+      _ScannerTab('Fundamentals', ScannerSubPage.fundamentalsNew),
+      // _ScannerTab('Custom Scans', ScannerSubPage.customScans),
+    ];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final t in tabs) _tabChip(t, active == t.page, isDark),
+      ],
+    );
+  }
+
+  Widget _tabChip(_ScannerTab tab, bool selected, bool isDark) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () {
+          if (!selected) {
+            ref
+                .read(scannerShellProvider.notifier)
+                .setActiveSubPage(tab.page);
+          }
+        },
+        child: Container(
+          margin: const EdgeInsets.only(right: 4),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected
+                ? (isDark
+                    ? Colors.white.withOpacity(0.1)
+                    : Colors.black.withOpacity(0.05))
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            tab.label,
+            style: MyntWebTextStyles.body(
+              context,
+              fontWeight:
+                  selected ? MyntFonts.semiBold : MyntFonts.medium,
+            ).copyWith(
+              color: selected
+                  ? shadcn.Theme.of(context).colorScheme.foreground
+                  : shadcn.Theme.of(context).colorScheme.mutedForeground,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -213,12 +280,13 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
   // ignore: unused_element
   String _label(ScannerSubPage p) {
     switch (p) {
-      case ScannerSubPage.symbols:
-        return 'Symbols';
-      case ScannerSubPage.scanners:
-        return 'Scanners';
-      case ScannerSubPage.fundamentals:
-        return 'Fundamentals';
+      // Legacy labels kept alongside the commented enum values.
+      // case ScannerSubPage.symbols:
+      //   return 'Symbols';
+      // case ScannerSubPage.scanners:
+      //   return 'Scanners';
+      // case ScannerSubPage.fundamentals:
+      //   return 'Fundamentals';
       case ScannerSubPage.customScans:
         return 'Custom Scans';
       case ScannerSubPage.fundamentalsNew:
@@ -227,4 +295,10 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
         return 'Scanners New';
     }
   }
+}
+
+class _ScannerTab {
+  final String label;
+  final ScannerSubPage page;
+  const _ScannerTab(this.label, this.page);
 }

@@ -198,7 +198,11 @@ class PerformanceTab extends ConsumerWidget {
   }
 
   Widget _barRow(BuildContext ctx, String label, double v, double maxAbs) {
-    final color = v >= 0 ? MyntColors.success : MyntColors.error;
+    final color = v >= 0
+        ? resolveThemeColor(ctx,
+            dark: MyntColors.successDark, light: MyntColors.success)
+        : resolveThemeColor(ctx,
+            dark: MyntColors.errorDark, light: MyntColors.error);
     final widthFactor =
         maxAbs == 0 ? 0.0 : (v.abs() / maxAbs).clamp(0.0, 1.0);
     final bg = resolveThemeColor(ctx,

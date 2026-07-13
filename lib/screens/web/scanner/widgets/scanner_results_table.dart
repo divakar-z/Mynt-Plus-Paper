@@ -46,6 +46,15 @@ class ScannerResultsTable extends StatefulWidget {
   final ValueChanged<String>? onExplainTap;
   final String footer;
   final List<ScanColumn> standardPrefixColumns;
+  /// Optional column pinned directly after Stock Name (before Symbol / Exch).
+  /// Used by the Fundamental Screener to surface Market Cap prominently as
+  /// the primary size metric of each match.
+  final ScanColumn? secondColumn;
+  /// Whether the fixed Symbol / Exch cells are rendered. Callers that expose
+  /// column visibility (Fundamentals) flip these from the Manage Columns
+  /// menu; older callers get the default `true` and see no change.
+  final bool showSymbol;
+  final bool showExch;
   final CellFormatter? customCellFormatter;
 
   const ScannerResultsTable({
@@ -56,6 +65,9 @@ class ScannerResultsTable extends StatefulWidget {
     this.onTickerTap,
     this.onExplainTap,
     this.standardPrefixColumns = const [],
+    this.secondColumn,
+    this.showSymbol = true,
+    this.showExch = true,
     this.customCellFormatter,
   });
 
@@ -64,7 +76,8 @@ class ScannerResultsTable extends StatefulWidget {
 }
 
 class _ScannerResultsTableState extends State<ScannerResultsTable> {
-  /// -1 = the combined "Stock Name" column (sorts by ticker).
+  /// -2 = the "Stock Name" column (sorts by name).
+  /// -1 = the "Symbol" column (sorts by ticker).
   /// 0 = EXCH (no-op).
   /// 1+ = entries from [_dataCols].
   int? _sortColIdx;
@@ -90,6 +103,30 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
   List<ScanRow> get _sortedRows {
     if (_sortColIdx == null) return widget.rows;
     final sorted = [...widget.rows];
+    if (_sortColIdx == -3 && widget.secondColumn != null) {
+      // Sort by the second column's raw value (Market Cap in the Fundamental
+      // Screener). Uses the same null-first / numeric-vs-string rules as the
+      // dynamic data columns below.
+      final key = widget.secondColumn!.key;
+      sorted.sort((a, b) {
+        final av = a.values[key];
+        final bv = b.values[key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return _sortAsc ? 1 : -1;
+        if (bv == null) return _sortAsc ? -1 : 1;
+        final c = (av is num && bv is num)
+            ? av.compareTo(bv)
+            : av.toString().compareTo(bv.toString());
+        return _sortAsc ? c : -c;
+      });
+      return sorted;
+    }
+    if (_sortColIdx == -2) {
+      sorted.sort((a, b) => _sortAsc
+          ? a.name.compareTo(b.name)
+          : b.name.compareTo(a.name));
+      return sorted;
+    }
     if (_sortColIdx == -1) {
       sorted.sort((a, b) => _sortAsc
           ? a.ticker.compareTo(b.ticker)
@@ -137,49 +174,61 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
     final headerBg = resolveThemeColor(context,
         dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
 
-    // Min widths that double as proportional weights for the flexible
-    // columns. Stock Name carries the long company names, so it gets the
-    // largest share of any spare width; numeric columns (short values) get
-    // the least. Exch is fixed — it only ever shows "NSE".
-    const exchW = 64.0;
+    // Symbol, Exch and every data column share an EQUAL width so their headers
+    // and cells line up in uniform tracks. Stock Name is bumped by [stockNameExtra]
+    // above that base — its content ("RELIANCE INDUSTRIES LTD", "HITACHI ENERGY
+    // INDIA…") is the longest in the row, and the extra room lets fewer names
+    // ellipsize without stealing space from the equal-width tracks.
+    // The min width is generous enough to fit common sector / industry names
+    // ("Consumer Durables", "Media & Entertainment") on a single line; wider
+    // content still ellipsizes rather than wrapping to a second row.
     const rowHPad = 20.0;
-    const stockNameMin = 300.0;
-    double dataMinFor(ScanColumn c) => c.fmt == 'string' ? 150.0 : 120.0;
+    const colMin = 170.0;
+    const stockNameExtra = 90.0;
 
     return LayoutBuilder(builder: (ctx, constraints) {
-      // The wrapping Container has a 1px border on each side, so the inner
-      // content area is 2px narrower than the outer constraint.
       const borderW = 1.0;
       final available =
           (constraints.maxWidth - borderW * 2).clamp(0.0, double.infinity);
-      // Spread the spare width proportionally across the flexible columns
-      // (Stock Name + data columns) by their min width — wider columns grow
-      // more, short numeric columns stay compact. Only scale up; when there
-      // isn't room, fall back to mins and let the table scroll horizontally.
-      final dataMinTotal =
-          dataCols.fold<double>(0.0, (sum, c) => sum + dataMinFor(c));
-      final flexBaseTotal = stockNameMin + dataMinTotal;
-      final availableForFlex =
-          (available - exchW - rowHPad * 2).clamp(0.0, double.infinity);
-      final rawScale =
-          flexBaseTotal == 0 ? 1.0 : availableForFlex / flexBaseTotal;
-      final scale = rawScale > 1.0 ? rawScale : 1.0;
-      final stockNameW = stockNameMin * scale;
-      final colWidths = <double>[
-        for (final c in dataCols) dataMinFor(c) * scale,
-      ];
-      final dataColsW = colWidths.fold<double>(0.0, (s, w) => s + w);
-      final totalWidth = stockNameW + exchW + rowHPad * 2 + dataColsW;
+      final availableForContent =
+          (available - rowHPad * 2).clamp(0.0, double.infinity);
+
+      final numDataCols = dataCols.length;
+      // Total equal-weight columns: Stock Name (always) + Symbol (optional)
+      // + Exch (optional) + optional secondColumn + data cols. Each hidden
+      // column drops out of the count so the remaining columns get wider.
+      final hasSecondCol = widget.secondColumn != null;
+      final equalColCount = 1 +
+          numDataCols +
+          (hasSecondCol ? 1 : 0) +
+          (widget.showSymbol ? 1 : 0) +
+          (widget.showExch ? 1 : 0);
+
+      // Reserve stockNameExtra before splitting the rest so Symbol / Exch /
+      // data columns still divide the remainder evenly.
+      final naturalEqualW = equalColCount == 0
+          ? 0.0
+          : (availableForContent - stockNameExtra) / equalColCount;
+      final equalW = naturalEqualW < colMin ? colMin : naturalEqualW;
+
+      final stockNameW = equalW + stockNameExtra;
+      final secondColW = hasSecondCol ? equalW : 0.0;
+      final symbolW = widget.showSymbol ? equalW : 0.0;
+      final exchW = widget.showExch ? equalW : 0.0;
+      final colWidths = List<double>.filled(numDataCols, equalW);
+      final totalWidth =
+          rowHPad * 2 + equalColCount * equalW + stockNameExtra;
       final needsScroll = totalWidth > available + 0.5;
 
       Widget table = SizedBox(
         width: needsScroll ? totalWidth : available,
         child: Column(
           children: [
-            // Sticky header row
+            // Sticky header row — fixed 40px height matches the data-row
+            // height (line 550) so the header and rows read as uniform tracks.
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: rowHPad, vertical: 10),
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: rowHPad),
               decoration: BoxDecoration(
                 color: headerBg,
                 border: Border(bottom: BorderSide(color: border)),
@@ -189,25 +238,63 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
                   width: stockNameW,
                   child: _SortHeader(
                     label: 'Stock Name',
-                    active: _sortColIdx == -1,
+                    active: _sortColIdx == -2,
                     asc: _sortAsc,
-                    onTap: () => _toggleSort(-1),
+                    onTap: () => _toggleSort(-2),
                   ),
                 ),
-                SizedBox(
-                  width: exchW,
-                  child: const _HeaderText('Exch'),
-                ),
+                if (hasSecondCol)
+                  SizedBox(
+                    width: secondColW,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _SortHeader(
+                        label: widget.secondColumn!.label,
+                        description: widget.secondColumn!.description,
+                        active: _sortColIdx == -3,
+                        asc: _sortAsc,
+                        onTap: () => _toggleSort(-3),
+                        alignEnd: widget.secondColumn!.fmt != 'string',
+                      ),
+                    ),
+                  ),
+                if (widget.showSymbol)
+                  SizedBox(
+                    width: symbolW,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _SortHeader(
+                        label: 'Symbol',
+                        active: _sortColIdx == -1,
+                        asc: _sortAsc,
+                        onTap: () => _toggleSort(-1),
+                      ),
+                    ),
+                  ),
+                if (widget.showExch)
+                  SizedBox(
+                    width: exchW,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6),
+                      child: _HeaderText('Exch'),
+                    ),
+                  ),
                 for (int i = 0; i < dataCols.length; i++)
                   SizedBox(
                     width: colWidths[i],
-                    child: _SortHeader(
-                      label: dataCols[i].label,
-                      description: dataCols[i].description,
-                      active: _sortColIdx == i + 1,
-                      asc: _sortAsc,
-                      onTap: () => _toggleSort(i + 1),
-                      alignEnd: dataCols[i].fmt != 'string',
+                    // Small internal padding so adjacent right-aligned
+                    // headers don't visually glue together ("ROERevenue
+                    // Growth (YoY)…"). 12px total gap between columns.
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: _SortHeader(
+                        label: dataCols[i].label,
+                        description: dataCols[i].description,
+                        active: _sortColIdx == i + 1,
+                        asc: _sortAsc,
+                        onTap: () => _toggleSort(i + 1),
+                        alignEnd: dataCols[i].fmt != 'string',
+                      ),
                     ),
                   ),
               ]),
@@ -232,7 +319,12 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
                       row: r,
                       cols: dataCols,
                       stockNameW: stockNameW,
+                      secondColumn: widget.secondColumn,
+                      secondColW: secondColW,
+                      symbolW: symbolW,
                       exchW: exchW,
+                      showSymbol: widget.showSymbol,
+                      showExch: widget.showExch,
                       colWidths: colWidths,
                       customCellFormatter: widget.customCellFormatter,
                       onTap: widget.onTickerTap == null
@@ -323,7 +415,7 @@ class _SortHeader extends StatelessWidget {
     final labelWidget = Flexible(
       child: Text(label,
           textAlign: alignEnd ? TextAlign.end : TextAlign.start,
-          maxLines: 2,
+          maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: MyntWebTextStyles.tableHeader(context,
               fontWeight: MyntFonts.semiBold, color: secondary)),
@@ -397,7 +489,12 @@ class _DataRow extends StatefulWidget {
   final ScanRow row;
   final List<ScanColumn> cols;
   final double stockNameW;
+  final ScanColumn? secondColumn;
+  final double secondColW;
+  final double symbolW;
   final double exchW;
+  final bool showSymbol;
+  final bool showExch;
   final List<double> colWidths;
   final CellFormatter? customCellFormatter;
   final VoidCallback? onTap;
@@ -406,7 +503,12 @@ class _DataRow extends StatefulWidget {
     required this.row,
     required this.cols,
     required this.stockNameW,
+    this.secondColumn,
+    this.secondColW = 0,
+    required this.symbolW,
     required this.exchW,
+    this.showSymbol = true,
+    this.showExch = true,
     required this.colWidths,
     required this.onTap,
     this.onExplainTap,
@@ -424,8 +526,6 @@ class _DataRowState extends State<_DataRow> {
   Widget build(BuildContext context) {
     final hoverBg = resolveThemeColor(context,
         dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final primary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
 
@@ -445,44 +545,33 @@ class _DataRowState extends State<_DataRow> {
         child: Container(
           color: _hover ? hoverBg : Colors.transparent,
           // Fixed height so the row never grows (bounces) when the hover
-          // action buttons appear — matches the Positions fixed-row layout.
-          height: 48,
+          // action buttons appear. 40 matches the Positions table row height
+          // (14px `body` text + shadcn.TableCell chrome + vertical:4 padding).
+          height: 40,
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(children: [
-            // Stock Name (name + ticker stacked) with inline hover actions —
-            // the name shrinks (ellipsis) to make room, like Positions.
+            // Stock Name column — the name takes the full width, hover
+            // buttons pin to the RIGHT edge of the column so they sit BETWEEN
+            // the Stock Name text and the "NSE" of the Exch column (never
+            // overlap either). Positions-page pattern.
             SizedBox(
               width: widget.stockNameW,
               child: Row(
                 children: [
-                  // Flexible (not Expanded) so the name takes only the width
-                  // it needs — the hover buttons then sit right after the
-                  // name text, with the rest of the column left as a gap
-                  // before the Exch column (no more clashing with "NSE").
-                  Flexible(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(widget.row.name,
-                            style: MyntWebTextStyles.body(context,
-                                fontWeight: MyntFonts.semiBold, color: primary),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                        // Second line (ticker code) commented out per request.
-                        // const SizedBox(height: 2),
-                        // Text(widget.row.ticker,
-                        //     style: MyntWebTextStyles.caption(context,
-                        //             color: secondary)
-                        //         .copyWith(fontFamily: 'monospace'),
-                        //     maxLines: 1,
-                        //     overflow: TextOverflow.ellipsis),
-                      ],
+                  Expanded(
+                    child: Tooltip(
+                      message: widget.row.name,
+                      waitDuration: const Duration(milliseconds: 400),
+                      child: Text(
+                        widget.row.name,
+                        style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.medium, color: primary),
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
-                  // Hover-only action buttons — inline right after the name
-                  // (Positions pattern). Their own gesture wins the tap, so
-                  // "Scanner Details" never accidentally opens the Overview.
                   if (showActions) ...[
                     const SizedBox(width: 8),
                     if (widget.onTap != null)
@@ -499,26 +588,73 @@ class _DataRowState extends State<_DataRow> {
                         icon: shadcn.LucideIcons.fileSearch,
                         onPressed: widget.onExplainTap!,
                       ),
+                    // Trailing gap so the button strip doesn't hug the Exch
+                    // column — visual breathing room before "NSE".
+                    const SizedBox(width: 26),
                   ],
                 ],
               ),
             ),
+            // Optional second column (e.g., Market Cap) — pinned between
+            // Stock Name and Symbol so the primary size metric sits right
+            // next to the name.
+            if (widget.secondColumn != null)
+              SizedBox(
+                width: widget.secondColW,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Align(
+                    alignment: widget.secondColumn!.fmt == 'string'
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
+                    child: _buildCell(context, widget.row, widget.secondColumn!),
+                  ),
+                ),
+              ),
+            // SYMBOL — compact tabular ticker, monospaced-friendly weight.
+            // Padding matches the other columns so Symbol doesn't sit flush
+            // against the right-aligned Market Cap number to its left.
+            if (widget.showSymbol)
+              SizedBox(
+                width: widget.symbolW,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(
+                    widget.row.ticker,
+                    style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.medium, color: primary)
+                        .copyWith(fontFeatures: const [
+                      FontFeature.tabularFigures(),
+                    ]),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
             // EXCH
-            SizedBox(
-              width: widget.exchW,
-              child: Text('NSE',
-                  style: MyntWebTextStyles.body(context, color: secondary)),
-            ),
-            // Data columns — sized per-column so strings (sector/industry)
-            // get more room than numerics.
+            if (widget.showExch)
+              SizedBox(
+                width: widget.exchW,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text('NSE',
+                      style: MyntWebTextStyles.body(context,
+                          fontWeight: MyntFonts.medium, color: primary)),
+                ),
+              ),
+            // Data columns — mirror the header's 6px internal padding so
+            // header labels and cell values stay aligned in the same tracks.
             for (int i = 0; i < widget.cols.length; i++)
               SizedBox(
                 width: widget.colWidths[i],
-                child: Align(
-                  alignment: widget.cols[i].fmt == 'string'
-                      ? Alignment.centerLeft
-                      : Alignment.centerRight,
-                  child: _buildCell(context, widget.row, widget.cols[i]),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Align(
+                    alignment: widget.cols[i].fmt == 'string'
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
+                    child: _buildCell(context, widget.row, widget.cols[i]),
+                  ),
                 ),
               ),
           ]),
@@ -540,6 +676,9 @@ class _DataRowState extends State<_DataRow> {
       final res = widget.customCellFormatter!(context, c, raw);
       return Text(
         res.text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
         style: MyntWebTextStyles.body(context,
                 fontWeight: MyntFonts.medium,
                 color: res.color ?? (raw == null ? secondary : primary))
@@ -549,20 +688,39 @@ class _DataRowState extends State<_DataRow> {
 
     if (raw == null) {
       return Text('—',
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
           style: MyntWebTextStyles.body(context, color: secondary));
     }
     if (raw is num) {
       final res = formatColumn(context, raw, c.fmt);
       return Text(
         res.text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
         style: MyntWebTextStyles.body(context,
                 fontWeight: MyntFonts.medium,
                 color: res.color ?? primary)
             .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
       );
     }
-    return Text(raw.toString(),
-        style: MyntWebTextStyles.body(context, color: primary));
+    // String data (Sector, Industry, …) — wrap in a Tooltip so hover reveals
+    // the full label when the column is too narrow.
+    final text = raw.toString();
+    return Tooltip(
+      message: text,
+      waitDuration: const Duration(milliseconds: 400),
+      child: Text(
+        text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: MyntWebTextStyles.body(context,
+            fontWeight: MyntFonts.medium, color: primary),
+      ),
+    );
   }
 }
 

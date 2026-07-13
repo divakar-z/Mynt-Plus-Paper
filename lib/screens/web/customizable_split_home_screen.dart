@@ -184,16 +184,20 @@ enum ScreenTypeParam {
   charts
 }
 
-/// Sub-page within the Scanner shell — drives the left rail + IndexedStack.
+/// Sub-page within the Scanner shell — drives the top tab bar + IndexedStack.
+/// Order MUST match the IndexedStack children list in ScannerShellScreen.
 enum ScannerSubPage {
-  symbols,
-  scanners,
-  fundamentals,
+  // Legacy tabs — no longer surfaced in the top tab bar. Kept commented so
+  // they can be re-enabled if the old flows need to come back.
+  // symbols,
+  // scanners,
+  // fundamentals,
   customScans,
   fundamentalsNew,
   // Keep new values LAST — the shell's IndexedStack maps `.index` to child
   // order, so inserting mid-list would misroute the existing tabs.
   scannersNew,
+  // technicals,  // removed — chip-based tech scanner retired.
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -2276,12 +2280,14 @@ class _CustomizableSplitHomeScreenState
 
   String _scannerPath(ScannerSubPage p) {
     switch (p) {
-      case ScannerSubPage.symbols:
-        return WebRoutes.scannerSymbols;
-      case ScannerSubPage.scanners:
-        return WebRoutes.scannerScanners;
-      case ScannerSubPage.fundamentals:
-        return WebRoutes.scannerFundamentals;
+      // Legacy cases kept commented alongside the enum values — re-enable
+      // together if the old tabs come back.
+      // case ScannerSubPage.symbols:
+      //   return WebRoutes.scannerSymbols;
+      // case ScannerSubPage.scanners:
+      //   return WebRoutes.scannerScanners;
+      // case ScannerSubPage.fundamentals:
+      //   return WebRoutes.scannerFundamentals;
       case ScannerSubPage.customScans:
         return WebRoutes.scannerCustom;
       case ScannerSubPage.fundamentalsNew:

@@ -5,6 +5,7 @@ import 'package:mynt_plus/provider/scanner/scanners_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/res/responsive_extensions.dart';
 import 'package:mynt_plus/screens/web/scanner/sub_pages/scanners_detail_pane.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/empty_state.dart';
 import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
@@ -119,136 +120,49 @@ class _ScannersNewSubPageState extends ConsumerState<ScannersNewSubPage> {
   }
 
   Widget _heroPanel(List<String> groups) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final border = shadcn.Theme.of(context).colorScheme.border;
-    final panelBg = resolveThemeColor(context,
-        dark: MyntColors.sidebarBgDark, light: const Color(0xFFF1F5FE));
-    final cardBg = resolveThemeColor(context,
-        dark: MyntColors.cardDark, light: MyntColors.card);
     final textPrimary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final gradientColors = isDark
+        ? const [Color(0xFF161B22), Color(0xFF0D1117)]
+        : const [Color(0xFFDCE7FC), Color(0xFFF0F5FE)];
 
     return Container(
+      height: 180,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: panelBg,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: border),
-        // Left→right gradient (not diagonal) so a wide banner stays even — blue
-        // near the title, fading to near-white by the search. No dark middle.
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.centerLeft,
           end: Alignment.centerRight,
-          colors: [Color(0xFFDCE7FC), Color(0xFFF0F5FE)],
+          colors: gradientColors,
         ),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final stacked = constraints.maxWidth < 980;
-          final overview = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Container(
-              //   padding:
-              //       const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              //   decoration: BoxDecoration(
-              //     color: primary.withValues(alpha: 0.10),
-              //     borderRadius: BorderRadius.circular(999),
-              //   ),
-              //   child: Text(
-              //     'RESEARCH DASHBOARD',
-              //     style: MyntWebTextStyles.caption(
-              //       context,
-              //       color: primary,
-              //       fontWeight: MyntFonts.semiBold,
-              //     ).copyWith(letterSpacing: 1.0),
-              //   ),
-              // ),
-              // const SizedBox(height: 14),
-              Text(
-                'Scanners',
-                style: MyntWebTextStyles.hero(context,
-                        fontWeight: MyntFonts.bold, color: textPrimary)
-                    .copyWith(fontSize: 28),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'A curated set of pre-built market scans that flag stocks matching specific patterns and signals, organised by category.',
-                style: MyntWebTextStyles.body(context, color: secondary),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [for (final g in groups) _jumpChip(g)],
-              ),
-            ],
-          );
-          return Flex(
-            direction: stacked ? Axis.vertical : Axis.horizontal,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (stacked) overview else Expanded(flex: 3, child: overview),
-              SizedBox(width: stacked ? 0 : 20, height: stacked ? 16 : 0),
-              SizedBox(
-                width: stacked ? double.infinity : 340,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: cardBg,
-                        // borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: border),
-                      ),
-                      child: MyntSearchTextField.withSmartClear(
-                        controller: _q,
-                        placeholder: 'Search scanners, codes, groups...',
-                        leadingIcon: assets.searchIcon,
-                        textCapitalization: TextCapitalization.none,
-                      ),
-                    ),
-                    // const SizedBox(height: 12),
-                    // Container(
-                    //   padding: const EdgeInsets.all(14),
-                    //   decoration: BoxDecoration(
-                    //     color: cardBg,
-                    //     borderRadius: BorderRadius.circular(14),
-                    //     border: Border.all(color: border),
-                    //   ),
-                    //   child: Column(
-                    //     crossAxisAlignment: CrossAxisAlignment.start,
-                    //     children: [
-                    //       Text(
-                    //         'Current view',
-                    //         style: MyntWebTextStyles.caption(context,
-                    //             color: secondary),
-                    //       ),
-                    //       const SizedBox(height: 8),
-                    //       Text(
-                    //         activeFilter,
-                    //         style: MyntWebTextStyles.title(context,
-                    //             fontWeight: MyntFonts.semiBold,
-                    //             color: textPrimary),
-                    //       ),
-                    //       const SizedBox(height: 4),
-                    //       Text(
-                    //         query.isEmpty
-                    //             ? 'Use search or the sentiment modules below to narrow the catalog.'
-                    //             : 'Searching for "$query"',
-                    //         style: MyntWebTextStyles.caption(context,
-                    //             color: secondary),
-                    //       ),
-                    //     ],
-                    //   ),
-                    // ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Scanners',
+            style: MyntWebTextStyles.hero(context,
+                    fontWeight: MyntFonts.bold, color: textPrimary)
+                .copyWith(fontSize: 28),
+          ),
+          const SizedBox(height: 15),
+          Text(
+            'A curated set of pre-built market scans that flag stocks matching specific patterns and signals, organised by category.',
+            style: MyntWebTextStyles.body(context, color: secondary),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [for (final g in groups) _jumpChip(g)],
+          ),
+        ],
       ),
     );
   }
@@ -304,64 +218,153 @@ class _ScannersNewSubPageState extends ConsumerState<ScannersNewSubPage> {
     );
   }
 
+  /// Single filled candle body — used for Bullish (green) and Bearish (red).
+  /// Sized to 20px so the tab height matches the positions-page tab strip.
+  Widget _candleIcon(Color color) {
+    return SizedBox(
+      width: 20,
+      height: 20,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(width: 1.5, height: 16, color: color),
+          Container(
+            width: 4,
+            height: 12,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(1.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// All-Setups: a green + red candle pair side by side.
+  Widget _allSetupsIcon(Color bull, Color bear) {
+    Widget candle(Color c) => Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(width: 1, height: 14, color: c),
+            Container(
+              width: 3.5,
+              height: 10,
+              decoration: BoxDecoration(
+                color: c,
+                borderRadius: BorderRadius.circular(1.5),
+              ),
+            ),
+          ],
+        );
+    return SizedBox(
+      width: 20,
+      height: 20,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          candle(bull),
+          const SizedBox(width: 3),
+          candle(bear),
+        ],
+      ),
+    );
+  }
+
+  /// Doji shape drawn as a thin vertical wick with a horizontal crossbar.
+  Widget _dojiIcon(Color color) {
+    return SizedBox(
+      width: 20,
+      height: 20,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(width: 1.5, height: 15, color: color),
+          Container(width: 8, height: 1.5, color: color),
+        ],
+      ),
+    );
+  }
+
   Widget _summaryStrip(
       int total, int filteredTotal, Map<ScannerSentiment, int> counts) {
+    // Draw all four icons ourselves — the PNGs have too much transparent
+    // padding, scaling any visible content to sub-pixel size at 32px.
+    final bull = resolveThemeColor(context,
+        dark: MyntColors.profitDark, light: MyntColors.profit);
+    final bear = resolveThemeColor(context,
+        dark: MyntColors.lossDark, light: MyntColors.loss);
+    final neutralColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final items = [
       (
         label: 'All Setups',
-        helper: '$filteredTotal visible now',
         count: total,
         value: null as ScannerSentiment?,
-        accent: resolveThemeColor(context,
-            dark: MyntColors.primaryDark, light: MyntColors.primary),
-        image: assets.scannerAll,
+        icon: _allSetupsIcon(bull, bear),
       ),
       (
         label: 'Bullish',
-        helper: 'Momentum upside',
         count: counts[ScannerSentiment.bullish] ?? 0,
         value: ScannerSentiment.bullish,
-        accent: _sentColor(ScannerSentiment.bullish),
-        image: assets.scannerBullish,
+        icon: _candleIcon(bull),
       ),
       (
         label: 'Bearish',
-        helper: 'Weakness / breakdowns',
         count: counts[ScannerSentiment.bearish] ?? 0,
         value: ScannerSentiment.bearish,
-        accent: _sentColor(ScannerSentiment.bearish),
-        image: assets.scannerBearish,
+        icon: _candleIcon(bear),
       ),
       (
         label: 'Neutral',
-        helper: 'Balanced / range setups',
         count: counts[ScannerSentiment.neutral] ?? 0,
         value: ScannerSentiment.neutral,
-        accent: _sentColor(ScannerSentiment.neutral),
-        image: assets.scannerNeutral,
+        icon: _dojiIcon(neutralColor),
       ),
     ];
 
-    // Fixed-width cards (left-aligned) instead of stretching to fill the row;
-    // they wrap to the next line on narrower screens.
-    return Wrap(
-      spacing: 14,
-      runSpacing: 14,
+    // Positions-page pattern: scrollable tabs on the left, Spacer, then the
+    // search field pinned to the right end of the row.
+    return Row(
       children: [
-        for (final item in items)
-          SizedBox(
-            width: 240,
-            child: _StatCard(
-              label: item.label,
-              helper: item.helper,
-              count: item.count,
-              image: item.image,
-              accent: item.accent,
-              active: _activeSentiment == item.value,
-              onTap: () => setState(() => _activeSentiment =
-                  _activeSentiment == item.value ? null : item.value),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final item in items)
+                  _TabItem(
+                    label: item.label,
+                    count: item.count,
+                    icon: item.icon,
+                    active: _activeSentiment == item.value,
+                    onTap: () => setState(() => _activeSentiment =
+                        _activeSentiment == item.value ? null : item.value),
+                  ),
+              ],
             ),
           ),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: context.responsiveValue<double>(
+            mobile: 140,
+            smallTablet: 180,
+            tablet: 220,
+            desktop: 300,
+            largeDesktop: 350,
+            widescreen: 400,
+          ),
+          height: 40,
+          child: MyntSearchTextField.withSmartClear(
+            controller: _q,
+            placeholder: 'Search scanners, codes, groups...',
+            leadingIcon: assets.searchIcon,
+            textCapitalization: TextCapitalization.none,
+          ),
+        ),
       ],
     );
   }
@@ -544,27 +547,12 @@ class _ScannersNewSubPageState extends ConsumerState<ScannersNewSubPage> {
     );
   }
 
-  Color _sentColor(ScannerSentiment s) {
-    switch (s) {
-      case ScannerSentiment.bullish:
-        return resolveThemeColor(context,
-            dark: MyntColors.profitDark, light: MyntColors.profit);
-      case ScannerSentiment.bearish:
-        return resolveThemeColor(context,
-            dark: MyntColors.lossDark, light: MyntColors.loss);
-      case ScannerSentiment.neutral:
-        return resolveThemeColor(context,
-            dark: MyntColors.textSecondaryDark,
-            light: MyntColors.textSecondary);
-    }
-  }
-
   Color _groupColor(String g) {
     switch (g.toLowerCase()) {
       case 'candlestick':
         return const Color(0xFFDB7C26);
       case 'price':
-        return MyntColors.primary;
+        return resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary);
       case 'technical':
         return const Color(0xFF0F9D7A);
       case 'volume':
@@ -575,115 +563,66 @@ class _ScannersNewSubPageState extends ConsumerState<ScannersNewSubPage> {
   }
 }
 
-class _StatCard extends StatefulWidget {
+class _TabItem extends StatelessWidget {
   final String label;
-  final String helper;
   final int count;
-  final String image;
-  final Color accent;
+  final Widget icon;
   final bool active;
   final VoidCallback onTap;
 
-  const _StatCard({
+  const _TabItem({
     required this.label,
-    required this.helper,
     required this.count,
-    required this.image,
-    required this.accent,
+    required this.icon,
     required this.active,
     required this.onTap,
   });
 
   @override
-  State<_StatCard> createState() => _StatCardState();
-}
-
-class _StatCardState extends State<_StatCard> {
-  bool _hover = false;
-
-  @override
   Widget build(BuildContext context) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final cardBg = resolveThemeColor(context,
-        dark: MyntColors.cardDark, light: MyntColors.card);
-    final hoverBg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: const Color(0xFFF8FBFF));
-    final textPrimary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activeBg = isDark
+        ? Colors.white.withValues(alpha: 0.1)
+        : Colors.black.withValues(alpha: 0.05);
+    final foreground = shadcn.Theme.of(context).colorScheme.foreground;
+    final mutedForeground = shadcn.Theme.of(context).colorScheme.mutedForeground;
+    final textColor = active ? foreground : mutedForeground;
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: widget.onTap,
+        onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          margin: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
-            // Active state is always blue (primary) for every card; hover just
-            // lightens the background.
-            color: widget.active
-                ? primary.withValues(alpha: 0.08)
-                : (_hover ? hoverBg : cardBg),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: widget.active ? primary : border,
-            ),
+            color: active ? activeBg : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      SizedBox(
-                        width: 30,
-                        height: 30,
-                        child: Image.asset(widget.image, fit: BoxFit.contain),
-                      ),
-                      const SizedBox(width: 6),
-
-                       Text(
-                    widget.label,
-                    style: MyntWebTextStyles.body(context,
-                        fontWeight: MyntFonts.semiBold, color: textPrimary),
-                  ),
-                      
-                      
-                    ],
-                  ),
-
-                   Text(
-                        '${widget.count}',
-                        style: MyntWebTextStyles.body(context,
-                            fontWeight: MyntFonts.bold, color: textPrimary),
-                      ),
-
-                 
-
-                  // const Spacer(),
-                  // if (widget.active)
-                  //   Container(
-                  //     padding: const EdgeInsets.symmetric(
-                  //         horizontal: 8, vertical: 4),
-                  //     decoration: BoxDecoration(
-                  //       color: widget.accent.withValues(alpha: 0.14),
-                  //       borderRadius: BorderRadius.circular(999),
-                  //     ),
-                  //     child: Text(
-                  //       'Active',
-                  //       style: MyntWebTextStyles.caption(context,
-                  //           color: widget.accent,
-                  //           fontWeight: MyntFonts.semiBold),
-                  //     ),
-                  //   ),
-                ],
+              icon,
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: MyntWebTextStyles.body(
+                  context,
+                  fontWeight:
+                      active ? MyntFonts.semiBold : MyntFonts.medium,
+                ).copyWith(color: textColor),
+              ),
+              const SizedBox(width: 4),
+              Transform.translate(
+                offset: const Offset(0, -6),
+                child: Text(
+                  '$count',
+                  style: MyntWebTextStyles.bodySmall(
+                    context,
+                    fontWeight:
+                        active ? MyntFonts.semiBold : MyntFonts.medium,
+                  ).copyWith(fontSize: 13, color: textColor),
+                ),
               ),
             ],
           ),
@@ -720,8 +659,7 @@ class _ScannerCardState extends State<_ScannerCard> {
   @override
   Widget build(BuildContext context) {
     final border = shadcn.Theme.of(context).colorScheme.border;
-    final cardBg = resolveThemeColor(context,
-        dark: MyntColors.cardDark, light: MyntColors.card);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final secondary = resolveThemeColor(context,
@@ -744,11 +682,15 @@ class _ScannerCardState extends State<_ScannerCard> {
           height: 208,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            // Hover cue is just the accent border — no background lighten, no
-            // drop shadow.
-            color: cardBg,
+            color: isDark
+                ? widget.accent.withValues(alpha: 0.06)
+                : Colors.white,
             border: Border.all(
-                color: _hover ? widget.accent.withValues(alpha: 0.55) : border),
+              color: _hover
+                  ? widget.accent.withValues(alpha: isDark ? 0.45 : 0.40)
+                  : widget.accent.withValues(alpha: isDark ? 0.20 : 0.15),
+              width: 1,
+            ),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -827,19 +769,6 @@ class _ScannerCardState extends State<_ScannerCard> {
     );
   }
 
-  Widget _iconTile(BuildContext context) {
-    final (icon, color) = _tileStyle(context);
-    return Container(
-      width: 48,
-      height: 48,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Icon(icon, size: 22, color: color),
-    );
-  }
-
   /// Ribbon/flag-shaped sentiment tag (notched left end) sitting in the pill's
   /// spot. Colored by sentiment, white bold label.
   Widget _sentimentBanner(BuildContext context) {
@@ -873,31 +802,6 @@ class _ScannerCardState extends State<_ScannerCard> {
     );
   }
 
-  (IconData, Color) _tileStyle(BuildContext context) {
-    switch (widget.sentiment) {
-      case ScannerSentiment.bullish:
-        return (
-          shadcn.LucideIcons.trendingUp,
-          resolveThemeColor(context,
-              dark: MyntColors.profitDark, light: MyntColors.profit)
-        );
-      case ScannerSentiment.bearish:
-        return (
-          shadcn.LucideIcons.trendingDown,
-          resolveThemeColor(context,
-              dark: MyntColors.lossDark, light: MyntColors.loss)
-        );
-      case ScannerSentiment.neutral:
-        return (
-          shadcn.LucideIcons.minus,
-          resolveThemeColor(context,
-              dark: MyntColors.textSecondaryDark,
-              light: MyntColors.textSecondary)
-        );
-      case null:
-        return (shadcn.LucideIcons.activity, widget.accent);
-    }
-  }
 }
 
 /// Clips a rectangle into a ribbon/flag shape with a triangular notch cut into

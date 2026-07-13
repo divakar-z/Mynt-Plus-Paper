@@ -29,19 +29,22 @@ class ScannersDetailPane extends ConsumerStatefulWidget {
 }
 
 class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
+  /// Default index filter — NIFTY 500 is the broadest liquid universe most
+  /// scanners are meant to run against, so pre-selecting it keeps the first
+  /// view actionable instead of dumping the entire NSE catalog.
+  static const List<String> _kDefaultIndices = ['NIFTY 500'];
+
   /// Per-scanner index filter. Each scanner detail has its own filter
   /// state so switching scanners always starts fresh — sharing one filter
   /// across scanners caused stale chips to bleed into unrelated scanners.
-  List<String> _selectedIndices = const [];
+  List<String> _selectedIndices = _kDefaultIndices;
 
   @override
   void didUpdateWidget(covariant ScannersDetailPane oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Different scanner = fresh filter. Without this the new scanner
-    // would inherit the previous one's chips, hiding the fact that the
-    // filter is still narrowing the universe.
-    if (oldWidget.code != widget.code && _selectedIndices.isNotEmpty) {
-      setState(() => _selectedIndices = const []);
+    // Different scanner = fresh filter (reset back to the NIFTY 500 default).
+    if (oldWidget.code != widget.code) {
+      setState(() => _selectedIndices = _kDefaultIndices);
     }
   }
 
@@ -67,15 +70,24 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
         // Grey banner holding the header (back + title + subtitle + actions)
         // with the scanner description tucked inside it.
         Container(
-          padding: const EdgeInsets.all(16),
+          // Fixed height (matches the dashboard hero panel) so the detail
+          // header stays the same size regardless of description length.
+          height: 180,
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            // Flat light-blue to match the dashboard hero banner.
-            color: resolveThemeColor(context,
-                dark: MyntColors.sidebarBgDark, light: const Color(0xFFEAF1FE)),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
                 color: resolveThemeColor(context,
                     dark: MyntColors.dividerDark, light: MyntColors.divider)),
+            // Mirrors the dashboard hero gradient so the detail header stays
+            // tonally consistent when switching between the two views.
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: Theme.of(context).brightness == Brightness.dark
+                  ? const [Color(0xFF161B22), Color(0xFF0D1117)]
+                  : const [Color(0xFFDCE7FC), Color(0xFFF0F5FE)],
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -149,36 +161,44 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
                   onTap: () => _export(context),
                 ),
               ]),
-              // Description inside the same banner.
-              meta.maybeWhen(
-                data: (s) {
-                  final text = (s.descriptionLong?.isNotEmpty ?? false)
-                      ? s.descriptionLong!
-                      : s.description;
-                  if (text.isEmpty) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Text(
-                      text,
-                      style: MyntWebTextStyles.body(context,
-                          color: resolveThemeColor(context,
-                              dark: MyntColors.textSecondaryDark,
-                              light: MyntColors.textSecondary)),
-                    ),
-                  );
-                },
-                orElse: () => const SizedBox.shrink(),
+              // Description inside the same banner. Expanded + scroll so a
+              // long description doesn't blow the fixed 180 banner height.
+              Expanded(
+                child: meta.maybeWhen(
+                  data: (s) {
+                    final text = (s.descriptionLong?.isNotEmpty ?? false)
+                        ? s.descriptionLong!
+                        : s.description;
+                    if (text.isEmpty) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 20),
+                      child: SingleChildScrollView(
+                        child: Text(
+                          text,
+                          style: MyntWebTextStyles.body(context,
+                              color: resolveThemeColor(context,
+                                  dark: MyntColors.textSecondaryDark,
+                                  light: MyntColors.textSecondary)),
+                        ),
+                      ),
+                    );
+                  },
+                  orElse: () => const SizedBox.shrink(),
+                ),
               ),
             ],
           ),
         ),
-        if (selectedIndices.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          ActiveIndexFilterChips(
-            selected: selectedIndices,
-            onChanged: _setIndices,
-          ),
-        ],
+        // Active filter chips row hidden — the select-style trigger already
+        // surfaces the current selection ("<first> +N"), so the chip row
+        // below the banner is redundant.
+        // if (selectedIndices.isNotEmpty) ...[
+        //   const SizedBox(height: 12),
+        //   ActiveIndexFilterChips(
+        //     selected: selectedIndices,
+        //     onChanged: _setIndices,
+        //   ),
+        // ],
         const SizedBox(height: 16),
         Expanded(
           child: results.when(
@@ -218,9 +238,30 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
                     description: c.description,
                   ),
               ];
+              // When the scanner surfaces both close and chg_pct (the common
+              // pair on candlestick/price/momentum scanners), append an
+              // absolute rupee-change column — traders read Chg (₹) alongside
+              // Chg (%) to gauge the move's magnitude in real money.
+              final hasCloseAndChg = cols.any((c) => c.key == 'close') &&
+                  cols.any((c) => c.key == 'chg_pct');
+              if (hasCloseAndChg) {
+                cols.add(const ScanColumn(
+                  key: 'chg_abs',
+                  label: 'Chg (₹)',
+                  fmt: 'signed_price',
+                  description:
+                      'Absolute price change in rupees, derived from Close × Chg% / (100 + Chg%).',
+                ));
+              }
               final rows = [
                 for (final m in r.matches)
-                  ScanRow(ticker: m.ticker, name: m.name, values: m.values),
+                  ScanRow(
+                    ticker: m.ticker,
+                    name: m.name,
+                    values: hasCloseAndChg
+                        ? _withChgAbs(m.values)
+                        : m.values,
+                  ),
               ];
               final visible = r.matches.length;
               final total = r.total;
@@ -257,7 +298,7 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
       case 'candlestick':
         return const Color(0xFFDB7C26);
       case 'price':
-        return MyntColors.primary;
+        return resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary);
       case 'technical':
         return const Color(0xFF0F9D7A);
       case 'volume':
@@ -288,6 +329,29 @@ class _ScannersDetailPaneState extends ConsumerState<ScannersDetailPane> {
   }
 }
 
+
+/// Derives the absolute rupee change from close and chg_pct and returns a
+/// new values map that includes it under `chg_abs`. Close/chg_pct arrive
+/// from the backend as num; if either is missing or non-numeric the abs
+/// change is left null so the cell renders "—".
+Map<String, dynamic> _withChgAbs(Map<String, dynamic> values) {
+  final closeRaw = values['close'];
+  final chgPctRaw = values['chg_pct'];
+  double? chgAbs;
+  if (closeRaw is num && chgPctRaw is num) {
+    // close_now = prev_close × (1 + chg_pct/100)
+    // ⇒ prev_close = close_now / (1 + chg_pct/100)
+    // ⇒ chg_abs   = close_now − prev_close
+    final denom = 1 + chgPctRaw.toDouble() / 100.0;
+    if (denom != 0) {
+      chgAbs = closeRaw.toDouble() - (closeRaw.toDouble() / denom);
+    }
+  }
+  return {
+    ...values,
+    'chg_abs': chgAbs,
+  };
+}
 
 /// Compact icon button with a grey hover circle — visually pairs with the
 /// Index filter icon in the detail header.

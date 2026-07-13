@@ -151,7 +151,7 @@ class _ExportDialogState extends State<_ExportDialog> {
     return RadioListTile<ExportColumnsMode>(
       contentPadding: EdgeInsets.zero,
       dense: true,
-      activeColor: MyntColors.primary,
+      activeColor: resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary),
       value: value,
       groupValue: _mode,
       title: Text(label, style: MyntWebTextStyles.body(context)),

@@ -74,6 +74,7 @@ class _TechnicalsTabState extends ConsumerState<TechnicalsTab> {
                           ? kEmDash
                           : e.value!.toStringAsFixed(2),
                       badge: interpretIndicator(
+                        context: context,
                         key: e.key,
                         value: e.value,
                         allIndicators: resp.indicators,

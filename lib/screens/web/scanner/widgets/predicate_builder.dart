@@ -181,20 +181,21 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
 
   Widget _buildGroup(IndicatorCatalog catalog, _BGroup g,
       {required int depth}) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
+    final border = resolveThemeColor(context,
+        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
     final cardBg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
     // final nestedBg = resolveThemeColor(context,
     //     dark: MyntColors.primaryDark.withValues(alpha: 0.05), light: MyntColors.primary.withValues(alpha: 0.05));
 
     return Container(
-      margin: EdgeInsets.symmetric(vertical: depth == 0 ? 0 : 6),
+      margin: EdgeInsets.symmetric(vertical: depth == 0 ? 0 : 4),
       decoration: BoxDecoration(
         // color: depth == 0 ? Colors.transparent : nestedBg,
         color:  Colors.transparent,
         border: Border.all(
             color: depth == 0 ? border.withValues(alpha: 0.5) : border),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -202,7 +203,7 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
           _groupHeader(g),
           // Body: child cards with connector chips between them.
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -241,12 +242,12 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
     final primary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: headerBg,
         borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(10),
-          topRight: Radius.circular(10),
+          topLeft: Radius.circular(8),
+          topRight: Radius.circular(8),
         ),
       ),
       child: Row(children: [
@@ -254,15 +255,26 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
             style: MyntWebTextStyles.body(context,
                      color: primary)
                 ),
-        const SizedBox(width: 10),
-        _CombinatorSegmented(
-          value: g.op,
-          onChanged: (v) => setState(() {
-            g.op = v;
-            _emit();
-          }),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 160,
+          height: 32,
+          child: FilterSelect(
+            value: const ['all', 'any', 'none'].contains(g.op) ? g.op : 'all',
+            hint: 'Combinator',
+            borderColor: resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary).withValues(alpha: 0.35),
+            options: const [
+              FilterSelectOption('all', 'All (AND)'),
+              FilterSelectOption('any', 'Any (OR)'),
+              FilterSelectOption('none', 'None (NOT)'),
+            ],
+            onChanged: (v) => setState(() {
+              g.op = v;
+              _emit();
+            }),
+          ),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
         Text('of the following:',
             style: MyntWebTextStyles.body(context, color:  primary)),
         const Spacer(),
@@ -332,180 +344,192 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
           );
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
+      margin: const EdgeInsets.symmetric(vertical: 3),
       decoration: BoxDecoration(
         color: cardBg,
-        border: Border.all(color: border),
-        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: resolveThemeColor(context, dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted)),
+        borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Card header — number + indicator title + remove
-          _leafHeader(index, leftDef, category, onRemove),
-          const Divider(height: 1),
-          // Card body — INDICATOR row, then kind-specific OP/VALUE row.
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _indicatorSection(catalog, l, leftDef),
-                if (leftDef != null) ...[
-                  const SizedBox(height: 16),
-                  _kindSpecificSection(catalog, leftDef, l),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _leafHeader(int index, CatalogIndicator? leftDef,
-      IndicatorCategory? category, VoidCallback onRemove) {
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-      child: Row(
-        children: [
-          _NumberedBadge(index: index),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  leftDef?.label ?? 'New condition',
-                  style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.bold),
-                ),
-                if (category != null)
-                  Text(category.label,
-                      style: MyntWebTextStyles.para(context,
-                          color: secondary)),
-              ],
-            ),
-          ),
-          if (leftDef?.needsBenchmark == true) ...[
-            const _BenchmarkChip(),
-            const SizedBox(width: 8),
-          ],
-          IconButton(
-            onPressed: onRemove,
-            icon: const Icon(shadcn.LucideIcons.x, size: 16),
-            tooltip: 'Remove condition',
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _indicatorSection(
-      IndicatorCatalog catalog, _BLeaf l, CatalogIndicator? leftDef) {
-    // The indicator picker gets its own inline label so it is the same height
-    // as the param columns (label + 40px field) - that keeps the picker and
-    // every param field on one aligned line instead of the picker sitting
-    // higher than the labelled params.
-    return Wrap(
-      spacing: 20,
-      runSpacing: 20,
-      crossAxisAlignment: WrapCrossAlignment.start,
-      children: [
-        Column(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 6, 12),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
           children: [
-            const _FieldLabel('Indicator'),
+            // Slim identity strip: number badge + category + optional benchmark
+            // chip + × delete. No title text — the Indicator dropdown below is
+            // the source of truth for the condition's identity.
+            _leafIdentityStrip(index, leftDef, category, onRemove),
             const SizedBox(height: 8),
-            SizedBox(
-              width: 240,
-              height: 40,
-              child: IndicatorPicker(
-                catalog: catalog,
-                value: l.leftIndicator,
-                onChanged: (v) => setState(() {
-                  l.leftIndicator = v;
-                  l.leftParams = _defaultParamsFor(catalog, v);
-                  _emit();
-                }),
+            // All fields flow in a single Wrap so on wide screens the whole
+            // expression reads left-to-right on one row: indicator, its
+            // params, operator, value/indicator toggle, right side, right
+            // params — wrapping only when width runs out.
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.end,
+                children: [
+                  ..._leftIndicatorChildren(catalog, l),
+                  if (leftDef != null)
+                    ..._paramInputs(leftDef, l.leftParams, () => _emit()),
+                  if (leftDef != null)
+                    ..._comparisonChildren(catalog, leftDef, l),
+                ],
               ),
             ),
           ],
         ),
-        if (leftDef != null)
-          ..._paramInputs(leftDef, l.leftParams, () => _emit()),
-      ],
+      ),
     );
   }
 
-  Widget _kindSpecificSection(
+  /// Slim top strip: order badge + subtle category context + benchmark chip
+  /// (if applicable) + close button. Replaces the old title-repeating header.
+  Widget _leafIdentityStrip(int index, CatalogIndicator? leftDef,
+      IndicatorCategory? category, VoidCallback onRemove) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return SizedBox(
+      height: 24,
+      child: Row(
+        children: [
+          _NumberedBadge(index: index),
+          const SizedBox(width: 8),
+          if (category != null)
+            Expanded(
+              child: Text(
+                category.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: MyntWebTextStyles.caption(context,
+                    color: secondary, fontWeight: MyntFonts.medium),
+              ),
+            )
+          else
+            const Spacer(),
+          if (leftDef?.needsBenchmark == true) ...[
+            const _BenchmarkChip(),
+            const SizedBox(width: 4),
+          ],
+          IconButton(
+            onPressed: onRemove,
+            icon: const Icon(shadcn.LucideIcons.x, size: 14),
+            tooltip: 'Remove condition',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Left indicator picker column — always the first Wrap child.
+  List<Widget> _leftIndicatorChildren(IndicatorCatalog catalog, _BLeaf l) {
+    return [
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _FieldLabel('Indicator'),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: 240,
+            height: 40,
+            child: IndicatorPicker(
+              catalog: catalog,
+              value: l.leftIndicator,
+              onChanged: (v) => setState(() {
+                l.leftIndicator = v;
+                l.leftParams = _defaultParamsFor(catalog, v);
+                _emit();
+              }),
+            ),
+          ),
+        ],
+      ),
+    ];
+  }
+
+  /// Kind-dispatched comparison fields (op + right side) as flat Wrap children,
+  /// so they sit inline with the indicator + left params on wide screens.
+  List<Widget> _comparisonChildren(
       IndicatorCatalog catalog, CatalogIndicator leftDef, _BLeaf l) {
     switch (leftDef.kind) {
       case IndicatorKind.booleanKind:
-        return _booleanSection(l);
+        return _booleanChildren(l);
       case IndicatorKind.enumKind:
-        return _enumSection(leftDef, l);
+        return _enumChildren(leftDef, l);
       case IndicatorKind.floatKind:
-        return _floatSection(catalog, l);
+        return _floatChildren(catalog, l);
     }
   }
 
   // ----- BOOLEAN: pattern formed / not formed ------------------------------
 
-  Widget _booleanSection(_BLeaf l) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _FieldLabel('Pattern'),
-        const SizedBox(height: 6),
-        _PillSegmented(
-          value: l.op == '==' ? '==' : '!=',
-          options: const ['!=', '=='],
-          labels: const ['Formed', 'Not formed'],
-          onChanged: (v) => setState(() {
-            l.op = v;
-            l.rightIsValue = true;
-            l.rightValueA = 0;
-            _emit();
-          }),
-        ),
-      ],
-    );
+  List<Widget> _booleanChildren(_BLeaf l) {
+    return [
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _FieldLabel('Pattern'),
+          const SizedBox(height: 4),
+          SizedBox(
+            height: 40,
+            child: _PillSegmented(
+              value: l.op == '==' ? '==' : '!=',
+              options: const ['!=', '=='],
+              labels: const ['Formed', 'Not formed'],
+              onChanged: (v) => setState(() {
+                l.op = v;
+                l.rightIsValue = true;
+                l.rightValueA = 0;
+                _emit();
+              }),
+            ),
+          ),
+        ],
+      ),
+    ];
   }
 
   // ----- ENUM: == / != + enum_values dropdown ------------------------------
 
-  Widget _enumSection(CatalogIndicator leftDef, _BLeaf l) {
+  List<Widget> _enumChildren(CatalogIndicator leftDef, _BLeaf l) {
     final values = leftDef.enumValues ?? const <CatalogEnumValue>[];
-    return Wrap(spacing: 14, runSpacing: 10, children: [
+    return [
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           const _FieldLabel('is'),
-          const SizedBox(height: 6),
-          _PillSegmented(
-            value: kEnumOperators.contains(l.op) ? l.op : '==',
-            options: const ['==', '!='],
-            labels: const ['equal to', 'not equal to'],
-            onChanged: (v) => setState(() {
-              l.op = v;
-              _emit();
-            }),
+          const SizedBox(height: 4),
+          SizedBox(
+            height: 40,
+            child: _PillSegmented(
+              value: kEnumOperators.contains(l.op) ? l.op : '==',
+              options: const ['==', '!='],
+              labels: const ['equal to', 'not equal to'],
+              onChanged: (v) => setState(() {
+                l.op = v;
+                _emit();
+              }),
+            ),
           ),
         ],
       ),
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           const _FieldLabel('Value'),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           SizedBox(
             width: 220,
+            height: 40,
             child: FilterSelect(
               value: (l.rightValueA != null &&
                       values.any((v) => v.value == l.rightValueA))
@@ -527,123 +551,122 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
           ),
         ],
       ),
-    ]);
+    ];
   }
 
   // ----- FLOAT: op dropdown + Value/Indicator toggle -----------------------
 
-  Widget _floatSection(IndicatorCatalog catalog, _BLeaf l) {
+  List<Widget> _floatChildren(IndicatorCatalog catalog, _BLeaf l) {
     final primary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    // One bottom-aligned row so the Operator dropdown, the Value/Indicator
-    // toggle, the indicator picker, "with", and the params all line up on the
-    // same field line (no stepped-down params).
-    return Wrap(
-      spacing: 14,
-      runSpacing: 10,
-      crossAxisAlignment: WrapCrossAlignment.end,
-      children: [
+
+    // Resolve right-side def early so we can decide whether to render the
+    // "with" connector — only when the picked indicator actually has params.
+    final rightDef = (!l.rightIsValue && l.rightIndicator != null)
+        ? (catalog.byName(l.rightIndicator!) ??
+            _emptyIndicator(l.rightIndicator!))
+        : null;
+    final rightHasParams = rightDef != null && rightDef.params.isNotEmpty;
+
+    return [
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _FieldLabel('Operator'),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: 180,
+            height: 40,
+            child: FilterSelect(
+              value: kFloatOperators.contains(l.op) ? l.op : '<',
+              hint: 'Operator',
+              options: [
+                for (final o in kFloatOperators)
+                  FilterSelectOption(o, _opLabel(o)),
+              ],
+              onChanged: (v) => setState(() {
+                l.op = v;
+                _emit();
+              }),
+            ),
+          ),
+        ],
+      ),
+      SizedBox(
+        height: 40,
+        child: _PillSegmented(
+          value: l.rightIsValue ? 'value' : 'indicator',
+          options: const ['value', 'indicator'],
+          labels: const ['Value', 'Indicator'],
+          onChanged: (v) => setState(() {
+            l.rightIsValue = v == 'value';
+            _emit();
+          }),
+        ),
+      ),
+      if (l.rightIsValue)
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            const _FieldLabel('Operator'),
-            const SizedBox(height: 6),
+            const _FieldLabel('Value'),
+            const SizedBox(height: 4),
             SizedBox(
-              width: 180,
+              width: 140,
               height: 40,
-              child: FilterSelect(
-                value: kFloatOperators.contains(l.op) ? l.op : '<',
-                hint: 'Operator',
-                options: [
-                  for (final o in kFloatOperators)
-                    FilterSelectOption(o, _opLabel(o)),
-                ],
+              child: TextFormField(
+                initialValue: l.rightValueA?.toString() ?? '',
+                decoration: _boxDecoration().copyWith(hintText: 'value'),
+                style: MyntWebTextStyles.body(context),
+                keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true, signed: true),
+                onChanged: (v) {
+                  l.rightValueA = num.tryParse(v);
+                  _emit();
+                },
+              ),
+            ),
+          ],
+        )
+      else ...[
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const _FieldLabel('Indicator'),
+            const SizedBox(height: 4),
+            SizedBox(
+              width: 220,
+              height: 40,
+              child: IndicatorPicker(
+                catalog: catalog,
+                value: l.rightIndicator,
                 onChanged: (v) => setState(() {
-                  l.op = v;
+                  l.rightIndicator = v;
+                  l.rightParams = _defaultParamsFor(catalog, v);
                   _emit();
                 }),
               ),
             ),
           ],
         ),
-        SizedBox(
-          height: 40,
-          child: _PillSegmented(
-            value: l.rightIsValue ? 'value' : 'indicator',
-            options: const ['value', 'indicator'],
-            labels: const ['Value', 'Indicator'],
-            onChanged: (v) => setState(() {
-              l.rightIsValue = v == 'value';
-              _emit();
-            }),
-          ),
-        ),
-        if (l.rightIsValue)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const _FieldLabel('Value'),
-              const SizedBox(height: 6),
-              SizedBox(
-                width: 140,
-                height: 40,
-                child: TextFormField(
-                  initialValue: l.rightValueA?.toString() ?? '',
-                  decoration: _boxDecoration().copyWith(hintText: 'value'),
-                  style: MyntWebTextStyles.body(context),
-                  keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true, signed: true),
-                  onChanged: (v) {
-                    l.rightValueA = num.tryParse(v);
-                    _emit();
-                  },
-                ),
-              ),
-            ],
-          )
-        else ...[
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const _FieldLabel('Indicator'),
-              const SizedBox(height: 6),
-              SizedBox(
-                width: 220,
-                height: 40,
-                child: IndicatorPicker(
-                  catalog: catalog,
-                  value: l.rightIndicator,
-                  onChanged: (v) => setState(() {
-                    l.rightIndicator = v;
-                    l.rightParams = _defaultParamsFor(catalog, v);
-                    _emit();
-                  }),
-                ),
-              ),
-            ],
-          ),
-          if (l.rightIndicator != null) ...[
-            SizedBox(
-              height: 40,
-              child: Align(
-                alignment: Alignment.center,
-                widthFactor: 1.0,
-                child: Text('with',
-                    style: MyntWebTextStyles.body(context, color: primary)),
-              ),
+        // "with" + right-side params only show when there ARE params, otherwise
+        // "with" dangles orphaned at the end of the row.
+        if (rightHasParams) ...[
+          SizedBox(
+            height: 40,
+            child: Align(
+              alignment: Alignment.center,
+              widthFactor: 1.0,
+              child: Text('with',
+                  style: MyntWebTextStyles.body(context, color: primary)),
             ),
-            ..._paramInputs(
-                catalog.byName(l.rightIndicator!) ??
-                    _emptyIndicator(l.rightIndicator!),
-                l.rightParams,
-                () => _emit()),
-          ],
+          ),
+          ..._paramInputs(rightDef, l.rightParams, () => _emit()),
         ],
       ],
-    );
+    ];
   }
 
   String _opLabel(String op) {
@@ -666,13 +689,14 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
   }
 
   // Our standard text-field look (matches FilterTextField): light fill,
-  // primary border, radius 5.
+  // muted border, radius 5.
   InputDecoration _boxDecoration() {
     final shape = OutlineInputBorder(
       borderRadius: BorderRadius.circular(5),
       borderSide: BorderSide(
           color: resolveThemeColor(context,
-              dark: MyntColors.textSecondaryDark, light: MyntColors.primary)),
+              dark: MyntColors.borderMutedDark,
+              light: MyntColors.borderMuted)),
     );
     return InputDecoration(
       filled: true,
@@ -701,7 +725,7 @@ class _PredicateBuilderState extends ConsumerState<PredicateBuilder> {
           mainAxisSize: MainAxisSize.min,
           children: [
             _FieldLabel(p.label),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             SizedBox(
               width: _paramWidthFor(p),
               height: 40,
@@ -849,14 +873,14 @@ class _NumberedBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const primary = MyntColors.primary;
+    final primary = resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary);
     return Container(
-      width: 22,
-      height: 22,
+      width: 20,
+      height: 20,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: primary.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(11),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Text(
         '$index',
@@ -886,7 +910,7 @@ class _ConnectorChip extends StatelessWidget {
     }
   }
 
-  Color _color() {
+  Color _color(BuildContext context) {
     switch (op) {
       case 'any':
         return const Color(0xFFA855F7); // violet
@@ -894,25 +918,27 @@ class _ConnectorChip extends StatelessWidget {
         return MyntColors.warning;
       case 'all':
       default:
-        return MyntColors.primary;
+        return resolveThemeColor(context,
+            dark: MyntColors.secondaryDark, light: MyntColors.primary);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final color = _color();
-    final border = shadcn.Theme.of(context).colorScheme.border;
+    final color = _color(context);
+    final border = resolveThemeColor(context,
+        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(children: [
-        Expanded(child: Container(height: 1, color: border)),
-        const SizedBox(width: 10),
+        Expanded(child: Container(height: 1, color: border.withValues(alpha: 0.6))),
+        const SizedBox(width: 8),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.12),
             border: Border.all(color: color.withValues(alpha: 0.3)),
-            borderRadius: BorderRadius.circular(5),
+            borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
             _label,
@@ -921,27 +947,9 @@ class _ConnectorChip extends StatelessWidget {
                 .copyWith(letterSpacing: 1.2),
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(child: Container(height: 1, color: border)),
+        const SizedBox(width: 8),
+        Expanded(child: Container(height: 1, color: border.withValues(alpha: 0.6))),
       ]),
-    );
-  }
-}
-
-/// Segmented control for the group combinator — All / Any / None.
-class _CombinatorSegmented extends StatelessWidget {
-  final String value;
-  final ValueChanged<String> onChanged;
-  const _CombinatorSegmented({required this.value, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return _PillSegmented(
-      value: value,
-      options: const ['all', 'any', 'none'],
-      labels: const ['All (AND)', 'Any (OR)', 'None (NOT)'],
-      onChanged: onChanged,
-      height: 32,
     );
   }
 }
@@ -955,19 +963,19 @@ class _PillSegmented extends StatelessWidget {
   final List<String> options;
   final List<String> labels;
   final ValueChanged<String> onChanged;
-  final double height;
   const _PillSegmented({
     required this.value,
     required this.options,
     required this.labels,
     required this.onChanged,
-    this.height = 40,
   });
+
+  static const double height = 50;
 
   @override
   Widget build(BuildContext context) {
     final border = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
     final textSecondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Container(
@@ -1016,7 +1024,8 @@ class _PillSegmented extends StatelessWidget {
         alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: selected ? MyntColors.primary : Colors.transparent,
+          color: selected ? resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary) : resolveThemeColor(context,
+              dark: const Color(0xffB5C0CF).withValues(alpha: 0.15), light: const Color(0xFFF1F3F8)),
           borderRadius: radius,
         ),
         child: Text(label,
@@ -1034,7 +1043,7 @@ class _BenchmarkChip extends StatelessWidget {
   const _BenchmarkChip();
   @override
   Widget build(BuildContext context) {
-    const primary = MyntColors.primary;
+    final primary = resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -1043,11 +1052,11 @@ class _BenchmarkChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(shadcn.LucideIcons.flag, size: 11, color: primary),
+        Icon(shadcn.LucideIcons.flag, size: 11, color: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary)),
         const SizedBox(width: 4),
         Text('vs NIFTY benchmark',
             style: MyntWebTextStyles.caption(context,
-                color: primary, fontWeight: MyntFonts.medium)),
+                color: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary), fontWeight: MyntFonts.medium)),
       ]),
     );
   }

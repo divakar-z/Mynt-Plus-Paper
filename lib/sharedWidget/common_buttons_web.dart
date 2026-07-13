@@ -90,6 +90,10 @@ class MyntButton extends StatelessWidget {
   final double? borderRadius;
   final EdgeInsets? padding;
   final MainAxisAlignment? iconAlignment;
+  /// Override the default button height (40). Applies to primary, secondary,
+  /// outlined, and tertiary variants that render a Container with a fixed
+  /// height — ghost / text buttons ignore this since they have no chrome.
+  final double? height;
 
   const MyntButton({
     super.key,
@@ -108,6 +112,7 @@ class MyntButton extends StatelessWidget {
     this.borderRadius,
     this.padding,
     this.iconAlignment,
+    this.height,
   }) : assert(
           label != null ||
               icon != null ||
@@ -169,7 +174,7 @@ class MyntButton extends StatelessWidget {
     final buttonPadding = padding ?? _getDefaultPadding();
 
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(borderRadiusValue),
@@ -211,7 +216,7 @@ class MyntButton extends StatelessWidget {
     final buttonPadding = padding ?? _getDefaultPadding();
 
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(borderRadiusValue),
@@ -261,7 +266,7 @@ class MyntButton extends StatelessWidget {
     final buttonPadding = padding ?? _getDefaultPadding();
 
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         border: Border.all(
@@ -338,7 +343,7 @@ class MyntButton extends StatelessWidget {
 
     // Tertiary button: Primary style but with tertiary background
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(_getDefaultBorderRadius()),

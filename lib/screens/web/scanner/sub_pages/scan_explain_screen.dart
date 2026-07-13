@@ -87,53 +87,52 @@ class _ScanExplainScreenState extends ConsumerState<ScanExplainScreen>
     );
   }
 
-  /// Top tab strip styled like the Watchlist tabs: a [shadcn.TabList] with an
-  /// underline indicator, active tab in brand-primary bold, inactive muted. The
-  /// brand-coloured underline comes from overriding the shadcn colorScheme
-  /// primary (same approach the Watchlist tabs use).
+  /// Top tab strip styled like the Positions page tabs: each tab is a pill
+  /// with a subtle rounded background on active, plain-text on inactive.
   Widget _topTabs(BuildContext context) {
     final isDark = isDarkMode(context);
-    final currentTheme = shadcn.Theme.of(context);
-    final baseColorScheme = isDark
-        ? shadcn.ColorSchemes.darkDefaultColor
-        : shadcn.ColorSchemes.lightDefaultColor;
-    final primaryColor = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final customColorScheme =
-        baseColorScheme.copyWith(primary: () => primaryColor);
+    final activeBg = isDark
+        ? Colors.white.withValues(alpha: 0.1)
+        : Colors.black.withValues(alpha: 0.05);
+    final foreground = shadcn.Theme.of(context).colorScheme.foreground;
+    final mutedForeground =
+        shadcn.Theme.of(context).colorScheme.mutedForeground;
 
-    return shadcn.Theme(
-      data: shadcn.ThemeData(
-        colorScheme: customColorScheme,
-        radius: currentTheme.radius,
-      ),
-      child: shadcn.TabList(
-        index: _tab.index,
-        onChanged: (value) {
-          if (value != _tab.index) _tab.animateTo(value);
-        },
-        children: [
-          for (int i = 0; i < _tabs.length; i++)
-            shadcn.TabItem(
-              child: Builder(builder: (context) {
-                final isActive = i == _tab.index;
-                return Text(
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int i = 0; i < _tabs.length; i++)
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () {
+                if (i != _tab.index) _tab.animateTo(i);
+              },
+              child: Container(
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color:
+                      i == _tab.index ? activeBg : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
                   _tabs[i],
-                  style: MyntWebTextStyles.body(context,
-                      color: isActive
-                          ? resolveThemeColor(context,
-                              dark: MyntColors.primaryDark,
-                              light: MyntColors.primary)
-                          : resolveThemeColor(context,
-                              dark: MyntColors.textSecondaryDark,
-                              light: MyntColors.textSecondary),
-                      fontWeight:
-                          isActive ? MyntFonts.bold : MyntFonts.medium),
-                );
-              }),
+                  style: MyntWebTextStyles.body(
+                    context,
+                    fontWeight: i == _tab.index
+                        ? MyntFonts.semiBold
+                        : MyntFonts.medium,
+                  ).copyWith(
+                    color:
+                        i == _tab.index ? foreground : mutedForeground,
+                  ),
+                ),
+              ),
             ),
-        ],
-      ),
+          ),
+      ],
     );
   }
 

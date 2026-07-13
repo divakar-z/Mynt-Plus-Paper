@@ -7,17 +7,24 @@ class ScoreProgressBar extends StatelessWidget {
   final double? score; // 0–100
   const ScoreProgressBar({super.key, required this.label, required this.score});
 
-  Color _color(double s) {
-    if (s >= 80) return MyntColors.success;
+  Color _color(BuildContext context, double s) {
+    if (s >= 80) {
+      return resolveThemeColor(context,
+          dark: MyntColors.successDark, light: MyntColors.success);
+    }
     if (s >= 60) return const Color(0xFF10B981); // emerald
-    if (s >= 40) return MyntColors.warning;
-    return MyntColors.error;
+    if (s >= 40) {
+      return resolveThemeColor(context,
+          dark: MyntColors.warningDark, light: MyntColors.warning);
+    }
+    return resolveThemeColor(context,
+        dark: MyntColors.errorDark, light: MyntColors.error);
   }
 
   @override
   Widget build(BuildContext context) {
     final s = (score ?? 0).clamp(0, 100).toDouble();
-    final color = _color(s);
+    final color = _color(context, s);
     final bg = resolveThemeColor(context,
         dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
     return Column(

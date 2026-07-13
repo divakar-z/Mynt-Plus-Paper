@@ -64,9 +64,10 @@ class _ScreensBrowserState extends ConsumerState<_ScreensBrowser> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Header: title + close, then the Saved / Presets tabs.
+              // Header: title + close, then the Saved / Presets tabs
+              // (positions-page rounded-pill style).
               Container(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
                 decoration: BoxDecoration(
                   border: Border(bottom: BorderSide(color: border)),
                 ),
@@ -83,11 +84,11 @@ class _ScreensBrowserState extends ConsumerState<_ScreensBrowser> {
                             onPressed: () => Navigator.of(context).pop()),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 12),
                     Row(children: [
-                      _tabButton('Saved', 0),
-                      const SizedBox(width: 18),
-                      _tabButton('Presets', 1),
+                      _tabPill('Saved', 0),
+                      const SizedBox(width: 4),
+                      _tabPill('Presets', 1),
                     ]),
                   ],
                 ),
@@ -104,31 +105,36 @@ class _ScreensBrowserState extends ConsumerState<_ScreensBrowser> {
     );
   }
 
-  Widget _tabButton(String label, int idx) {
+  /// Positions-page rounded-pill tab: transparent when inactive, subtle
+  /// white/black tint when active, 6px radius, no border.
+  Widget _tabPill(String label, int idx) {
     final active = _tab == idx;
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return InkWell(
-      onTap: () => setState(() {
-        _tab = idx;
-        _selected = 0;
-      }),
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 8),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activeBg = isDark
+        ? Colors.white.withValues(alpha: 0.1)
+        : Colors.black.withValues(alpha: 0.05);
+    final foreground = shadcn.Theme.of(context).colorScheme.foreground;
+    final mutedForeground =
+        shadcn.Theme.of(context).colorScheme.mutedForeground;
+    final textColor = active ? foreground : mutedForeground;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => setState(() {
+          _tab = idx;
+          _selected = 0;
+        }),
         child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                  color: active ? primary : Colors.transparent, width: 2),
-            ),
+            color: active ? activeBg : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
           ),
-          padding: const EdgeInsets.only(bottom: 6),
           child: Text(label,
               style: MyntWebTextStyles.body(context,
-                  fontWeight: active ? MyntFonts.semiBold : MyntFonts.medium,
-                  color: active ? primary : secondary)),
+                fontWeight:
+                    active ? MyntFonts.semiBold : MyntFonts.medium,
+              ).copyWith(color: textColor)),
         ),
       ),
     );

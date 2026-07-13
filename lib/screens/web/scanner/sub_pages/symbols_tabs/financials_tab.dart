@@ -206,22 +206,24 @@ class _FinancialsTableState extends State<_FinancialsTable> {
         ],
       );
 
-      final bodyList = ListView.builder(
+      final rowDividerColor = border.withValues(alpha: 0.4);
+      final bodyList = ListView.separated(
         controller: _vCtrl,
         itemCount: widget.lineItems.length,
-        itemExtent: 44,
+        separatorBuilder: (_, __) =>
+            Divider(height: 1, color: rowDividerColor),
         itemBuilder: (context, i) {
           final li = widget.lineItems[i];
           return shadcn.Table(
             columnWidths: colWidths,
-            defaultRowHeight: const shadcn.FixedTableSize(44),
+            defaultRowHeight: const shadcn.FixedTableSize(40),
             rows: [
               shadcn.TableRow(
                 cells: [
                   _cell(
                     child: Text(li,
-                        style:
-                            MyntWebTextStyles.tableCell(context, color: primary),
+                        style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.medium, color: primary),
                         overflow: TextOverflow.ellipsis),
                   ),
                   for (final p in cols)
@@ -322,18 +324,24 @@ class _ValueCell extends StatelessWidget {
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final primary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    const tabular = [FontFeature.tabularFigures()];
     if (value == null) {
       return Text(kEmDash,
           textAlign: TextAlign.right,
-          style: MyntWebTextStyles.body(context, color: secondary));
+          style: MyntWebTextStyles.body(context, color: secondary)
+              .copyWith(fontFeatures: tabular));
     }
     final cr = value! / 1e7;
-    final color = cr < 0 ? MyntColors.error : primary;
+    final color = cr < 0
+        ? resolveThemeColor(context,
+            dark: MyntColors.errorDark, light: MyntColors.error)
+        : primary;
     return Text(
       cr.toStringAsFixed(2),
       textAlign: TextAlign.right,
       style: MyntWebTextStyles.body(context,
-          fontWeight: MyntFonts.medium, color: color),
+              fontWeight: MyntFonts.medium, color: color)
+          .copyWith(fontFeatures: tabular),
     );
   }
 }
@@ -420,7 +428,8 @@ class _Segmented extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? MyntColors.primary : Colors.transparent,
+          color: selected ? resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary)
+       : Colors.transparent,
           borderRadius: radius,
         ),
         child: Text(label,

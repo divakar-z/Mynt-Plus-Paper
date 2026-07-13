@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
@@ -18,20 +18,15 @@ import 'package:mynt_plus/screens/web/scanner/widgets/index_filter_dropdown.dart
 import 'package:mynt_plus/screens/web/scanner/widgets/scanner_results_table.dart';
 import 'custom_scan_builder_pane.dart';
 
-/// Accent palette for the per-scan `<>` card tile — each saved scan gets a
-/// stable colour from this list (shown at low opacity behind the icon).
-const List<Color> _kScanAccents = [
-  Color(0xFF6366F1), // indigo
-  Color(0xFF14B8A6), // teal
-  Color(0xFFF97316), // orange
-  Color(0xFFEC4899), // pink
-  Color(0xFF0EA5E9), // sky
-  Color(0xFFA855F7), // purple
-  Color(0xFF84CC16), // lime
-  Color(0xFFEF4444), // red
-  Color(0xFFF59E0B), // amber
-];
+/// Default index filter — NIFTY 500 pre-selected so both the initial run
+/// and the pane's filter dropdown start on a liquid, actionable universe
+/// instead of the full NSE catalog.
+const List<String> _kDefaultCustomScanIndices = ['NIFTY 500'];
 
+/// Custom Scans tab — saved-scans list, "New custom scan" builder, and the
+/// results view for a saved scan. The predicate builder handles both
+/// fundamental and technical conditions (the old chip-based Technicals tab
+/// has been retired).
 class CustomScansSubPage extends ConsumerWidget {
   const CustomScansSubPage({super.key});
 
@@ -64,6 +59,7 @@ class CustomScansSubPage extends ConsumerWidget {
             type: MyntButtonType.primary,
             label: 'New custom scan',
             icon: Icons.add,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
             onPressed: () => ref
                 .read(customScansSessionProvider.notifier)
                 .openNewBuilder(),
@@ -88,38 +84,9 @@ class CustomScansSubPage extends ConsumerWidget {
                       'Click "+ New custom scan" above to write your first predicate.',
                 );
               }
-              // Responsive card grid (3 / 2 / 1 columns) like the MF Strategy
-              // dashboard — cards fill the row width instead of a fixed size.
-              return SingleChildScrollView(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: LayoutBuilder(builder: (ctx, c) {
-                  const spacing = 16.0;
-                  final columns = c.maxWidth > 900
-                      ? 3
-                      : c.maxWidth > 500
-                          ? 2
-                          : 1;
-                  final cardWidth =
-                      (c.maxWidth - spacing * (columns - 1)) / columns;
-                  return Wrap(
-                    spacing: spacing,
-                    runSpacing: spacing,
-                    children: [
-                      for (final s in list)
-                        SizedBox(
-                          width: cardWidth,
-                          child: _ScanCard(
-                            scan: s,
-                            onEdit: () => ref
-                                .read(customScansSessionProvider.notifier)
-                                .openExistingBuilder(s),
-                            onChanged: () =>
-                                ref.invalidate(savedCustomScansProvider),
-                          ),
-                        ),
-                    ],
-                  );
-                }),
+              return _ScansTable(
+                list: list,
+                onChanged: () => ref.invalidate(savedCustomScansProvider),
               );
             },
           ),
@@ -129,24 +96,77 @@ class CustomScansSubPage extends ConsumerWidget {
   }
 }
 
-/// MF-Strategy-style card: identity icon + name + 3-dot (Edit / Delete) menu,
-/// a divider, and a Created / Runs / Last-run stat row. Tap the card to Run the
-/// scan (the play hint at the bottom signals this).
-class _ScanCard extends ConsumerStatefulWidget {
+/// Responsive card grid for saved custom scans — 4 / 3 / 2 / 1 columns based
+/// on available width. Cards use a fixed height so every card in the grid
+/// aligns cleanly regardless of column count or content length. Border only
+/// (no drop shadow) so the surface stays flat and matches the rest of the
+/// screener chrome.
+class _ScansTable extends ConsumerWidget {
+  final List<SavedCustomScan> list;
+  final VoidCallback onChanged;
+  const _ScansTable({required this.list, required this.onChanged});
+
+  /// Uniform card height keeps every row of the grid aligned even when the
+  /// meta line ("Never run" vs. "Last run 10 Jul 2026") differs across cards.
+  static const double _kCardHeight = 118.0;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: LayoutBuilder(builder: (ctx, c) {
+        const spacing = 14.0;
+        // 4 up on wide screens, gracefully falling back to 3 / 2 / 1.
+        final columns = c.maxWidth >= 1280
+            ? 4
+            : c.maxWidth >= 960
+                ? 3
+                : c.maxWidth >= 640
+                    ? 2
+                    : 1;
+        final cardWidth =
+            (c.maxWidth - spacing * (columns - 1)) / columns;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final s in list)
+              SizedBox(
+                width: cardWidth,
+                height: _kCardHeight,
+                child: _ScanRow(
+                  scan: s,
+                  onEdit: () => ref
+                      .read(customScansSessionProvider.notifier)
+                      .openExistingBuilder(s),
+                  onChanged: onChanged,
+                ),
+              ),
+          ],
+        );
+      }),
+    );
+  }
+}
+
+/// A single saved-scan row in the table — identity icon + name on the left,
+/// Created / Runs / Last-run metadata across, and a 3-dot Edit / Delete menu
+/// at the trailing edge. Row click runs the scan.
+class _ScanRow extends ConsumerStatefulWidget {
   final SavedCustomScan scan;
   final VoidCallback onEdit;
   final VoidCallback onChanged;
-  const _ScanCard({
+  const _ScanRow({
     required this.scan,
     required this.onEdit,
     required this.onChanged,
   });
 
   @override
-  ConsumerState<_ScanCard> createState() => _ScanCardState();
+  ConsumerState<_ScanRow> createState() => _ScanRowState();
 }
 
-class _ScanCardState extends ConsumerState<_ScanCard> {
+class _ScanRowState extends ConsumerState<_ScanRow> {
   bool _hover = false;
 
   /// Run the saved scan — switch the sub-page into results view (which shows a
@@ -158,7 +178,12 @@ class _ScanCardState extends ConsumerState<_ScanCard> {
     final notifier = ref.read(customScansSessionProvider.notifier);
     notifier.openResults(scan);
     try {
-      final r = await locator<ApiExporter>().runSavedCustomScan(scan.id);
+      // First run uses the same default the results pane pre-selects, so the
+      // table and the filter dropdown agree from the first frame.
+      final r = await locator<ApiExporter>().runSavedCustomScan(
+        scan.id,
+        indices: _kDefaultCustomScanIndices,
+      );
       notifier.setResults(AsyncValue.data(r));
       widget.onChanged();
     } catch (e, st) {
@@ -176,17 +201,28 @@ class _ScanCardState extends ConsumerState<_ScanCard> {
   @override
   Widget build(BuildContext context) {
     final scan = widget.scan;
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final textColor = resolveThemeColor(context,
+    // Portfolio card chrome — divider-tone border, dashboard-card BG in dark,
+    // shadcn card BG in light. Copied verbatim so the two card families look
+    // like siblings.
+    final cardBg = isDarkMode(context)
+        ? MyntColors.dashboardCarColor
+        : shadcn.Theme.of(context).colorScheme.card;
+    final borderColor = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final textPrimary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final muted = resolveThemeColor(context,
+    final textSecondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final primary = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
-    // Per-scan accent for the `<>` tile — a stable palette pick so each card
-    // gets its own colour (same low opacity as before).
-    final accent =
-        _kScanAccents[scan.name.hashCode.abs() % _kScanAccents.length];
+    final chipBg = resolveThemeColor(context,
+        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+    final hasRun = scan.lastRunAt != null;
+    final lastRunLabel =
+        hasRun ? 'Last run ${formatDate(scan.lastRunAt)}' : 'Never run';
+    final runsLabel =
+        '${scan.runCount} ${scan.runCount == 1 ? "run" : "runs"}';
+    final createdLabel = 'Created ${formatDate(scan.createdAt)}';
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -194,73 +230,98 @@ class _ScanCardState extends ConsumerState<_ScanCard> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: _run,
-        child: Container(
-          padding: const EdgeInsets.all(16),
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
           decoration: BoxDecoration(
-            color: _hover
-                ? resolveThemeColor(context,
-                    dark: MyntColors.cardHoverDark, light: MyntColors.cardHover)
-                : resolveThemeColor(context,
-                    dark: MyntColors.cardDark, light: MyntColors.card),
+            color: cardBg,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: _hover ? primary : border, width: 1),
+            border: Border.all(
+                color: _hover ? primary.withValues(alpha: 0.55) : borderColor,
+                width: 1),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
             children: [
-              // Identity icon + name + 3-dot (Edit / Delete).
-              Row(
-                children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: accent.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(Icons.code, size: 18, color: accent),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(scan.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: MyntWebTextStyles.title(context,
-                            fontWeight: MyntFonts.semiBold, color: textColor)),
-                  ),
-                  _menu(muted),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Divider(height: 1, color: border),
-              const SizedBox(height: 12),
-              // Created / Runs / Last run — mirrors the MF card's stat row.
-              IntrinsicHeight(
+              // Header — icon + (name, created-date subtitle) + menu.
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 6, 10),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _stat('Created', formatDateTime(scan.createdAt), muted,
-                        textColor),
-                    VerticalDivider(width: 20, thickness: 1, color: border),
-                    _stat('Runs', '${scan.runCount}', muted, textColor),
-                    VerticalDivider(width: 20, thickness: 1, color: border),
-                    _stat('Last run', formatDateTime(scan.lastRunAt), muted,
-                        textColor),
+                    Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: primary.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(shadcn.LucideIcons.code,
+                          size: 16, color: primary),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            scan.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: MyntWebTextStyles.symbol(context,
+                                fontWeight: MyntFonts.semiBold,
+                                color: textPrimary),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            createdLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: MyntWebTextStyles.exch(context,
+                                color: textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _menu(textSecondary),
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
-              // Tap-to-run hint.
-              // Row(
-              //   children: [
-              //     Icon(Icons.play_arrow_rounded, size: 16, color: primary),
-              //     const SizedBox(width: 4),
-              //     Text('Run scan',
-              //         style: MyntWebTextStyles.caption(context,
-              //             color: primary, fontWeight: MyntFonts.semiBold)),
-              //   ],
-              // ),
+              const Spacer(),
+              // Footer strip — divider on top, runs count on the left, and a
+              // status pill on the right. Fills the card's bottom so every
+              // card lines up regardless of name length.
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: borderColor)),
+                ),
+                padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
+                child: Row(
+                  children: [
+                    Icon(shadcn.LucideIcons.play,
+                        size: 12, color: textSecondary),
+                    const SizedBox(width: 6),
+                    Text(
+                      runsLabel,
+                      style: MyntWebTextStyles.exch(context,
+                          fontWeight: MyntFonts.medium,
+                          color: textSecondary),
+                    ),
+                    const Spacer(),
+                    Flexible(
+                      child: _statusPill(
+                        context,
+                        label: lastRunLabel,
+                        muted: textSecondary,
+                        chipBg: chipBg,
+                        accent: hasRun ? null : textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -268,22 +329,28 @@ class _ScanCardState extends ConsumerState<_ScanCard> {
     );
   }
 
-  Widget _stat(
-      String label, String value, Color labelColor, Color valueColor) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(label,
-              style: MyntWebTextStyles.caption(context, color: labelColor)),
-          const SizedBox(height: 2),
-          Text(value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: MyntWebTextStyles.body(context,
-                  fontWeight: MyntFonts.semiBold, color: valueColor)),
-        ],
+  /// Compact status pill for the footer's last-run label. Subtle background
+  /// + secondary text; keeps the footer readable without competing with the
+  /// scan name in the header.
+  Widget _statusPill(
+    BuildContext context, {
+    required String label,
+    required Color muted,
+    required Color chipBg,
+    Color? accent,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: chipBg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: MyntWebTextStyles.exch(context,
+            fontWeight: FontWeight.w500, color: accent ?? muted),
       ),
     );
   }
@@ -504,16 +571,14 @@ class _SavedScanResultsPane extends ConsumerStatefulWidget {
 
 class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
   /// Per-scan index filter, owned by this pane only. Switching to a
-  /// different saved scan (via `didUpdateWidget`) resets the selection
-  /// so each Run starts on the full universe.
-  List<String> _selectedIndices = const [];
+  /// different saved scan (via `didUpdateWidget`) resets to the default.
+  List<String> _selectedIndices = _kDefaultCustomScanIndices;
 
   @override
   void didUpdateWidget(covariant _SavedScanResultsPane old) {
     super.didUpdateWidget(old);
-    if (old.view.scan.id != widget.view.scan.id &&
-        _selectedIndices.isNotEmpty) {
-      setState(() => _selectedIndices = const []);
+    if (old.view.scan.id != widget.view.scan.id) {
+      setState(() => _selectedIndices = _kDefaultCustomScanIndices);
     }
   }
 
@@ -603,13 +668,6 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
             ),
           ),
         ]),
-        if (selectedIndices.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          ActiveIndexFilterChips(
-            selected: selectedIndices,
-            onChanged: _onFilterChanged,
-          ),
-        ],
         const SizedBox(height: 16),
         Expanded(
           child: view.result.when(

@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
-import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -159,66 +159,72 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
       _nameCtl.addListener(_pushName);
     }
 
+    final headerBorder = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // Fixed header — back + live title + name field + the Run / Save /
         // Preview JSON actions. Stays put while the builder body scrolls.
-        Row(children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back, size: 18),
-            onPressed: widget.onClose,
-            tooltip: 'Back to list',
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              builder.name.trim().isEmpty ? 'New scan' : builder.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: MyntWebTextStyles.head(context,
-                  fontWeight: MyntFonts.bold,
-                  color: resolveThemeColor(context,
-                      dark: MyntColors.textPrimaryDark,
-                      light: MyntColors.textPrimary)),
+        Container(
+          padding: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: headerBorder.withValues(alpha: 0.6)),
             ),
           ),
-          // Name field only while the scan is new (unsaved). Once saved, the
-          // name shows as the title above, so the field would just repeat it.
-          if (builder.editing == null) ...[
-            const SizedBox(width: 16),
-            SizedBox(
-              width: 260,
-              child: MyntFormTextField(
-                controller: _nameCtl,
-                placeholder: 'Scan name',
-                height: 40,
-              ),
+          child: Row(children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back, size: 18),
+              onPressed: widget.onClose,
+              tooltip: 'Back to list',
             ),
-          ],
-          const SizedBox(width: 16),
-          MyntButton(
-            type: MyntButtonType.primary,
-            label: 'Run inline',
-            icon: Icons.play_arrow,
-            onPressed: _runInline,
-          ),
-          const SizedBox(width: 8),
-          MyntButton(
-            type: MyntButtonType.outlined,
-            label: builder.editing == null ? 'Save' : 'Save changes',
-            icon: Icons.save,
-            onPressed: _save,
-          ),
-          const SizedBox(width: 8),
-          MyntButton(
-            type: MyntButtonType.outlined,
-            label: 'Preview JSON',
-            icon: Icons.code,
-            onPressed: () => _showJsonDialog(builder.predicate),
-          ),
-        ]),
-        const SizedBox(height: 16),
+            const SizedBox(width: 4),
+            // Static page title — mirrors "Fundamental Screener" on the sibling
+            // tab so the two pages read as siblings.
+            Text('Custom Scan',
+                style: MyntWebTextStyles.head(context,
+                    fontWeight: MyntFonts.bold)),
+            const Spacer(),
+            // Name pill on the right — editable for a new scan, read-only pill
+            // for an existing saved scan (rename happens from the list, not
+            // from within the builder). Placed just left of the action cluster,
+            // matching the Fundamentals header's screen-name pill placement.
+            if (builder.editing == null)
+              _NamePill(controller: _nameCtl)
+            else
+              _ReadOnlyNamePill(name: builder.name),
+            const SizedBox(width: 8),
+            // Save + Preview JSON — chip-buttons matching the Fundamentals
+            // header (34px tall so they sit as siblings of the name pill).
+            // Save is icon+label, Preview JSON is icon-only.
+            _chipButton(
+              icon: shadcn.LucideIcons.save,
+              label: builder.editing == null ? 'Save' : 'Save changes',
+              tooltip: 'Save this scan',
+              height: 34,
+              onTap: _save,
+            ),
+            const SizedBox(width: 8),
+            _chipButton(
+              icon: shadcn.LucideIcons.code,
+              tooltip: 'Preview JSON',
+              height: 34,
+              onTap: () => _showJsonDialog(builder.predicate),
+            ),
+            const SizedBox(width: 8),
+            // Run inline — primary MyntButton kept as the header's CTA (mirrors
+            // Fundamentals' "Run scan" pattern).
+            MyntButton(
+              type: MyntButtonType.primary,
+              label: 'Run inline',
+              icon: Icons.play_arrow,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              onPressed: _runInline,
+            ),
+          ]),
+        ),
+        const SizedBox(height: 12),
         // Scrolling body — the predicate builder, optional JSON preview and
         // the inline results.
         Expanded(
@@ -313,9 +319,10 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Results — ${r.matches.length} matches  ·  as of ${r.asOf}',
+              const SizedBox(height: 4),
+              Text('Results : ${r.matches.length} matches  ·  as of ${r.asOf}',
                   style: MyntWebTextStyles.title(context,
-                      fontWeight: MyntFonts.bold,
+                      fontWeight: MyntFonts.medium,
                       color: resolveThemeColor(context,
                           dark: MyntColors.textPrimaryDark,
                           light: MyntColors.textPrimary))),
@@ -336,6 +343,134 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
           ),
         );
       },
+    );
+  }
+
+  /// Bordered action button that mirrors the Fundamentals header's chip
+  /// button — icon+label variant for Save, icon-only variant for Preview
+  /// JSON. Sized by [height] (34px) so it sits as a sibling of the name pill.
+  Widget _chipButton({
+    String? label,
+    IconData? icon,
+    String? tooltip,
+    double? height,
+    required VoidCallback? onTap,
+  }) {
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final hoverBg = resolveThemeColor(context,
+        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+    final disabled = onTap == null;
+    final labelColor =
+        disabled ? secondary.withValues(alpha: 0.4) : textPrimary;
+    final iconColor =
+        disabled ? secondary.withValues(alpha: 0.4) : secondary;
+    final button = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        hoverColor: hoverBg,
+        child: Container(
+          height: height,
+          alignment: height != null ? Alignment.center : null,
+          padding: EdgeInsets.symmetric(
+              horizontal: label != null ? 10 : 6, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) Icon(icon, size: 18, color: iconColor),
+              if (icon != null && label != null) const SizedBox(width: 6),
+              if (label != null)
+                Text(
+                  label,
+                  style: MyntWebTextStyles.body(context,
+                      fontWeight: MyntFonts.medium, color: labelColor),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (tooltip != null) return Tooltip(message: tooltip, child: button);
+    return button;
+  }
+}
+
+/// Read-only sibling of [_NamePill] — same pill chrome, plain Text inside.
+/// Used when editing an existing saved scan so the name occupies the same
+/// slot on the right as the editable pill does for a new scan.
+class _ReadOnlyNamePill extends StatelessWidget {
+  final String name;
+  const _ReadOnlyNamePill({required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    return Container(
+      width: 280,
+      height: 36,
+      decoration: BoxDecoration(
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: MyntWebTextStyles.body(context,
+            fontWeight: MyntFonts.medium, color: textPrimary),
+      ),
+    );
+  }
+}
+
+/// Outlined pill for the scan name — mirrors the "Screen name" field in the
+/// Fundamentals header. A bare TextField sits inside a bordered container so
+/// the name reads as one control alongside the header's Run / Save buttons.
+class _NamePill extends StatelessWidget {
+  final TextEditingController controller;
+  const _NamePill({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Container(
+      width: 280,
+      height: 36,
+      decoration: BoxDecoration(
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: TextField(
+        controller: controller,
+        style: MyntWebTextStyles.body(context,
+            fontWeight: MyntFonts.medium, color: textPrimary),
+        decoration: InputDecoration(
+          isCollapsed: true,
+          border: InputBorder.none,
+          hintText: 'Untitled scan',
+          hintStyle: MyntWebTextStyles.body(context,
+              color: secondary.withValues(alpha: 0.7)),
+        ),
+      ),
     );
   }
 }

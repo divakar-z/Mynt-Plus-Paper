@@ -117,7 +117,7 @@ class FundamentalTab extends ConsumerWidget {
 
   Widget _scoreSection(BuildContext context, FundamentalScore s) {
     final composite = s.composite;
-    final scoreColor = _scoreColor(composite);
+    final scoreColor = _scoreColor(context, composite);
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Column(
@@ -157,12 +157,22 @@ class FundamentalTab extends ConsumerWidget {
     );
   }
 
-  Color _scoreColor(double? s) {
-    if (s == null) return MyntColors.warning;
-    if (s >= 80) return MyntColors.success;
+  Color _scoreColor(BuildContext context, double? s) {
+    if (s == null) {
+      return resolveThemeColor(context,
+          dark: MyntColors.warningDark, light: MyntColors.warning);
+    }
+    if (s >= 80) {
+      return resolveThemeColor(context,
+          dark: MyntColors.successDark, light: MyntColors.success);
+    }
     if (s >= 60) return const Color(0xFF10B981);
-    if (s >= 40) return MyntColors.warning;
-    return MyntColors.error;
+    if (s >= 40) {
+      return resolveThemeColor(context,
+          dark: MyntColors.warningDark, light: MyntColors.warning);
+    }
+    return resolveThemeColor(context,
+        dark: MyntColors.errorDark, light: MyntColors.error);
   }
 }
 

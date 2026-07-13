@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
@@ -91,12 +90,32 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
   @override
   Widget build(BuildContext context) {
     final hasSelection = widget.selected.isNotEmpty;
+    // Filter-input fill (same colours as `_boxDecoration` in the predicate
+    // builder / other FilterSelects) so the trigger reads as an input field
+    // instead of a plain white pill.
+    final inputFill = resolveThemeColor(context,
+        dark: const Color(0xffB5C0CF).withValues(alpha: 0.15),
+        light: const Color(0xFFF1F3F8));
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    // Select-style trigger: shows the current selection as the "value" and a
+    // chevron on the right — mirrors the strategy-builder / positions-page
+    // dropdown boxes. Multi-select is preserved; the label collapses long
+    // selections to "<first> +N".
+    final String label;
+    if (widget.selected.isEmpty) {
+      label = 'All indices';
+    } else if (widget.selected.length == 1) {
+      label = widget.selected.first;
+    } else {
+      label = '${widget.selected.first} +${widget.selected.length - 1}';
+    }
 
     return CompositedTransformTarget(
       link: _link,
-      // Trigger: a compact filter icon (no text / chevron). When indices are
-      // selected, a small blue dot badge appears at the top-right corner.
-      // The multi-select panel (search, grouping, checkboxes) opens below it.
       child: OverlayPortal(
         controller: _portal,
         overlayChildBuilder: _buildOverlay,
@@ -111,35 +130,48 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
               if (!_portal.isShowing) _searchCtrl.clear();
               _portal.toggle();
             },
-            child: Tooltip(
-              message: 'Index filter',
-              child: Container(
-                width: 40,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  // Selected → a blue circular highlight; hover → a subtle
-                  // grey circle; otherwise transparent.
-                  color: hasSelection
-                      ? MyntColors.primary.withValues(alpha: 0.12)
-                      : (_triggerHover
-                          ? resolveThemeColor(context,
-                              dark: MyntColors.cardHoverDark,
-                              light: MyntColors.cardHover)
-                          : Colors.transparent),
+            child: Container(
+              width: 220,
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: inputFill,
+                // Same muted border used by `_boxDecoration` in the predicate
+                // builder / other FilterSelects.
+                border: Border.all(
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.borderMutedDark,
+                      light: MyntColors.borderMuted),
                 ),
-                child: SvgPicture.asset(
-                  assets.searchFilter,
-                  width: 20,
-                  colorFilter: ColorFilter.mode(
-                    hasSelection
-                        ? MyntColors.primary
-                        : resolveThemeColor(context,
-                            dark: MyntColors.iconDark, light: MyntColors.icon),
-                    BlendMode.srcIn,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: MyntWebTextStyles.body(
+                        context,
+                        color: hasSelection ? textPrimary : secondary,
+                        fontWeight: hasSelection
+                            ? MyntFonts.semiBold
+                            : MyntFonts.regular,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  AnimatedRotation(
+                    turns: _portal.isShowing ? 0.5 : 0.0,
+                    duration: const Duration(milliseconds: 150),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 20,
+                      color: secondary,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -364,7 +396,7 @@ class _IndexRow extends StatelessWidget {
     final int effective = matchCount ?? 0;
     final String label = '$effective';
     final Color labelColor =
-        effective > 0 ? MyntColors.primary : secondary;
+        effective > 0 ? resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary): secondary;
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -375,10 +407,10 @@ class _IndexRow extends StatelessWidget {
             width: 16,
             height: 16,
             decoration: BoxDecoration(
-              color: selected ? MyntColors.primary : Colors.transparent,
+              color: selected ? resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary) : Colors.transparent,
               border: Border.all(
                 color: selected
-                    ? MyntColors.primary
+                    ?      resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary)
                     : secondary.withValues(alpha: 0.4),
               ),
               borderRadius: BorderRadius.circular(3),

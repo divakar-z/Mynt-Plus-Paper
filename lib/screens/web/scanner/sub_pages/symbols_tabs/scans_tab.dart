@@ -247,6 +247,8 @@ class _ScansTabState extends ConsumerState<ScansTab> {
   }
 
   Widget _whyLink(BuildContext context, ScanDetail scan) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondaryDark, light: MyntColors.primary);
     return InkWell(
       onTap: () => ref
           .read(scannerShellProvider.notifier)
@@ -255,10 +257,9 @@ class _ScansTabState extends ConsumerState<ScansTab> {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Text('Why it matched',
             style: MyntWebTextStyles.para(context,
-                fontWeight: MyntFonts.semiBold, color: MyntColors.primary)),
+                fontWeight: MyntFonts.semiBold, color: accent)),
         const SizedBox(width: 4),
-        const Icon(shadcn.LucideIcons.arrowUpRight,
-            size: 13, color: MyntColors.primary),
+        Icon(shadcn.LucideIcons.arrowUpRight, size: 13, color: accent),
       ]),
     );
   }

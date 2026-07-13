@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 
@@ -21,12 +22,19 @@ class FilterSelect extends StatefulWidget {
   final String hint;
   final List<FilterSelectOption> options;
   final ValueChanged<String> onChanged;
+  final Color? borderColor;
+  /// Trigger height. Defaults to 40 (the scalper-settings size) but callers
+  /// inside chip popovers pass a smaller value so the dropdown reads closer
+  /// to a filter chip.
+  final double height;
   const FilterSelect({
     super.key,
     required this.value,
     required this.hint,
     required this.options,
     required this.onChanged,
+    this.borderColor,
+    this.height = 40,
   });
 
   @override
@@ -141,7 +149,7 @@ class _FilterSelectState extends State<FilterSelect> {
                                           ? MyntFonts.semiBold
                                           : MyntFonts.medium,
                                       color: o.value == widget.value
-                                          ? MyntColors.primary
+                                          ? resolveThemeColor(context, dark: MyntColors.secondaryDark, light: MyntColors.primary)
                                           : textColor),
                                 ),
                               ),
@@ -171,16 +179,17 @@ class _FilterSelectState extends State<FilterSelect> {
       key: _key,
       onTap: _toggle,
       child: Container(
-        height: 40,
+        height: widget.height,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: resolveThemeColor(context,
-              dark: Colors.transparent, light: const Color(0xFFF1F3F8)),
+              dark: const Color(0xffB5C0CF).withValues(alpha: 0.15), light: const Color(0xFFF1F3F8)),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-              color: resolveThemeColor(context,
-                  dark: MyntColors.textSecondaryDark,
-                  light: MyntColors.primary)),
+              color: widget.borderColor ??
+                  resolveThemeColor(context,
+                      dark: MyntColors.borderMutedDark,
+                      light: MyntColors.borderMuted)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -211,6 +220,13 @@ class FilterTextField extends StatelessWidget {
   final String? suffix;
   final TextInputType? keyboardType;
   final ValueChanged<String>? onChanged;
+  /// Field height. Defaults to 40; smaller values are used inside chip
+  /// popovers to keep the op + value pair compact.
+  final double height;
+  /// Character-level input filters. Null → free input. Numeric-only fields
+  /// pass [TextInputValidators.signedDecimal] to block letters/symbols at
+  /// the OS keystroke level so nothing invalid ever lands in the controller.
+  final List<TextInputFormatter>? inputFormatters;
   const FilterTextField({
     super.key,
     required this.controller,
@@ -218,6 +234,8 @@ class FilterTextField extends StatelessWidget {
     this.suffix,
     this.keyboardType,
     this.onChanged,
+    this.height = 40,
+    this.inputFormatters,
   });
 
   @override
@@ -230,14 +248,20 @@ class FilterTextField extends StatelessWidget {
       borderRadius: BorderRadius.circular(5),
       borderSide: BorderSide(
           color: resolveThemeColor(context,
-              dark: MyntColors.textSecondaryDark, light: MyntColors.primary)),
+              dark: MyntColors.borderMutedDark,
+              light: MyntColors.borderMuted)),
+    );
+    final valueStyle = MyntWebTextStyles.body(
+      context,
+      fontWeight: MyntFonts.medium,
     );
     return SizedBox(
-      height: 40,
+      height: height,
       child: TextField(
         controller: controller,
         keyboardType: keyboardType,
-        style: MyntWebTextStyles.body(context),
+        style: valueStyle,
+        inputFormatters: inputFormatters,
         onChanged: onChanged,
         decoration: InputDecoration(
           filled: true,
@@ -245,10 +269,9 @@ class FilterTextField extends StatelessWidget {
               dark: const Color(0xffB5C0CF).withValues(alpha: 0.15),
               light: const Color(0xFFF1F3F8)),
           hintText: hint,
-          hintStyle: MyntWebTextStyles.body(context,
-              color: secondary.withValues(alpha: 0.5)),
+          hintStyle: valueStyle.copyWith(color: secondary.withValues(alpha: 0.5)),
           suffixText: suffix,
-          suffixStyle: MyntWebTextStyles.body(context, color: primary),
+          suffixStyle: valueStyle.copyWith(color: primary),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           enabledBorder: shape,
@@ -258,6 +281,27 @@ class FilterTextField extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shared input formatters used by the scanner's numeric filter fields.
+/// Rejecting invalid characters at the OS keystroke level (via
+/// `FilteringTextInputFormatter`) gives the same UX in both tabs and keeps
+/// the value inputs unable to hold junk that later fails a Run scan.
+class TextInputValidators {
+  TextInputValidators._();
+
+  /// Digits, decimal point, and a leading minus sign — the char set used by
+  /// numeric price/ratio filters. Multi-`.` / multi-`-` inputs are still
+  /// possible at the char level; the downstream `num.tryParse` guards the
+  /// final value, so we don't over-engineer the regex here.
+  static List<TextInputFormatter> signedDecimal() => [
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
+      ];
+
+  /// Digits only — used by year-count inputs where decimals/minus don't apply.
+  static List<TextInputFormatter> digitsOnly() => [
+        FilteringTextInputFormatter.digitsOnly,
+      ];
 }
 
 /// Searchable multi-select (scalper-overlay style, matching [FilterSelect]) —
@@ -476,12 +520,13 @@ class _FilterMultiSelectState extends State<FilterMultiSelect> {
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: resolveThemeColor(context,
-              dark: Colors.transparent, light: const Color(0xFFF1F3F8)),
+              dark: const Color(0xffB5C0CF).withValues(alpha: 0.15),
+              light: const Color(0xFFF1F3F8)),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
               color: resolveThemeColor(context,
-                  dark: MyntColors.textSecondaryDark,
-                  light: MyntColors.primary)),
+                  dark: MyntColors.borderMutedDark,
+                  light: MyntColors.borderMuted)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,

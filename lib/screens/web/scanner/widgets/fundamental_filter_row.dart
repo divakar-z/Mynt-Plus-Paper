@@ -166,6 +166,9 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
     if (isCat) return _categoryMultiSelect();
     final op = widget.filter.op;
     if (op == 'is_null' || op == 'is_not_null') return _opDropdown(ops);
+    // Op and value share the popover row equally — same height, same width —
+    // so the two dropdowns read as a matched pair. Inside popovers they use
+    // the compact height ([_fieldHeight]); elsewhere they keep the default 40.
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -174,11 +177,16 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
         Expanded(child: _valueInputs(field)),
         if (_isMultiYear && op != 'min_years') ...[
           const SizedBox(width: 8),
-          SizedBox(width: 60, child: _yearsInput()),
+          SizedBox(width: 54, child: _yearsInput()),
         ],
       ],
     );
   }
+
+  /// Compact 34px height for op/value dropdowns inside the chip popover;
+  /// the full 40px height elsewhere so we don't shrink the standalone
+  /// FundamentalFilterRow rendered in the old sidebar layout.
+  double get _fieldHeight => widget.stacked ? 34 : 40;
 
   Widget _fieldDropdown() {
     final byGroup = <String, List<FundamentalField>>{};
@@ -233,6 +241,7 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
     return FilterSelect(
       value: ops.contains(widget.filter.op) ? widget.filter.op : null,
       hint: 'Op',
+      height: _fieldHeight,
       options: [for (final o in ops) FilterSelectOption(o, opLabel(o))],
       onChanged: (v) => widget.onChange(FundamentalFilter(
         field: widget.filter.field,
@@ -265,6 +274,7 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
       return FilterTextField(
         controller: _v1,
         hint: 'a, b, c',
+        height: _fieldHeight,
         onChanged: (txt) => widget.onChange(FundamentalFilter(
           field: widget.filter.field,
           op: op,
@@ -302,8 +312,10 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
       controller: c,
       hint: 'value',
       suffix: suffix,
+      height: _fieldHeight,
       keyboardType:
           const TextInputType.numberWithOptions(decimal: true, signed: true),
+      inputFormatters: TextInputValidators.signedDecimal(),
       onChanged: (_) => _emit(),
     );
   }
@@ -312,7 +324,9 @@ class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
     return FilterTextField(
       controller: _years,
       hint: 'yrs',
+      height: _fieldHeight,
       keyboardType: TextInputType.number,
+      inputFormatters: TextInputValidators.digitsOnly(),
       onChanged: (_) => _emit(),
     );
   }
