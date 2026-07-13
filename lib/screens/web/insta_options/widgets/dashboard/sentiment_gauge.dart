@@ -26,6 +26,8 @@ class SentimentGauge extends StatelessWidget {
         dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final muted = resolveThemeColor(context,
         dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
 
     return DashSectionCard(
       title: 'Sentiment',
@@ -53,14 +55,14 @@ class SentimentGauge extends StatelessWidget {
                     children: [
                       Text(
                         '${(frac * 100).round()}%',
-                        style: MyntWebTextStyles.head(context,
+                        style: MyntWebTextStyles.hero(context,
                             darkColor: MyntColors.textPrimaryDark,
                             lightColor: MyntColors.textPrimary,
                             fontWeight: MyntFonts.bold),
                       ),
-                      Text('bullish',
+                      Text('Bullish',
                           style:
-                              MyntWebTextStyles.caption(context, color: muted)),
+                              MyntWebTextStyles.body(context, color: primary, fontWeight: MyntFonts.medium  )),
                     ],
                   ),
                 ),
@@ -86,9 +88,9 @@ class SentimentGauge extends StatelessWidget {
                   runSpacing: 8,
                   children: [
                     _Quad('Long buildup', s.longBuildup, profit),
-                    _Quad('Short cov.', s.shortCovering, kDashTeal),
+                    _Quad('Short covering', s.shortCovering, kDashShortCov),
                     _Quad('Short buildup', s.shortBuildup, loss),
-                    _Quad('Long cov.', s.longCovering, kDashOrange),
+                    _Quad('Long covering', s.longCovering, kDashOrange),
                     if (s.na > 0)
                       _Quad('NA', s.na, muted),
                   ],
@@ -111,18 +113,18 @@ class _Count extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.baseline,
       textBaseline: TextBaseline.alphabetic,
       children: [
         Text('$value',
-            style: MyntWebTextStyles.title(context,
+            style: MyntWebTextStyles.hero(context,
                 color: color, fontWeight: MyntFonts.bold)),
         const SizedBox(width: 5),
-        Text(label, style: MyntWebTextStyles.caption(context, color: muted)),
+        Text(label, style: MyntWebTextStyles.body(context, color: primary, fontWeight: MyntFonts.medium)),
       ],
     );
   }
@@ -137,30 +139,31 @@ class _Quad extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final strong = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    // Match the table Category chip: colour-tinted background, uppercase label
+    // in the category colour, and the count in a solid circular badge.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration:
-          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          Text(
+            label.toUpperCase(),
+            style: MyntWebTextStyles.para(context,
+                color: color, fontWeight: MyntFonts.medium),
           ),
           const SizedBox(width: 6),
-          Text(label, style: MyntWebTextStyles.caption(context, color: fg)),
-          const SizedBox(width: 6),
-          Text('$value',
-              style: MyntWebTextStyles.caption(context,
-                  color: strong, fontWeight: MyntFonts.bold)),
+          Text(
+            '$value',
+            style: MyntWebTextStyles.caption(context,
+                color: resolveThemeColor(context,
+                    dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary
+                  ),
+                fontWeight: MyntFonts.bold),
+          ),
         ],
       ),
     );

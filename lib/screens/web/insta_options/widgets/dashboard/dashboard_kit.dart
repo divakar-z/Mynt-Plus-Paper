@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:mynt_plus/models/insta_options/dashboard/dashboard_enums.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 /// Semantic accents not in the shared palette (short_covering / long_covering).
-const Color kDashTeal = Color(0xFF14B8A6);
+const Color kDashShortCov = Color(0xFF3E8EDE); // soft blue (replaces the teal)
 const Color kDashOrange = Color(0xFFE3852B);
 
 /// Profit / loss / neutral colour for a signed value.
@@ -29,7 +31,7 @@ Color dashCategoryColor(BuildContext context, BuildupCategory c) {
       return resolveThemeColor(context,
           dark: MyntColors.profitDark, light: MyntColors.profit);
     case BuildupCategory.shortCovering:
-      return kDashTeal;
+      return kDashShortCov;
     case BuildupCategory.shortBuildup:
       return resolveThemeColor(context,
           dark: MyntColors.lossDark, light: MyntColors.loss);
@@ -56,6 +58,23 @@ String dashCategoryShort(BuildupCategory c) {
   }
 }
 
+/// Chip label — buildup categories drop the redundant "Buildup" word (just
+/// Long / Short); covering categories keep their full name.
+String dashCategoryChipLabel(BuildupCategory c) {
+  switch (c) {
+    case BuildupCategory.longBuildup:
+      return 'Long';
+    case BuildupCategory.shortBuildup:
+      return 'Short';
+    case BuildupCategory.shortCovering:
+      return 'Short Covering';
+    case BuildupCategory.longCovering:
+      return 'Long Covering';
+    case BuildupCategory.na:
+      return c.label;
+  }
+}
+
 /// Pill chip for a buildup category (full label or short code).
 class DashCategoryChip extends StatelessWidget {
   final BuildupCategory category;
@@ -70,19 +89,25 @@ class DashCategoryChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = dashCategoryColor(context, category);
+    // Matches the Orders "Status" chip (executed tab): rectangular tag, colour
+    // tinted at 12% for the background, uppercase para (12px) medium label in
+    // the category colour.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(10),
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        short ? dashCategoryShort(category) : category.label,
-        style: MyntWebTextStyles.caption(
+        (short ? dashCategoryShort(category) : dashCategoryChipLabel(category))
+            .toUpperCase(),
+        style: MyntWebTextStyles.para(
           context,
           color: color,
-          fontWeight: MyntFonts.semiBold,
+          fontWeight: MyntFonts.medium,
         ),
+        overflow: TextOverflow.ellipsis,
+        softWrap: false,
       ),
     );
   }
@@ -112,8 +137,17 @@ class DashSectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 10),
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.cardBorderDark,
+                      light: MyntColors.cardBorder),
+                ),
+              ),
+            ),
             child: Row(
               children: [
                 Flexible(
@@ -124,7 +158,7 @@ class DashSectionCard extends StatelessWidget {
                       context,
                       darkColor: MyntColors.textPrimaryDark,
                       lightColor: MyntColors.textPrimary,
-                      fontWeight: MyntFonts.semiBold,
+                      fontWeight: MyntFonts.bold,
                     ),
                   ),
                 ),
@@ -142,11 +176,12 @@ class DashSectionCard extends StatelessWidget {
                     ),
                   ),
                 ] else
-                  const Spacer(),
+                 SizedBox(width: 10),
                 if (trailing != null) trailing!,
               ],
             ),
           ),
+          const SizedBox(height: 12),
           Padding(padding: bodyPadding, child: child),
         ],
       ),
@@ -167,38 +202,13 @@ class DashSearchBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-    final accent = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
-    return SizedBox(
-      height: 34,
-      child: TextField(
-        controller: controller,
-        style: MyntWebTextStyles.bodySmall(context,
-            darkColor: MyntColors.textPrimaryDark,
-            lightColor: MyntColors.textPrimary),
-        cursorColor: accent,
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: hint,
-          hintStyle: MyntWebTextStyles.bodySmall(context, color: muted),
-          prefixIcon: Icon(Icons.search, size: 16, color: muted),
-          prefixIconConstraints:
-              const BoxConstraints(minWidth: 32, minHeight: 32),
-          contentPadding: const EdgeInsets.symmetric(vertical: 8),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(6),
-            borderSide: BorderSide(color: border, width: 0.5),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(6),
-            borderSide: BorderSide(color: accent),
-          ),
-        ),
-      ),
+    // Matches the Holdings search field (shared MyntSearchTextField with a
+    // smart clear button). `hint` maps to the placeholder.
+    return MyntSearchTextField.withSmartClear(
+      controller: controller,
+      placeholder: hint,
+      leadingIcon: assets.searchIcon,
+      onClear: () => controller.clear(),
     );
   }
 }

@@ -4,10 +4,16 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 /// One column for [DashTable]. `width` null → the column flexes to fill the
-/// remaining space (use for the symbol/name column).
+/// remaining space, sharing it with the other flex columns in proportion to
+/// their [flex] factor.
 class DashCol<T> {
   final String label;
   final double? width;
+
+  /// Relative share of the leftover space when [width] is null — a name column
+  /// at `flex: 2` gets twice the width of a `flex: 1` numeric column. Ignored
+  /// when [width] is set.
+  final int flex;
   final bool numeric;
   final Widget Function(BuildContext, T) cell;
   final Comparable<Object> Function(T)? sortKey;
@@ -16,6 +22,7 @@ class DashCol<T> {
     required this.label,
     required this.cell,
     this.width,
+    this.flex = 1,
     this.numeric = false,
     this.sortKey,
   });
@@ -42,6 +49,15 @@ class DashTable<T> extends StatefulWidget {
   final int? sortColumn;
   final bool ascending;
 
+  /// Optional footer rendered INSIDE the outlined container, below the rows
+  /// (e.g. a pagination bar) — so it reads as part of the table, not a widget
+  /// floating below it. Give it its own top border for a divider.
+  final Widget? footer;
+
+  /// When set, the rows area (header + rows) is pinned to this height so a short
+  /// final page doesn't shrink the table; the [footer] sits below it.
+  final double? bodyHeight;
+
   const DashTable({
     super.key,
     required this.columns,
@@ -51,6 +67,8 @@ class DashTable<T> extends StatefulWidget {
     this.onSort,
     this.sortColumn,
     this.ascending = false,
+    this.footer,
+    this.bodyHeight,
   });
 
   @override
@@ -117,58 +135,82 @@ class _DashTableState<T> extends State<DashTable<T>> {
     final cols = widget.columns;
     final rows = _sortedRows;
 
-    return shadcn.OutlinedContainer(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final fixedSum = cols
-              .where((c) => c.width != null)
-              .fold<double>(0, (s, c) => s + c.width!);
-          final flexCount = cols.where((c) => c.width == null).length;
-          final rawFlex = flexCount > 0
-              ? (constraints.maxWidth - fixedSum) / flexCount
-              : 0.0;
-          final flexW = rawFlex < 130 ? 130.0 : rawFlex;
+    final body = LayoutBuilder(
+      builder: (context, constraints) {
+        final fixedSum = cols
+            .where((c) => c.width != null)
+            .fold<double>(0, (s, c) => s + c.width!);
+        // Distribute the leftover space across the flex columns in proportion
+        // to their flex factor (each clamped to a usable minimum).
+        final flexTotal =
+            cols.where((c) => c.width == null).fold<int>(0, (s, c) => s + c.flex);
+        final unit =
+            flexTotal > 0 ? (constraints.maxWidth - fixedSum) / flexTotal : 0.0;
+        double colW(DashCol<T> c) {
+          if (c.width != null) return c.width!;
+          final w = unit * c.flex;
+          return w < 130 ? 130.0 : w;
+        }
 
-          final widths = <int, shadcn.TableSize>{
-            for (var i = 0; i < cols.length; i++)
-              i: shadcn.FixedTableSize(cols[i].width ?? flexW),
-          };
-          final totalW =
-              cols.fold<double>(0, (s, c) => s + (c.width ?? flexW));
-          final needsHScroll = totalW > constraints.maxWidth + 0.5;
+        final widths = <int, shadcn.TableSize>{
+          for (var i = 0; i < cols.length; i++)
+            i: shadcn.FixedTableSize(colW(cols[i])),
+        };
+        final totalW = cols.fold<double>(0, (s, c) => s + colW(c));
+        final needsHScroll = totalW > constraints.maxWidth + 0.5;
 
-          final table = shadcn.Table(
-            key: ValueKey('sort_${_activeCol}_$_activeAsc'),
-            columnWidths: widths,
-            defaultRowHeight: const shadcn.FixedTableSize(38),
-            rows: [
-              shadcn.TableHeader(
-                cells: [
-                  for (var i = 0; i < cols.length; i++)
-                    _headerCell(context, cols[i], i),
-                ],
-              ),
-              for (var r = 0; r < rows.length; r++)
-                _dataRow(context, rows[r], r, cols),
-            ],
-          );
-
-          final content = SizedBox(
-            width: needsHScroll ? totalW : constraints.maxWidth,
-            child: table,
-          );
-
-          if (!needsHScroll) return content;
-          return Scrollbar(
-            controller: _hCtrl,
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              controller: _hCtrl,
-              scrollDirection: Axis.horizontal,
-              child: content,
+        final table = shadcn.Table(
+          key: ValueKey('sort_${_activeCol}_$_activeAsc'),
+          columnWidths: widths,
+          defaultRowHeight: const shadcn.FixedTableSize(38),
+          rows: [
+            shadcn.TableHeader(
+              cells: [
+                for (var i = 0; i < cols.length; i++)
+                  _headerCell(context, cols[i], i),
+              ],
             ),
-          );
-        },
+            for (var r = 0; r < rows.length; r++)
+              _dataRow(context, rows[r], r, cols),
+          ],
+        );
+
+        final content = SizedBox(
+          width: needsHScroll ? totalW : constraints.maxWidth,
+          child: table,
+        );
+
+        if (!needsHScroll) return content;
+        return Scrollbar(
+          controller: _hCtrl,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _hCtrl,
+            scrollDirection: Axis.horizontal,
+            child: content,
+          ),
+        );
+      },
+    );
+
+    // Pin the rows area to a fixed height (keeps every page the same height so
+    // the layout below never jumps); the footer sits below it — both inside the
+    // outlined container, so the footer reads as part of the table.
+    final sizedBody = widget.bodyHeight != null
+        ? SizedBox(
+            height: widget.bodyHeight,
+            child: Align(alignment: Alignment.topLeft, child: body),
+          )
+        : body;
+
+    return shadcn.OutlinedContainer(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          sizedBody,
+          if (widget.footer != null) widget.footer!,
+        ],
       ),
     );
   }

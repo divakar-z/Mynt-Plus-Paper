@@ -30,7 +30,7 @@ class InstaSideRailItem {
 const List<InstaSideRailItem> kInstaSideRailItems = [
   InstaSideRailItem(
     sub: InstaSubScreen.markets,
-    title: 'Markets Dashboard',
+    title: 'Market Dashboard',
     icon: Icons.dashboard,
   ),
   InstaSideRailItem(

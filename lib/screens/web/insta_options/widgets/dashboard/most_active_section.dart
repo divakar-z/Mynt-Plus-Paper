@@ -32,21 +32,19 @@ class _MostActiveSectionState extends State<MostActiveSection> {
   List<DashCol<MostActiveRow>> _volumeCols() => [
         DashCol(
           label: 'Symbol',
+          // Equal share with the data columns (a bigger flex leaves too much
+          // empty space after the short symbol names on this wide table).
           sortKey: (r) => r.symbol,
           cell: (c, r) => Text(r.symbol,
               overflow: TextOverflow.ellipsis, style: _cell(c, bold: true)),
         ),
         DashCol(
           label: 'Volume',
-          width: 110,
-          numeric: true,
           sortKey: (r) => r.volume ?? 0,
           cell: (c, r) => Text(InstaOptionsFormat.oi(r.volume), style: _cell(c)),
         ),
         DashCol(
           label: 'OI',
-          width: 110,
-          numeric: true,
           sortKey: (r) => r.oi,
           cell: (c, r) => Text(InstaOptionsFormat.oi(r.oi), style: _cell(c)),
         ),
@@ -55,39 +53,38 @@ class _MostActiveSectionState extends State<MostActiveSection> {
   List<DashCol<MostActiveRow>> _oiCols() => [
         DashCol(
           label: 'Symbol',
+          // Equal share with the data columns (a bigger flex leaves too much
+          // empty space after the short symbol names on this wide table).
           sortKey: (r) => r.symbol,
           cell: (c, r) => Text(r.symbol,
               overflow: TextOverflow.ellipsis, style: _cell(c, bold: true)),
         ),
         DashCol(
-          label: 'OI',
-          width: 84,
-          numeric: true,
-          sortKey: (r) => r.oi,
-          cell: (c, r) => Text(InstaOptionsFormat.oi(r.oi), style: _cell(c)),
+          label: 'Category',
+          width: 160,
+          cell: (c, r) => r.category == null
+              ? Text('—', style: _cell(c))
+              : DashCategoryChip(category: r.category!),
         ),
         DashCol(
-          label: 'OI %',
-          width: 82,
-          numeric: true,
-          sortKey: (r) => r.oiChangePct ?? 0,
-          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.oiChangePct),
+          label: 'OI',
+          // OI value coloured by its change direction (like BuildUp); the OI %
+          // column stays neutral.
+          sortKey: (r) => r.oi,
+          cell: (c, r) => Text(InstaOptionsFormat.oi(r.oi),
               style: _cell(c, color: dashChangeColor(c, r.oiChangePct))),
         ),
         DashCol(
+          label: 'OI %',
+          sortKey: (r) => r.oiChangePct ?? 0,
+          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.oiChangePct),
+              style: _cell(c)),
+        ),
+        DashCol(
           label: 'Price %',
-          width: 82,
-          numeric: true,
           sortKey: (r) => r.priceChangePct ?? 0,
           cell: (c, r) => Text(InstaOptionsFormat.changePct(r.priceChangePct),
               style: _cell(c, color: dashChangeColor(c, r.priceChangePct))),
-        ),
-        DashCol(
-          label: 'Cat',
-          width: 56,
-          cell: (c, r) => r.category == null
-              ? Text('—', style: _cell(c))
-              : DashCategoryChip(category: r.category!, short: true),
         ),
       ];
 
@@ -104,7 +101,9 @@ class _MostActiveSectionState extends State<MostActiveSection> {
         key: ValueKey(_by),
         columns: _by == MostActiveBy.volume ? _volumeCols() : _oiCols(),
         rows: rows,
-        initialSortCol: 1,
+        // Volume view sorts by Volume (index 1); OI view sorts by OI — now
+        // index 2 since Category sits right after Symbol.
+        initialSortCol: _by == MostActiveBy.volume ? 1 : 2,
         emptyLabel: 'No symbols.',
       ),
     );

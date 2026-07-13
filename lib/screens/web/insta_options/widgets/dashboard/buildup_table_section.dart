@@ -4,6 +4,7 @@ import 'package:mynt_plus/models/insta_options/dashboard/dashboard_enums.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/insta_tab_chip.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dash_table.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/paginated_dash_table.dart';
@@ -11,7 +12,7 @@ import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/paginated_
 /// Buildup table (below the Sentiment gauge) — the per-stock detail behind the
 /// quadrant counts (`buildup_sentiment.rows`). The toolbar row carries the
 /// category filter chips on the left and the symbol search on the right; the
-/// table below is sortable across the whole set and paginated 25 rows per page.
+/// table below is sortable across the whole set and paginated 10 rows per page.
 /// Changing the category or search resets to page 1 (sort is kept).
 class BuildupTableSection extends StatefulWidget {
   final BuildupSentiment sentiment;
@@ -53,48 +54,52 @@ class _BuildupTableSectionState extends State<BuildupTableSection> {
         fontWeight: bold ? MyntFonts.semiBold : MyntFonts.medium,
       );
 
-  List<DashCol<BuildupRow>> _cols() => [
+  List<DashCol<BuildupRow>> _cols(bool showCategory) => [
         DashCol(
           label: 'Symbol',
+          flex: 2, // name column gets ~2× the share of a data column
           sortKey: (r) => r.symbol,
           cell: (c, r) => Text(r.symbol,
               overflow: TextOverflow.ellipsis, style: _cell(c, bold: true)),
         ),
+        // Category only shown on "All" — on a specific category tab it would
+        // just repeat the tab's name for every row.
+        if (showCategory)
+          DashCol(
+            label: 'Category', 
+            width: 160, // fits the longest label ("SHORT COVERING") without ellipsis
+            cell: (c, r) => DashCategoryChip(category: r.category),
+          ),
         DashCol(
           label: 'LTP',
-          width: 92,
           numeric: true,
           sortKey: (r) => r.lastClose ?? 0,
-          cell: (c, r) =>
-              Text(InstaOptionsFormat.price(r.lastClose), style: _cell(c)),
-        ),
-        DashCol(
-          label: 'Price %',
-          width: 86,
-          numeric: true,
-          sortKey: (r) => r.priceChangePct ?? 0,
-          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.priceChangePct),
+          // LTP coloured by the price move (like the watchlist); the Price %
+          // column stays neutral.
+          cell: (c, r) => Text(InstaOptionsFormat.price(r.lastClose),
               style: _cell(c, color: dashChangeColor(c, r.priceChangePct))),
         ),
         DashCol(
-          label: 'OI',
-          width: 84,
+          label: 'Price %',
           numeric: true,
-          sortKey: (r) => r.oi,
-          cell: (c, r) => Text(InstaOptionsFormat.oi(r.oi), style: _cell(c)),
+          sortKey: (r) => r.priceChangePct ?? 0,
+          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.priceChangePct),
+              style: _cell(c)),
         ),
         DashCol(
-          label: 'OI %',
-          width: 84,
+          label: 'OI',
           numeric: true,
-          sortKey: (r) => r.oiChangePct ?? 0,
-          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.oiChangePct),
+          sortKey: (r) => r.oi,
+          // OI coloured by its change direction; the OI % column stays neutral.
+          cell: (c, r) => Text(InstaOptionsFormat.oi(r.oi),
               style: _cell(c, color: dashChangeColor(c, r.oiChangePct))),
         ),
         DashCol(
-          label: 'Category',
-          width: 118,
-          cell: (c, r) => DashCategoryChip(category: r.category),
+          label: 'OI %',
+          numeric: true,
+          sortKey: (r) => r.oiChangePct ?? 0,
+          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.oiChangePct),
+              style: _cell(c)),
         ),
       ];
 
@@ -110,8 +115,10 @@ class _BuildupTableSectionState extends State<BuildupTableSection> {
   @override
   Widget build(BuildContext context) {
     final rows = _filtered();
+    // Category column only adds value on "All" (mixed categories).
+    final showCategory = _category == null;
     return DashSectionCard(
-      title: 'Buildup',
+      title: 'BuildUp',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -130,9 +137,12 @@ class _BuildupTableSectionState extends State<BuildupTableSection> {
           ),
           const SizedBox(height: 12),
           PaginatedDashTable<BuildupRow>(
-            columns: _cols(),
+            // Key flips when the Category column shows/hides so the table
+            // rebuilds with the correct sort index for the new column set.
+            key: ValueKey('buildup_cat_$showCategory'),
+            columns: _cols(showCategory),
             rows: rows,
-            initialSortCol: 4, // OI %, descending
+            initialSortCol: showCategory ? 5 : 4, // OI %, descending
             filterKey: '$_category|$_q',
             emptyLabel: 'No stocks match.',
           ),
@@ -162,11 +172,11 @@ class _FilterChips extends StatelessWidget {
           _chip(context, 'All', sentiment.total, null),
           _chip(context, 'Long buildup', sentiment.longBuildup,
               BuildupCategory.longBuildup),
-          _chip(context, 'Short cov.', sentiment.shortCovering,
+          _chip(context, 'Short covering', sentiment.shortCovering,
               BuildupCategory.shortCovering),
           _chip(context, 'Short buildup', sentiment.shortBuildup,
               BuildupCategory.shortBuildup),
-          _chip(context, 'Long cov.', sentiment.longCovering,
+          _chip(context, 'Long covering', sentiment.longCovering,
               BuildupCategory.longCovering),
         ],
       ),
@@ -175,68 +185,14 @@ class _FilterChips extends StatelessWidget {
 
   Widget _chip(
       BuildContext context, String label, int count, BuildupCategory? value) {
-    final active = selected == value;
-    final accent = value == null
-        ? resolveThemeColor(context,
-            dark: MyntColors.primaryDark, light: MyntColors.primary)
-        : dashCategoryColor(context, value);
-    final bg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final strong = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final mutedNum = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-
+    // Shared chip → identical size / font / label to the top-nav tabs.
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => onSelect(value),
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: active ? accent.withValues(alpha: 0.14) : bg,
-              border: Border.all(
-                  color: active ? accent : Colors.transparent, width: 1),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (value != null) ...[
-                  Container(
-                    width: 7,
-                    height: 7,
-                    decoration:
-                        BoxDecoration(color: accent, shape: BoxShape.circle),
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                Text(
-                  label,
-                  style: MyntWebTextStyles.caption(
-                    context,
-                    color: active ? strong : fg,
-                    fontWeight: active ? MyntFonts.semiBold : MyntFonts.medium,
-                  ),
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  '$count',
-                  style: MyntWebTextStyles.caption(
-                    context,
-                    color: mutedNum,
-                    fontWeight: MyntFonts.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+      child: InstaTabChip(
+        label: label,
+        count: count,
+        selected: selected == value,
+        onTap: () => onSelect(value),
       ),
     );
   }

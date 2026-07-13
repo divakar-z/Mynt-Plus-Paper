@@ -72,7 +72,7 @@ class _MarketsDashboardScreenState
     return Container(
       color: bg,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
         children: [
           DashboardAppBar(
             tradeDate: p.tradeDate,

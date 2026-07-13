@@ -36,16 +36,17 @@ class DashboardAppBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Text(
-          'Markets Dashboard',
-          style: MyntWebTextStyles.head(
-            context,
-            darkColor: MyntColors.textPrimaryDark,
-            lightColor: MyntColors.textPrimary,
-            fontWeight: MyntFonts.bold,
-          ),
-        ),
-        const Spacer(),
+        // Text(
+        //   'Market Dashboard',
+        //   style: MyntWebTextStyles.head(
+        //     context,
+        //     darkColor: MyntColors.textPrimaryDark,
+        //     lightColor: MyntColors.textPrimary,
+        //     fontWeight: MyntFonts.bold,
+        //   ),
+        // ),
+        // const Spacer(),
+        const Spacer(), // push the date selector + refresh to the right
         LiveDateSelector(
           liveMode: liveMode,
           liveChannel: liveChannel,
@@ -71,35 +72,34 @@ class _RefreshButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    // Borderless icon button matching the Holdings screen refresh button.
+    final dark = isDarkMode(context);
+    final iconColor = resolveThemeColor(context,
+        dark: MyntColors.textWhite, light: MyntColors.textPrimary);
     final accent = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: loading ? null : onRefresh,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: 34,
-          height: 34,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: resolveThemeColor(context,
-                dark: MyntColors.cardDark, light: MyntColors.card),
-            border: Border.all(color: border, width: 0.5),
-            borderRadius: BorderRadius.circular(6),
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          splashColor:
+              (dark ? Colors.white : Colors.black).withValues(alpha: 0.15),
+          highlightColor:
+              (dark ? Colors.white : Colors.black).withValues(alpha: 0.08),
+          onTap: loading ? null : onRefresh,
+          child: Center(
+            child: loading
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: accent),
+                  )
+                : Icon(Icons.refresh, size: 28, color: iconColor),
           ),
-          child: loading
-              ? SizedBox(
-                  width: 15,
-                  height: 15,
-                  child:
-                      CircularProgressIndicator(strokeWidth: 2, color: accent),
-                )
-              : Icon(Icons.refresh, size: 18, color: fg),
         ),
       ),
     );

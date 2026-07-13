@@ -30,25 +30,24 @@ class GainersLosersSection extends StatelessWidget {
               overflow: TextOverflow.ellipsis, style: _cell(c, bold: true)),
         ),
         DashCol(
-          label: 'Price %',
-          width: 84,
-          numeric: true,
-          sortKey: (r) => r.priceChangePct ?? 0,
-          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.priceChangePct),
-              style: _cell(c, color: dashChangeColor(c, r.priceChangePct))),
+          label: 'Category',
+          width: 160,
+          cell: (c, r) => DashCategoryChip(category: r.category),
         ),
         DashCol(
           label: 'LTP',
-          width: 92,
           numeric: true,
           sortKey: (r) => r.lastClose ?? 0,
-          cell: (c, r) =>
-              Text(InstaOptionsFormat.price(r.lastClose), style: _cell(c)),
+          // LTP coloured by the price move (like BuildUp); Price % stays neutral.
+          cell: (c, r) => Text(InstaOptionsFormat.price(r.lastClose),
+              style: _cell(c, color: dashChangeColor(c, r.priceChangePct))),
         ),
         DashCol(
-          label: 'Cat',
-          width: 56,
-          cell: (c, r) => DashCategoryChip(category: r.category, short: true),
+          label: 'Price %',
+          numeric: true,
+          sortKey: (r) => r.priceChangePct ?? 0,
+          cell: (c, r) => Text(InstaOptionsFormat.changePct(r.priceChangePct),
+              style: _cell(c)),
         ),
       ];
 

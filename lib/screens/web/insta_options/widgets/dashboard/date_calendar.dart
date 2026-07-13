@@ -45,8 +45,6 @@ class _DashDateButtonState extends State<DashDateButton> {
     final enabled = widget.availableDates.isNotEmpty;
     final fg = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
 
     return OverlayPortal(
       controller: _ctrl,
@@ -85,7 +83,12 @@ class _DashDateButtonState extends State<DashDateButton> {
               decoration: BoxDecoration(
                 color: resolveThemeColor(context,
                     dark: MyntColors.cardDark, light: MyntColors.card),
-                border: Border.all(color: border, width: 0.5),
+                border: Border.all(
+                    color: resolveThemeColor(context,
+                            dark: MyntColors.textTertiaryDark,
+                            light: MyntColors.textTertiary)
+                        .withValues(alpha: 0.4),
+                    width: 1),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Row(

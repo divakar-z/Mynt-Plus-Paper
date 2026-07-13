@@ -12,6 +12,7 @@ import 'package:mynt_plus/screens/web/insta_options/screens/pcr_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/per_strike_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/screens/trending_oi_screen.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/basket_chip.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/insta_top_tabs.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/side_rail.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/symbol_expiry_bar.dart';
 
@@ -82,20 +83,33 @@ class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
       color: tokens.bgPrimary,
       child: Stack(
         children: [
-          Row(
+          // Navigation switched from the left side-rail to a top tab strip
+          // (Holdings-style). Sub-screen switching is unchanged — the tabs call
+          // the same `_onSelect`. `stretch` makes the tab strip span full width
+          // so its chips left-align (Column defaults to centering otherwise).
+          Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              InstaSideRail(active: _active, onSelect: _onSelect),
-              Expanded(
-                child: Column(
-                  children: [
-                    if (_showSymbolExpiryBar) const SymbolExpiryBar(),
-                    Expanded(child: _buildActiveSubScreen()),
-                  ],
-                ),
-              ),
+              InstaTopTabs(active: _active, onSelect: _onSelect),
+              if (_showSymbolExpiryBar) const SymbolExpiryBar(),
+              Expanded(child: _buildActiveSubScreen()),
             ],
           ),
+          // ---- Old left side-rail layout (kept for quick revert) ----
+          // Row(
+          //   crossAxisAlignment: CrossAxisAlignment.stretch,
+          //   children: [
+          //     InstaSideRail(active: _active, onSelect: _onSelect),
+          //     Expanded(
+          //       child: Column(
+          //         children: [
+          //           if (_showSymbolExpiryBar) const SymbolExpiryBar(),
+          //           Expanded(child: _buildActiveSubScreen()),
+          //         ],
+          //       ),
+          //     ),
+          //   ],
+          // ),
           const BasketChip(),
         ],
       ),
