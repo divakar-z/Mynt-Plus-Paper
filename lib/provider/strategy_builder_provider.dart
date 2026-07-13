@@ -19,6 +19,7 @@ import 'package:mynt_plus/provider/core/default_change_notifier.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
 import 'package:mynt_plus/models/portfolio_model/position_book_model.dart';
 import 'package:mynt_plus/models/strategy_builder_model/select_symbols_model.dart';
+import 'package:mynt_plus/models/span_calc_model.dart';
 import 'package:mynt_plus/utils/responsive_snackbar.dart';
 
 final strategyBuilderProvider =
@@ -112,6 +113,29 @@ class StrategyBasketItem {
       vega: vega ?? this.vega,
     );
   }
+}
+
+/// One leg's SPAN margin (span + expo) in the margin-benefit breakdown.
+class StrategyMarginLeg {
+  final String name;
+  final double margin;
+  StrategyMarginLeg(this.name, this.margin);
+}
+
+/// Result of the SpanCalc margin-benefit calculation shown in the Margin Info
+/// dialog: each leg's own margin, their sum, the combined margin, and the
+/// benefit (sum - combined). (Zerodha-style)
+class StrategyMarginBenefit {
+  final List<StrategyMarginLeg> legs;
+  final double sumIndividual;
+  final double combined;
+  final double benefit;
+  StrategyMarginBenefit({
+    required this.legs,
+    required this.sumIndividual,
+    required this.combined,
+    required this.benefit,
+  });
 }
 
 /// Predefined strategy model
@@ -383,6 +407,92 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
   void toggleIncludeExistingMargin() {
     _includeExistingMargin = !_includeExistingMargin;
     notifyListeners();
+  }
+
+  // ── SpanCalc margin-benefit (shown in the Margin Info dialog) ──────────────
+  // Phase 1: call SpanCalc once per leg (its individual margin) + once for all
+  // legs together (combined), then benefit = sum(individual) - combined. Same
+  // method the mobile SPAN calculator and Zerodha use. The full combined
+  // response is logged so we can later check whether a single combined call is
+  // enough (Phase 2).
+  bool _isCalcMarginBenefit = false;
+  bool get isCalcMarginBenefit => _isCalcMarginBenefit;
+  StrategyMarginBenefit? _marginBenefitResult;
+  StrategyMarginBenefit? get marginBenefitResult => _marginBenefitResult;
+  String? _marginBenefitError;
+  String? get marginBenefitError => _marginBenefitError;
+
+  Future<void> calculateMarginBenefit() async {
+    final selectedItems = _basket.where((item) => item.checkbox).toList();
+    if (selectedItems.isEmpty) {
+      _isCalcMarginBenefit = false;
+      _marginBenefitResult = null;
+      _marginBenefitError = 'Add at least one leg to see the margin benefit.';
+      notifyListeners();
+      return;
+    }
+
+    _isCalcMarginBenefit = true;
+    _marginBenefitResult = null;
+    _marginBenefitError = null;
+    notifyListeners();
+
+    try {
+      final positions = <SpanCalcPositionItem>[];
+      final legs = <StrategyMarginLeg>[];
+      double sumIndividual = 0;
+
+      for (final item in selectedItems) {
+        // SpanCalc needs symname/instname (not stored on the basket item), so
+        // fetch a quick quote per leg — same as the mobile calculator.
+        final quote = await api.getScripQuote(item.token, item.exch);
+        final qty = item.ordlot * item.lotSize * _lotMultiplier;
+        final signedQty = (item.buySell == 'SELL' ? -qty : qty).toString();
+
+        final pos = SpanCalcPositionItem(
+          prd: 'M',
+          exch: item.exch,
+          tsym: item.tsym,
+          symname: quote.symname ?? '',
+          instname: quote.instname ?? '',
+          exd: quote.exd ?? item.expdate,
+          netqty: signedQty,
+          optt: quote.optt ?? item.optt,
+          strprc: quote.strprc ?? item.strprc,
+        );
+        positions.add(pos);
+
+        // Individual margin for this leg alone = span + expo.
+        final indResp = await api.spanCalc(actid: 'DEMOIT', positions: [pos]);
+        final indMargin = indResp.spanValue + indResp.expoValue;
+        sumIndividual += indMargin;
+
+        final strike =
+            double.tryParse(item.strprc)?.toStringAsFixed(0) ?? item.strprc;
+        final legName =
+            '${(quote.symname ?? '').trim()} $strike ${item.optt}'.trim();
+        legs.add(StrategyMarginLeg(legName, indMargin));
+      }
+
+      // Combined margin for all legs together = span + expo.
+      final combinedResp =
+          await api.spanCalc(actid: 'DEMOIT', positions: positions);
+      final combined = combinedResp.spanValue + combinedResp.expoValue;
+      final benefit = sumIndividual - combined;
+
+      _marginBenefitResult = StrategyMarginBenefit(
+        legs: legs,
+        sumIndividual: sumIndividual,
+        combined: combined,
+        benefit: benefit > 0 ? benefit : 0,
+      );
+    } catch (e) {
+      _marginBenefitError = 'Could not calculate margin. Please try again.';
+      log('[MarginBenefit] error: $e');
+    } finally {
+      _isCalcMarginBenefit = false;
+      notifyListeners();
+    }
   }
 
   // Custom strategies (API-based leg builder)

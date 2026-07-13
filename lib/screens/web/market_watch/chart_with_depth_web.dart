@@ -232,7 +232,12 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       // 1. If we had a previous selection, try to preserve it (clamped to valid range)
       // 2. Otherwise, use Options tab (index 2) if isOption, else Overview (index 0)
       int initialIndex;
-      if (previousIndex > 0 && previousIndex < targetLength) {
+      if (ref.read(marketWatchProvider).openOnChartTab && targetLength > 1) {
+        // A Chart-tab open was requested (watchlist option-chain "Chart" action).
+        // Force the Chart tab (index 1) even across controller recreations that
+        // happen while scrip data loads; the flag is cleared after the panel settles.
+        initialIndex = 1;
+      } else if (previousIndex > 0 && previousIndex < targetLength) {
         // Preserve current tab if it's still valid
         initialIndex = previousIndex;
       } else if (previousIndex >= targetLength) {
@@ -284,6 +289,23 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       };
       _tabController!.addListener(_tabControllerListener!);
     }
+  }
+
+  /// Re-enable any chart iframe left at pointer-events:none by the app's
+  /// dropdown/menu cursor-bleed guard (whose restore can race), so the chart is
+  /// interactive again. Cheap and idempotent — only touches a stuck iframe.
+  void _ensureChartIframesEnabled() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (final f in iframes) {
+        if (f is html.IFrameElement &&
+            f.id.contains('chart-iframe') &&
+            f.style.pointerEvents != 'auto') {
+          f.style.pointerEvents = 'auto';
+          f.style.cursor = '';
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _placeOrderInput(
@@ -443,6 +465,38 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     );
   }
 
+  /// Title for the option-chain / depth header.
+  /// - Underlying index or stock (no option type) → its full display name
+  ///   (e.g. "NIFTY 50"), matching the watchlist and search. `symname` is
+  ///   skipped here because for an index that field is the base trading symbol
+  ///   ("NIFTY"), which drops the "50".
+  /// - Option contract (has an option type) → base symbol + expiry + CE/PE
+  ///   (e.g. "NIFTY 24JUL26 CE"), unchanged from before.
+  String _optionChainHeaderTitle(GetQuotes? depthData) {
+    final String option =
+        (depthData?.option ?? widget.wlValue.option).trim();
+    if (option.isEmpty) {
+      final name =
+          (depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol)
+              .replaceAll('-EQ', '')
+              .toUpperCase();
+      return "$name ";
+    }
+    // For BFO the symname is the instrument code ("BSXOPT"), so use the derived
+    // symbol ("SENSEX") as the base; other exchanges keep symname (e.g. NIFTY).
+    final primary =
+        depthData?.exch == "BFO" ? depthData?.symbol : depthData?.symname;
+    final base = (primary ??
+            depthData?.symname ??
+            depthData?.symbol ??
+            depthData?.tsym ??
+            widget.wlValue.symbol)
+        .replaceAll('-EQ', '')
+        .toUpperCase();
+    final exp = depthData?.expDate ?? widget.wlValue.expDate;
+    return "$base $exp $option ";
+  }
+
   @override
   Widget build(BuildContext context) {
     final mw = ref.watch(marketWatchProvider);
@@ -453,6 +507,22 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final hasFundamentalData = mw.fundamentalData != null &&
         mw.fundamentalData?.msg != "no data found";
     _setupTabControllerIfNeeded(hasOptions: hasOptions, hasFundamentalData: hasFundamentalData);
+
+    // If a Chart-tab open was requested (e.g. from the watchlist option-chain
+    // "Chart" action, which opens this panel fresh), switch to the Chart tab
+    // (index 1) once — mirroring the in-panel onChartRequested behaviour — then
+    // consume the flag so it doesn't affect later opens.
+    if (mw.openOnChartTab) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_tabController != null &&
+            _tabController!.length > 1 &&
+            _tabController!.index != 1) {
+          _tabController!.animateTo(1);
+        }
+        ref.read(marketWatchProvider).openOnChartTab = false;
+      });
+    }
 
     return Container(
       color: resolveThemeColor(context,
@@ -692,7 +762,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  "${(depthData?.symname ?? depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol).replaceAll('-EQ', '').toUpperCase()}${depthData?.expDate ?? widget.wlValue.expDate} ${depthData?.option ?? widget.wlValue.option} ",
+                                  _optionChainHeaderTitle(depthData),
                                   overflow: TextOverflow.ellipsis,
                                   style: MyntWebTextStyles.title(
                                     context,
@@ -1192,10 +1262,20 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         // Return placeholder target that the portal follows
         return CompositedTransformTarget(
           link: _chartLayerLink,
-          child: Container(
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            color: Colors.transparent, // Transparent placeholder, chart renders via portal
+          child: MouseRegion(
+            // The chart iframe can be left at pointer-events:none by the app's
+            // dropdown/menu cursor-bleed guard when its restore doesn't fire
+            // (confirmed root cause of the "frozen chart" bug). While disabled,
+            // the iframe passes pointer events through to this placeholder — so
+            // re-enable it the instant the cursor is over the chart. Self-heals
+            // for every chart flow.
+            onEnter: (_) => _ensureChartIframesEnabled(),
+            onHover: (_) => _ensureChartIframesEnabled(),
+            child: Container(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              color: Colors.transparent, // Transparent placeholder, chart renders via portal
+            ),
           ),
         );
       },

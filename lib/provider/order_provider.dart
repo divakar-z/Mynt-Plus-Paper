@@ -1553,7 +1553,8 @@ class OrderProvider extends DefaultChangeNotifier {
               if (element.exch == "BFO" && element.dname != null) {
                 List<String> splitVal = element.dname!.split(" ");
                 element.symbol = splitVal[0];
-                element.expDate = "${splitVal[1]} ${splitVal[2]}";
+                // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+                element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
                 element.option = splitVal.length > 4
                     ? "${splitVal[3]} ${splitVal[4]}"
                     : splitVal[3];
@@ -1657,7 +1658,8 @@ class OrderProvider extends DefaultChangeNotifier {
               List<String> splitVal = element.dname!.split(" ");
 
               element.symbol = splitVal[0];
-              element.expDate = "${splitVal[1]} ${splitVal[2]}";
+              // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+              element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
               element.option = splitVal.length > 4
                   ? "${splitVal[3]} ${splitVal[4]}"
                   : splitVal[3];

@@ -262,6 +262,24 @@ Map spilitTsym({required String value}) {
   return {"symbol": symbol, "expDate": expDate, "option": option};
 }
 
+/// BFO (BSE F&O) options: the display name (`dname`) gives the correct symbol and
+/// day+month (e.g. "SENSEX 09 JUL PE 77800") but no year, while the tsym encodes
+/// the year as the two digits right after the symbol (e.g. "SENSEX2670977700CE"
+/// -> "26"). This keeps the dname-derived day+month untouched and only appends
+/// the year from the tsym -> "09 JUL 26". Falls back to just day+month when the
+/// year can't be read cleanly, so nothing regresses. (TC_440 root fix)
+String bfoExpiryWithYear(List<String> dnameParts, String? tsym) {
+  if (dnameParts.length < 3) return dnameParts.join(" ").trim();
+  final dayMon = "${dnameParts[1]} ${dnameParts[2]}";
+  final sym = dnameParts[0].toUpperCase();
+  final ts = (tsym ?? "").toUpperCase();
+  if (sym.isNotEmpty && ts.startsWith(sym) && ts.length >= sym.length + 2) {
+    final yy = ts.substring(sym.length, sym.length + 2);
+    if (RegExp(r'^\d{2}$').hasMatch(yy)) return "$dayMon $yy";
+  }
+  return dayMon;
+}
+
 String sipformatDateTime({required String value}) {
   String formatedDate = '';
   String inputDateString = value;

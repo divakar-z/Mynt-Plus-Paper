@@ -1637,8 +1637,12 @@ class _CustomizableSplitHomeScreenState
           showOptionZ: showOptionZ,
           showOptionFlash: showOptionFlash,
           showScalper: showScalper,
-          showScanner: showScanner,
-          showCharts: showCharts,
+          // Scanner / Orderflow / Charts hidden from the sidebar menu too, to
+          // match the Options dropdown (features not ready for hosting).
+          // Restore by putting the show* variables back / removing these.
+          showScanner: false,
+          showOrderflow: false,
+          showCharts: false,
         ),
         );
       },

@@ -953,7 +953,8 @@ class GroupAnalyseButton extends ConsumerWidget {
                 if (position.exch == "BFO" && position.dname != null && position.dname != "null") {
                   List<String> splitVal = position.dname!.split(" ");
                   symbol = splitVal[0];
-                  expDate = "${splitVal[1]} ${splitVal[2]}";
+                  // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+                  expDate = bfoExpiryWithYear(splitVal, position.tsym);
                 } else {
                   Map spilitSymbol = spilitTsym(value: "${position.tsym}");
                   symbol = "${spilitSymbol["symbol"]}";
