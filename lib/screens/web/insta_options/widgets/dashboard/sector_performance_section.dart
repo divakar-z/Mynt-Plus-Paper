@@ -81,6 +81,9 @@ class _Cell extends StatelessWidget {
     final textPrimary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final dir = neutral ? muted : (up ? profit : loss);
+    final divider = resolveThemeColor(context,
+            dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary)
+        .withValues(alpha: 0.2);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -89,8 +92,9 @@ class _Cell extends StatelessWidget {
         // by the border colour only.
         color: resolveThemeColor(context,
             dark: MyntColors.cardDark, light: MyntColors.card),
-        border: Border.all(
-            color: dir.withValues(alpha: isDark ? 0.55 : 0.5), width: 1),
+        // border: Border.all(
+        //     color: dir.withValues(alpha: isDark ? 0.55 : 0.5), width: 1),
+        border: Border.all(color: divider, width: 1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(

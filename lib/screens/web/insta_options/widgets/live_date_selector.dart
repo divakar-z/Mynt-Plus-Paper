@@ -52,14 +52,14 @@ class LiveDateSelector extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // if (hasLive) ...[
-        //   _LivePill(
-        //     active: liveMode,
-        //     time: liveMode ? (freshnessHm ?? liveChannel!.hm) : null,
-        //     onTap: onSelectLive,
-        //   ),
-        //   const SizedBox(width: 8),
-        // ],
+        if (hasLive) ...[
+          _LivePill(
+            active: liveMode,
+            time: liveMode ? (freshnessHm ?? liveChannel!.hm) : null,
+            onTap: onSelectLive,
+          ),
+          const SizedBox(width: 8),
+        ],
         Opacity(
           opacity: hasLive && liveMode ? 0.6 : 1.0,
           child: DashDateButton(

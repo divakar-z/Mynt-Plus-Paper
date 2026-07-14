@@ -79,16 +79,19 @@ class _DashDateButtonState extends State<DashDateButton> {
             onTap: enabled ? _toggle : null,
             behavior: HitTestBehavior.opaque,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              // Matches the InstaOptions dropdown (index picker) styling.
+              height: 36,
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
                 color: resolveThemeColor(context,
-                    dark: MyntColors.cardDark, light: MyntColors.card),
+                    dark: MyntColors.transparent,
+                    light: const Color(0xffF1F3F8)),
                 border: Border.all(
-                    color: resolveThemeColor(context,
-                            dark: MyntColors.textTertiaryDark,
-                            light: MyntColors.textTertiary)
-                        .withValues(alpha: 0.4),
-                    width: 1),
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.primary),
+                ),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Row(
@@ -98,11 +101,19 @@ class _DashDateButtonState extends State<DashDateButton> {
                   const SizedBox(width: 8),
                   Text(
                     InstaOptionsFormat.dateLabel(widget.tradeDate),
-                    style: MyntWebTextStyles.bodySmall(context,
-                        color: fg, fontWeight: MyntFonts.semiBold),
+                    style: MyntWebTextStyles.body(context,
+                        darkColor: MyntColors.textWhite,
+                        lightColor: MyntColors.textBlack,
+                        fontWeight: MyntFonts.medium),
                   ),
                   const SizedBox(width: 6),
-                  Icon(Icons.keyboard_arrow_down, size: 16, color: fg),
+                  Icon(
+                    Icons.keyboard_arrow_down,
+                    size: 20,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary),
+                  ),
                 ],
               ),
             ),

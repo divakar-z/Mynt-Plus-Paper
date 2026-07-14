@@ -59,7 +59,7 @@ class ContributionMovers extends StatelessWidget {
         padding: const EdgeInsets.only(top: 4, bottom: 6),
         child: Text(
           label.toUpperCase(),
-          style: MyntWebTextStyles.caption(context,
+          style: MyntWebTextStyles.body(context,
                   color: muted, fontWeight: MyntFonts.semiBold)
               .copyWith(letterSpacing: 0.5),
         ),
@@ -67,16 +67,19 @@ class ContributionMovers extends StatelessWidget {
 
   Widget _netChip(BuildContext context) {
     final pc = data.pointChange;
-    final color = dashChangeColor(context, pc);
+    // Softened a touch toward white so the fill isn't a heavy block of colour.
+    final color =
+        Color.lerp(dashChangeColor(context, pc), Colors.white, 0.10)!;
+    // Solid rounded chip, coloured by the net point move.
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
+        color: color,
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Text('Net ${signedPts(pc)} pts',
           style: MyntWebTextStyles.bodySmall(context,
-              color: color, fontWeight: MyntFonts.semiBold)),
+              color: Colors.white, fontWeight: MyntFonts.semiBold)),
     );
   }
 }

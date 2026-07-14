@@ -24,7 +24,7 @@ class ContribBar extends StatelessWidget {
     required this.value,
     required this.maxAbs,
     this.sublabel,
-    this.labelWidth = 132,
+    this.labelWidth = 150,
     this.valueWidth = 72,
   });
 
@@ -46,7 +46,7 @@ class ContribBar extends StatelessWidget {
     final color = pos ? profit : loss;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         children: [
           SizedBox(
@@ -55,23 +55,22 @@ class ContribBar extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: MyntWebTextStyles.bodySmall(context,
+                _EllipsisText(label,
+                    style: MyntWebTextStyles.body(context,
                         color: fg, fontWeight: MyntFonts.semiBold)),
-                if (sublabel != null)
-                  Text(sublabel!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: MyntWebTextStyles.caption(context, color: muted)),
+                if (sublabel != null) ...[
+                  const SizedBox(height: 2),
+                  _EllipsisText(sublabel!,
+                      style: MyntWebTextStyles.para(context,
+                          color: muted, fontWeight: MyntFonts.regular)),
+                ],
               ],
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: SizedBox(
-              height: 16,
+              height: 22,
               child: Row(
                 children: [
                   Expanded(
@@ -100,7 +99,7 @@ class ContribBar extends StatelessWidget {
             width: valueWidth,
             child: Text(signedPts(value),
                 textAlign: TextAlign.right,
-                style: MyntWebTextStyles.bodySmall(context,
+                style: MyntWebTextStyles.body(context,
                     color: color, fontWeight: MyntFonts.semiBold)),
           ),
         ],
@@ -113,8 +112,36 @@ class ContribBar extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: c.withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: BorderRadius.circular(0),
           ),
         ),
       );
+}
+
+/// A single-line ellipsised label that reveals its full text in a [Tooltip]
+/// **only when it's actually truncated** — measured against the width it's
+/// given, so fully-visible names don't get a needless hover tooltip.
+class _EllipsisText extends StatelessWidget {
+  final String text;
+  final TextStyle style;
+
+  const _EllipsisText(this.text, {required this.style});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tp = TextPainter(
+          text: TextSpan(text: text, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+        )..layout();
+        final label = Text(text,
+            maxLines: 1, overflow: TextOverflow.ellipsis, style: style);
+        return tp.width > constraints.maxWidth
+            ? Tooltip(message: text, child: label)
+            : label;
+      },
+    );
+  }
 }

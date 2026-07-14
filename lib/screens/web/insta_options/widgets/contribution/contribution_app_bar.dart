@@ -85,11 +85,6 @@ class _IndexPickerState extends ConsumerState<_IndexPicker> {
 
   @override
   Widget build(BuildContext context) {
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-
     return OverlayPortal(
       controller: _ctrl,
       overlayChildBuilder: (context) => Stack(
@@ -119,24 +114,44 @@ class _IndexPickerState extends ConsumerState<_IndexPicker> {
             onTap: _ctrl.show,
             behavior: HitTestBehavior.opaque,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              constraints: const BoxConstraints(minWidth: 160),
+              // Matches the Scalper "Default Symbol" dropdown button (trimmed
+              // to line up with the date pill + refresh in this app bar).
+              width: 160,
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
                 color: resolveThemeColor(context,
-                    dark: MyntColors.cardDark, light: MyntColors.card),
-                border: Border.all(color: border, width: 0.5),
+                    dark: MyntColors.transparent,
+                    light: const Color(0xffF1F3F8)),
                 borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.primary),
+                ),
               ),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Icon(Icons.account_balance, size: 15, color: fg),
-                  const SizedBox(width: 8),
-                  Text(widget.current,
-                      style: MyntWebTextStyles.bodySmall(context,
-                          color: fg, fontWeight: MyntFonts.bold)),
-                  const SizedBox(width: 8),
-                  Icon(Icons.keyboard_arrow_down, size: 16, color: fg),
+                  Expanded(
+                    child: Text(
+                      widget.current,
+                      overflow: TextOverflow.ellipsis,
+                      style: MyntWebTextStyles.body(
+                        context,
+                        darkColor: MyntColors.textWhite,
+                        lightColor: MyntColors.textBlack,
+                        fontWeight: MyntFonts.medium,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    Icons.keyboard_arrow_down,
+                    size: 20,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary),
+                  ),
                 ],
               ),
             ),
@@ -248,26 +263,23 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    final btn = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: 34,
-          height: 34,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: resolveThemeColor(context,
-                dark: MyntColors.cardDark, light: MyntColors.card),
-            border: Border.all(color: border, width: 0.5),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(icon, size: 18, color: fg),
+    // Borderless icon button matching the Holdings / Market Dashboard refresh.
+    final dark = isDarkMode(context);
+    final iconColor = resolveThemeColor(context,
+        dark: MyntColors.textWhite, light: MyntColors.textPrimary);
+    final btn = SizedBox(
+      width: 40,
+      height: 40,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          splashColor:
+              (dark ? Colors.white : Colors.black).withValues(alpha: 0.15),
+          highlightColor:
+              (dark ? Colors.white : Colors.black).withValues(alpha: 0.08),
+          onTap: onTap,
+          child: Center(child: Icon(icon, size: 28, color: iconColor)),
         ),
       ),
     );
