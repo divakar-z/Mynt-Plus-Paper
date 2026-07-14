@@ -446,6 +446,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     final expDate = widget.gttOrderBook.expDate ?? widget.scripInfo.expDate ?? '';
     final option = widget.gttOrderBook.option ?? widget.scripInfo.option ?? '';
     final exchange = widget.gttOrderBook.exch ?? widget.scripInfo.exch ?? '';
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = widget.gttOrderBook.masterName ?? widget.scripInfo.masterName;
 
     final ltp = currentLtp ?? widget.gttOrderBook.ltp ?? widget.gttOrderBook.prc ?? '0.00';
     final change = currentChange ?? widget.gttOrderBook.change ?? '0.00';
@@ -472,7 +474,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                   child: Row(
                     children: [
                       Text(
-                        "$symbol $expDate $option ",
+                        "${master ?? "$symbol $expDate $option"} ",
                         style: WebTextStyles.title(
                           isDarkTheme: theme.isDarkMode,
                           color: theme.isDarkMode ? MyntColors.textPrimaryDark : MyntColors.textPrimary,

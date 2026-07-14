@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:flutter/material.dart'
     show
         RefreshIndicator,
@@ -435,10 +436,14 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
           
           String aInstrument = a is BrokerMessage
               ? (aParsed?['instrument'] ?? 'N/A')
-              : (a.tsym?.replaceAll("-EQ", "") ?? 'N/A');
+              : (DerivativeMaster.nameFor(a.exch, a.token) ??
+                  a.tsym?.replaceAll("-EQ", "") ??
+                  'N/A');
           String bInstrument = b is BrokerMessage
               ? (bParsed?['instrument'] ?? 'N/A')
-              : (b.tsym?.replaceAll("-EQ", "") ?? 'N/A');
+              : (DerivativeMaster.nameFor(b.exch, b.token) ??
+                  b.tsym?.replaceAll("-EQ", "") ??
+                  'N/A');
           r = cmp<String>(aInstrument, bInstrument);
           break;
         case 1: // Exchange
@@ -972,7 +977,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
               final exchange = parsed?['exchange'] ?? '';
               if (exchange.isNotEmpty) cellText += ' $exchange';
             } else {
-              final symbol = (alert.tsym ?? '').replaceAll("-EQ", "").trim();
+              final symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+                  (alert.tsym ?? '').replaceAll("-EQ", "").trim();
               final exchange = alert.exch ?? '';
               cellText = exchange.isNotEmpty ? '$symbol $exchange' : symbol;
             }
@@ -1103,7 +1109,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       symbol = alert.tsym?.replaceAll("-EQ", "") ?? '';
       exchange = alert.exch ?? '';
     } else {
-      symbol = alert.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+      symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+          (alert.tsym?.replaceAll("-EQ", "") ?? 'N/A');
       exchange = alert.exch ?? '';
     }
 
@@ -1704,7 +1711,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
   }
 
   Future<bool?> _showCancelAlertDialog(AlertPendingModel alert) async {
-    final symbol = alert.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+        (alert.tsym?.replaceAll("-EQ", "") ?? 'N/A');
 
     return showDialog<bool>(
       context: context,

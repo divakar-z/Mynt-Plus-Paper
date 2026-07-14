@@ -596,9 +596,11 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
                                   Text(
-                                    "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
-                                        .replaceAll("-EQ", "")
-                                        .toUpperCase(),
+                                    (scrip.masterName?.isNotEmpty == true)
+                                        ? scrip.masterName!
+                                        : "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
+                                            .replaceAll("-EQ", "")
+                                            .toUpperCase(),
                                     style: MyntWebTextStyles.symbol(
                                       context,
                                       color: resolveThemeColor(
@@ -608,7 +610,8 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                       ),
                                     ),
                                   ),
-                                  if (scrip.option != null &&
+                                  if (scrip.masterName == null &&
+                                      scrip.option != null &&
                                       scrip.option.toString().isNotEmpty)
                                     Padding(
                                       padding: const EdgeInsets.only(left: 4),
@@ -624,7 +627,8 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                         ),
                                       ),
                                     ),
-                                  if (scrip.expDate != null &&
+                                  if (scrip.masterName == null &&
+                                      scrip.expDate != null &&
                                       scrip.expDate.toString().isNotEmpty)
                                     Padding(
                                       padding: const EdgeInsets.only(left: 4),

@@ -218,6 +218,10 @@ class _PositionTableState extends ConsumerState<PositionTable> {
 
   // Helper method to format instrument display text (without exchange - exchange shown separately)
   String _formatInstrumentText(PositionBookModel position) {
+    // Priority 0: backend display name from the DerivativeMaster (derivatives).
+    final master = position.masterName;
+    if (master != null && master.isNotEmpty) return master;
+
     // Priority 1: Use dname (display name) if available
     if (position.dname != null && position.dname!.isNotEmpty) {
       return position.dname!.replaceAll("-EQ", "").trim();

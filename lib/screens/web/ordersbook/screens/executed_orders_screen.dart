@@ -1056,6 +1056,9 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
   }
 
   String _formatInstrumentText(OrderBookModel order) {
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = order.masterName;
+    if (master != null && master.isNotEmpty) return master;
     if (order.tsym != null && order.tsym!.isNotEmpty) {
       // Remove "-EQ" suffix and don't include exchange
       return order.tsym!.replaceAll("-EQ", "").trim();

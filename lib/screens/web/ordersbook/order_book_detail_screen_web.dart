@@ -320,7 +320,7 @@ class _OrderBookDetailScreenWebState
           children: [
             Flexible(
               child: Text(
-                "${_orderData.symbol?.replaceAll("-EQ", "") ?? ''} ${_orderData.expDate ?? ''} ${_orderData.option ?? ''} ",
+                "${_orderData.displayName} ",
                 style: MyntWebTextStyles.title(
                   context,
                   color: resolveThemeColor(context,

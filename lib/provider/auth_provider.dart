@@ -2025,7 +2025,15 @@ class AuthProvider extends DefaultChangeNotifier {
                   ref.read(stocksProvide).fetchCAevents(),
                 ];
                 Future.wait(marketFutures); // Don't await - let it run in background
-                
+
+                // User detail carries the entitled exchanges (exarr); load it
+                // first, then fetch the derivative contract master for only those
+                // exchanges. One-time, resolves contract names across all screens.
+                Future.microtask(() async {
+                  await ref.read(userProfileProvider).fetchUserDetail(context);
+                  ref.read(marketWatchProvider).fetchDerivativeMaster();
+                });
+
                 // Batch 3: Order data (load in background)
                 // Only fetch order book on login — trade book and GTT are lazy-loaded when user opens those tabs
                 Future.microtask(() {
@@ -2050,9 +2058,9 @@ class AuthProvider extends DefaultChangeNotifier {
                 });
                 
                 // Batch 6: Profile and other data (load in background)
+                // (fetchUserDetail moved up so exarr is ready for the master fetch)
                 Future.microtask(() {
                   ref.read(userProfileProvider).getProfileimage();
-                  ref.read(userProfileProvider).fetchUserDetail(context);
                   ref.read(ledgerProvider).setterfornullallSwitch = null;
                 });
                 

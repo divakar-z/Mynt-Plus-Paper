@@ -18,6 +18,7 @@ import '../../../routes/route_names.dart';
 import '../../../utils/custom_navigator.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/order_book_model/order_book_model.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/websocket_provider.dart';
@@ -122,6 +123,19 @@ class _WatchlistCardWebState extends ConsumerState<WatchlistCardWeb> {
     // The LTP/change display uses websocketProvider.socketDatas[token] directly, not getQuotes.
     // getQuotes is only needed for action callbacks (Buy/Sell), so ref.read is appropriate.
     final depthData = ref.read(marketWatchProvider).getQuotes!;
+
+    // Contract parts from the DerivativeMaster (symbol / expDate / option), so
+    // every piece of the card is master-sourced. Null for equities/indices,
+    // which fall through to the existing tsym-derived fields below.
+    final wlMasterParts = DerivativeMaster.partsFor(
+      widget.watchListData["exch"]?.toString(),
+      widget.watchListData["token"]?.toString(),
+    );
+    final wlSymbol = wlMasterParts?["symbol"];
+    final wlOption =
+        wlMasterParts?["option"] ?? "${widget.watchListData["option"] ?? ""}";
+    final wlExpDate =
+        wlMasterParts?["expDate"] ?? "${widget.watchListData["expDate"] ?? ""}";
 
     // final expandedToken = ref.watch(expandedWatchlistItemProvider);
 
@@ -285,10 +299,11 @@ class _WatchlistCardWebState extends ConsumerState<WatchlistCardWeb> {
                                         CrossAxisAlignment.center,
                                     children: [
                                       Text(
-                                        widget.watchListData["symbol"]
-                                            .toString()
-                                            .replaceAll("-EQ", "")
-                                            .toUpperCase(),
+                                        wlSymbol ??
+                                            widget.watchListData["symbol"]
+                                                .toString()
+                                                .replaceAll("-EQ", "")
+                                                .toUpperCase(),
                                         style: MyntWebTextStyles.symbol(
                                           context,
                                           color: resolveThemeColor(
@@ -298,14 +313,12 @@ class _WatchlistCardWebState extends ConsumerState<WatchlistCardWeb> {
                                           ),
                                         ),
                                       ),
-                                      if (widget.watchListData["option"]
-                                          .toString()
-                                          .isNotEmpty)
+                                      if (wlOption.isNotEmpty)
                                         Padding(
                                           padding:
                                               const EdgeInsets.only(left: 4),
                                           child: Text(
-                                            "${widget.watchListData["option"]}",
+                                            wlOption,
                                             style: MyntWebTextStyles.symbol(
                                               context,
                                               color: resolveThemeColor(
@@ -389,11 +402,9 @@ class _WatchlistCardWebState extends ConsumerState<WatchlistCardWeb> {
                                         ),
                                       ),
                                     ),
-                                    if (widget.watchListData['expDate']
-                                        .toString()
-                                        .isNotEmpty)
+                                    if (wlExpDate.isNotEmpty)
                                       Text(
-                                        "${widget.watchListData['expDate']}",
+                                        wlExpDate,
                                         style: MyntWebTextStyles.exch(
                                           context,
                                           fontWeight: FontWeight.w500,
@@ -404,7 +415,7 @@ class _WatchlistCardWebState extends ConsumerState<WatchlistCardWeb> {
                                           ),
                                         ),
                                       ),
-if (_isExpiryToday(widget.watchListData['expDate'])) ...[
+if (_isExpiryToday(wlExpDate)) ...[
                       const SizedBox(width: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
@@ -1841,7 +1852,7 @@ if (_isExpiryToday(widget.watchListData['expDate'])) ...[
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  '${depthArgs.symbol.replaceAll("-EQ", "").toUpperCase()}${depthArgs.expDate} ${depthArgs.option} Stock Report',
+                                  '${DerivativeMaster.nameFor(depthArgs.exch, depthArgs.token) ?? '${depthArgs.symbol.replaceAll("-EQ", "").toUpperCase()}${depthArgs.expDate} ${depthArgs.option}'} Stock Report',
                                   style: WebTextStyles.title(
                                     isDarkTheme: theme.isDarkMode,
                                     color: theme.isDarkMode

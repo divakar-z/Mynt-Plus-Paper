@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'dart:math' as math;
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/marketwatch_model/scrip_overview/eodchartdata_model.dart';
@@ -1239,7 +1240,7 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    "${widget.wlValue.symbol.replaceAll("-EQ", "").toUpperCase()}${widget.wlValue.expDate} ${widget.wlValue.option}",
+                    "${DerivativeMaster.nameFor(widget.wlValue.exch, widget.wlValue.token) ?? "${widget.wlValue.symbol.replaceAll("-EQ", "").toUpperCase()}${widget.wlValue.expDate} ${widget.wlValue.option}"}",
                     style: MyntWebTextStyles.title(
                       context,
                       darkColor: MyntColors.textPrimaryDark,

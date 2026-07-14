@@ -769,7 +769,8 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             cellText = _formatCreatedDate(order);
             break;
           case 1: // Instrument
-            final symbol = (order.tsym ?? '').replaceAll("-EQ", "").trim();
+            final symbol =
+                order.masterName ?? (order.tsym ?? '').replaceAll("-EQ", "").trim();
             final exchange = order.exch ?? '';
             final exchangeText = exchange.isNotEmpty ? ' $exchange' : '';
             final symbolWidth = _measureTextWidth(symbol, textStyle);
@@ -891,8 +892,9 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
     final status = gttOrder.gttOrderCurrentStatus?.toUpperCase() ?? '';
     final isPending = status == 'PENDING' || status == 'TRIGGER_PENDING';
     final uniqueId = '${gttOrder.alId ?? ''}_${gttOrder.tsym ?? ''}';
-    // Format instrument: remove "-EQ" and show symbol + exchange separately
-    final symbol = gttOrder.tsym ?? '';
+    // Format instrument: prefer the backend display name (DerivativeMaster) for
+    // derivatives, else the tsym; remove "-EQ" and show exchange separately.
+    final symbol = gttOrder.masterName ?? (gttOrder.tsym ?? '');
     final displayText = symbol.replaceAll("-EQ", "").trim();
 
     return GestureDetector(

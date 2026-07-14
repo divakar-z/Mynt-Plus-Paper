@@ -1,4 +1,10 @@
+import 'package:mynt_plus/sharedWidget/functions.dart';
+
 class PositionBookModel {
+  /// Backend display name from the DerivativeMaster (keyed by exch:token), or
+  /// null when the contract isn't in the master (equities / indices).
+  String? get masterName => DerivativeMaster.nameFor(exch, token);
+
   String? actid;
   String? bep;
   String? cfbuyqty;

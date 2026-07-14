@@ -1,3 +1,5 @@
+import 'package:mynt_plus/sharedWidget/functions.dart';
+
 class SearchScripNewModel {
   String? stat;
   List<ScripNewValue>? values;
@@ -27,6 +29,10 @@ class SearchScripNewModel {
 }
 
 class ScripNewValue {
+  /// Backend display name from the DerivativeMaster (keyed by exch:token), or
+  /// null when the contract isn't in the master (indices / equities).
+  String? get masterName => DerivativeMaster.nameFor(exch, token);
+
   String? exch;
   String? token;
   String? tsym;

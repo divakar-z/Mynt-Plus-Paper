@@ -298,7 +298,7 @@ class _GttOrderBookDetailScreenWebState
             children: [
               Flexible(
                 child: Text(
-                  "${_gttOrder.symbol?.replaceAll("-EQ", "").toUpperCase() ?? ''} ${_gttOrder.expDate ?? ''} ${_gttOrder.option ?? ''} ",
+                  "${_gttOrder.displayName} ",
                   style: MyntWebTextStyles.title(
                     context,
                     color: resolveThemeColor(context,

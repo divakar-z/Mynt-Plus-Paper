@@ -464,6 +464,29 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// Loads the derivative contract master into the DerivativeMaster cache
+  /// ("EXCH:token" -> ready display name), for only the derivative exchanges the
+  /// user is entitled to (from userDetail.exarr). Background, non-blocking;
+  /// failures are swallowed so login is never affected.
+  Future<void> fetchDerivativeMaster() async {
+    try {
+      // Cash equity exchanges (NSE/BSE) hold no derivatives and, sent as parent
+      // codes, expand to the whole family. Skip only those and send every other
+      // segment the user is entitled to (F&O, commodity, currency) from exarr.
+      const cashExch = {'NSE', 'BSE'};
+      final exarr = ref.read(userProfileProvider).userDetailModel?.exarr ?? [];
+      var exchanges = exarr.where((e) => !cashExch.contains(e)).toList();
+      // Fallback so it never fetches an empty list (e.g. user detail not ready).
+      if (exchanges.isEmpty) exchanges = ['NFO', 'BFO', 'MCX'];
+      final data = await api.getDerivativeMaster(exchanges: exchanges);
+      DerivativeMaster.setAll(data);
+      debugPrint(
+          '[DerivativeMaster] loaded ${data.length} contracts for $exchanges');
+    } catch (e) {
+      debugPrint('[DerivativeMaster] fetch error: $e');
+    }
+  }
+
   // Save current page index to SharedPreferences
   Future<void> _saveCurrentPageIndex() async {
     try {

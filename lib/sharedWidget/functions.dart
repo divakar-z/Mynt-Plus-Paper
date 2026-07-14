@@ -280,6 +280,61 @@ String bfoExpiryWithYear(List<String> dnameParts, String? tsym) {
   return dayMon;
 }
 
+/// In-memory cache of the derivative contract master (NFO/BFO/MCX), fetched once
+/// on login from the DerivativeMaster API. Keyed by "EXCH:token" -> ready display
+/// name (e.g. "SENSEX 30 JUL 2026 FUT" / "360ONE 25 AUG 2026 CE 1000"). Lets every
+/// screen resolve a contract's name from one backend source instead of deriving
+/// it from tsym/dname per-endpoint.
+class DerivativeMaster {
+  DerivativeMaster._();
+  static final Map<String, String> _names = {};
+
+  static bool get isLoaded => _names.isNotEmpty;
+
+  static void setAll(Map<String, String> data) {
+    _names
+      ..clear()
+      ..addAll(data);
+  }
+
+  /// Ready display name for a contract, or null if not present in the master.
+  static String? nameFor(String? exch, String? token) {
+    if (exch == null || token == null || exch.isEmpty || token.isEmpty) {
+      return null;
+    }
+    return _names['$exch:$token'];
+  }
+
+  /// Split parts (symbol / expDate / option) of a contract's master name, or
+  /// null when the contract isn't in the master. Lets a screen source every
+  /// piece from the master instead of mixing the master name with [spilitTsym].
+  static Map<String, String>? partsFor(String? exch, String? token) {
+    final name = nameFor(exch, token);
+    if (name == null || name.isEmpty) return null;
+    return spilitMaster(value: name);
+  }
+}
+
+/// Splits a DerivativeMaster display name (e.g. "NIFTY 14 JUL 2026 CE 24000",
+/// "ZINC 31 JUL 2026 FUT", "360ONE 25 AUG 2026 CE 1000") into the same parts as
+/// [spilitTsym] so screens can show the pieces separately, all sourced from the
+/// master. The year is returned two-digit ("14 JUL 26") to match the existing
+/// expiry format and the "expiry today" tag logic. Falls back to the whole
+/// string as the symbol when no "DD MON YYYY" date is present.
+Map<String, String> spilitMaster({required String value}) {
+  final match = RegExp(r'(\d{1,2}) ([A-Za-z]{3}) (\d{4})').firstMatch(value);
+  if (match == null) {
+    return {"symbol": value.trim(), "expDate": "", "option": ""};
+  }
+  final symbol = value.substring(0, match.start).trim();
+  final day = match.group(1)!;
+  final month = match.group(2)!.toUpperCase();
+  final year = match.group(3)!; // 4-digit, e.g. "2026"
+  final expDate = "$day $month ${year.substring(year.length - 2)}";
+  final option = value.substring(match.end).trim();
+  return {"symbol": symbol, "expDate": expDate, "option": option};
+}
+
 String sipformatDateTime({required String value}) {
   String formatedDate = '';
   String inputDateString = value;
