@@ -38,6 +38,7 @@ class FundamentalsBuilderState {
         orderDir: orderDir,
         limit: limit,
       );
+  bool get hasFundamental => filters.isNotEmpty;
 }
 
 List<String> validOpsForDtype(String dtype, {bool multiYear = false}) {

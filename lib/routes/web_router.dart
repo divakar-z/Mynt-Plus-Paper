@@ -339,25 +339,29 @@ void initializeWebRouter() {
           initialRightPanel: ScreenTypeParam.scanner,
         ),
       ),
+      // Legacy scanner sub-page URLs — the underlying enum values are
+      // commented out (Symbols / Scanners / Fundamentals tabs retired), so
+      // these routes now redirect to the closest active tab so existing
+      // bookmarks continue to work.
       GoRoute(
         path: WebRoutes.scannerSymbols,
         builder: (context, state) => const CustomizableSplitHomeScreen(
           initialRightPanel: ScreenTypeParam.scanner,
-          initialScannerSubPage: ScannerSubPage.symbols,
+          initialScannerSubPage: ScannerSubPage.scannersNew,
         ),
       ),
       GoRoute(
         path: WebRoutes.scannerScanners,
         builder: (context, state) => const CustomizableSplitHomeScreen(
           initialRightPanel: ScreenTypeParam.scanner,
-          initialScannerSubPage: ScannerSubPage.scanners,
+          initialScannerSubPage: ScannerSubPage.scannersNew,
         ),
       ),
       GoRoute(
         path: WebRoutes.scannerFundamentals,
         builder: (context, state) => const CustomizableSplitHomeScreen(
           initialRightPanel: ScreenTypeParam.scanner,
-          initialScannerSubPage: ScannerSubPage.fundamentals,
+          initialScannerSubPage: ScannerSubPage.fundamentalsNew,
         ),
       ),
       GoRoute(
@@ -374,7 +378,7 @@ void initializeWebRouter() {
           final ticker = state.pathParameters['ticker'] ?? '';
           return CustomizableSplitHomeScreen(
             initialRightPanel: ScreenTypeParam.scanner,
-            initialScannerSubPage: ScannerSubPage.scanners,
+            initialScannerSubPage: ScannerSubPage.scannersNew,
             initialExplainArgs: ExplainKey(
               scope: ExplainScope.builtin,
               id: code,

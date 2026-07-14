@@ -6,6 +6,7 @@ import 'package:mynt_plus/models/scanner_model/fundamental_score.dart';
 import 'package:mynt_plus/models/scanner_model/ohlcv.dart';
 import 'package:mynt_plus/models/scanner_model/peers.dart';
 import 'package:mynt_plus/models/scanner_model/performance.dart';
+import 'package:mynt_plus/models/scanner_model/scan_details.dart';
 import 'package:mynt_plus/models/scanner_model/symbol.dart' as model;
 import 'package:mynt_plus/models/scanner_model/symbol_info.dart';
 import 'package:mynt_plus/models/scanner_model/technicals.dart';
@@ -38,6 +39,12 @@ final performanceProvider = FutureProvider.family<PerformanceResponse, String>(
 
 final symbolScannersProvider = FutureProvider.family<List<String>, String>(
     (_, t) => _api.fetchSymbolScanners(t));
+
+/// Rich per-symbol scan matches (name + sentiment + columns + values) backing
+/// the expandable Scans tab. Keyed by ticker; `as_of` defaults to latest.
+final scanDetailsProvider =
+    FutureProvider.family<ScanDetailsResponse, String>(
+        (_, t) => _api.fetchScanDetails(t));
 
 final symbolInfoProvider = FutureProvider.family<SymbolInfo, String>(
     (_, t) => _api.fetchSymbolInfo(t));

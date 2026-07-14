@@ -25,9 +25,13 @@ class ScannerLeftRail extends StatelessWidget {
   });
 
   static const _items = <_RailItem>[
-    _RailItem(ScannerSubPage.scanners, 'Scanners', shadcn.LucideIcons.radar),
-    _RailItem(ScannerSubPage.fundamentals, 'Fundamentals',
-        shadcn.LucideIcons.chartBar),
+    // _RailItem(ScannerSubPage.scanners, 'Scanners', shadcn.LucideIcons.radar),
+    _RailItem(ScannerSubPage.scannersNew, 'Scanners New',
+        shadcn.LucideIcons.layoutDashboard),
+    // _RailItem(ScannerSubPage.fundamentals, 'Fundamentals',
+    //     shadcn.LucideIcons.chartBar),
+    _RailItem(ScannerSubPage.fundamentalsNew, 'Fundamentals New',
+        shadcn.LucideIcons.sparkles),
     _RailItem(ScannerSubPage.customScans, 'Custom Scans',
         shadcn.LucideIcons.code),
   ];
@@ -37,7 +41,9 @@ class ScannerLeftRail extends StatelessWidget {
     final bg = resolveThemeColor(context,
         dark: MyntColors.sidebarBgDark, light: MyntColors.sidebarBg);
     final border = shadcn.Theme.of(context).colorScheme.border;
-    final width = collapsed ? 64.0 : 220.0;
+    final sectionColor = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final width = collapsed ? 64.0 : 270.0;
 
     return Container(
       width: width,
@@ -50,13 +56,15 @@ class ScannerLeftRail extends StatelessWidget {
         children: [
           if (!collapsed)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              // Aligns with the pill content start (outer 8px + inner 12px = 20px).
+              padding: const EdgeInsets.fromLTRB(20, 20, 16, 6),
               child: Text(
                 'RESEARCH',
                 style: MyntWebTextStyles.caption(
                   context,
                   fontWeight: MyntFonts.semiBold,
-                ).copyWith(letterSpacing: 1.2),
+                  color: sectionColor,
+                ).copyWith(letterSpacing: 1.4, fontSize: 11),
               ),
             )
           else
@@ -98,15 +106,22 @@ class _NavItemState extends State<_NavItem> {
 
   @override
   Widget build(BuildContext context) {
-    const primary = MyntColors.primary;
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.secondaryDark, light: MyntColors.primary);
+    // Softer baseline so the active item has clear contrast against siblings.
     final inactiveColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final hoverColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final hoverBg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+        dark: MyntColors.rowHoverDark, light: MyntColors.rowHover);
+
     final bg = widget.active
-        ? primary.withValues(alpha: 0.10)
+        ? primary.withValues(alpha: 0.12)
         : (_hover ? hoverBg : Colors.transparent);
-    final color = widget.active ? primary : inactiveColor;
+    final color = widget.active
+        ? primary
+        : (_hover ? hoverColor : inactiveColor);
 
     // MouseRegion wraps everything (no padding dead zone). Container is
     // non-animated for instant hover response — AnimatedContainer flickered
@@ -121,25 +136,34 @@ class _NavItemState extends State<_NavItem> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            // Padding-driven height instead of a fixed size — vertical 12
+            // padding gives ~44px rows, matching the app-drawer nav item feel
+            // in the reference design.
+            padding: EdgeInsets.symmetric(
+                horizontal: widget.collapsed ? 0 : 14, vertical: 12),
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(6),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: widget.collapsed
+                  ? MainAxisAlignment.center
+                  : MainAxisAlignment.start,
               children: [
-                Icon(widget.item.icon, size: 18, color: color),
+                Icon(widget.item.icon, size: 20, color: color),
                 if (!widget.collapsed) ...[
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       widget.item.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: MyntWebTextStyles.body(
                         context,
                         fontWeight: widget.active
                             ? MyntFonts.semiBold
-                            : MyntFonts.regular,
+                            : MyntFonts.medium,
                         darkColor: color,
                         lightColor: color,
                       ),

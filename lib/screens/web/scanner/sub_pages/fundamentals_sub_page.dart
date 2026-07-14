@@ -1,18 +1,24 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/provider/scanner/fundamentals_provider.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/open_scanner_scrip.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/screens/web/scanner/sub_pages/fundamentals_builder_state.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/download_xlsx.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/empty_state.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/export_modal.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/filter_inputs.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/fundamental_filter_row.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/scanner_results_table.dart';
 
@@ -37,6 +43,21 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
   void _setResult(AsyncValue<FundamentalScanResponse>? r) =>
       ref.read(fundamentalsSessionProvider.notifier).setResult(r);
 
+  // Source of truth for the Limit field's text; synced to the builder on change.
+  late final TextEditingController _limitCtrl =
+      TextEditingController(text: _state.limit.toString());
+
+  // Scrolls only the filter rows so the FILTERS header and bottom toolbar stay
+  // put as more filters are added.
+  final ScrollController _filtersScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _limitCtrl.dispose();
+    _filtersScroll.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     // Watch so the body rebuilds when builder/result change.
@@ -45,156 +66,189 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
     final presets = ref.watch(fundamentalPresetsProvider);
     final saved = ref.watch(savedScreensProvider);
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Top header row with title + actions
-          _topBar(),
-          const SizedBox(height: 16),
-          _SectionCard(
-            label: 'SAVED SCREENS',
-            child: saved.when(
-              loading: () => const LinearProgressIndicator(),
-              error: (e, _) => Text(e.toString(),
-                  style: MyntWebTextStyles.caption(context)),
-              data: (list) => list.isEmpty
-                  ? Text('None yet — save a screen to reuse it.',
-                      style: MyntWebTextStyles.caption(context,
-                          color: resolveThemeColor(context,
-                              dark: MyntColors.textSecondaryDark,
-                              light: MyntColors.textSecondary)))
-                  : Wrap(spacing: 8, runSpacing: 8, children: [
-                      for (final s in list)
-                        InputChip(
-                          avatar: const Icon(shadcn.LucideIcons.bookmark, size: 12),
-                          label: Text(s.name),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Fixed page header — the title + actions stay put while the body
+        // below (saved screens, presets, filters, results) scrolls.
+        _topBar(),
+        const SizedBox(height: 16),
+        Expanded(
+          child: SingleChildScrollView(
+            // Right gutter so the body scrollbar sits beside the content
+            // instead of painting over the cards / results table edge.
+            padding: const EdgeInsets.only(right: 12, bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _SectionCard(
+                  label: 'SAVED SCREENS',
+                  child: saved.when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (e, _) => Text(e.toString(),
+                        style: MyntWebTextStyles.caption(context)),
+                    data: (list) => Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        // Start-fresh card — clears the FILTERS builder so the
+                        // user can build (then name via Save as…) a new screen.
+                        _CreateScreenCard(
+                          onTap: () => _setBuilder(
+                              _state.copyWith(filters: const [])),
+                        ),
+                        // One card per saved screen: tap to apply (its filters
+                        // load into the builder below), trash to delete.
+                        for (final s in list)
+                          _SavedScreenCard(
+                            name: s.name,
+                            filterCount: s.filters.length,
+                            treatNullAs: s.treatNullAs,
+                            onApply: () => _setBuilder(_state.copyWith(
+                              filters: s.filters,
+                              treatNullAs: s.treatNullAs,
+                            )),
+                            onDelete: () async {
+                              if (await _confirmDelete(s.name)) {
+                                await locator<ApiExporter>()
+                                    .deleteSavedScreen(s.id);
+                                ref.invalidate(savedScreensProvider);
+                              }
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _SectionCard(
+                  label: 'PRESETS',
+                  child: presets.when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (e, _) => Text(e.toString(),
+                        style: MyntWebTextStyles.caption(context)),
+                    data: (list) => Wrap(spacing: 8, runSpacing: 8, children: [
+                      for (final p in list)
+                        ActionChip(
+                          avatar:
+                              const Icon(shadcn.LucideIcons.layers, size: 12),
+                          label: Text(p.name),
                           onPressed: () => _setBuilder(_state.copyWith(
-                                    filters: s.filters,
-                                    treatNullAs: s.treatNullAs,
-                                  )),
-                          onDeleted: () async {
-                            final ok = await showDialog<bool>(
-                              context: context,
-                              builder: (_) => AlertDialog(
-                                title: const Text('Delete saved screen?'),
-                                content: Text('"${s.name}" will be removed.'),
-                                actions: [
-                                  TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, false),
-                                      child: const Text('Cancel')),
-                                  FilledButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, true),
-                                      child: const Text('Delete')),
-                                ],
-                              ),
-                            );
-                            if (ok == true) {
-                              await locator<ApiExporter>()
-                                  .deleteSavedScreen(s.id);
-                              ref.invalidate(savedScreensProvider);
-                            }
-                          },
+                            filters: p.filters,
+                            treatNullAs: p.treatNullAs,
+                          )),
                         ),
                     ]),
-            ),
-          ),
-          const SizedBox(height: 12),
-          _SectionCard(
-            label: 'PRESETS',
-            child: presets.when(
-              loading: () => const LinearProgressIndicator(),
-              error: (e, _) => Text(e.toString(),
-                  style: MyntWebTextStyles.caption(context)),
-              data: (list) => Wrap(spacing: 8, runSpacing: 8, children: [
-                for (final p in list)
-                  ActionChip(
-                    avatar: const Icon(shadcn.LucideIcons.layers, size: 12),
-                    label: Text(p.name),
-                    onPressed: () => _setBuilder(_state.copyWith(
-                              filters: p.filters,
-                              treatNullAs: p.treatNullAs,
-                            )),
                   ),
-              ]),
-            ),
-          ),
-          const SizedBox(height: 12),
-          _SectionCard(
-            label: 'FILTERS',
-            trailing: fields.maybeWhen(
-              data: (fList) => TextButton.icon(
-                icon: const Icon(shadcn.LucideIcons.plus, size: 14),
-                label: const Text('Add filter'),
-                onPressed: () {
-                  if (fList.isEmpty) return;
-                  final nf = [
-                    ..._state.filters,
-                    FundamentalFilter(field: fList.first.key, op: '<'),
-                  ];
-                  _setBuilder(_state.copyWith(filters: nf));
-                },
-              ),
-              orElse: () => const SizedBox.shrink(),
-            ),
-            child: fields.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-              error: (e, _) => EmptyState(
-                kind: EmptyStateKind.error,
-                title: 'Could not load field catalog',
-                message: e.toString(),
-                onRetry: () => ref.invalidate(fundamentalFieldsProvider),
-              ),
-              data: (fList) => Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_state.filters.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Text(
-                        'No filters yet — click + Add filter to begin, or pick a preset.',
-                        style: MyntWebTextStyles.caption(context,
-                            color: resolveThemeColor(context,
-                                dark: MyntColors.textSecondaryDark,
-                                light: MyntColors.textSecondary)),
-                      ),
-                    ),
-                  for (int i = 0; i < _state.filters.length; i++) ...[
-                    FundamentalFilterRow(
-                      fields: fList,
-                      filter: _state.filters[i],
-                      onChange: (f) {
-                        final nf = [..._state.filters]..[i] = f;
-                        _setBuilder(_state.copyWith(filters: nf));
-                      },
-                      onRemove: () {
-                        final nf = [..._state.filters]..removeAt(i);
+                ),
+                const SizedBox(height: 12),
+                _SectionCard(
+                  label: 'FILTERS',
+                  trailing: fields.maybeWhen(
+                    data: (fList) => MyntIconTextButton(
+                      label: 'Add filter',
+                      iconAsset: assets.addCircleIcon,
+                      onPressed: () {
+                        if (fList.isEmpty) return;
+                        final nf = [
+                          ..._state.filters,
+                          FundamentalFilter(field: fList.first.key, op: '<'),
+                        ];
                         _setBuilder(_state.copyWith(filters: nf));
                       },
                     ),
-                    if (i < _state.filters.length - 1)
-                      const SizedBox(height: 8),
-                  ],
-                  const SizedBox(height: 12),
-                  Divider(
-                      height: 1,
-                      color: shadcn.Theme.of(context).colorScheme.border),
-                  const SizedBox(height: 12),
-                  _bottomToolbar(),
-                ],
-              ),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
+                  child: fields.when(
+                    loading: () => Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Center(child: MyntLoader.branded()),
+                    ),
+                    error: (e, _) => EmptyState(
+                      kind: EmptyStateKind.error,
+                      title: 'Could not load field catalog',
+                      message: e.toString(),
+                      onRetry: () => ref.invalidate(fundamentalFieldsProvider),
+                    ),
+                    data: (fList) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (_state.filters.isEmpty)
+                          const EmptyState(
+                            kind: EmptyStateKind.empty,
+                            title: 'No filters added yet',
+                            message:
+                                'Click + Add filter above to begin, or pick a preset.',
+                          )
+                        else
+                          // Rows scroll within a capped height in their own gutter;
+                          // the scrollbar stays visible (matches the depth section).
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 280),
+                            child: ScrollConfiguration(
+                              behavior: const MaterialScrollBehavior()
+                                  .copyWith(scrollbars: false),
+                              child: RawScrollbar(
+                                controller: _filtersScroll,
+                                thumbVisibility: true,
+                                thickness: 6,
+                                radius: const Radius.circular(8),
+                                thumbColor: resolveThemeColor(context,
+                                        dark: MyntColors.textSecondaryDark,
+                                        light: MyntColors.textSecondary)
+                                    .withValues(alpha: 0.5),
+                                child: SingleChildScrollView(
+                                  controller: _filtersScroll,
+                                  padding: const EdgeInsets.only(right: 12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      for (int i = 0;
+                                          i < _state.filters.length;
+                                          i++) ...[
+                                        FundamentalFilterRow(
+                                          fields: fList,
+                                          filter: _state.filters[i],
+                                          onChange: (f) {
+                                            final nf = [..._state.filters]
+                                              ..[i] = f;
+                                            _setBuilder(
+                                                _state.copyWith(filters: nf));
+                                          },
+                                          onRemove: () {
+                                            final nf = [..._state.filters]
+                                              ..removeAt(i);
+                                            _setBuilder(
+                                                _state.copyWith(filters: nf));
+                                          },
+                                        ),
+                                        if (i < _state.filters.length - 1)
+                                          const SizedBox(height: 20),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 16),
+                        Divider(
+                            height: 1,
+                            color: shadcn.Theme.of(context).colorScheme.border),
+                        const SizedBox(height: 12),
+                        _bottomToolbar(),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                if (_result != null) _buildResults(),
+              ],
             ),
           ),
-          const SizedBox(height: 20),
-          if (_result != null) _buildResults(),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -202,36 +256,41 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
   // Top bar: title + Save as / Download / Run scan
   // ---------------------------------------------------------------------
   Widget _topBar() {
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 12,
-      runSpacing: 8,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text('Fundamental Screener',
-            style:
-                MyntWebTextStyles.head(context, fontWeight: MyntFonts.bold)),
-        Text('Filter by any combination of fundamental metrics',
-            style: MyntWebTextStyles.caption(context, color: secondary)),
-        const SizedBox(width: 200), // pushes actions right when wrap fits
+        // Title on the left; Expanded pushes the actions to the far right.
+        Expanded(
+          child: Text('Fundamental Screener',
+              style:
+                  MyntWebTextStyles.head(context, fontWeight: MyntFonts.bold)),
+        ),
+        const SizedBox(width: 16),
+        // Action buttons — right-aligned.
         Row(mainAxisSize: MainAxisSize.min, children: [
-          OutlinedButton.icon(
-            icon: const Icon(shadcn.LucideIcons.save, size: 14),
-            label: const Text('Save as…'),
+          // Save as… — outlined blue (the MF "Backtest" button style).
+          MyntButton(
+            type: MyntButtonType.outlined,
+            label: 'Save as…',
+            icon: shadcn.LucideIcons.save,
             onPressed: _save,
           ),
           const SizedBox(width: 8),
-          OutlinedButton.icon(
-            icon: const Icon(shadcn.LucideIcons.download, size: 14),
-            label: const Text('Download'),
-            onPressed: _export,
+          // Download — icon-only hover button (the scanner-detail download style).
+        
+          // Run scan — filled blue primary (the MF "Place Order" button style).
+          MyntButton(
+            type: MyntButtonType.primary,
+            label: 'Run scan',
+            icon: shadcn.LucideIcons.play,
+            onPressed: _run,
           ),
           const SizedBox(width: 8),
-          FilledButton.icon(
-            icon: const Icon(shadcn.LucideIcons.play, size: 14),
-            label: const Text('Run scan'),
-            onPressed: _run,
+
+            _HoverIconButton(
+            icon: Icons.download,
+            tooltip: 'Download',
+            onTap: _export,
           ),
         ]),
       ],
@@ -244,69 +303,57 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
   Widget _bottomToolbar() {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final labelStyle = MyntWebTextStyles.caption(context, color: secondary);
+    final labelStyle = MyntWebTextStyles.body(context,
+         color: secondary);
     final controls = <Widget>[
       Row(mainAxisSize: MainAxisSize.min, children: [
-        Text('Missing data:', style: labelStyle),
-        const SizedBox(width: 6),
-        ChoiceChip(
-          label: const Text('Exclude'),
-          selected: _state.treatNullAs == 'fail',
-          onSelected: (_) =>
-              _setBuilder(_state.copyWith(treatNullAs: 'fail')),
-        ),
-        const SizedBox(width: 4),
-        ChoiceChip(
-          label: const Text('Include'),
-          selected: _state.treatNullAs == 'pass',
-          onSelected: (_) =>
-              _setBuilder(_state.copyWith(treatNullAs: 'pass')),
+        Text('Missing data', style: labelStyle),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 140,
+          child: FilterSelect(
+            value: _state.treatNullAs,
+            hint: 'Missing data',
+            options: const [
+              FilterSelectOption('fail', 'Exclude'),
+              FilterSelectOption('pass', 'Include'),
+            ],
+            onChanged: (v) => _setBuilder(_state.copyWith(treatNullAs: v)),
+          ),
         ),
       ]),
       Row(mainAxisSize: MainAxisSize.min, children: [
         Text('Sort by', style: labelStyle),
-        const SizedBox(width: 6),
+        const SizedBox(width: 8),
         SizedBox(
           width: 200,
-          child: DropdownButtonFormField<String>(
-            isDense: true,
-            isExpanded: true,
+          child: FilterSelect(
             value: _state.orderBy,
-            decoration: _denseFieldDecoration(),
-            items: const [
-              DropdownMenuItem(
-                  value: 'market_cap', child: Text('Market Cap')),
-              DropdownMenuItem(
-                  value: 'pe_trailing', child: Text('P/E (TTM)')),
-              DropdownMenuItem(
-                  value: 'return_on_equity', child: Text('ROE')),
-              DropdownMenuItem(
-                  value: 'dividend_yield', child: Text('Dividend Yield')),
-              DropdownMenuItem(value: 'name', child: Text('Name')),
+            hint: 'Sort by',
+            options: const [
+              FilterSelectOption('market_cap', 'Market Cap'),
+              FilterSelectOption('pe_trailing', 'P/E (TTM)'),
+              FilterSelectOption('return_on_equity', 'ROE'),
+              FilterSelectOption('dividend_yield', 'Dividend Yield'),
+              FilterSelectOption('name', 'Name'),
             ],
-            onChanged: (v) {
-              if (v != null) _setBuilder(_state.copyWith(orderBy: v));
-            },
+            onChanged: (v) => _setBuilder(_state.copyWith(orderBy: v)),
           ),
         ),
       ]),
       Row(mainAxisSize: MainAxisSize.min, children: [
         Text('Dir', style: labelStyle),
-        const SizedBox(width: 6),
+        const SizedBox(width: 8),
         SizedBox(
           width: 110,
-          child: DropdownButtonFormField<String>(
-            isDense: true,
-            isExpanded: true,
+          child: FilterSelect(
             value: _state.orderDir,
-            decoration: _denseFieldDecoration(),
-            items: const [
-              DropdownMenuItem(value: 'desc', child: Text('Desc')),
-              DropdownMenuItem(value: 'asc', child: Text('Asc')),
+            hint: 'Dir',
+            options: const [
+              FilterSelectOption('desc', 'Desc'),
+              FilterSelectOption('asc', 'Asc'),
             ],
-            onChanged: (v) {
-              if (v != null) _setBuilder(_state.copyWith(orderDir: v));
-            },
+            onChanged: (v) => _setBuilder(_state.copyWith(orderDir: v)),
           ),
         ),
       ]),
@@ -314,12 +361,11 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
         Text('Limit', style: labelStyle),
         const SizedBox(width: 6),
         SizedBox(
-          width: 70,
-          child: TextFormField(
-            initialValue: _state.limit.toString(),
+          width: 80,
+          child: FilterTextField(
+            controller: _limitCtrl,
+            hint: 'Limit',
             keyboardType: TextInputType.number,
-            decoration: _denseFieldDecoration(),
-            style: MyntWebTextStyles.body(context),
             onChanged: (v) {
               final n = int.tryParse(v);
               if (n != null) _setBuilder(_state.copyWith(limit: n));
@@ -330,15 +376,19 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
     ];
 
     final actions = Row(mainAxisSize: MainAxisSize.min, children: [
-      OutlinedButton.icon(
-        icon: const Icon(shadcn.LucideIcons.save, size: 14),
-        label: const Text('Save as…'),
+      // Save as… — outlined blue (matches the header).
+      MyntButton(
+        type: MyntButtonType.outlined,
+        label: 'Save as…',
+        icon: shadcn.LucideIcons.save,
         onPressed: _save,
       ),
       const SizedBox(width: 8),
-      FilledButton.icon(
-        icon: const Icon(shadcn.LucideIcons.play, size: 14),
-        label: const Text('Run scan'),
+      // Run scan — filled blue primary (matches the header).
+      MyntButton(
+        type: MyntButtonType.primary,
+        label: 'Run scan',
+        icon: shadcn.LucideIcons.play,
         onPressed: _run,
       ),
     ]);
@@ -360,22 +410,6 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
     );
   }
 
-  InputDecoration _denseFieldDecoration() => InputDecoration(
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide: BorderSide(
-              color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide: BorderSide(
-              color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-      );
-
   // ---------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------
@@ -384,16 +418,15 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
       final needsValue = f.op != 'is_null' && f.op != 'is_not_null';
       if (needsValue && f.value == null) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Set a value for "${f.field}" (${f.op})')),
-        );
+        ResponsiveSnackBar.showWarning(
+            context, 'Set a value for "${f.field}" (${f.op})');
         return;
       }
     }
     _setResult(const AsyncLoading());
     try {
-      final r = await locator<ApiExporter>()
-          .runFundamentalScan(_state.toRequest());
+      final r =
+          await locator<ApiExporter>().runFundamentalScan(_state.toRequest());
       _setResult(AsyncData(r));
     } catch (e, st) {
       _setResult(AsyncError(e, st));
@@ -402,24 +435,107 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
 
   Future<void> _save() async {
     final ctrl = TextEditingController();
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    // Same shell + name field as the MF "Create Strategy" dialog: shadcn.Card →
+    // bordered header (title + close) → MyntFormTextField (40px) with inline
+    // validation → full-width primary Save (the button always fires).
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Save screen'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(hintText: 'Screen name'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Save')),
-        ],
-      ),
+      builder: (_) {
+        String? errorText;
+        return StatefulBuilder(builder: (dCtx, setLocal) {
+          void trySave() {
+            if (ctrl.text.trim().isEmpty) {
+              setLocal(() => errorText = 'Please enter a name');
+              return;
+            }
+            Navigator.of(dCtx).pop(true);
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            child: shadcn.Card(
+              borderRadius: BorderRadius.circular(8),
+              padding: EdgeInsets.zero,
+              child: Container(
+                width: 400,
+                decoration: BoxDecoration(
+                  color: resolveThemeColor(dCtx,
+                      dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header — title + close, bottom border.
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: border)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Save screen',
+                              style: MyntWebTextStyles.title(dCtx,
+                                  color: textPrimary)),
+                          MyntCloseButton(
+                              onPressed: () => Navigator.of(dCtx).pop(false)),
+                        ],
+                      ),
+                    ),
+                    // Content — name field with inline validation.
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Enter a name for this screen',
+                              style: MyntWebTextStyles.body(dCtx,
+                                  color: textPrimary)),
+                          const SizedBox(height: 12),
+                          MyntFormTextField(
+                            controller: ctrl,
+                            placeholder: 'Screen name',
+                            height: 40,
+                            autofocus: true,
+                            onChanged: (_) {
+                              if (errorText != null) {
+                                setLocal(() => errorText = null);
+                              }
+                            },
+                            onSubmitted: (_) => trySave(),
+                          ),
+                          if (errorText != null) ...[
+                            const SizedBox(height: 8),
+                            Text(errorText!,
+                                style: MyntWebTextStyles.caption(dCtx,
+                                    color: resolveThemeColor(dCtx,
+                                        dark: MyntColors.lossDark,
+                                        light: MyntColors.loss))),
+                          ],
+                          const SizedBox(height: 20),
+                          MyntButton(
+                            type: MyntButtonType.primary,
+                            label: 'Save',
+                            isFullWidth: true,
+                            onPressed: trySave,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        });
+      },
     );
     if (ok == true && ctrl.text.trim().isNotEmpty) {
       await locator<ApiExporter>().saveScreen(
@@ -432,6 +548,86 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
       );
       ref.invalidate(savedScreensProvider);
     }
+  }
+
+  /// Watchlist-style delete confirmation: shadcn.Card → header (title + close)
+  /// → centered confirm text → full-width red Delete. Returns true if confirmed.
+  Future<bool> _confirmDelete(String name) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: shadcn.Card(
+          borderRadius: BorderRadius.circular(8),
+          padding: EdgeInsets.zero,
+          child: Container(
+            width: 400,
+            decoration: BoxDecoration(
+              color: resolveThemeColor(dCtx,
+                  dark: MyntColors.dialogDark, light: MyntColors.dialog),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                          color: shadcn.Theme.of(dCtx).colorScheme.border),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Delete saved screen',
+                          style: MyntWebTextStyles.title(dCtx,
+                              color: resolveThemeColor(dCtx,
+                                  dark: MyntColors.textPrimaryDark,
+                                  light: MyntColors.textPrimary))),
+                      MyntCloseButton(
+                          onPressed: () => Navigator.of(dCtx).pop(false)),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Are you sure you want to delete "$name"?',
+                        textAlign: TextAlign.center,
+                        style: MyntWebTextStyles.body(dCtx,
+                            fontWeight: MyntFonts.medium,
+                            color: resolveThemeColor(dCtx,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary)),
+                      ),
+                      const SizedBox(height: 24),
+                      MyntButton(
+                        type: MyntButtonType.primary,
+                        size: MyntButtonSize.large,
+                        label: 'Delete',
+                        isFullWidth: true,
+                        backgroundColor: resolveThemeColor(dCtx,
+                            dark: MyntColors.errorDark,
+                            light: MyntColors.tertiary),
+                        onPressed: () => Navigator.of(dCtx).pop(true),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return ok == true;
   }
 
   Future<void> _export() async {
@@ -449,17 +645,15 @@ class _FundamentalsSubPageState extends ConsumerState<FundamentalsSubPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e')),
-      );
+      ResponsiveSnackBar.showError(context, 'Export failed: $e');
     }
   }
 
   Widget _buildResults() {
     return _result!.when(
-      loading: () => const Padding(
+      loading: () => Padding(
           padding: EdgeInsets.all(16),
-          child: Center(child: CircularProgressIndicator())),
+          child: Center(child: MyntLoader.simple())),
       error: (e, _) => EmptyState(
         kind: EmptyStateKind.error,
         title: 'Run failed',
@@ -536,22 +730,22 @@ class _SectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final border = shadcn.Theme.of(context).colorScheme.border;
     final tertiary = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: border),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(5),
         color: resolveThemeColor(context,
             dark: MyntColors.cardDark, light: MyntColors.card),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 14),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
             Text(label,
-                style: MyntWebTextStyles.caption(context,
-                        fontWeight: MyntFonts.semiBold, color: tertiary)
+                style: MyntWebTextStyles.body(context,
+                        fontWeight: MyntFonts.medium, color: tertiary)
                     .copyWith(letterSpacing: 0.8)),
             const Spacer(),
             if (trailing != null) trailing!,
@@ -559,6 +753,210 @@ class _SectionCard extends StatelessWidget {
           const SizedBox(height: 10),
           child,
         ],
+      ),
+    );
+  }
+}
+
+/// Saved-screen card (MF-strategy style): the screen name + a small meta line
+/// (how many filters it loads and its missing-data rule). Tap the card to apply
+/// it — its filters fill the FILTERS builder below — or the trash to delete it.
+class _SavedScreenCard extends StatefulWidget {
+  final String name;
+  final int filterCount;
+  final String treatNullAs; // 'fail' | 'pass'
+  final VoidCallback onApply;
+  final VoidCallback onDelete;
+  const _SavedScreenCard({
+    required this.name,
+    required this.filterCount,
+    required this.treatNullAs,
+    required this.onApply,
+    required this.onDelete,
+  });
+
+  @override
+  State<_SavedScreenCard> createState() => _SavedScreenCardState();
+}
+
+class _SavedScreenCardState extends State<_SavedScreenCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final textColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final hoverBg = resolveThemeColor(context,
+        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+    final missing = widget.treatNullAs == 'pass' ? 'Include' : 'Exclude';
+    final countLabel =
+        '${widget.filterCount} ${widget.filterCount == 1 ? 'filter' : 'filters'}';
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onApply,
+        child: Container(
+          width: 260,
+          height: 64,
+          padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+          decoration: BoxDecoration(
+            color: _hover
+                ? hoverBg
+                : resolveThemeColor(context,
+                    dark: MyntColors.cardDark, light: MyntColors.card),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: _hover ? MyntColors.primary : border, width: 1),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.bookmark_border, size: 18, color: muted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(widget.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.semiBold, color: textColor)),
+                    const SizedBox(height: 3),
+                    Text('$countLabel · $missing missing',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            MyntWebTextStyles.caption(context, color: muted)),
+                  ],
+                ),
+              ),
+              // Trash — its own gesture wins, so tapping it never also fires
+              // the card's "apply".
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: widget.onDelete,
+                  borderRadius: BorderRadius.circular(4),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.delete_outline, size: 18),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Start-fresh card shown first in the SAVED SCREENS grid — a primary-tinted
+/// "Create new screen" tile. Tapping it clears the FILTERS builder so the user
+/// starts a new screen (then names it via Save as…).
+class _CreateScreenCard extends StatefulWidget {
+  final VoidCallback onTap;
+  const _CreateScreenCard({required this.onTap});
+
+  @override
+  State<_CreateScreenCard> createState() => _CreateScreenCardState();
+}
+
+class _CreateScreenCardState extends State<_CreateScreenCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: 260,
+          height: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: primary.withValues(alpha: _hover ? 0.10 : 0.05),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: primary, width: 1),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.add_circle_outline, size: 18, color: primary),
+              const SizedBox(width: 8),
+              Text('Create new screen',
+                  style: MyntWebTextStyles.body(context,
+                      fontWeight: MyntFonts.semiBold, color: primary)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact icon button with a grey hover circle — the same download/export
+/// button style used in the scanner-detail header.
+class _HoverIconButton extends StatefulWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _HoverIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  State<_HoverIconButton> createState() => _HoverIconButtonState();
+}
+
+class _HoverIconButtonState extends State<_HoverIconButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: widget.tooltip,
+          child: Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hover
+                  ? resolveThemeColor(context,
+                      dark: MyntColors.cardHoverDark,
+                      light: MyntColors.cardHover)
+                  : Colors.transparent,
+            ),
+            child: Icon(
+              widget.icon,
+              size: 20,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.iconDark, light: MyntColors.icon),
+            ),
+          ),
+        ),
       ),
     );
   }

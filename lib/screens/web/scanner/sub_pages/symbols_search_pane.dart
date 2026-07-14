@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/provider/scanner/symbols_provider.dart';
@@ -86,7 +87,7 @@ class _SymbolsSearchPaneState extends ConsumerState<SymbolsSearchPane> {
     }
     final async = ref.watch(symbolSearchProvider(_activeQuery));
     return async.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => Center(child: MyntLoader.branded()),
       error: (e, _) => EmptyState(
         kind: EmptyStateKind.error,
         title: 'Could not search',

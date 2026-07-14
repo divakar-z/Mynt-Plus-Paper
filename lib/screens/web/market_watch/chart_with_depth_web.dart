@@ -291,6 +291,23 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     }
   }
 
+  /// Re-enable any chart iframe left at pointer-events:none by the app's
+  /// dropdown/menu cursor-bleed guard (whose restore can race), so the chart is
+  /// interactive again. Cheap and idempotent — only touches a stuck iframe.
+  void _ensureChartIframesEnabled() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (final f in iframes) {
+        if (f is html.IFrameElement &&
+            f.id.contains('chart-iframe') &&
+            f.style.pointerEvents != 'auto') {
+          f.style.pointerEvents = 'auto';
+          f.style.cursor = '';
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<void> _placeOrderInput(
       BuildContext ctx, GetQuotes? depthData, bool transType) async {
     if (depthData == null) return;
@@ -446,6 +463,38 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         ),
       ),
     );
+  }
+
+  /// Title for the option-chain / depth header.
+  /// - Underlying index or stock (no option type) → its full display name
+  ///   (e.g. "NIFTY 50"), matching the watchlist and search. `symname` is
+  ///   skipped here because for an index that field is the base trading symbol
+  ///   ("NIFTY"), which drops the "50".
+  /// - Option contract (has an option type) → base symbol + expiry + CE/PE
+  ///   (e.g. "NIFTY 24JUL26 CE"), unchanged from before.
+  String _optionChainHeaderTitle(GetQuotes? depthData) {
+    final String option =
+        (depthData?.option ?? widget.wlValue.option).trim();
+    if (option.isEmpty) {
+      final name =
+          (depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol)
+              .replaceAll('-EQ', '')
+              .toUpperCase();
+      return "$name ";
+    }
+    // For BFO the symname is the instrument code ("BSXOPT"), so use the derived
+    // symbol ("SENSEX") as the base; other exchanges keep symname (e.g. NIFTY).
+    final primary =
+        depthData?.exch == "BFO" ? depthData?.symbol : depthData?.symname;
+    final base = (primary ??
+            depthData?.symname ??
+            depthData?.symbol ??
+            depthData?.tsym ??
+            widget.wlValue.symbol)
+        .replaceAll('-EQ', '')
+        .toUpperCase();
+    final exp = depthData?.expDate ?? widget.wlValue.expDate;
+    return "$base $exp $option ";
   }
 
   @override
@@ -713,7 +762,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  "${(depthData?.symname ?? depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol).replaceAll('-EQ', '').toUpperCase()}${depthData?.expDate ?? widget.wlValue.expDate} ${depthData?.option ?? widget.wlValue.option} ",
+                                  _optionChainHeaderTitle(depthData),
                                   overflow: TextOverflow.ellipsis,
                                   style: MyntWebTextStyles.title(
                                     context,
@@ -1213,10 +1262,20 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         // Return placeholder target that the portal follows
         return CompositedTransformTarget(
           link: _chartLayerLink,
-          child: Container(
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            color: Colors.transparent, // Transparent placeholder, chart renders via portal
+          child: MouseRegion(
+            // The chart iframe can be left at pointer-events:none by the app's
+            // dropdown/menu cursor-bleed guard when its restore doesn't fire
+            // (confirmed root cause of the "frozen chart" bug). While disabled,
+            // the iframe passes pointer events through to this placeholder — so
+            // re-enable it the instant the cursor is over the chart. Self-heals
+            // for every chart flow.
+            onEnter: (_) => _ensureChartIframesEnabled(),
+            onHover: (_) => _ensureChartIframesEnabled(),
+            child: Container(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              color: Colors.transparent, // Transparent placeholder, chart renders via portal
+            ),
           ),
         );
       },

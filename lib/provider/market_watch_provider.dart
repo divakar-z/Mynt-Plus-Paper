@@ -1874,7 +1874,8 @@ getOptionawait(String exch, String token) {
               List<String> splitVal = element.dname!.split(" ");
 
               element.symbol = splitVal[0];
-              element.expDate = "${splitVal[1]} ${splitVal[2]}";
+              // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+              element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
               element.option = splitVal.length > 4
                   ? "${splitVal[3]} ${splitVal[4]}"
                   : splitVal[3];
@@ -2120,7 +2121,9 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _scripInfoModel!.dname!.split(" ");
 
             _scripInfoModel!.symbol = splitVal[0];
-            _scripInfoModel!.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+            _scripInfoModel!.expDate =
+                bfoExpiryWithYear(splitVal, _scripInfoModel!.tsym);
             _scripInfoModel!.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2174,7 +2177,8 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _getQuotes.cname!.split(" ");
 
             _getQuotes.symbol = splitVal[0];
-            _getQuotes.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep cname's day+month, append the year from the tsym. (TC_440)
+            _getQuotes.expDate = bfoExpiryWithYear(splitVal, _getQuotes.tsym);
             _getQuotes.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2265,7 +2269,8 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _getQuotes.cname!.split(" ");
 
             _getQuotes.symbol = splitVal[0];
-            _getQuotes.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep cname's day+month, append the year from the tsym. (TC_440)
+            _getQuotes.expDate = bfoExpiryWithYear(splitVal, _getQuotes.tsym);
             _getQuotes.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2446,10 +2451,17 @@ getOptionawait(String exch, String token) {
             if (exch == "BFO" && dname != null) {
               final splitVal = dname.split(" ");
               val.symbol = splitVal[0];
-              val.expDate = "${splitVal[1]} ${splitVal[2]}";
-              val.option = splitVal.length > 4
-                  ? "${splitVal[3]} ${splitVal[4]}"
-                  : splitVal[3];
+              // BFO: keep dname's day+month, append the year from the tsym —
+              // same helper as every other BFO branch. (TC_440)
+              val.expDate = bfoExpiryWithYear(splitVal, tsym);
+              // Search sends BFO futures as "... FUT 0" (empty strike slot); drop
+              // the "0" so it reads just "FUT". Options keep type + strike. (FUT0)
+              val.option = (splitVal.length > 3 &&
+                      splitVal[3].toUpperCase() == "FUT")
+                  ? "FUT"
+                  : (splitVal.length > 4
+                      ? "${splitVal[3]} ${splitVal[4]}"
+                      : splitVal[3]);
             } else {
               final spilitSymbol = spilitTsym(value: tsym ?? "");
               val.symbol = spilitSymbol["symbol"];
@@ -2505,6 +2517,37 @@ getOptionawait(String exch, String token) {
     }
   }
 
+  // Normalises an expiry string to the expiry-list format "DD-MON-YYYY"
+  // (e.g. "14 JUL 26" -> "14-JUL-2026"), so a selected contract's expiry can be
+  // matched against the option expiry list regardless of separators / year length.
+  String _normalizeExpiry(String e) {
+    final parts = e.trim().toUpperCase().split(RegExp(r'[\s\-]+'));
+    if (parts.length != 3) return e.trim().toUpperCase();
+    final day = parts[0].padLeft(2, '0');
+    final mon = parts[1];
+    var yr = parts[2];
+    if (yr.length == 2) yr = '20$yr';
+    return '$day-$mon-$yr';
+  }
+
+  // When the option chain is opened from a specific option contract, returns
+  // that contract's expiry (in the expiry-list format) so the chain opens on the
+  // selected contract's expiry instead of the nearest. Returns null for
+  // indices/stocks (no own expiry), for expiries not in the list, or when the
+  // current quote isn't this token (guards against a stale quote from another
+  // scrip, so only a genuine contract-open is ever affected). (TC_408)
+  String? _matchedContractExpiry(String token) {
+    if (_getQuotes.token?.toString() != token) return null;
+    final raw = _getQuotes.expDate;
+    if (raw == null || raw.trim().isEmpty) return null;
+    final target = _normalizeExpiry(raw);
+    for (final e in (_optExp ?? [])) {
+      final exd = e.exd;
+      if (exd != null && _normalizeExpiry(exd) == target) return exd;
+    }
+    return null;
+  }
+
   // Fetching data from the api and stored in a variable
 
   Future fetchLinkeScrip(
@@ -2534,6 +2577,18 @@ getOptionawait(String exch, String token) {
 
           _optionExch = storeQuotes[token]?['l']['optionExch'];
           _selectedTradeSym = storeQuotes[token]?['l']['selectedTradeSym'];
+          // If opened from a specific option contract, prefer that contract's
+          // expiry over the nearest and re-derive its exch/tradeSym (TC_408).
+          final matchedExp = _matchedContractExpiry(token);
+          if (matchedExp != null) {
+            _selectedExpDate = matchedExp;
+            for (var i = 0; i < _optExp!.length; i++) {
+              if (_selectedExpDate == _optExp![i].exd) {
+                _optionExch = _optExp![i].exch;
+                _selectedTradeSym = _optExp![i].tsym;
+              }
+            }
+          }
         }
         if (_fut!.isNotEmpty) {
           _futToken = "${_fut![0].token}";
@@ -2606,6 +2661,11 @@ getOptionawait(String exch, String token) {
 
             // print("########### $_sortedDate");
             _selectedExpDate = _sortedDate[0];
+            // If opened from a specific option contract, default the expiry to
+            // that contract's expiry instead of the nearest (TC_408). Falls back
+            // to nearest for indices/stocks or unknown expiries.
+            final matchedExp = _matchedContractExpiry(token);
+            if (matchedExp != null) _selectedExpDate = matchedExp;
             for (var i = 0; i < _optExp!.length; i++) {
               if (_selectedExpDate == _optExp![i].exd) {
                 _optionExch = _optExp![i].exch;

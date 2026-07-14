@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 import 'package:mynt_plus/models/scanner_model/custom_scan.dart';
 import 'package:mynt_plus/models/scanner_model/financials.dart';
+import 'package:mynt_plus/models/scanner_model/fundamental_categories.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_field.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_score.dart';
@@ -10,6 +11,7 @@ import 'package:mynt_plus/models/scanner_model/ohlcv.dart';
 import 'package:mynt_plus/models/scanner_model/peers.dart';
 import 'package:mynt_plus/models/scanner_model/performance.dart';
 import 'package:mynt_plus/models/scanner_model/saved_screen.dart';
+import 'package:mynt_plus/models/scanner_model/scan_details.dart';
 import 'package:mynt_plus/models/scanner_model/scan_explain.dart';
 import 'package:mynt_plus/models/scanner_model/scan_result.dart';
 import 'package:mynt_plus/models/scanner_model/scanner.dart' as model;
@@ -210,6 +212,16 @@ mixin StockScannerApi on ApiCore {
     return (j as List).map((e) => e.toString()).toList();
   }
 
+  /// Every built-in scanner this symbol matches, each with its own result
+  /// `columns` and the symbol's computed `values` — backs the expandable
+  /// "Scans" tab. `as_of` defaults to the symbol's latest scan date.
+  Future<ScanDetailsResponse> fetchScanDetails(String ticker,
+      {String? asOf}) async {
+    final j = await _get('/symbols/$ticker/scan-details',
+        query: {if (asOf != null) 'as_of': asOf});
+    return ScanDetailsResponse.fromJson(j as Map<String, dynamic>);
+  }
+
   Future<SymbolInfo> fetchSymbolInfo(String ticker) async {
     final j = await _get('/symbols/$ticker/info');
     return SymbolInfo.fromJson(j as Map<String, dynamic>);
@@ -366,6 +378,13 @@ mixin StockScannerApi on ApiCore {
         .cast<Map<String, dynamic>>()
         .map(FundamentalPreset.fromJson)
         .toList();
+  }
+
+  /// Sector + industry option lists for the Sector / Industry multiselect
+  /// filters — global reference data, fetched once and cached by the provider.
+  Future<FundamentalCategories> fetchFundamentalCategories() async {
+    final j = await _get('/scans/fundamental/categories');
+    return FundamentalCategories.fromJson(j as Map<String, dynamic>);
   }
 
   Future<FundamentalScanResponse> runFundamentalScan(

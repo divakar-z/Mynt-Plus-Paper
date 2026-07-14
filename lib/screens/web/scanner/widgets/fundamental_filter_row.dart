@@ -1,16 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_field.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/filter_inputs.dart';
+import 'package:mynt_plus/provider/scanner/fundamentals_provider.dart';
 import 'package:mynt_plus/screens/web/scanner/sub_pages/fundamentals_builder_state.dart';
 
-class FundamentalFilterRow extends StatefulWidget {
+class FundamentalFilterRow extends ConsumerStatefulWidget {
   final List<FundamentalField> fields;
   final FundamentalFilter filter;
   final ValueChanged<FundamentalFilter> onChange;
   final VoidCallback onRemove;
+
+  /// When true, render the field / operator / value controls stacked
+  /// vertically (for the redesigned left filter sidebar) instead of one
+  /// horizontal row. The current screen keeps the default horizontal layout.
+  final bool stacked;
+
+  /// When true (only meaningful with [stacked]), drop the field dropdown and
+  /// remove-× and render only the condition (operator + value / multiselect).
+  /// Used by the metric accordion, where the field is fixed by the row itself.
+  final bool hideField;
 
   const FundamentalFilterRow({
     super.key,
@@ -18,13 +31,16 @@ class FundamentalFilterRow extends StatefulWidget {
     required this.filter,
     required this.onChange,
     required this.onRemove,
+    this.stacked = false,
+    this.hideField = false,
   });
 
   @override
-  State<FundamentalFilterRow> createState() => _FundamentalFilterRowState();
+  ConsumerState<FundamentalFilterRow> createState() =>
+      _FundamentalFilterRowState();
 }
 
-class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
+class _FundamentalFilterRowState extends ConsumerState<FundamentalFilterRow> {
   late final TextEditingController _v1 = TextEditingController();
   late final TextEditingController _v2 = TextEditingController();
   late final TextEditingController _years = TextEditingController();
@@ -58,39 +74,49 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
   bool get _isPct => _field?.dtype == 'pct';
   bool get _isMultiYear => isMultiYearField(widget.filter.field);
 
-  InputDecoration _box() => InputDecoration(
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide:
-              BorderSide(color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide:
-              BorderSide(color: shadcn.Theme.of(context).colorScheme.border),
-        ),
-      );
-
   @override
   Widget build(BuildContext context) {
     final field = _field;
+    if (widget.stacked) return _buildStacked(field);
+    // Sector / Industry: no operator, no typing — a searchable multiselect
+    // that builds an `in` filter from the checked values.
+    if (widget.filter.field == 'sector' ||
+        widget.filter.field == 'industry') {
+      return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        SizedBox(width: 200, child: _fieldDropdown()),
+        const SizedBox(width: 8),
+        SizedBox(width: 320, child: _categoryMultiSelect()),
+        const SizedBox(width: 4),
+        IconButton(
+          onPressed: widget.onRemove,
+          icon: const Icon(shadcn.LucideIcons.x, size: 14),
+          tooltip: 'Remove',
+          visualDensity: VisualDensity.compact,
+        ),
+      ]);
+    }
     final ops = field == null
         ? const <String>[]
         : validOpsForDtype(field.dtype, multiYear: _isMultiYear);
-    // Row + Expanded for the value column → no overflow regardless of viewport.
+    final op = widget.filter.op;
+    // Fixed-width value column (like the dropdowns) instead of stretching the
+    // whole row; `between` / list ops get a little more room.
+    final valueW = op == 'between'
+        ? 320.0
+        : (op == 'in' || op == 'not_in')
+            ? 280.0
+            : 200.0;
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       SizedBox(width: 200, child: _fieldDropdown()),
       const SizedBox(width: 8),
       SizedBox(width: 200, child: _opDropdown(ops)),
       const SizedBox(width: 8),
-      Expanded(child: _valueInputs(field)),
+      SizedBox(width: valueW, child: _valueInputs(field)),
       if (_isMultiYear) ...[
         const SizedBox(width: 8),
         SizedBox(width: 78, child: _yearsInput()),
       ],
+      const SizedBox(width: 4),
       IconButton(
         onPressed: widget.onRemove,
         icon: const Icon(shadcn.LucideIcons.x, size: 14),
@@ -100,59 +126,129 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
     ]);
   }
 
+  /// Compact layout for the redesigned left filter sidebar: the field on its
+  /// own line with the remove ×, then the operator + value (+ optional years)
+  /// together on one line below — half the height of a fully stacked row.
+  Widget _buildStacked(FundamentalField? field) {
+    final isCat =
+        widget.filter.field == 'sector' || widget.filter.field == 'industry';
+    final ops = field == null
+        ? const <String>[]
+        : validOpsForDtype(field.dtype, multiYear: _isMultiYear);
+    final body = _conditionBody(field, ops, isCat);
+    // Accordion mode: the field is fixed by the row it lives under, so we drop
+    // the field dropdown / remove-× and render only the condition.
+    if (widget.hideField) return body;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(children: [
+          Expanded(child: _fieldDropdown()),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed: widget.onRemove,
+            icon: const Icon(shadcn.LucideIcons.x, size: 14),
+            tooltip: 'Remove',
+            visualDensity: VisualDensity.compact,
+          ),
+        ]),
+        const SizedBox(height: 8),
+        body,
+      ],
+    );
+  }
+
+  /// The condition portion of a stacked row: the category multiselect, a bare
+  /// operator (for null-checks), or operator + value (+ optional years) on one
+  /// compact line.
+  Widget _conditionBody(
+      FundamentalField? field, List<String> ops, bool isCat) {
+    if (isCat) return _categoryMultiSelect();
+    final op = widget.filter.op;
+    if (op == 'is_null' || op == 'is_not_null') return _opDropdown(ops);
+    // Op and value share the popover row equally — same height, same width —
+    // so the two dropdowns read as a matched pair. Inside popovers they use
+    // the compact height ([_fieldHeight]); elsewhere they keep the default 40.
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: _opDropdown(ops)),
+        const SizedBox(width: 8),
+        Expanded(child: _valueInputs(field)),
+        if (_isMultiYear && op != 'min_years') ...[
+          const SizedBox(width: 8),
+          SizedBox(width: 54, child: _yearsInput()),
+        ],
+      ],
+    );
+  }
+
+  /// Compact 34px height for op/value dropdowns inside the chip popover;
+  /// the full 40px height elsewhere so we don't shrink the standalone
+  /// FundamentalFilterRow rendered in the old sidebar layout.
+  double get _fieldHeight => widget.stacked ? 34 : 40;
+
   Widget _fieldDropdown() {
     final byGroup = <String, List<FundamentalField>>{};
     for (final f in widget.fields) {
       byGroup.putIfAbsent(f.group, () => []).add(f);
     }
-    return DropdownButtonFormField<String>(
-      isDense: true,
-      decoration: _box(),
-      value: widget.filter.field.isEmpty ? null : widget.filter.field,
-      hint: Text('Field…', style: MyntWebTextStyles.body(context)),
-      style: MyntWebTextStyles.body(context),
-      items: [
-        for (final entry in byGroup.entries) ...[
-          DropdownMenuItem(
-            enabled: false,
-            value: '__g_${entry.key}',
-            child: _GroupHeader(label: entry.key),
-          ),
-          for (final f in entry.value)
-            DropdownMenuItem(value: f.key, child: Text(f.label)),
-        ],
+    final opts = <FilterSelectOption>[
+      for (final entry in byGroup.entries) ...[
+        FilterSelectOption('', entry.key, isHeader: true),
+        for (final f in entry.value) FilterSelectOption(f.key, f.label),
       ],
+    ];
+    return FilterSelect(
+      value: widget.filter.field.isEmpty ? null : widget.filter.field,
+      hint: 'Field…',
+      options: opts,
       onChanged: (v) {
-        if (v == null || v.startsWith('__g_')) return;
-        widget.onChange(FundamentalFilter(field: v, op: widget.filter.op));
+        // Sector / Industry default to the `in` operator (multiselect); every
+        // other field keeps the current operator.
+        final isCat = v == 'sector' || v == 'industry';
+        widget.onChange(FundamentalFilter(
+            field: v, op: isCat ? 'in' : widget.filter.op));
       },
     );
   }
 
+  Widget _categoryMultiSelect() {
+    final cats = ref.watch(fundamentalCategoriesProvider);
+    final options = cats.maybeWhen(
+      data: (c) =>
+          widget.filter.field == 'sector' ? c.sectors : c.industries,
+      orElse: () => const <String>[],
+    );
+    final selected = widget.filter.value is List
+        ? (widget.filter.value as List).map((e) => e.toString()).toList()
+        : const <String>[];
+    return FilterMultiSelect(
+      options: options,
+      selected: selected,
+      hint: widget.filter.field == 'sector'
+          ? 'Select sectors…'
+          : 'Select industries…',
+      onChanged: (list) => widget.onChange(FundamentalFilter(
+        field: widget.filter.field,
+        op: 'in',
+        value: list.isEmpty ? null : list,
+      )),
+    );
+  }
+
   Widget _opDropdown(List<String> ops) {
-    return DropdownButtonFormField<String>(
-      isDense: true,
-      decoration: _box(),
+    return FilterSelect(
       value: ops.contains(widget.filter.op) ? widget.filter.op : null,
-      hint: Text('Op', style: MyntWebTextStyles.body(context)),
-      style: MyntWebTextStyles.body(context),
-      isExpanded: true,
-      items: [
-        for (final o in ops)
-          DropdownMenuItem(
-            value: o,
-            child: Text(opLabel(o), overflow: TextOverflow.ellipsis),
-          ),
-      ],
-      onChanged: (v) {
-        if (v == null) return;
-        widget.onChange(FundamentalFilter(
-          field: widget.filter.field,
-          op: v,
-          value: widget.filter.value,
-          years: widget.filter.years,
-        ));
-      },
+      hint: 'Op',
+      height: _fieldHeight,
+      options: [for (final o in ops) FilterSelectOption(o, opLabel(o))],
+      onChanged: (v) => widget.onChange(FundamentalFilter(
+        field: widget.filter.field,
+        op: v,
+        value: widget.filter.value,
+        years: widget.filter.years,
+      )),
     );
   }
 
@@ -166,7 +262,7 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
         Expanded(child: _numericInput(_v1, suffix: _isPct ? '%' : null)),
         const SizedBox(width: 4),
         Text('to',
-            style: MyntWebTextStyles.caption(context,
+            style: MyntWebTextStyles.body(context,
                 color: resolveThemeColor(context,
                     dark: MyntColors.textSecondaryDark,
                     light: MyntColors.textSecondary))),
@@ -175,10 +271,10 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
       ]);
     }
     if (op == 'in' || op == 'not_in') {
-      return TextField(
+      return FilterTextField(
         controller: _v1,
-        style: MyntWebTextStyles.body(context),
-        decoration: _box().copyWith(hintText: 'a, b, c'),
+        hint: 'a, b, c',
+        height: _fieldHeight,
         onChanged: (txt) => widget.onChange(FundamentalFilter(
           field: widget.filter.field,
           op: op,
@@ -212,29 +308,25 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
   }
 
   Widget _numericInput(TextEditingController c, {String? suffix}) {
-    return TextField(
+    return FilterTextField(
       controller: c,
+      hint: 'value',
+      suffix: suffix,
+      height: _fieldHeight,
       keyboardType:
           const TextInputType.numberWithOptions(decimal: true, signed: true),
-      style: MyntWebTextStyles.body(context),
-      decoration: _box().copyWith(
-        hintText: 'value',
-        suffixText: suffix,
-        suffixStyle: MyntWebTextStyles.caption(context,
-            color: resolveThemeColor(context,
-                dark: MyntColors.textSecondaryDark,
-                light: MyntColors.textSecondary)),
-      ),
+      inputFormatters: TextInputValidators.signedDecimal(),
       onChanged: (_) => _emit(),
     );
   }
 
   Widget _yearsInput() {
-    return TextField(
+    return FilterTextField(
       controller: _years,
+      hint: 'yrs',
+      height: _fieldHeight,
       keyboardType: TextInputType.number,
-      style: MyntWebTextStyles.body(context),
-      decoration: _box().copyWith(hintText: 'yrs'),
+      inputFormatters: TextInputValidators.digitsOnly(),
       onChanged: (_) => _emit(),
     );
   }
@@ -268,32 +360,5 @@ class _FundamentalFilterRowState extends State<FundamentalFilterRow> {
       value: value,
       years: int.tryParse(_years.text),
     ));
-  }
-}
-
-/// Tinted, uppercase group header used inside grouped DropdownMenuItem lists
-/// so sections (Valuation / Profitability / ...) read as separators rather
-/// than as another row.
-class _GroupHeader extends StatelessWidget {
-  final String label;
-  const _GroupHeader({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final tint = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final tertiary = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: -16),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      color: tint,
-      child: Text(
-        label.toUpperCase(),
-        style: MyntWebTextStyles.caption(context,
-                fontWeight: MyntFonts.semiBold, color: tertiary)
-            .copyWith(letterSpacing: 1.0),
-      ),
-    );
   }
 }
