@@ -3311,6 +3311,30 @@ class _IndicatorSettingsDialogState
     Navigator.of(context).pop();
   }
 
+  // Picks the control for a schema param: dropdown for enums, switch for
+  // booleans, stepper for plain numbers. All three read/write the same numeric
+  // `_values` store (enum = option index, bool = 0/1).
+  Widget _paramControl(IndicatorParam p) {
+    if (p.isEnum) {
+      return _ParamDropdown(
+        param: p,
+        value: _values[p.key] ?? p.defaultValue,
+        onChanged: (v) => setState(() => _values[p.key] = v),
+      );
+    }
+    if (p.isBool) {
+      return _ParamSwitch(
+        value: (_values[p.key] ?? p.defaultValue) >= 1,
+        onChanged: (v) => setState(() => _values[p.key] = v ? 1 : 0),
+      );
+    }
+    return _ParamStepper(
+      value: _values[p.key] ?? p.defaultValue,
+      param: p,
+      onChanged: (v) => setState(() => _values[p.key] = v),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cfg = _findCfg();
@@ -3431,11 +3455,7 @@ class _IndicatorSettingsDialogState
                   _SettingsRow(
                     label: p.label,
                     description: p.description,
-                    control: _ParamStepper(
-                      value: _values[p.key] ?? p.defaultValue,
-                      param: p,
-                      onChanged: (v) => setState(() => _values[p.key] = v),
-                    ),
+                    control: _paramControl(p),
                   ),
                 ]
               else if (useGenericPeriod) ...[
@@ -3749,6 +3769,114 @@ class _StepButton extends StatelessWidget {
           child: Icon(icon, size: 16, color: color),
         ),
       ),
+    );
+  }
+}
+
+// Dropdown control for enum params. Displays the selected option's label and
+// opens a menu; stores the chosen option INDEX back through [onChanged].
+class _ParamDropdown extends StatelessWidget {
+  final IndicatorParam param;
+  final num value; // selected option index
+  final ValueChanged<num> onChanged;
+  const _ParamDropdown({
+    required this.param,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final options = param.options ?? const <IndicatorOption>[];
+    if (options.isEmpty) return const SizedBox.shrink();
+    final idx = value.toInt().clamp(0, options.length - 1);
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.inputBgDark, light: MyntColors.inputBg);
+    final stroke = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final surface = resolveThemeColor(context,
+        dark: MyntColors.overlayBgDark, light: MyntColors.overlayBg);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    return PopupMenuButton<int>(
+      tooltip: '',
+      initialValue: idx,
+      color: surface,
+      elevation: 8,
+      position: PopupMenuPosition.under,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: stroke, width: 1),
+      ),
+      onSelected: (i) {
+        if (i != idx) onChanged(i);
+      },
+      itemBuilder: (context) => [
+        for (int i = 0; i < options.length; i++)
+          PopupMenuItem<int>(
+            value: i,
+            height: 40,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    options[i].label,
+                    style: i == idx
+                        ? MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.semiBold)
+                        : MyntWebTextStyles.body(context),
+                  ),
+                ),
+                if (i == idx) Icon(Icons.check, size: 16, color: accent),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        width: 168,
+        height: 36,
+        padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: stroke, width: 1),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                options[idx].label,
+                overflow: TextOverflow.ellipsis,
+                style: MyntWebTextStyles.body(context,
+                    fontWeight: MyntFonts.semiBold),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.expand_more, size: 16, color: muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Switch control for boolean params (stored as 0/1).
+class _ParamSwitch extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  const _ParamSwitch({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    return Switch(
+      value: value,
+      onChanged: onChanged,
+      activeTrackColor: accent,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
   }
 }

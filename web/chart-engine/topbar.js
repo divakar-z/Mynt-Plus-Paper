@@ -1011,19 +1011,6 @@
           'Time until current bar closes',
           _switch(v.showBarCountdown,
               (x) => _patchView({ showBarCountdown: x }))));
-      body.appendChild(_row('Key levels (pivots)',
-          'PP, R1–R3, S1–S3 from prev session',
-          _switch(v.showKeyLevels,
-              (x) => _patchView({ showKeyLevels: x }))));
-      if (v.showKeyLevels) {
-        body.appendChild(_row('Pivot variant',
-            'Classical, Fibonacci or Camarilla',
-            _segmented(v.pivotVariant, [
-              { value: 'classical', label: 'Classical' },
-              { value: 'fibonacci', label: 'Fibonacci' },
-              { value: 'camarilla', label: 'Camarilla' },
-            ], (x) => _patchView({ pivotVariant: x }))));
-      }
       body.appendChild(_row('Auto-pattern',
           'HH / HL / LH / LL labels',
           _switch(v.showAutoPattern,
@@ -2337,6 +2324,7 @@
     { kind: 'dpo',      label: 'DPO',    fullName: 'Detrended Price Oscillator',  category: 'momentum' },
     { kind: 'pvt',      label: 'PVT',    fullName: 'Price Volume Trend',          category: 'momentum' },
     { kind: 'ad',       label: 'A/D',    fullName: 'Accumulation/Distribution',   category: 'momentum' },
+    { kind: 'pivots',   label: 'PIV',    fullName: 'Pivot Points',                category: 'trend' },
   ];
   const INDICATOR_CATEGORIES = [
     { value: 'all',        label: 'All' },
