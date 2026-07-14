@@ -3147,10 +3147,7 @@ class Chart {
     // from the series.
     const _rebinAxis = this.candleStyle === 'renko'
         || this._isRebinnedStyle(this.candleStyle);
-    if (!_rebinAxis) {
-      this._drawKeyLevels(plot, lo, hi, priceToY);
-    }
-    // Phase 23.4 — Volume Profile gutter histogram (after key levels, before H/L markers).
+    // Phase 23.4 — Volume Profile gutter histogram (before H/L markers).
     this._drawVolumeProfile(plot, lo, hi, priceToY);
     if (!_rebinAxis) {
       this._drawHighLowMarkers(plot, priceToY, visible, firstVisibleAbs);

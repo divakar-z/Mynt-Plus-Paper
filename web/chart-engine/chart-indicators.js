@@ -41,30 +41,33 @@ class _ChartIndicatorsMixin {
     return out;
   }
 
-  _computeRSI(period) {
-    const n = this.candles.length;
-    const out = new Array(n).fill(null);
-    if (period <= 0 || n < period + 1) return out;
-    let avgGain = 0, avgLoss = 0;
-    for (let i = 1; i <= period; i++) {
-      const ch = this.candles[i].c - this.candles[i - 1].c;
-      if (ch >= 0) avgGain += ch;
-      else avgLoss -= ch;
+  // RSI source series — order MUST match indicator_schema.dart RSI 'source'
+  // options: 0 close, 1 open, 2 high, 3 low, 4 hl2, 5 hlc3, 6 ohlc4.
+  _rsiSourceSeries(srcIdx) {
+    const C = this.candles;
+    switch (+srcIdx | 0) {
+      case 1:  return C.map((c) => c.o);
+      case 2:  return C.map((c) => c.h);
+      case 3:  return C.map((c) => c.l);
+      case 4:  return C.map((c) => (c.h + c.l) / 2);
+      case 5:  return C.map((c) => (c.h + c.l + c.c) / 3);
+      case 6:  return C.map((c) => (c.o + c.h + c.l + c.c) / 4);
+      default: return C.map((c) => c.c);
     }
-    avgGain /= period;
-    avgLoss /= period;
-    const rs0 = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs0);
-    for (let i = period + 1; i < n; i++) {
-      const ch = this.candles[i].c - this.candles[i - 1].c;
-      const g = ch > 0 ? ch : 0;
-      const l = ch < 0 ? -ch : 0;
-      avgGain = (avgGain * (period - 1) + g) / period;
-      avgLoss = (avgLoss * (period - 1) + l) / period;
-      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-      out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+  }
+
+  // Accepts either a number (legacy: close-based RSI, used internally by
+  // StochRSI) or an indicator-like object `{ period, params }` so the schema
+  // dialog can pick the source series. Close-source values are identical to
+  // the old close-only implementation (both use Wilder smoothing).
+  _computeRSI(arg) {
+    if (arg && typeof arg === 'object') {
+      const period = Math.max(1, (+arg.period || 14) | 0);
+      const p = arg.params || {};
+      return this._rsiOnSeries(this._rsiSourceSeries(p.source), period);
     }
-    return out;
+    const period = Math.max(1, (+arg || 14) | 0);
+    return this._rsiOnSeries(this.candles.map((c) => c.c), period);
   }
 
   // ---------- Phase 11 ----------
@@ -544,6 +547,69 @@ class _ChartIndicatorsMixin {
       avgU = (avgU * (n - 1) + u) / n;
       avgD = (avgD * (n - 1) + dn) / n;
       out[i] = avgD === 0 ? 100 : 100 - 100 / (1 + avgU / avgD);
+    }
+    return out;
+  }
+
+  // Moving average over an arbitrary (possibly null-prefixed) numeric series —
+  // used for the RSI smoothing line. type: sma|ema|smma|wma|vwma. `vols` is
+  // required for vwma. EMA/SMMA are seeded with the SMA of the first `len`
+  // samples (TradingView convention).
+  _seriesMA(type, src, len, vols) {
+    const n = src.length;
+    const out = new Array(n).fill(null);
+    len = Math.max(1, len | 0);
+    let start = 0;
+    while (start < n && src[start] == null) start++;
+    if (n - start < len) return out;
+    if (type === 'ema' || type === 'smma') {
+      const alpha = type === 'ema' ? 2 / (len + 1) : 1 / len;
+      let seed = 0;
+      for (let k = 0; k < len; k++) seed += src[start + k];
+      let prev = seed / len;
+      out[start + len - 1] = prev;
+      for (let i = start + len; i < n; i++) {
+        const v = src[i];
+        if (v == null) { out[i] = prev; continue; }
+        prev = prev + alpha * (v - prev);
+        out[i] = prev;
+      }
+      return out;
+    }
+    for (let i = start + len - 1; i < n; i++) {
+      let num = 0, den = 0, ok = true;
+      for (let k = 0; k < len; k++) {
+        const idx = i - k;
+        const v = src[idx];
+        if (v == null) { ok = false; break; }
+        if (type === 'wma') { const w = len - k; num += v * w; den += w; }
+        else if (type === 'vwma') {
+          const vol = (vols && vols[idx] != null) ? vols[idx] : 0;
+          num += v * vol; den += vol;
+        } else { num += v; den += 1; }
+      }
+      if (ok && den > 0) out[i] = num / den;
+    }
+    return out;
+  }
+
+  // Rolling population stdev over a null-prefixed series (RSI Bollinger bands).
+  _seriesStdev(src, len) {
+    const n = src.length;
+    const out = new Array(n).fill(null);
+    len = Math.max(1, len | 0);
+    let start = 0;
+    while (start < n && src[start] == null) start++;
+    for (let i = start + len - 1; i < n; i++) {
+      let sum = 0, sumSq = 0, ok = true;
+      for (let k = 0; k < len; k++) {
+        const v = src[i - k];
+        if (v == null) { ok = false; break; }
+        sum += v; sumSq += v * v;
+      }
+      if (!ok) continue;
+      const m = sum / len;
+      out[i] = Math.sqrt(Math.max(0, sumSq / len - m * m));
     }
     return out;
   }
@@ -1137,6 +1203,10 @@ class _ChartIndicatorsMixin {
 
       for (const ind of this._indicators) {
         if (ind.hidden) continue;
+        if (ind.kind === 'pivots') {
+          this._drawPivotsIndicator(ind, plot, lo, hi, priceToY);
+          continue;
+        }
         if (ind.kind === 'bb') {
           const bands = this._computeBB(ind);
           const drawSeries = (values, lineW) => {
@@ -2208,7 +2278,7 @@ class _ChartIndicatorsMixin {
   // we use the MACD line for the hover chip, not signal/histogram).
   _subPaneValueAt(sp, idx) {
     const k = sp.kind;
-    if (k === 'rsi')      return (this._computeRSI(sp.period) || [])[idx];
+    if (k === 'rsi')      return (this._computeRSI(sp) || [])[idx];
     if (k === 'mfi')      return (this._computeMFI(sp.period) || [])[idx];
     if (k === 'cmf')      return (this._computeCMF(sp.period) || [])[idx];
     if (k === 'wr')       return (this._computeWilliamsR(sp.period) || [])[idx];
@@ -2605,7 +2675,7 @@ class _ChartIndicatorsMixin {
     const visible = this._visibleCandles();
     if (visible.length === 0) { ctx.restore(); return; }
     const firstAbs = this.candles.indexOf(visible[0]);
-    const values = this._computeRSI(sp.period);
+    const values = this._computeRSI(sp);
     ctx.strokeStyle = sp.color || '#8B5CF6';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
@@ -2620,6 +2690,47 @@ class _ChartIndicatorsMixin {
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+    // Smoothing MA line over the RSI (the "SMA-based RSI"). Type order matches
+    // indicator_schema.dart RSI 'smoothingType'; a missing value defaults to SMA.
+    const _sm = sp.params || {};
+    const _smRaw = _sm.smoothingType;
+    const _smType = (_smRaw == null)
+        ? 'sma'
+        : (['none', 'sma', 'sma_bb', 'ema', 'smma', 'wma', 'vwma'][(+_smRaw | 0)] || 'none');
+    if (_smType !== 'none') {
+      const _smLen = Math.max(1, (+_sm.smoothingLength || 14) | 0);
+      const _maType = _smType === 'sma_bb' ? 'sma' : _smType;
+      const _maVals = this._seriesMA(
+          _maType, values, _smLen, this.candles.map((c) => c.v));
+      const _plot = (arr, color, dash) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash(dash || []);
+        ctx.beginPath();
+        let st = false;
+        for (let i = 0; i < visible.length; i++) {
+          const absIdx = firstAbs + i;
+          const v = arr[absIdx];
+          if (v == null) continue;
+          const x = this._candleXCenter(absIdx, sp);
+          const y = yFor(v);
+          if (!st) { ctx.moveTo(x, y); st = true; } else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      };
+      _plot(_maVals, '#F5A623');
+      if (_smType === 'sma_bb') {
+        const _mult = +_sm.bbStdDev || 2;
+        const _sd = this._seriesStdev(values, _smLen);
+        const _up = _maVals.map((m, i) =>
+            (m == null || _sd[i] == null) ? null : m + _mult * _sd[i]);
+        const _lo = _maVals.map((m, i) =>
+            (m == null || _sd[i] == null) ? null : m - _mult * _sd[i]);
+        _plot(_up, 'rgba(245,166,35,0.55)', [4, 3]);
+        _plot(_lo, 'rgba(245,166,35,0.55)', [4, 3]);
+      }
+    }
     ctx.font = '600 10px Geist, sans-serif';
     ctx.fillStyle = sp.color || '#8B5CF6';
     ctx.textBaseline = 'middle';

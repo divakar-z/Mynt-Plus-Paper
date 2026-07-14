@@ -514,7 +514,10 @@ class _ChartOverlaysMixin {
     return spans;
   }
 
-  _pivotsFor(variant, h, l, c) {
+  // Pivot level formulas. `o` (prior open) is only needed by DeMark. Variant
+  // strings match indicator_schema.dart PIVOT option order (classical /
+  // fibonacci / camarilla / woodie / demark). DeMark returns only pp/r1/s1.
+  _pivotsFor(variant, h, l, c, o) {
     if (!isFinite(h) || !isFinite(l) || !isFinite(c)) return null;
     const pp = (h + l + c) / 3;
     const range = h - l;
@@ -532,11 +535,130 @@ class _ChartOverlaysMixin {
         s1: c - range * 1.1 / 12, s2: c - range * 1.1 / 6, s3: c - range * 1.1 / 4,
       };
     }
+    if (variant === 'woodie') {
+      const wp = (h + l + 2 * c) / 4;
+      return {
+        pp: wp,
+        r1: 2 * wp - l, r2: wp + range, r3: h + 2 * (wp - l),
+        s1: 2 * wp - h, s2: wp - range, s3: l - 2 * (h - wp),
+      };
+    }
+    if (variant === 'demark') {
+      const open = isFinite(o) ? o : c;
+      let x;
+      if (c < open) x = h + 2 * l + c;
+      else if (c > open) x = 2 * h + l + c;
+      else x = h + l + 2 * c;
+      return { pp: x / 4, r1: x / 2 - l, s1: x / 2 - h };
+    }
     return {
       pp,
       r1: 2 * pp - l, r2: pp + range, r3: h + 2 * (pp - l),
       s1: 2 * pp - h, s2: pp - range, s3: l - 2 * (h - pp),
     };
+  }
+
+  // Group this.candles into per-period spans (IST) for the pivot indicator. tf
+  // 'weekly' groups Mon–Sun; otherwise per calendar day. Shape
+  // { startIdx, endIdx, o, h, l, c } — `o` is carried for DeMark.
+  _pivotSpans(tf) {
+    const bars = this.candles;
+    const spans = [];
+    if (!bars || bars.length === 0) return spans;
+    const DAY_MS = 86400000;
+    const keyFn = (tf === 'weekly')
+      ? (tsSec) => {
+          const d = new Date((tsSec + 19800) * 1000);
+          const mid = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+          const isoDow = (new Date(mid).getUTCDay() + 6) % 7; // Mon=0
+          return String(mid - isoDow * DAY_MS);
+        }
+      : (tsSec) => {
+          const d = new Date((tsSec + 19800) * 1000);
+          return d.getUTCFullYear() + '-' +
+              String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +
+              String(d.getUTCDate()).padStart(2, '0');
+        };
+    let cur = null;
+    for (let i = 0; i < bars.length; i++) {
+      const k = keyFn(bars[i].ts);
+      if (cur && k === cur.key) {
+        cur.endIdx = i;
+        if (bars[i].h > cur.h) cur.h = bars[i].h;
+        if (bars[i].l < cur.l) cur.l = bars[i].l;
+        cur.c = bars[i].c;
+      } else {
+        if (cur) spans.push(cur);
+        cur = {
+          key: k, startIdx: i, endIdx: i,
+          o: bars[i].o, h: bars[i].h, l: bars[i].l, c: bars[i].c,
+        };
+      }
+    }
+    if (cur) spans.push(cur);
+    return spans;
+  }
+
+  // Pivot Points overlay indicator (fx menu). Each period's levels come from
+  // the PRIOR period's OHLC. variant/timeframe/labels/prices from ind.params
+  // (index order matches indicator_schema.dart). Single color = ind.color,
+  // width = ind.thickness. Called from _drawIndicators.
+  _drawPivotsIndicator(ind, plot, lo, hi, priceToY) {
+    const p = ind.params || {};
+    const variant = ['classical', 'fibonacci', 'camarilla', 'woodie', 'demark'][(+p.variant | 0)] || 'classical';
+    const tf = ['daily', 'weekly'][(+p.pivotTimeframe | 0)] || 'daily';
+    const showLabels = p.showLabels == null ? true : (+p.showLabels >= 1);
+    const showPrices = p.showPrices == null ? true : (+p.showPrices >= 1);
+    const spans = this._pivotSpans(tf);
+    if (spans.length < 2) return;
+    const color = ind.color || '#F59E0B';
+    const width = (ind.thickness && ind.thickness > 0) ? ind.thickness : 1;
+    const tag = variant === 'fibonacci' ? 'F' : variant === 'camarilla' ? 'C'
+        : variant === 'woodie' ? 'W' : variant === 'demark' ? 'D' : '';
+    const labels = {
+      r3: tag + 'R3', r2: tag + 'R2', r1: tag + 'R1',
+      pp: tag ? tag + 'P' : 'PP',
+      s1: tag + 'S1', s2: tag + 'S2', s3: tag + 'S3',
+    };
+    const order = ['r3', 'r2', 'r1', 'pp', 's1', 's2', 's3'];
+    const dp = this._priceDecimals();
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = '600 9px Geist, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = width;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    for (let s = 1; s < spans.length; s++) {
+      const prev = spans[s - 1];
+      const cur = spans[s];
+      const kl = this._pivotsFor(variant, prev.h, prev.l, prev.c, prev.o);
+      if (!kl) continue;
+      const xLeft = this._candleXCenter(cur.startIdx, plot) - this.view.cellW / 2;
+      const xRight = this._candleXCenter(cur.endIdx, plot) + this.view.cellW / 2;
+      if (xRight < plot.left || xLeft > plot.right) continue;
+      const x0 = Math.max(plot.left, xLeft);
+      const x1 = Math.min(plot.right - 4, xRight);
+      if (x1 <= x0) continue;
+      for (const k of order) {
+        const val = kl[k];
+        if (val == null || !isFinite(val) || val < lo || val > hi) continue;
+        const y = priceToY(val);
+        ctx.beginPath();
+        ctx.moveTo(x0, y);
+        ctx.lineTo(x1, y);
+        ctx.stroke();
+        if (showLabels || showPrices) {
+          let txt = showLabels ? labels[k] : '';
+          if (showPrices) txt += (txt ? ' ' : '') + val.toFixed(dp);
+          if (txt) ctx.fillText(txt, x0 + 4, y - 6);
+        }
+      }
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
   }
 
   _drawKeyLevels(plot, lo, hi, priceToY) {
