@@ -36,41 +36,40 @@ class ConstituentsTable extends StatelessWidget {
               light: MyntColors.textTertiary)));
 
   List<DashCol<Constituent>> _cols(BuildContext context) {
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final tertiary = resolveThemeColor(context,
         dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
     return [
-      DashCol(
-        label: 'Symbol',
-        width: 100,
-        sortKey: (r) => r.symbol,
-        cell: (c, r) => Text(r.symbol,
-            overflow: TextOverflow.ellipsis, style: _cell(c, bold: true)),
-      ),
+      // Symbol column hidden — Name leads the table with the col-1 bold style.
+      // DashCol(
+      //   label: 'Symbol',
+      //   width: 100,
+      //   sortKey: (r) => r.symbol,
+      //   cell: (c, r) => Text(r.symbol,
+      //       overflow: TextOverflow.ellipsis, style: _cell(c, bold: true)),
+      // ),
+      // Name and Sector split the leftover width evenly; every fixed column
+      // is wide enough for its header plus the sort arrow.
       DashCol(
         label: 'Name',
         sortKey: (r) => r.name,
-        cell: (c, r) => Text(r.name,
-            overflow: TextOverflow.ellipsis, style: _cell(c, color: secondary)),
+        cell: (c, r) => EllipsisText(r.name, style: _cell(c, bold: true)),
       ),
       DashCol(
         label: 'Sector',
-        width: 144,
         sortKey: (r) => r.sector,
-        cell: (c, r) => Text(r.sector,
-            overflow: TextOverflow.ellipsis, style: _cell(c, color: tertiary)),
+        cell: (c, r) =>
+            EllipsisText(r.sector, style: _cell(c, color: tertiary)),
       ),
       DashCol(
         label: 'Wt %',
-        width: 66,
+        width: 84,
         numeric: true,
         sortKey: (r) => r.weightPct ?? 0,
         cell: (c, r) => Text(_pctOrDash(r.weightPct), style: _cell(c)),
       ),
       DashCol(
         label: 'Price %',
-        width: 84,
+        width: 100,
         numeric: true,
         sortKey: (r) => r.priceChangePct ?? 0,
         cell: (c, r) => Text(InstaOptionsFormat.changePct(r.priceChangePct),
@@ -78,7 +77,7 @@ class ConstituentsTable extends StatelessWidget {
       ),
       DashCol(
         label: 'Points',
-        width: 92,
+        width: 100,
         numeric: true,
         sortKey: (r) => r.pointContribution ?? 0,
         cell: (c, r) => Text(signedPts(r.pointContribution),
@@ -87,7 +86,7 @@ class ConstituentsTable extends StatelessWidget {
       ),
       DashCol(
         label: 'Share %',
-        width: 80,
+        width: 100,
         numeric: true,
         sortKey: (r) => r.sharePct ?? 0,
         cell: (c, r) => Text(InstaOptionsFormat.changePct(r.sharePct),
@@ -95,12 +94,17 @@ class ConstituentsTable extends StatelessWidget {
       ),
       DashCol(
         label: 'Direction',
-        width: 102,
-        cell: (c, r) => _dirChip(c, r.direction),
+        width: 110,
+        // Plain neutral text — no badge, no direction colour.
+        cell: (c, r) => Text(
+            r.direction.isEmpty
+                ? '—'
+                : '${r.direction[0].toUpperCase()}${r.direction.substring(1)}',
+            style: _cell(c)),
       ),
       DashCol(
         label: 'OI Δ%',
-        width: 82,
+        width: 92,
         numeric: true,
         sortKey: (r) => r.oiChangePct ?? 0,
         cell: (c, r) => r.oiChangePct == null
@@ -110,7 +114,7 @@ class ConstituentsTable extends StatelessWidget {
       ),
       DashCol(
         label: 'Buildup',
-        width: 118,
+        width: 160,
         cell: (c, r) => r.category == null
             ? _dash(c)
             : DashCategoryChip(category: BuildupCategory.fromWire(r.category)),
@@ -118,42 +122,43 @@ class ConstituentsTable extends StatelessWidget {
     ];
   }
 
-  Widget _dirChip(BuildContext context, String dir) {
-    final profit = resolveThemeColor(context,
-        dark: MyntColors.profitDark, light: MyntColors.profit);
-    final loss = resolveThemeColor(context,
-        dark: MyntColors.lossDark, light: MyntColors.loss);
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-    final color = dir == 'contributor'
-        ? profit
-        : dir == 'detractor'
-            ? loss
-            : muted;
-    final label = dir.isEmpty
-        ? '—'
-        : '${dir[0].toUpperCase()}${dir.substring(1)}';
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Text(label,
-            style: MyntWebTextStyles.caption(context,
-                color: color, fontWeight: MyntFonts.semiBold)),
-      ),
-    );
-  }
+  // Direction badge retired — the column shows plain text now.
+  // Widget _dirChip(BuildContext context, String dir) {
+  //   final profit = resolveThemeColor(context,
+  //       dark: MyntColors.profitDark, light: MyntColors.profit);
+  //   final loss = resolveThemeColor(context,
+  //       dark: MyntColors.lossDark, light: MyntColors.loss);
+  //   final muted = resolveThemeColor(context,
+  //       dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+  //   final color = dir == 'contributor'
+  //       ? profit
+  //       : dir == 'detractor'
+  //           ? loss
+  //           : muted;
+  //   final label = dir.isEmpty
+  //       ? '—'
+  //       : '${dir[0].toUpperCase()}${dir.substring(1)}';
+  //   return Align(
+  //     alignment: Alignment.centerLeft,
+  //     child: Container(
+  //       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+  //       decoration: BoxDecoration(
+  //         color: color.withValues(alpha: 0.14),
+  //         borderRadius: BorderRadius.circular(10),
+  //       ),
+  //       child: Text(label,
+  //           style: MyntWebTextStyles.caption(context,
+  //               color: color, fontWeight: MyntFonts.semiBold)),
+  //     ),
+  //   );
+  // }
 
   @override
   Widget build(BuildContext context) {
     return PaginatedDashTable<Constituent>(
       columns: _cols(context),
       rows: data.constituents,
-      initialSortCol: 3, // Weight %, descending
+      initialSortCol: 2, // Weight %, descending (Symbol column removed)
       filterKey: '${data.index}|${data.tradeDate}',
       emptyLabel: 'No constituents.',
     );

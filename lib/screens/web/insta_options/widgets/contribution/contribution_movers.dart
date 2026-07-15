@@ -34,7 +34,7 @@ class ContributionMovers extends StatelessWidget {
             for (final c in contributors)
               ContribBar(
                 label: c.symbol,
-                sublabel: c.sector,
+                // sublabel: c.sector, // sector hidden per manager review
                 value: c.pointContribution ?? 0,
                 maxAbs: maxAbs,
               ),
@@ -45,7 +45,7 @@ class ContributionMovers extends StatelessWidget {
             for (final d in detractors)
               ContribBar(
                 label: d.symbol,
-                sublabel: d.sector,
+                // sublabel: d.sector, // sector hidden per manager review
                 value: d.pointContribution ?? 0,
                 maxAbs: maxAbs,
               ),
@@ -67,19 +67,54 @@ class ContributionMovers extends StatelessWidget {
 
   Widget _netChip(BuildContext context) {
     final pc = data.pointChange;
-    // Softened a touch toward white so the fill isn't a heavy block of colour.
-    final color =
-        Color.lerp(dashChangeColor(context, pc), Colors.white, 0.10)!;
-    // Solid rounded chip, coloured by the net point move.
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(6),
+    final color = dashChangeColor(context, pc);
+    // Dashed-outline pill: faint tint fill, dashed border + text in the
+    // direction colour (roadmap-tag style).
+    return CustomPaint(
+      painter: _DashedBorderPainter(color: color, radius: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(5),
+        ),
+        child: Text('Net   ${signedPts(pc)} pts',
+            style: MyntWebTextStyles.body(context,
+                color: color, fontWeight: MyntFonts.semiBold)),
       ),
-      child: Text('Net ${signedPts(pc)} pts',
-          style: MyntWebTextStyles.bodySmall(context,
-              color: Colors.white, fontWeight: MyntFonts.semiBold)),
     );
   }
+}
+
+/// Paints a dashed rounded-rect border (BoxDecoration only does solid).
+class _DashedBorderPainter extends CustomPainter {
+  final Color color;
+  final double radius;
+
+  static const double _dash = 5;
+  static const double _gap = 3;
+
+  const _DashedBorderPainter({required this.color, required this.radius});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+          Offset.zero & size, Radius.circular(radius)));
+    for (final metric in path.computeMetrics()) {
+      var dist = 0.0;
+      while (dist < metric.length) {
+        canvas.drawPath(metric.extractPath(dist, dist + _dash), paint);
+        dist += _dash + _gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedBorderPainter old) =>
+      old.color != color || old.radius != radius;
 }

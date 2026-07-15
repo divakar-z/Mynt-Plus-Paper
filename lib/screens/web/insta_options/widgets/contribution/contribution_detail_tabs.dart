@@ -4,6 +4,7 @@ import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/contribution/constituents_table.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/contribution/sector_contribution_section.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/insta_tab_chip.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 /// The two detail views — Sector contribution and the per-stock Constituents
@@ -38,18 +39,23 @@ class _ContributionDetailTabsState extends State<ContributionDetailTabs> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 14, 0),
+            padding: const EdgeInsets.fromLTRB(12, 8, 14, 8),
             child: Row(
               children: [
-                _tabButton('Sector', 0),
-                const SizedBox(width: 22),
-                _tabButton('Constituents', 1),
-                const Spacer(),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Text(count,
-                      style: MyntWebTextStyles.caption(context, color: muted)),
+                InstaTabChip(
+                  label: 'Sector',
+                  selected: _tab == 0,
+                  onTap: () => setState(() => _tab = 0),
                 ),
+                const SizedBox(width: 6),
+                InstaTabChip(
+                  label: 'Constituents',
+                  selected: _tab == 1,
+                  onTap: () => setState(() => _tab = 1),
+                ),
+                // const Spacer(),
+                // Text(count,
+                //     style: MyntWebTextStyles.caption(context, color: muted)),
               ],
             ),
           ),
@@ -65,41 +71,4 @@ class _ContributionDetailTabsState extends State<ContributionDetailTabs> {
     );
   }
 
-  Widget _tabButton(String label, int index) {
-    final active = _tab == index;
-    final accent = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final strong = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => setState(() => _tab = index),
-        behavior: HitTestBehavior.opaque,
-        child: IntrinsicWidth(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  style: MyntWebTextStyles.bodySmall(context,
-                      color: active ? strong : muted,
-                      fontWeight:
-                          active ? MyntFonts.semiBold : MyntFonts.medium),
-                ),
-              ),
-              Container(height: 2, color: active ? accent : Colors.transparent),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }

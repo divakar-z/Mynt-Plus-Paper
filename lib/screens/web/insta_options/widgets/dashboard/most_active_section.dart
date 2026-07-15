@@ -6,6 +6,7 @@ import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dash_table.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/paginated_dash_table.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 /// §5.7 Most active — toggle between futures Volume and |OI change|.
 class MostActiveSection extends StatefulWidget {
@@ -118,45 +119,64 @@ class _Toggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+    // Segmented toggle matching the scanner Financials pickers (same as the
+    // OI Statistics OI ⇄ OI-change toggle): selected = solid brand-blue fill
+    // + white text; fixed 36 to line up with the other bar controls.
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final values = MostActiveBy.values;
     return Container(
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(7)),
+      height: 30,
+      decoration: BoxDecoration(
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      clipBehavior: Clip.antiAlias,
       child: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final b in MostActiveBy.values) _seg(context, b),
+          for (var i = 0; i < values.length; i++)
+            _seg(context, values[i],
+                isFirst: i == 0, isLast: i == values.length - 1),
         ],
       ),
     );
   }
 
-  Widget _seg(BuildContext context, MostActiveBy value) {
-    final active = by == value;
-    final activeBg = resolveThemeColor(context,
-        dark: MyntColors.cardDark, light: MyntColors.card);
-    final activeFg = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+  Widget _seg(BuildContext context, MostActiveBy value,
+      {required bool isFirst, required bool isLast}) {
+    final selected = by == value;
     final inactiveFg = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    // Selected segment's outer corners round to match the container (5).
+    const r = Radius.circular(5);
+    final radius = BorderRadius.only(
+      topLeft: isFirst ? r : Radius.zero,
+      bottomLeft: isFirst ? r : Radius.zero,
+      topRight: isLast ? r : Radius.zero,
+      bottomRight: isLast ? r : Radius.zero,
+    );
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () => onSelect(value),
         behavior: HitTestBehavior.opaque,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: active ? activeBg : Colors.transparent,
-            borderRadius: BorderRadius.circular(5),
+            color: selected
+                ? resolveThemeColor(context,
+                    dark: MyntColors.secondary, light: MyntColors.primary)
+                : Colors.transparent,
+            borderRadius: radius,
           ),
           child: Text(
             value.label,
-            style: MyntWebTextStyles.caption(
+            style: MyntWebTextStyles.para(
               context,
-              color: active ? activeFg : inactiveFg,
-              fontWeight: active ? MyntFonts.semiBold : MyntFonts.medium,
+              color: selected ? Colors.white : inactiveFg,
+              fontWeight: selected ? MyntFonts.semiBold : MyntFonts.medium,
             ),
           ),
         ),

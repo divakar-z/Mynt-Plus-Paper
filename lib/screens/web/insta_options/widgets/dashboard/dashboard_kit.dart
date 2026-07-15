@@ -286,21 +286,22 @@ class DashStat extends StatelessWidget {
       children: [
         Text(
           label,
-          style: MyntWebTextStyles.caption(
+          style: MyntWebTextStyles.body(
             context,
             darkColor: MyntColors.textTertiaryDark,
             lightColor: MyntColors.textTertiary,
+            fontWeight: MyntFonts.regular,
           ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: 4),
         Text(
           value,
-          style: MyntWebTextStyles.bodySmall(
+          style: MyntWebTextStyles.body(
             context,
             color: valueColor,
             darkColor: valueColor ?? MyntColors.textPrimaryDark,
             lightColor: valueColor ?? MyntColors.textPrimary,
-            fontWeight: MyntFonts.semiBold,
+            fontWeight: MyntFonts.medium,
           ),
         ),
       ],

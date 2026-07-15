@@ -34,6 +34,12 @@ class SectorPerformanceSection extends StatelessWidget {
       );
     }
 
+    // Heatmap scale: tint intensity is relative to the strongest mover in
+    // view, so the day's leader is always full strength.
+    final maxAbs = sorted
+        .map((s) => s.avgChangePct.abs())
+        .reduce((a, b) => a > b ? a : b);
+
     return DashSectionCard(
       title: 'Sector Performance',
       child: LayoutBuilder(
@@ -53,7 +59,8 @@ class SectorPerformanceSection extends StatelessWidget {
             runSpacing: spacing,
             children: [
               for (final s in sorted)
-                SizedBox(width: cardWidth, child: _Cell(sector: s)),
+                SizedBox(
+                    width: cardWidth, child: _Cell(sector: s, maxAbs: maxAbs)),
             ],
           );
         },
@@ -64,8 +71,9 @@ class SectorPerformanceSection extends StatelessWidget {
 
 class _Cell extends StatelessWidget {
   final SectorPerformanceRow sector;
+  final double maxAbs;
 
-  const _Cell({required this.sector});
+  const _Cell({required this.sector, required this.maxAbs});
 
   @override
   Widget build(BuildContext context) {
@@ -85,13 +93,19 @@ class _Cell extends StatelessWidget {
             dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary)
         .withValues(alpha: 0.2);
 
+    // Heatmap tint: intensity scales with the move's size relative to the
+    // strongest sector in view (the leader gets the deepest wash).
+    final t =
+        maxAbs <= 0 ? 0.0 : (sector.avgChangePct.abs() / maxAbs).clamp(0.0, 1.0);
+    final tintAlpha = isDark ? 0.05 + 0.20 * t : 0.03 + 0.15 * t;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        // No fill — the direction (green up / red down / grey flat) is carried
-        // by the border colour only.
-        color: resolveThemeColor(context,
-            dark: MyntColors.cardDark, light: MyntColors.card),
+        color: neutral
+            ? resolveThemeColor(context,
+                dark: MyntColors.cardDark, light: MyntColors.card)
+            : dir.withValues(alpha: tintAlpha),
         // border: Border.all(
         //     color: dir.withValues(alpha: isDark ? 0.55 : 0.5), width: 1),
         border: Border.all(color: divider, width: 1),
@@ -138,11 +152,11 @@ class _Cell extends StatelessWidget {
                 style: MyntWebTextStyles.para(context,
                     color: loss, fontWeight: MyntFonts.semiBold),
               ),
-              const Spacer(),
-              Text(
-                'OI ${sector.netOi}',
-                style: MyntWebTextStyles.para(context, color: muted),
-              ),
+              // const Spacer(),
+              // Text(
+              //   'OI ${sector.netOi}',
+              //   style: MyntWebTextStyles.para(context, color: muted),
+              // ),
             ],
           ),
         ],

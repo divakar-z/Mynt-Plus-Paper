@@ -114,6 +114,9 @@ class OiByStrikeChart extends StatelessWidget {
           width: 0.82,
           spacing: 0.12,
           borderRadius: const BorderRadius.all(Radius.circular(2)),
+          // No grow/morph animation on load or when the expiry/date/mode
+          // swaps the data — bars render straight at their final size.
+          animationDuration: 0,
         ),
         ColumnSeries<OiStrikeRow, num>(
           dataSource: rows,
@@ -125,6 +128,7 @@ class OiByStrikeChart extends StatelessWidget {
           width: 0.82,
           spacing: 0.12,
           borderRadius: const BorderRadius.all(Radius.circular(2)),
+          animationDuration: 0,
         ),
       ],
     );

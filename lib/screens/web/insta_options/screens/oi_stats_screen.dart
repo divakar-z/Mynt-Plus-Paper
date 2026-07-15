@@ -103,18 +103,22 @@ class _OiStatsScreenState extends ConsumerState<OiStatsScreen> {
                         darkColor: MyntColors.textPrimaryDark,
                         lightColor: MyntColors.textPrimary,
                         fontWeight: MyntFonts.semiBold)),
-                const SizedBox(width: 10),
-                Icon(Icons.zoom_in, size: 14, color: muted),
-                const SizedBox(width: 3),
-                Text('scroll / drag to zoom',
-                    style: MyntWebTextStyles.caption(context, color: muted)),
                 const Spacer(),
                 _modeToggle(context),
               ],
             ),
             const SizedBox(height: 10),
-            _legend(context, data),
-            const SizedBox(height: 6),
+            // Legend left; the zoom hint sits opposite it on the same row.
+            Row(
+              children: [
+                _legend(context, data),
+                const Spacer(),
+                
+                Text('scroll / drag to zoom',
+                    style: MyntWebTextStyles.caption(context, color: muted)),
+              ],
+            ),
+            const SizedBox(height: 12),
             Expanded(child: OiByStrikeChart(data: data, mode: _mode)),
           ],
         ),
@@ -122,44 +126,64 @@ class _OiStatsScreenState extends ConsumerState<OiStatsScreen> {
     );
   }
 
+  /// Segmented toggle matching the scanner Financials pickers: selected =
+  /// solid brand-blue fill + white text.
   Widget _modeToggle(BuildContext context) {
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    Widget seg(String label, OiChartMode m) {
-      final active = _mode == m;
-      final accent = resolveThemeColor(context,
-          dark: MyntColors.primaryDark, light: MyntColors.primary);
-      final muted = resolveThemeColor(context,
-          dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final textSecondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    Widget seg(String label, OiChartMode m,
+        {required bool isFirst, required bool isLast}) {
+      final selected = _mode == m;
+      // Selected segment's outer corners round to match the container (5).
+      const r = Radius.circular(5);
+      final radius = BorderRadius.only(
+        topLeft: isFirst ? r : Radius.zero,
+        bottomLeft: isFirst ? r : Radius.zero,
+        topRight: isLast ? r : Radius.zero,
+        bottomRight: isLast ? r : Radius.zero,
+      );
       return MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
           onTap: () => setState(() => _mode = m),
           behavior: HitTestBehavior.opaque,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            color: active ? accent.withValues(alpha: 0.14) : Colors.transparent,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected
+                  ? resolveThemeColor(context,
+                      dark: MyntColors.secondary, light: MyntColors.primary)
+                  : Colors.transparent,
+              borderRadius: radius,
+            ),
             child: Text(label,
-                style: MyntWebTextStyles.caption(context,
-                    color: active ? accent : muted,
+                style: MyntWebTextStyles.para(context,
                     fontWeight:
-                        active ? MyntFonts.semiBold : MyntFonts.medium)),
+                        selected ? MyntFonts.semiBold : MyntFonts.medium,
+                    color: selected ? Colors.white : textSecondary)),
           ),
         ),
       );
     }
 
     return Container(
+      // Fixed 36 to line up with the underlying dropdown / date pill.
+      height: 30,
       decoration: BoxDecoration(
-        border: Border.all(color: border, width: 0.5),
-        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(5),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          seg('OI', OiChartMode.oi),
-          seg('OI change', OiChartMode.change),
-        ]),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          seg('OI', OiChartMode.oi, isFirst: true, isLast: false),
+          seg('OI change', OiChartMode.change, isFirst: false, isLast: true),
+        ],
       ),
     );
   }
@@ -181,7 +205,7 @@ class _OiStatsScreenState extends ConsumerState<OiStatsScreen> {
     Widget item(Widget mark, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
           mark,
           const SizedBox(width: 5),
-          Text(label, style: MyntWebTextStyles.caption(context, color: muted)),
+          Text(label, style: MyntWebTextStyles.para(context, color: muted)),
         ]);
     return Row(
       children: [
@@ -193,7 +217,7 @@ class _OiStatsScreenState extends ConsumerState<OiStatsScreen> {
             SizedBox(
                 width: 14,
                 child: Divider(color: spot, thickness: 1.5, height: 1)),
-            'Spot ${InstaOptionsFormat.price(data.underlyingValue)}'),
+            'Spot  ${InstaOptionsFormat.price(data.underlyingValue)}'),
       ],
     );
   }
@@ -234,20 +258,21 @@ class _SummaryTiles extends StatelessWidget {
     );
   }
 
+  /// Same mini-card as the Index Contribution header tiles (PCR / Rollover):
+  /// light tertiary border, caption label over a semiBold value.
   Widget _tile(BuildContext context, String label, String value,
       {Color? color}) {
     final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+            dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary)
+        .withValues(alpha: 0.2);
     final bg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: bg,
-        border: Border.all(color: border, width: 0.5),
-        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: border, width: 1),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -256,16 +281,21 @@ class _SummaryTiles extends StatelessWidget {
           Text(label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: MyntWebTextStyles.caption(context, color: muted)),
-          const SizedBox(height: 2),
+              style: MyntWebTextStyles.body(
+                context,
+                darkColor: MyntColors.textTertiaryDark,
+                lightColor: MyntColors.textTertiary,
+                fontWeight: MyntFonts.regular,
+              )),
+          const SizedBox(height: 4),
           Text(value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: MyntWebTextStyles.head(context,
+              style: MyntWebTextStyles.body(context,
                   color: color,
                   darkColor: color ?? MyntColors.textPrimaryDark,
                   lightColor: color ?? MyntColors.textPrimary,
-                  fontWeight: MyntFonts.semiBold)),
+                  fontWeight: MyntFonts.medium)),
         ],
       ),
     );

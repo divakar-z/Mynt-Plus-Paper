@@ -13,6 +13,11 @@ String signedPts(double? v) =>
 class ContribBar extends StatelessWidget {
   final String label;
   final String? sublabel;
+
+  /// Rich sublabel (e.g. coloured ▲/▼ counts); takes precedence over
+  /// [sublabel] when both are given.
+  final Widget? sublabelWidget;
+
   final double value;
   final double maxAbs;
   final double labelWidth;
@@ -24,6 +29,7 @@ class ContribBar extends StatelessWidget {
     required this.value,
     required this.maxAbs,
     this.sublabel,
+    this.sublabelWidget,
     this.labelWidth = 150,
     this.valueWidth = 72,
   });
@@ -46,7 +52,8 @@ class ContribBar extends StatelessWidget {
     final color = pos ? profit : loss;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
+      // Tightened (was 10) — rows sit closer now the sector sublabel is gone.
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
           SizedBox(
@@ -55,12 +62,15 @@ class ContribBar extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _EllipsisText(label,
+                EllipsisText(label,
                     style: MyntWebTextStyles.body(context,
                         color: fg, fontWeight: MyntFonts.semiBold)),
-                if (sublabel != null) ...[
+                if (sublabelWidget != null) ...[
                   const SizedBox(height: 2),
-                  _EllipsisText(sublabel!,
+                  sublabelWidget!,
+                ] else if (sublabel != null) ...[
+                  const SizedBox(height: 2),
+                  EllipsisText(sublabel!,
                       style: MyntWebTextStyles.para(context,
                           color: muted, fontWeight: MyntFonts.regular)),
                 ],
@@ -120,12 +130,13 @@ class ContribBar extends StatelessWidget {
 
 /// A single-line ellipsised label that reveals its full text in a [Tooltip]
 /// **only when it's actually truncated** — measured against the width it's
-/// given, so fully-visible names don't get a needless hover tooltip.
-class _EllipsisText extends StatelessWidget {
+/// given, so fully-visible names don't get a needless hover tooltip. Shared
+/// by the movers bars and the contribution tables.
+class EllipsisText extends StatelessWidget {
   final String text;
   final TextStyle style;
 
-  const _EllipsisText(this.text, {required this.style});
+  const EllipsisText(this.text, {super.key, required this.style});
 
   @override
   Widget build(BuildContext context) {
