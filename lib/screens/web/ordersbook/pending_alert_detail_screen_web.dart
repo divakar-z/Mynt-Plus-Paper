@@ -216,7 +216,9 @@ class _PendingAlertDetailScreenWebState
           children: [
             Flexible(
               child: Text(
-                widget.alert.tsym?.replaceAll("-EQ", "") ?? '',
+                DerivativeMaster.nameFor(
+                        widget.alert.exch, widget.alert.token) ??
+                    (widget.alert.tsym?.replaceAll("-EQ", "") ?? ''),
                 style: MyntWebTextStyles.title(
                   context,
                   color: resolveThemeColor(context,
@@ -362,8 +364,9 @@ class _PendingAlertDetailScreenWebState
                       final marketWatchProviderRef =
                           ref.read(marketWatchProvider);
                       final String alertId = "${widget.alert.alId}";
-                      final symbol =
-                          widget.alert.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+                      final symbol = DerivativeMaster.nameFor(
+                              widget.alert.exch, widget.alert.token) ??
+                          (widget.alert.tsym?.replaceAll("-EQ", "") ?? 'N/A');
 
                       // Close the sheet FIRST
                       shadcn.closeSheet(context);

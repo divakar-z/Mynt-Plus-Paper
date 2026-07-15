@@ -435,12 +435,16 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
           Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
           
           String aInstrument = a is BrokerMessage
-              ? (aParsed?['instrument'] ?? 'N/A')
+              ? (DerivativeMaster.nameFor(a.exch, a.token) ??
+                  aParsed?['instrument'] ??
+                  'N/A')
               : (DerivativeMaster.nameFor(a.exch, a.token) ??
                   a.tsym?.replaceAll("-EQ", "") ??
                   'N/A');
           String bInstrument = b is BrokerMessage
-              ? (bParsed?['instrument'] ?? 'N/A')
+              ? (DerivativeMaster.nameFor(b.exch, b.token) ??
+                  bParsed?['instrument'] ??
+                  'N/A')
               : (DerivativeMaster.nameFor(b.exch, b.token) ??
                   b.tsym?.replaceAll("-EQ", "") ??
                   'N/A');
@@ -973,7 +977,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
         switch (col) {
           case 0: // Instrument
             if (alert is BrokerMessage) {
-              cellText = parsed?['instrument'] ?? 'N/A';
+              cellText = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+                  (parsed?['instrument'] ?? 'N/A');
               final exchange = parsed?['exchange'] ?? '';
               if (exchange.isNotEmpty) cellText += ' $exchange';
             } else {
@@ -1105,8 +1110,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     String symbol = '';
     String exchange = '';
     if (alert is BrokerMessage) {
-      // Use direct fields from API response
-      symbol = alert.tsym?.replaceAll("-EQ", "") ?? '';
+      // Use direct fields from API response; prefer the DerivativeMaster name.
+      symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+          (alert.tsym?.replaceAll("-EQ", "") ?? '');
       exchange = alert.exch ?? '';
     } else {
       symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
