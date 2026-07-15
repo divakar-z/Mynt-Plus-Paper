@@ -1,4 +1,16 @@
+import 'package:mynt_plus/sharedWidget/functions.dart';
+
 class TradeBookModel {
+  /// Backend display name from the DerivativeMaster (keyed by exch:token), or
+  /// null when the contract isn't in the master (equities / indices).
+  String? get masterName => DerivativeMaster.nameFor(exch, token);
+
+  /// Ready contract name for display: master name when available, else the
+  /// existing symbol/expiry/option assembly (never a raw tsym).
+  String get displayName =>
+      masterName ??
+      '${symbol?.replaceAll("-EQ", "") ?? ''} ${expDate ?? ''} ${option ?? ''}';
+
   String? stat;
   String? emsg;
   String? norenordno;

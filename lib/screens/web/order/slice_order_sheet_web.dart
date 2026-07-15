@@ -460,7 +460,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
         Row(
           children: [
             Text(
-              "${widget.scripInfo.symbol} ",
+              "${widget.scripInfo.masterName ?? widget.scripInfo.symbol} ",
               style: WebTextStyles.custom(
                 fontSize: 13,
                 isDarkTheme: theme.isDarkMode,
@@ -471,7 +471,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
               ),
             ),
             Text(
-              "${widget.scripInfo.option}",
+              "${widget.scripInfo.masterName == null ? (widget.scripInfo.option ?? '') : ''}",
               style: WebTextStyles.custom(
                 fontSize: 13,
                 isDarkTheme: theme.isDarkMode,
@@ -489,7 +489,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
             CustomExchBadge(exch: "${widget.scripInfo.exch}"),
             const SizedBox(width: 8),
             Text(
-              "${widget.scripInfo.expDate}",
+              "${widget.scripInfo.masterName == null ? (widget.scripInfo.expDate ?? '') : ''}",
               style: WebTextStyles.custom(
                 fontSize: 12,
                 isDarkTheme: theme.isDarkMode,

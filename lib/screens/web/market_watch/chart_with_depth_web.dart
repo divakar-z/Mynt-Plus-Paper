@@ -473,6 +473,11 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
   /// - Option contract (has an option type) → base symbol + expiry + CE/PE
   ///   (e.g. "NIFTY 24JUL26 CE"), unchanged from before.
   String _optionChainHeaderTitle(GetQuotes? depthData) {
+    // Prefer the backend display name for any derivative (DerivativeMaster,
+    // keyed by exch:token). Indices/equities aren't in the master and fall
+    // through to the existing logic below.
+    final master = depthData?.masterName;
+    if (master != null && master.isNotEmpty) return "$master ";
     final String option =
         (depthData?.option ?? widget.wlValue.option).trim();
     if (option.isEmpty) {

@@ -234,7 +234,7 @@ class _TradeBookDetailScreenWebState
             Row(
               children: [
                 Text(
-                  "${displayData.symbol?.replaceAll("-EQ", "") ?? ''} ${displayData.expDate ?? ''} ${displayData.option ?? ''} ",
+                  "${displayData.displayName} ",
                   style: MyntWebTextStyles.title(
                     context,
                     color: resolveThemeColor(context,

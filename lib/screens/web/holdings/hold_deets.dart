@@ -307,7 +307,7 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
             Row(
               children: [
                 Text(
-                  "${_exchTsym.tsym?.replaceAll("-EQ", "") ?? ''} ${_exchTsym.expDate ?? ''} ${_exchTsym.option ?? ''} ",
+                  "${_exchTsym.displayName} ",
                   style: WebTextStyles.dialogTitle(
                     isDarkTheme: theme.isDarkMode,
                     color: theme.isDarkMode ? WebDarkColors.textPrimary : WebColors.textSecondary,

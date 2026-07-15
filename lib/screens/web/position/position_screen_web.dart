@@ -2141,7 +2141,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     PortfolioProvider positionBook,
     String uniqueId,
   ) {
-    final displayText =
+    final displayText = position.masterName ??
         '${position.symbol ?? ''} ${position.exch ?? ''} ${position.expDate ?? ''} ${position.option ?? ''}';
 
     // ✅ Use ValueListenableBuilder to avoid rebuilding entire table on hover
