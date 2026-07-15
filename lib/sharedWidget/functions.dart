@@ -297,6 +297,10 @@ class DerivativeMaster {
       ..addAll(data);
   }
 
+  /// Empties the cache. Called on logout so the next account starts clean and
+  /// never reads the previous session's fetched set.
+  static void clear() => _names.clear();
+
   /// Ready display name for a contract, or null if not present in the master.
   static String? nameFor(String? exch, String? token) {
     if (exch == null || token == null || exch.isEmpty || token.isEmpty) {
@@ -315,21 +319,21 @@ class DerivativeMaster {
   }
 }
 
-/// Splits a DerivativeMaster display name (e.g. "NIFTY 14 JUL 2026 CE 24000",
-/// "ZINC 31 JUL 2026 FUT", "360ONE 25 AUG 2026 CE 1000") into the same parts as
-/// [spilitTsym] so screens can show the pieces separately, all sourced from the
-/// master. The year is returned two-digit ("14 JUL 26") to match the existing
-/// expiry format and the "expiry today" tag logic. Falls back to the whole
-/// string as the symbol when no "DD MON YYYY" date is present.
+/// Splits a DerivativeMaster display name (e.g. "NIFTY 21 JUL 26 23450 PE",
+/// "ZINC 31 JUL 26 FUT") into the same parts as [spilitTsym] so screens can show
+/// the pieces separately, all sourced from the master. The source year is
+/// accepted as 2- or 4-digit and always returned two-digit ("21 JUL 26") to
+/// match the existing expiry format and the "expiry today" tag logic. Falls back
+/// to the whole string as the symbol when no "DD MON YY(YY)" date is present.
 Map<String, String> spilitMaster({required String value}) {
-  final match = RegExp(r'(\d{1,2}) ([A-Za-z]{3}) (\d{4})').firstMatch(value);
+  final match = RegExp(r'(\d{1,2}) ([A-Za-z]{3}) (\d{2,4})').firstMatch(value);
   if (match == null) {
     return {"symbol": value.trim(), "expDate": "", "option": ""};
   }
   final symbol = value.substring(0, match.start).trim();
   final day = match.group(1)!;
   final month = match.group(2)!.toUpperCase();
-  final year = match.group(3)!; // 4-digit, e.g. "2026"
+  final year = match.group(3)!; // 2- or 4-digit; normalised to 2 below
   final expDate = "$day $month ${year.substring(year.length - 2)}";
   final option = value.substring(match.end).trim();
   return {"symbol": symbol, "expDate": expDate, "option": option};

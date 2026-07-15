@@ -541,6 +541,9 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     try {
       _exarr = [];
       _pendingWatchlists.clear();
+      // Reset the derivative-master cache so the next account starts clean and
+      // never reads the previous session's fetched set.
+      DerivativeMaster.clear();
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('pending_watchlists');
     } catch (e) {
