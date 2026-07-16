@@ -8,6 +8,9 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../models/desk_reports_model/calender_pnl_model.dart';
+import '../../../../models/journal_notes_model/journal_note.dart';
+import '../../../../models/journal_notes_model/segment_group.dart';
+import '../../../../provider/journal_notes/journal_notes_provider.dart';
 import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../res/mynt_web_text_styles.dart';
@@ -18,6 +21,7 @@ import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/scroll_to_load_mixin.dart';
 import '../../../../sharedWidget/snack_bar.dart';
 import 'charges_dialog_web.dart';
+import 'note_editor_sheet_web.dart';
 import 'pnl_stats_summary_web.dart';
 
 class CalenderpnlScreen extends ConsumerStatefulWidget {
@@ -406,6 +410,20 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
 
     final double netValue = (data?.realized ?? 0.0) - (data?.totalCharges ?? 0.0);
 
+    // --- Trade journal notes ---
+    // One list call decorates the whole heat map; never one fetch per cell.
+    // Reading the nullable `value` means a slow or failed notes call never
+    // blocks the P&L view — markers simply appear once they land.
+    final noteGroup = SegmentGroup.fromTabLabel(ledgerprovider.selectedSegment);
+    final notesRangeKey = _notesRangeKey(ledgerprovider);
+    final notesByDate = notesRangeKey == null
+        ? const <String, JournalNote>{}
+        : (ref.watch(notesForRangeProvider(notesRangeKey)).value ??
+            const <String, JournalNote>{});
+    final snapshotsByDate = noteGroup == null
+        ? const <String, NotePnlSnapshot>{}
+        : _snapshotsByDate(ledgerprovider, noteGroup);
+
     return SingleChildScrollView(
       controller: _tableScrollController,
       child: Column(
@@ -433,6 +451,22 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 ledgerprovider.setSelectedMonth(month);
                 ledgerprovider.setTab(false);
               },
+              notedDates: notesByDate.keys.toSet(),
+              notableDates: snapshotsByDate.keys.toSet(),
+              onNoteTap: (notesRangeKey == null || noteGroup == null)
+                  ? null
+                  : (date) {
+                      final iso = _isoDate(date);
+                      openNoteEditorSheet(
+                        context,
+                        ref: ref,
+                        noteDate: iso,
+                        group: noteGroup,
+                        existing: notesByDate[iso],
+                        snapshot: snapshotsByDate[iso],
+                        rangeKey: notesRangeKey,
+                      );
+                    },
               onMonthChanged: (month) =>
                   ledgerprovider.setSelectedMonth(month),
             ),
@@ -1302,7 +1336,74 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
-  // --- Date-wise Section ---
+  // --- Trade journal notes -------------------------------------------------
+
+  /// `YYYY-MM-DD`, the only format the notes API accepts.
+  ///
+  /// Deliberately not the `DateFormat('dd/MM/yyyy')` this screen uses for the
+  /// journal endpoints. Both formats go to the same host and must not share a
+  /// formatter — `14/07/2026` is a `400 BAD_DATE` to the notes routes.
+  static String _isoDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  /// Null when the active tab is not one of the four known asset classes — in
+  /// which case notes are simply not offered, rather than guessed at.
+  NotesRangeKey? _notesRangeKey(LDProvider lp) {
+    final group = SegmentGroup.fromTabLabel(lp.selectedSegment);
+    if (group == null) return null;
+    return NotesRangeKey(
+      from: _isoDate(lp.startTaxDate),
+      to: _isoDate(lp.endTaxDate),
+      group: group,
+    );
+  }
+
+  /// Every day that has a P&L to snapshot, keyed `YYYY-MM-DD`.
+  ///
+  /// The backend cannot recompute this — realised P&L comes from FIFO matching
+  /// across the whole financial year — so the client sends what it displayed.
+  ///
+  /// Equity/F&O/Currency read `journal[]`, the backend's own per-day rollup and
+  /// the source the heat map itself is built from. Commodity reads `dateWise`:
+  /// [CalenderpnlModel] synthesises commodity `journal[]` rows with
+  /// `unrealisedpnl` hardcoded to `'0'`, so reading those would always send a
+  /// zero unrealised.
+  ///
+  /// Built once per build rather than searched per cell — the calendar renders
+  /// a full financial year of them.
+  ///
+  /// A day absent from this map has no P&L row, so a note on it would be
+  /// invisible to analytics. Those days are not offered a note at all.
+  Map<String, NotePnlSnapshot> _snapshotsByDate(
+      LDProvider lp, SegmentGroup group) {
+    final data = lp.calenderpnlAllData;
+    if (data == null) return const {};
+    final out = <String, NotePnlSnapshot>{};
+
+    if (group.usesJournalDiary3) {
+      (data.dateWise ?? const {}).forEach((key, day) {
+        final iso = key.toString();
+        // `dateWise` carries a literal "unknown" key holding trades whose dates
+        // could not be parsed. It is not a date — never offer a note on it.
+        if (!kNoteDatePattern.hasMatch(iso)) return;
+        if (day is Map) out[iso] = NotePnlSnapshot.fromDateWise(day, group);
+      });
+      return out;
+    }
+
+    for (final row in data.journal ?? const <Journal>[]) {
+      // TRADE_DATE is `yyyy-MM-ddTHH:mm:ss`; its date part is the note key.
+      final raw = row.tRADEDATE;
+      if (raw == null || raw.length < 10) continue;
+      final iso = raw.substring(0, 10);
+      if (!kNoteDatePattern.hasMatch(iso)) continue;
+      out[iso] = NotePnlSnapshot.fromJournalRow(row, group);
+    }
+    return out;
+  }
+
   Widget _buildDateWiseSection(BuildContext context, List<DateTime> sortedDates,
       LDProvider ledgerprovider, bool isCommodity) {
     if (sortedDates.isEmpty) {
@@ -2610,6 +2711,18 @@ class _WebCalendarTabs extends StatefulWidget {
   final ValueChanged<DateTime> onMonthSelected;
   final ValueChanged<DateTime> onMonthChanged;
 
+  /// Days that already carry a journal note, keyed `YYYY-MM-DD`.
+  final Set<String> notedDates;
+
+  /// Days that have a P&L to snapshot, and so can be noted. A day outside this
+  /// set is not offered a note — one saved there would be invisible to
+  /// analytics.
+  final Set<String> notableDates;
+
+  /// Null when notes are unavailable for the active tab, which hides the
+  /// affordance entirely.
+  final ValueChanged<DateTime>? onNoteTap;
+
   const _WebCalendarTabs({
     required this.heatmapData,
     required this.monthlyPnL,
@@ -2620,6 +2733,9 @@ class _WebCalendarTabs extends StatefulWidget {
     required this.onTabChanged,
     required this.onMonthSelected,
     required this.onMonthChanged,
+    this.notedDates = const {},
+    this.notableDates = const {},
+    this.onNoteTap,
   });
 
   @override
@@ -2663,6 +2779,9 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
               endDate: widget.endFY,
               currentMonth: widget.selectedMonth,
               onMonthChanged: widget.onMonthChanged,
+              notedDates: widget.notedDates,
+              notableDates: widget.notableDates,
+              onNoteTap: widget.onNoteTap,
             ),
         ],
       ),
@@ -2820,12 +2939,24 @@ class _WebDailyCalendar extends StatelessWidget {
   final DateTime currentMonth;
   final ValueChanged<DateTime> onMonthChanged;
 
+  /// Days that already carry a journal note, keyed `YYYY-MM-DD`.
+  final Set<String> notedDates;
+
+  /// Days that have a P&L to snapshot, and so can be noted.
+  final Set<String> notableDates;
+
+  /// Null when notes are unavailable for the active tab.
+  final ValueChanged<DateTime>? onNoteTap;
+
   const _WebDailyCalendar({
     required this.heatmapData,
     required this.startDate,
     required this.endDate,
     required this.currentMonth,
     required this.onMonthChanged,
+    this.notedDates = const {},
+    this.notableDates = const {},
+    this.onNoteTap,
   });
 
   @override
@@ -2991,14 +3122,48 @@ class _WebDailyCalendar extends StatelessWidget {
               dark: MyntColors.textPrimaryDark,
               light: MyntColors.textPrimary);
 
+          final iso = _CalenderpnlScreenState._isoDate(date);
+          final hasNote = notedDates.contains(iso);
+          // A note can only be *added* on a day with a P&L row — one saved
+          // elsewhere has no snapshot and would be invisible to analytics. But
+          // an existing note must always open, snapshot or not: a day can lose
+          // its P&L row (a restated back office, a narrowed date range), and
+          // gating on the snapshot alone would strand the note with no way to
+          // edit or delete it.
+          final canNote =
+              onNoteTap != null && (hasNote || notableDates.contains(iso));
+
+          final dateLabel = DateFormat('dd MMM yyyy').format(date);
+          final pnlLabel =
+              value != null ? '₹${value.toStringAsFixed(2)}' : 'No trades';
+          final String tooltip;
+          if (hasNote) {
+            tooltip = '$dateLabel: $pnlLabel\nNote added — click to edit';
+          } else if (canNote) {
+            tooltip = '$dateLabel: $pnlLabel\nClick to add a note';
+          } else {
+            tooltip = '$dateLabel: $pnlLabel';
+          }
+
           return _HoverableHeatmapCell(
-            tooltipMessage:
-                '${DateFormat('dd MMM yyyy').format(date)}: ${value != null ? '₹${value.toStringAsFixed(2)}' : 'No trades'}',
+            tooltipMessage: tooltip,
             cellSize: cellSize,
             cellGap: cellGap,
             bgColor: bgColor,
             isToday: isToday,
             todayBorderColor: todayBorderColor,
+            hasNote: hasNote,
+            // Punch the marker out of a filled cell in the page background, but
+            // an unfilled cell is already near-background — there a light dot
+            // would vanish, so ink it instead.
+            noteMarkerColor: val != 0
+                ? resolveThemeColor(context,
+                    dark: MyntColors.backgroundColorDark,
+                    light: MyntColors.backgroundColor)
+                : resolveThemeColor(context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.textSecondary),
+            onTap: canNote ? () => onNoteTap!(date) : null,
           );
         }
 
@@ -3135,6 +3300,16 @@ class _HoverableHeatmapCell extends StatefulWidget {
   final bool isToday;
   final Color todayBorderColor;
 
+  /// Draws a dot in the cell to mark a day that carries a journal note.
+  final bool hasNote;
+
+  /// The dot's colour — the page background, so it reads as a punched-out hole
+  /// against both the profit and loss fills.
+  final Color noteMarkerColor;
+
+  /// Null makes the cell inert: no cursor change, no tap.
+  final VoidCallback? onTap;
+
   const _HoverableHeatmapCell({
     required this.tooltipMessage,
     required this.cellSize,
@@ -3142,6 +3317,9 @@ class _HoverableHeatmapCell extends StatefulWidget {
     required this.bgColor,
     required this.isToday,
     required this.todayBorderColor,
+    this.hasNote = false,
+    this.noteMarkerColor = const Color(0xFFFFFFFF),
+    this.onTap,
   });
 
   @override
@@ -3153,30 +3331,52 @@ class _HoverableHeatmapCellState extends State<_HoverableHeatmapCell> {
 
   @override
   Widget build(BuildContext context) {
+    // Cells are only a few pixels wide, so the marker is a dot rather than an
+    // icon — anything with detail is unreadable at this size.
+    final markerSize = (widget.cellSize * 0.34).clamp(2.5, 5.0);
+
     return MouseRegion(
+      cursor: widget.onTap != null
+          ? SystemMouseCursors.click
+          : MouseCursor.defer,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: Tooltip(
-        message: widget.tooltipMessage,
-        child: Container(
-          width: widget.cellSize,
-          height: widget.cellSize,
-          margin: EdgeInsets.only(
-              bottom: widget.cellGap, right: widget.cellGap),
-          decoration: BoxDecoration(
-            color: widget.bgColor,
-            borderRadius: BorderRadius.circular(3),
-            border: widget.isToday
-                ? Border.all(
-                    color: widget.todayBorderColor,
-                    width: 1.5,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: widget.tooltipMessage,
+          child: Container(
+            width: widget.cellSize,
+            height: widget.cellSize,
+            margin: EdgeInsets.only(
+                bottom: widget.cellGap, right: widget.cellGap),
+            decoration: BoxDecoration(
+              color: widget.bgColor,
+              borderRadius: BorderRadius.circular(3),
+              border: widget.isToday
+                  ? Border.all(
+                      color: widget.todayBorderColor,
+                      width: 1.5,
+                    )
+                  : _hovered
+                      ? Border.all(
+                          color: widget.todayBorderColor.withValues(alpha: 0.5),
+                          width: 1.5,
+                        )
+                      : null,
+            ),
+            child: widget.hasNote
+                ? Center(
+                    child: Container(
+                      width: markerSize,
+                      height: markerSize,
+                      decoration: BoxDecoration(
+                        color: widget.noteMarkerColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
                   )
-                : _hovered
-                    ? Border.all(
-                        color: widget.todayBorderColor.withValues(alpha: 0.5),
-                        width: 1.5,
-                      )
-                    : null,
+                : null,
           ),
         ),
       ),
