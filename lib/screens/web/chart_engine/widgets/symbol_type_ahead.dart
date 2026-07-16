@@ -129,12 +129,19 @@ class _SymbolTypeAheadState extends State<SymbolTypeAhead> {
     });
   }
 
+  /// Decorative title for a search result — prefer the DerivativeMaster name,
+  /// falling back to the raw dname/tsym. Matches the JS typeahead flow driven
+  /// by the shell's `searchSymbols` reply so both search paths read the same.
+  String _resultTitle(ScripNewValue r) =>
+      (r.masterName ?? r.tsym ?? r.dname ?? r.symbol ?? '')
+          .replaceAll('-EQ', '');
+
   void _pick(ScripNewValue v) {
     final scrip = ChartScrip(
       exch: v.exch ?? 'NSE',
       token: v.token ?? '',
       tsym: v.tsym ?? '',
-      dispName: v.dname ?? v.tsym ?? v.symbol ?? '',
+      dispName: _resultTitle(v),
       ls: int.tryParse(v.ls ?? '') ?? 1,
       ti: double.tryParse(v.ti ?? '') ?? 0.05,
       instname: v.instname ?? '',
@@ -210,7 +217,7 @@ class _SymbolTypeAheadState extends State<SymbolTypeAhead> {
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        Text(r.dname ?? r.tsym ?? '',
+                                        Text(_resultTitle(r),
                                             style: MyntWebTextStyles.body(
                                                 context,
                                                 fontWeight:

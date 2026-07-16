@@ -1290,7 +1290,13 @@ class _ChartEngineShellScreenState
                 'exch':     v.exch,
                 'token':    v.token,
                 'tsym':     v.tsym,
-                'dname':    v.dname,
+                // Prefer the DerivativeMaster decorative name so the JS
+                // typeahead shows (and picks) a human-readable contract name;
+                // falls back to the trading symbol (tsym) first, then dname,
+                // when the contract isn't in the master (indices / equities).
+                // Trim the "-EQ" suffix so equities read "TCS" not "TCS-EQ".
+                'dname':    (v.masterName ?? v.tsym ?? v.dname)
+                    ?.replaceAll('-EQ', ''),
                 'symbol':   v.symbol,
                 'ls':       v.ls,
                 'ti':       v.ti,
