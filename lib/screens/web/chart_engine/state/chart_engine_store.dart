@@ -857,11 +857,23 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
       // to 1, sometimes 0). Keep the better lot/tick and leave qty untouched.
       final keepLs = existing.ls > scrip.ls ? existing.ls : scrip.ls;
       final keepTi = existing.ti > 0 ? existing.ti : scrip.ti;
-      if (keepLs == existing.ls && keepTi == existing.ti) return; // no-op
+      // Adopt the incoming display name too: a symbol persisted with its raw
+      // tsym must pick up the DerivativeMaster decorative name once it loads,
+      // otherwise the chart title (which reads dispName) stays stale for a
+      // known contract. Only its non-empty value is taken so a lot-less
+      // re-fire can't blank an existing name.
+      final keepDispName =
+          scrip.dispName.isNotEmpty ? scrip.dispName : existing.dispName;
+      if (keepLs == existing.ls &&
+          keepTi == existing.ti &&
+          keepDispName == existing.dispName) {
+        return; // no-op
+      }
       state = state.copyWithPane(
           index,
-          state.panes[index]
-              .copyWith(scrip: scrip.copyWith(ls: keepLs, ti: keepTi)));
+          state.panes[index].copyWith(
+              scrip: scrip.copyWith(
+                  dispName: keepDispName, ls: keepLs, ti: keepTi)));
       _schedulePersist();
       return;
     }

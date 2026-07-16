@@ -247,7 +247,10 @@ class _WatchlistCardWebState extends ConsumerState<WatchlistCardWeb> {
                               exch: depthArgs.exch,
                               token: depthArgs.token,
                               tsym: depthArgs.tsym,
-                              dispName: depthArgs.tsym,
+                              dispName: (DerivativeMaster.nameFor(
+                                          depthArgs.exch, depthArgs.token) ??
+                                      depthArgs.tsym)
+                                  .replaceAll('-EQ', ''),
                               ls: 1,
                               ti: 0.05,
                               instname: depthArgs.instname,
