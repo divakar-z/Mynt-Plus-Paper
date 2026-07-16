@@ -1,5 +1,22 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+/// Point the trade-journal notes API at a local `journal_notes.py` dev server
+/// instead of live:
+///
+///   flutter run -d chrome --web-port 8080 \
+///       --dart-define=JOURNAL_NOTES_LOCAL=true
+///
+/// Read from the environment rather than hardcoded so a dev pointer cannot be
+/// committed by accident — the default is always live.
+///
+/// Note the dev server is cross-origin from the Flutter web app, so the browser
+/// preflights every call. `journal_notes.py` must answer `OPTIONS` with
+/// `Access-Control-Allow-Headers: Authorization, clientid, Content-Type` or the
+/// requests fail before reaching Flask. `curl` will not reveal this — it does
+/// not preflight.
+const bool kJournalNotesUseLocalDev =
+    bool.fromEnvironment('JOURNAL_NOTES_LOCAL');
+
 class ApiLinks {
 // UAT----
 
@@ -391,6 +408,23 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get caevents => 'https://v3.mynt.in/equity/';
   String get position => 'https://a1.zebuetrade.com/position/';
   String get cmrdownload => 'https://rekycbe.mynt.in/report/cmr';
+
+  /// Trade-journal notes (`journal_notes.py`).
+  ///
+  /// Composed off [reportsapi] because the `/report` prefix is applied by the
+  /// reverse proxy on live, not by Flask — no blueprint declares it. The local
+  /// dev server exposes the same routes with no prefix at all, so both the host
+  /// and the prefix difference are absorbed here and switching is one flag.
+  ///
+  /// No trailing slash: paths carry their own leading slash, following
+  /// [stockScannerApi]. (The rest of the report family appends `/getLedger` to
+  /// a base that already ends in `/`, producing a tolerated `//`.)
+  ///
+  /// Unlike its report-family siblings this service returns real HTTP status
+  /// codes — see `JournalNotesApi`.
+  String get journalNotesApi => kJournalNotesUseLocalDev
+      ? 'http://localhost:9003/journal'
+      : '${reportsapi}journal';
 
 //mf new3
   String get newvenketmfurl => "https://v3.mynt.in/mfapi";

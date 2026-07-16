@@ -1,3 +1,4 @@
+import 'package:mynt_plus/api/journal_notes_api.dart';
 import 'package:mynt_plus/api/ledger_api.dart';
 import '../api_key_generate_api.dart';
 import '../auth_api.dart';
@@ -44,4 +45,5 @@ class ApiExporter
         LedgerApi,
         ProfileAllDetailsApi,
         VersionApi,
-        StockScannerApi {}
+        StockScannerApi,
+        JournalNotesApi {}
