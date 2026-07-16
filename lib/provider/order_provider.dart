@@ -792,22 +792,52 @@ class OrderProvider extends DefaultChangeNotifier {
   /// Re-runs search filter on current tab's data without calling notifyListeners
   void _reapplySearchSilent(String value) {
     if (value.isEmpty) return;
-    final upperValue = value.toUpperCase();
     if (_selectedTab == 0 && _openOrder != null && _openOrder!.isNotEmpty) {
       _orderSearchItem = _openOrder!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.dname,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     } else if (_selectedTab == 1 && _executedOrder != null && _executedOrder!.isNotEmpty) {
       _orderSearchItem = _executedOrder!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.dname,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     } else if (_selectedTab == 2 && _tradeBook != null && _tradeBook!.isNotEmpty) {
       _tradeBooksearch = _tradeBook!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.dname,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     } else if (_selectedTab == 3 && _gttOrderBookModel != null && _gttOrderBookModel!.isNotEmpty) {
       _gttOrderBookSearch = _gttOrderBookModel!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     }
   }
@@ -993,6 +1023,17 @@ class OrderProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// True when [query] appears in any of the contract's name forms (master
+  /// display name, dname, raw tsym, parsed symbol/expiry/option, exchange) so
+  /// search matches whatever the Instrument column displays. Used by
+  /// [searchOrders], [_reapplySearchSilent], and the GTT screen's triggered
+  /// list — keep the field lists in sync, and in sync with the positions
+  /// search in position_table.dart.
+  bool contractMatches(String query, List<String?> fields) {
+    final q = query.toLowerCase();
+    return fields.any((field) => (field ?? '').toLowerCase().contains(q));
+  }
+
   // A single search function to handle search for all order tabs
   searchOrders(String value, BuildContext context) {
 
@@ -1010,8 +1051,15 @@ class OrderProvider extends DefaultChangeNotifier {
         case 0: // Open Orders
           if (_openOrder != null && _openOrder!.isNotEmpty) {
             _orderSearchItem = _openOrder!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.dname,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _orderSearchItem = [];
@@ -1020,8 +1068,15 @@ class OrderProvider extends DefaultChangeNotifier {
         case 1: // Executed Orders
           if (_executedOrder != null && _executedOrder!.isNotEmpty) {
             _orderSearchItem = _executedOrder!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.dname,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _orderSearchItem = [];
@@ -1030,8 +1085,15 @@ class OrderProvider extends DefaultChangeNotifier {
         case 2: // Trade Book
           if (_tradeBook != null && _tradeBook!.isNotEmpty) {
             _tradeBooksearch = _tradeBook!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.dname,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _tradeBooksearch = [];
@@ -1040,8 +1102,14 @@ class OrderProvider extends DefaultChangeNotifier {
         case 3: // GTT Orders
           if (_gttOrderBookModel != null && _gttOrderBookModel!.isNotEmpty) {
             _gttOrderBookSearch = _gttOrderBookModel!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _gttOrderBookSearch = [];
@@ -1066,8 +1134,11 @@ class OrderProvider extends DefaultChangeNotifier {
           if (alertProvider.alertPendingModel != null &&
               alertProvider.alertPendingModel!.isNotEmpty) {
             final searchResult = alertProvider.alertPendingModel!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      DerivativeMaster.nameFor(element.exch, element.token),
+                      element.tsym,
+                      element.exch,
+                    ]))
                 .toList();
             alertProvider.setAlertPendingSearch(searchResult);
           } else {
@@ -1089,9 +1160,12 @@ class OrderProvider extends DefaultChangeNotifier {
 
             // Then apply search filter
             final searchResult = alertRelatedMessages
-                .where((msg) =>
-                    msg.dmsg != null &&
-                    msg.dmsg!.toUpperCase().contains(value.toUpperCase()))
+                .where((msg) => contractMatches(value, [
+                      DerivativeMaster.nameFor(msg.exch, msg.token),
+                      msg.tsym,
+                      msg.dmsg,
+                      msg.exch,
+                    ]))
                 .toList();
             notificationProvider.setTriggeredAlertSearch(searchResult);
           } else {

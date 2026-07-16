@@ -243,7 +243,22 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
 
     final List<GttOrderBookModel> gttOrders;
     if (showTriggered) {
-      gttOrders = orderBook.triggeredGttOrders ?? [];
+      // Triggered orders come from a separate lazily-fetched list that
+      // searchOrders doesn't cover, so filter here at build time — always
+      // fresh even when the fetch completes mid-search.
+      final triggered = orderBook.triggeredGttOrders ?? [];
+      gttOrders = (searchQuery.isNotEmpty && isGttOrdersTab)
+          ? triggered
+              .where((e) => orderBook.contractMatches(searchQuery, [
+                    e.masterName,
+                    e.tsym,
+                    e.symbol,
+                    e.expDate,
+                    e.option,
+                    e.exch,
+                  ]))
+              .toList()
+          : triggered;
     } else {
       gttOrders = (searchQuery.isNotEmpty && isGttOrdersTab)
           ? (orderBook.gttOrderBookSearch ?? [])
@@ -360,15 +375,15 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                               child: Padding(
                                 padding: const EdgeInsets.all(16.0),
                                 child: NoDataFoundWeb(
-                                  title: showTriggered
-                                      ? "No Triggered GTT Orders"
-                                      : (searchQuery.isNotEmpty
-                                          ? "No GTT Orders Found"
+                                  title: searchQuery.isNotEmpty
+                                      ? "No GTT Orders Found"
+                                      : (showTriggered
+                                          ? "No Triggered GTT Orders"
                                           : "No GTT Orders"),
-                                  subtitle: showTriggered
-                                      ? "You don't have any triggered GTT orders yet."
-                                      : (searchQuery.isNotEmpty
-                                          ? "No GTT orders match your search \"$searchQuery\"."
+                                  subtitle: searchQuery.isNotEmpty
+                                      ? "No GTT orders match your search \"$searchQuery\"."
+                                      : (showTriggered
+                                          ? "You don't have any triggered GTT orders yet."
                                           : "You don't have any GTT orders yet."),
                                   primaryEnabled: false,
                                   secondaryEnabled: false,

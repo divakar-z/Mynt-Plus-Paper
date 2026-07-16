@@ -527,9 +527,20 @@ class _PositionTableState extends ConsumerState<PositionTable> {
     final searchQuery = widget.searchQuery?.toLowerCase().trim() ?? '';
     if (searchQuery.isNotEmpty) {
       filtered = filtered.where((position) {
-        final symbol = position.symbol?.toLowerCase() ?? '';
-        final exch = position.exch?.toLowerCase() ?? '';
-        return symbol.contains(searchQuery) || exch.contains(searchQuery);
+        // Match the displayed contract name (master/dname/tsym) and its
+        // parsed parts so expiry ("JUL", "24 JUL 26") and strike/option
+        // ("270 CE") searches work, not just the underlying symbol.
+        final searchable = [
+          position.masterName,
+          position.dname,
+          position.tsym,
+          position.symbol,
+          position.expDate,
+          position.option,
+          position.exch,
+        ];
+        return searchable.any(
+            (field) => (field ?? '').toLowerCase().contains(searchQuery));
       }).toList();
     }
 
@@ -549,8 +560,10 @@ class _PositionTableState extends ConsumerState<PositionTable> {
             comparison = (a.sPrdtAli ?? '').compareTo(b.sPrdtAli ?? '');
             break;
           case 2: // Instrument
-            comparison = '${a.symbol ?? ''} ${a.exch ?? ''}'
-                .compareTo('${b.symbol ?? ''} ${b.exch ?? ''}');
+            // Compare the displayed contract name (master/dname/tsym) — the
+            // parsed symbol alone ties for every contract of one underlying.
+            comparison = _formatInstrumentText(a)
+                .compareTo(_formatInstrumentText(b));
             break;
           case 3: // Qty
             comparison = (int.tryParse(a.qty ?? '0') ?? 0)
