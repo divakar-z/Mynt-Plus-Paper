@@ -227,6 +227,56 @@ void main() {
       final note = JournalNote.fromJson({...saveResponse, 'pnl': null});
       expect(note.hasProvisionalSnapshot, isFalse);
     });
+
+    test('parses the attachments array now returned on every note object', () {
+      // The backend serializer now includes attachments[] on save/get/list —
+      // the exact shape captured in §7.2 of the spec.
+      final note = JournalNote.fromJson({
+        ...saveResponse,
+        'attachments': [
+          {
+            'attachment_id': 'ac19c45f-02ca-4eba-b509-2a5f06b1865b',
+            'note_id': 1,
+            'filename': 'banknifty-5m.jpg',
+            'content_type': 'image/jpeg',
+            'byte_size': 996,
+            'sha256': '2ca16c29',
+            'created_at': '2026-07-16T14:39:50+05:30',
+          },
+        ],
+      });
+
+      expect(note.attachments, hasLength(1));
+      final a = note.attachments.first;
+      expect(a.attachmentId, 'ac19c45f-02ca-4eba-b509-2a5f06b1865b');
+      expect(a.filename, 'banknifty-5m.jpg');
+      expect(a.isImage, isTrue);
+      expect(a.isPdf, isFalse);
+      // byte_size is the STORED size after re-encode, not what was uploaded.
+      expect(a.byteSize, 996);
+    });
+
+    test('a note with no attachments parses to an empty list, not null', () {
+      final note = JournalNote.fromJson(saveResponse); // no attachments key
+      expect(note.attachments, isEmpty);
+    });
+
+    test('distinguishes a PDF attachment from an image', () {
+      final note = JournalNote.fromJson({
+        ...saveResponse,
+        'attachments': [
+          {
+            'attachment_id': 'p1',
+            'note_id': 1,
+            'filename': 'contract.pdf',
+            'content_type': 'application/pdf',
+            'byte_size': 4200,
+          },
+        ],
+      });
+      expect(note.attachments.single.isPdf, isTrue);
+      expect(note.attachments.single.isImage, isFalse);
+    });
   });
 
   group('NoteListResult', () {

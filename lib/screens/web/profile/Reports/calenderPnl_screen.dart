@@ -3084,18 +3084,12 @@ class _WebDailyCalendar extends StatelessWidget {
         final availableWidth =
             constraints.maxWidth - dayLabelWidth - totalMonthGaps;
 
-        // Cells are sized to fill the width, but never smaller than a floor —
-        // a full financial year squeezed into the panel leaves cells too small
-        // to read the note dot. Below the floor we use the floor and let the
-        // grid scroll horizontally instead.
-        const double minCellStep = 22.0;
-        final double fillCellStep = availableWidth / totalWeeks;
-        final double cellStep =
-            fillCellStep < minCellStep ? minCellStep : fillCellStep;
-        final double cellGap = (cellStep * 0.18).clamp(3.0, 5.0);
+        // Fill the width so the whole financial year is always visible — no
+        // horizontal scroll, no hidden months. Cells scale with the panel; the
+        // note marker (a corner triangle) stays legible even when they are small.
+        final double cellStep = availableWidth / totalWeeks;
+        final double cellGap = (cellStep * 0.18).clamp(2.0, 4.0);
         final double cellSize = cellStep - cellGap;
-        // The grid's natural width; when it exceeds the panel it scrolls.
-        final double gridWidth = totalWeeks * cellStep + totalMonthGaps;
 
         Widget buildCell(DateTime? date) {
           if (date == null) {
@@ -3161,102 +3155,98 @@ class _WebDailyCalendar extends StatelessWidget {
             isToday: isToday,
             todayBorderColor: todayBorderColor,
             hasNote: hasNote,
-            // Punch the marker out of a filled cell in the page background, but
-            // an unfilled cell is already near-background — there a light dot
-            // would vanish, so ink it instead.
-            noteMarkerColor: val != 0
-                ? resolveThemeColor(context,
-                    dark: MyntColors.backgroundColorDark,
-                    light: MyntColors.backgroundColor)
-                : resolveThemeColor(context,
-                    dark: MyntColors.textSecondaryDark,
-                    light: MyntColors.textSecondary),
+            // Vivid orange with a lighter same-hue glow — specified explicitly
+            // to stay visible on both the green and the red fills. Same in both
+            // themes; the glow supplies the edge separation.
+            noteMarkerColor: MyntColors.noteMarker,
             onTap: canNote ? () => onNoteTap!(date) : null,
           );
         }
 
-        // The grid and its month labels use fixed cell widths and scroll
-        // horizontally together. The day-of-week labels stay pinned on the left,
-        // outside the scroll, so they never slide out of view.
-        final grid = Row(
+        return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (int m = 0; m < monthGroups.length; m++) ...[
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: monthGroups[m].weeks.map((weekDays) {
-                  return Column(
-                    children:
-                        weekDays.map((date) => buildCell(date)).toList(),
-                  );
-                }).toList(),
-              ),
-              if (m < monthGroups.length - 1) SizedBox(width: monthGap),
-            ],
-          ],
-        );
-
-        final monthLabels = Row(
-          children: [
-            for (int m = 0; m < monthGroups.length; m++) ...[
-              SizedBox(
-                width: monthGroups[m].weeks.length * cellStep,
-                child: Center(
-                  child: Text(
-                    _monthAbbr(monthGroups[m].month),
-                    style: TextStyle(
-                      fontFamily: MyntFonts.fontFamily,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500,
-                      color: secondaryColor,
-                    ),
+            // Heatmap grid — day labels pinned left, month groups fill the width.
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: dayLabelWidth,
+                  child: Column(
+                    children: List.generate(7, (dayIndex) {
+                      return Container(
+                        height: cellSize + cellGap,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          dayLabels[dayIndex],
+                          style: TextStyle(
+                            fontFamily: MyntFonts.fontFamily,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w400,
+                            color: secondaryColor,
+                          ),
+                        ),
+                      );
+                    }),
                   ),
                 ),
-              ),
-              if (m < monthGroups.length - 1) SizedBox(width: monthGap),
-            ],
-          ],
-        );
-
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Day-of-week labels (Mon, Wed, Fri) — pinned, not scrolled.
-            SizedBox(
-              width: dayLabelWidth,
-              child: Column(
-                children: List.generate(7, (dayIndex) {
-                  return Container(
-                    height: cellSize + cellGap,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      dayLabels[dayIndex],
-                      style: TextStyle(
-                        fontFamily: MyntFonts.fontFamily,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w400,
-                        color: secondaryColor,
-                      ),
-                    ),
-                  );
-                }),
-              ),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: gridWidth,
-                  child: Column(
+                Expanded(
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      grid,
-                      const SizedBox(height: 6),
-                      monthLabels,
+                      for (int m = 0; m < monthGroups.length; m++) ...[
+                        Expanded(
+                          flex: monthGroups[m].weeks.length,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: monthGroups[m].weeks.map((weekDays) {
+                              return Column(
+                                children: weekDays
+                                    .map((date) => buildCell(date))
+                                    .toList(),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                        if (m < monthGroups.length - 1)
+                          SizedBox(width: monthGap),
+                      ],
                     ],
                   ),
                 ),
-              ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            // Month labels below the grid — centered under each group.
+            Row(
+              children: [
+                SizedBox(width: dayLabelWidth),
+                Expanded(
+                  child: Row(
+                    children: [
+                      for (int m = 0; m < monthGroups.length; m++) ...[
+                        Expanded(
+                          flex: monthGroups[m].weeks.length,
+                          child: Center(
+                            child: Text(
+                              _monthAbbr(monthGroups[m].month),
+                              style: TextStyle(
+                                fontFamily: MyntFonts.fontFamily,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                                color: secondaryColor,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (m < monthGroups.length - 1)
+                          SizedBox(width: monthGap),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ),
           ],
         );
@@ -3331,10 +3321,10 @@ class _HoverableHeatmapCellState extends State<_HoverableHeatmapCell> {
 
   @override
   Widget build(BuildContext context) {
-    // The note marker is a dot rather than an icon — even at the larger cell
-    // size, detail is unreadable. Sized to fill a clear share of the cell so it
-    // reads at a glance.
-    final markerSize = (widget.cellSize * 0.42).clamp(5.0, 9.0);
+    // A dot pinned to the top-right of the cell. Small enough that the day's
+    // colour stays readable underneath — the glow supplies the visibility, so
+    // the core itself must not swallow the box.
+    final markerSize = (widget.cellSize * 0.32).clamp(3.5, 5.0);
 
     return MouseRegion(
       cursor: widget.onTap != null
@@ -3351,6 +3341,8 @@ class _HoverableHeatmapCellState extends State<_HoverableHeatmapCell> {
             height: widget.cellSize,
             margin: EdgeInsets.only(
                 bottom: widget.cellGap, right: widget.cellGap),
+            // Clip children (the corner triangle) to the rounded cell.
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               color: widget.bgColor,
               borderRadius: BorderRadius.circular(3),
@@ -3367,13 +3359,29 @@ class _HoverableHeatmapCellState extends State<_HoverableHeatmapCell> {
                       : null,
             ),
             child: widget.hasNote
-                ? Center(
-                    child: Container(
-                      width: markerSize,
-                      height: markerSize,
-                      decoration: BoxDecoration(
-                        color: widget.noteMarkerColor,
-                        shape: BoxShape.circle,
+                ? Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 2, right: 2),
+                      child: Container(
+                        width: markerSize,
+                        height: markerSize,
+                        decoration: BoxDecoration(
+                          color: widget.noteMarkerColor,
+                          shape: BoxShape.circle,
+                          // A lighter halo of the same hue — reads as a glow
+                          // and gives the dot an edge on any fill colour. Kept
+                          // tight so core + glow stay a corner badge rather
+                          // than covering the box.
+                          boxShadow: [
+                            BoxShadow(
+                              color: widget.noteMarkerColor
+                                  .withValues(alpha: 0.55),
+                              blurRadius: 2,
+                              spreadRadius: 0.8,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   )

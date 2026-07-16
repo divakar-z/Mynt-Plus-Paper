@@ -158,6 +158,12 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
 
   bool get _isNew => widget.existing == null;
 
+  /// `2026-05-15` → `15 May 2026` for display. The stored key stays ISO.
+  String get _prettyDate {
+    final d = DateTime.tryParse(widget.noteDate);
+    return d != null ? DateFormat('dd MMM yyyy').format(d) : widget.noteDate;
+  }
+
   /// Whether the current text differs from what the note was opened with. Read
   /// live from the controllers rather than tracked with a flag, so it stays
   /// correct even after the user edits back to the original.
@@ -390,10 +396,23 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   }
 
   Widget _buildHeader(BuildContext context) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
       child: Row(
         children: [
+          Container(
+            width: 38,
+            height: 38,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(Icons.edit_note_rounded, size: 22, color: accent),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -407,10 +426,11 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${widget.noteDate} · ${widget.group.tabLabel}',
+                  '$_prettyDate · ${widget.group.tabLabel}',
                   style: MyntWebTextStyles.caption(context,
                       darkColor: MyntColors.textSecondaryDark,
-                      lightColor: MyntColors.textSecondary),
+                      lightColor: MyntColors.textSecondary,
+                      fontWeight: MyntFonts.medium),
                 ),
               ],
             ),
@@ -436,36 +456,57 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     }
 
     final realised = snapshot.realised;
-    final color = realised >= 0
+    final isProfit = realised >= 0;
+    final color = isProfit
         ? resolveThemeColor(context,
             dark: MyntColors.profitDark, light: MyntColors.profit)
         : resolveThemeColor(context,
             dark: MyntColors.lossDark, light: MyntColors.loss);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: resolveThemeColor(context,
-            dark: MyntColors.inputBgDark, light: MyntColors.inputBg),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: resolveThemeColor(context,
-              dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder),
-        ),
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
       ),
       child: Row(
         children: [
-          Text(
-            "This day's P&L",
-            style: MyntWebTextStyles.bodySmall(context,
-                darkColor: MyntColors.textSecondaryDark,
-                lightColor: MyntColors.textSecondary),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "This day's realised P&L",
+                  style: MyntWebTextStyles.bodySmall(context,
+                      darkColor: MyntColors.textSecondaryDark,
+                      lightColor: MyntColors.textSecondary),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _formatAmount(realised),
+                  style: MyntWebTextStyles.head(context,
+                      color: color, fontWeight: MyntFonts.bold),
+                ),
+              ],
+            ),
           ),
-          const Spacer(),
-          Text(
-            _formatAmount(realised),
-            style: MyntWebTextStyles.body(context,
-                color: color, fontWeight: MyntFonts.semiBold),
+          const SizedBox(width: 12),
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isProfit
+                  ? Icons.trending_up_rounded
+                  : Icons.trending_down_rounded,
+              size: 20,
+              color: color,
+            ),
           ),
         ],
       ),

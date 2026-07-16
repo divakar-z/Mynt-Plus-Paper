@@ -72,6 +72,11 @@ class WebColors {
   static const Color warningDark = Color(0xFFD29922);
   static const Color pending = Color(0xFFFFB038);
 
+  /// Trade-journal note marker on the P&L Summary heat map. A vivid orange
+  /// chosen to stay visible on the profit green, the loss red, and the empty
+  /// grey cells alike; rendered with a lighter same-hue glow around it.
+  static const Color noteMarker = Color(0xFFFF7900);
+
   // ---------------- BACKGROUND----------------
 
   static const Color searchBg = Color(0xFFF9F9F9);
