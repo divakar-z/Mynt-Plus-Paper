@@ -1644,7 +1644,7 @@ class _CustomizableSplitHomeScreenState
           // Scanner / Orderflow / Charts hidden from the sidebar menu too, to
           // match the Options dropdown (features not ready for hosting).
           // Restore by putting the show* variables back / removing these.
-          showScanner: false,
+          showScanner: showScanner,
           showOrderflow: false,
           showCharts: false,
         ),
