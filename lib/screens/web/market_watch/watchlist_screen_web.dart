@@ -15,6 +15,7 @@ import 'dart:html' as html;
 import 'tv_chart/chart_iframe_guard.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/thems.dart';
+import '../../../sharedWidget/functions.dart';
 import '../../../res/res.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
@@ -34,6 +35,8 @@ import '../../../models/marketwatch_model/get_quotes.dart';
 import 'index/index_bottom_sheet_web.dart';
 import 'option_chain_panel_web.dart';
 import '../../../provider/watchlist_oc_provider.dart';
+import '../chart_engine/state/chart_engine_store.dart';
+import '../chart_engine/state/active_pane_symbol_request.dart';
 
 // Provider to manage delete mode state
 final deleteModeProvider =
@@ -2265,6 +2268,31 @@ class _WatchlistIndexSlotWebState
       // Call depth APIs with the safely constructed arguments
       if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
         await widget.marketWatch.calldepthApis(context, depthArgs, "");
+      }
+
+      // Apply the picked symbol to the chart's CURRENTLY-focused pane. Routed
+      // through the engine (which reads its live `.pane.active` marker at apply
+      // time) rather than Flutter's `activePaneIndex`, so a pick reliably lands
+      // on the focused pane — including re-picking a symbol already shown in
+      // another pane. Harmless when no chart/iframe is mounted (the shell's
+      // listener no-ops). ls/ti unknown here; the engine's GetSecurityInfo
+      // fetch backfills the real lot/tick.
+      if (!mounted) return;
+      if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
+        ref.read(activePaneSymbolRequestProvider.notifier).request(
+              ChartScrip(
+                exch: depthArgs.exch,
+                token: depthArgs.token,
+                tsym: depthArgs.tsym,
+                dispName: (DerivativeMaster.nameFor(
+                            depthArgs.exch, depthArgs.token) ??
+                        depthArgs.tsym)
+                    .replaceAll('-EQ', ''),
+                ls: 1,
+                ti: 0.05,
+                instname: depthArgs.instname,
+              ).toJson(),
+            );
       }
     } catch (e) {
     }

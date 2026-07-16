@@ -730,7 +730,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                             ledgerdata.segmentvalue,
                                             widget.data.nSESYMBOL.toString(),
                                             widget.data.iSIN.toString(),
-                                            widget.data.aMOUNT.toString(),
+                                            ((double.tryParse(widget.data.sCRIPVALUE?.toString() ?? '0') ?? 0) *
+                                                    (double.tryParse(ledgerdata.selectnetpledge.text) ?? 0))
+                                                .toStringAsFixed(2),
                                             ledgerdata.selectnetpledge.text,
                                             widget.data.nET.toString(),
                                             "pledge",
@@ -748,7 +750,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                             ledgerdata.segmentvalue,
                                             widget.data.nSESYMBOL.toString(),
                                             widget.data.iSIN.toString(),
-                                            widget.data.aMOUNT.toString(),
+                                            ((double.tryParse(widget.data.sCRIPVALUE?.toString() ?? '0') ?? 0) *
+                                                    (double.tryParse(ledgerdata.selectnetpledge.text) ?? 0))
+                                                .toStringAsFixed(2),
                                             ledgerdata.selectnetpledge.text,
                                             widget.data.nET.toString(),
                                             "unpledge",

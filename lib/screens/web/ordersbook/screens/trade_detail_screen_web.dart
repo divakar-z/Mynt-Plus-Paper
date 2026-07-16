@@ -206,12 +206,14 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
   }
 
   Widget _buildSymbolSection(ThemesProvider theme) {
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = widget.trade.masterName;
     final symbol = widget.trade.symbol?.replaceAll("-EQ", "") ??
         widget.trade.tsym?.replaceAll("-EQ", "") ??
         '';
     final expDate = widget.trade.expDate ?? '';
     final option = widget.trade.option ?? '';
-    final displayText = '$symbol $expDate $option'.trim();
+    final displayText = master ?? '$symbol $expDate $option'.trim();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

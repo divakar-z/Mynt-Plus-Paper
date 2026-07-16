@@ -64,6 +64,7 @@ class ApiLinks {
   String get searchScrip => '$goMyntURL/SearchScrip';
   // String get searchScripNew => '${bemynt}global/SearchScrip';
 String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
+  String get derivativeMaster => 'https://ws.mynt.in/search/DerivativeMaster';
   String get searchOptScript => '${bemynt}global/SearchOptScript';
   String get technicalData => '$goMyntURL/GetTechnicals';
   String get watchListrename => '$goMyntURL/RenameMW';
@@ -396,6 +397,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   
   String get mfholdingsnewapi => "$newvenketmfurl/order/holdings";
   String get mfAllHoldingsApi => "$newvenketmfurl/order/All_holdings";
+  String get mfDematHoldingsApi => "$newvenketmfurl/order/demat_holdings";
   String get mfnewbestMf => "$newvenketmfurl/dashboard/getMfBaskets";
   String get mfnfoMF => "$newvenketmfurl/dashboard/NFO_datas";
   String get newmfallcatnewendpoit =>
@@ -423,5 +425,13 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
 
   String get mfbasketanalysis => "$dashBoardURL/mfbasket/collections/portfolio_store";
   String get mfbaskbacktest => "$dashBoardURL/mfbasket/collections/portfolio_analysis";
+
+  // ===========================================================================
+  // StockScanner (read-only stock research backend — FastAPI)
+  // TODO: Swap to prod URL when StockScanner backend is hosted publicly.
+  //       Assumes PUBLIC_READ_MODE=true on the backend (no API key required).
+  // ===========================================================================
+  String get stockScannerBaseURL => 'https://agg.zebuetrade.com/scanner';
+  String get stockScannerApi => '$stockScannerBaseURL/api/v1';
 
 }

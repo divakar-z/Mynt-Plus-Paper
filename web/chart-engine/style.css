@@ -1,0 +1,1881 @@
+/* Chart Engine — theme-aware. Mirror of web/footprint-chart/style.css. */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Regular.ttf') format('truetype');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Medium.ttf') format('truetype');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-SemiBold.ttf') format('truetype');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Bold.ttf') format('truetype');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+:root {
+  --bg: #0B0F14;
+  --text: #C9D1D9;
+  --text-soft: #8B949E;
+  --text-mute: #6E7681;
+  --grid-soft: #171C22;
+  --grid-strong: #1F2937;
+  --overlay-bg: rgba(11,15,20,0.94);
+  --card-bg: #161B22;
+  --card-border: #30363D;
+  --accent: #58A6FF;
+}
+html.light {
+  --bg: #FFFFFF;
+  --text: #121212;
+  --text-soft: #4A4A4A;
+  --text-mute: #6B6B6B;
+  --grid-soft: #F9F9F9;
+  --grid-strong: #CBD5E1;
+  --overlay-bg: rgba(248,250,252,0.94);
+  --card-bg: #FFFFFF;
+  --card-border: #E1E4E8;
+  --accent: #0037B7;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+}
+
+/* `100vh` inside a Flutter Web iframe occasionally reports the parent window's
+   viewport rather than the iframe's own — using `100%` of html/body keeps the
+   root pinned to the iframe element's actual height. */
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────────
+   Lives at the top of the iframe (above #layout). Hosts the HTML/JS
+   controls that are migrating piece-by-piece out of Flutter. Starts
+   nearly empty — controls are appended by topbar.js (and per-control
+   modules) only when their feature flag is on. Hidden entirely when
+   empty so the chart owns the full height in pre-migration mode. */
+/* Top bar. Pinned at iframe top, mirrors the host website's surface so
+   the chart UI doesn't look like a foreign patch dropped onto the app.
+   Light mode goes pure white to match the parent screen; dark mode uses
+   the chart's slate background so OLED screens still feel cohesive. */
+#top-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  min-height: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--card-border);
+  overflow: visible;
+}
+html.light #top-bar {
+  background: #FFFFFF;
+  border-bottom: 1px solid #E2E8F0;
+}
+#top-bar:empty {
+  display: none;
+  border-bottom: 0;
+}
+#top-bar:not(:empty) {
+  height: 44px;
+}
+
+/* Right-group anchor — flex auto-margin pushes everything after it
+   to the right edge, separating the chart-control group from the
+   trade-control group. */
+.tb-right-start {
+  margin-left: auto;
+}
+
+/* Base button — bumped to 28px height + 12px horizontal padding for a
+   more confident hit target that matches TradingView's button scale. */
+.tb-chip {
+  height: 28px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-soft);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+/* Light-mode buttons go pure white with a slate-200 border so they
+   read as clean tappable surfaces against the white top bar — the
+   "patchy gray" look in slate-100 (the var --card-bg default) was the
+   biggest visual mismatch with the parent screen. */
+html.light .tb-chip {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+  color: #475569;
+}
+html.light .tb-chip:hover {
+  background: #F8FAFC;
+  border-color: #CBD5E1;
+  color: #0F172A;
+}
+/* `cursor: crosshair` on .pane bleeds into the popover when the popover
+   visually overlays the chart canvas. Force the default arrow on the
+   popover surface and a pointer on every interactive child so the user
+   sees the right affordance no matter where they hover. */
+#top-bar, #top-bar * { cursor: default; }
+#top-bar button { cursor: pointer; }
+.tb-popover, .tb-popover * { cursor: default; }
+.tb-popover button,
+.tb-popover .tb-list-row,
+.tb-popover .tb-layout-tile { cursor: pointer; }
+.tb-chip:hover {
+  color: var(--text);
+  border-color: var(--text-mute);
+  background: var(--grid-soft);
+}
+.tb-chip:active { transform: translateY(0.5px); }
+.tb-chip:disabled { opacity: 0.6; cursor: default; }
+
+/* INSTANT badge. Default state is a subtle "off" chip; when on, fills with
+   amber to match the existing Flutter widget's color so the migration is
+   visually transparent. Selectors are double-classed so they outweigh the
+   `html.light .tb-chip` light-mode override (otherwise the amber fill
+   would be overwritten back to white). */
+.tb-instant { letter-spacing: 0.06em; }
+.tb-instant-icon { font-size: 12px; line-height: 1; }
+.tb-chip.tb-instant--on,
+html.light .tb-chip.tb-instant--on {
+  background: #F59E0B;
+  border-color: #F59E0B;
+  color: #FFFFFF;
+}
+.tb-chip.tb-instant--on:hover,
+html.light .tb-chip.tb-instant--on:hover {
+  background: #D97706;
+  border-color: #D97706;
+  color: #FFFFFF;
+}
+
+/* Square icon-only chips — Layout picker, Snap, Settings.
+   Shared shape: 28×28, no inner padding, centred glyph. The visible
+   icons inherit `currentColor` so they automatically follow the
+   button's text-colour transitions on hover / active. */
+.tb-layout,
+.tb-snap,
+.tb-settings {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.tb-layout canvas { display: block; }
+
+/* Snap chip — text + camera icon. */
+.tb-snap svg { display: inline-block; }
+
+/* Popover — anchored absolutely. Used by Layout picker, will be used by
+   Timeframe / Style / Settings / Order Defaults next. Z-index sits above
+   the chart canvas (which has no z-index of its own). */
+.tb-popover {
+  position: absolute;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  z-index: 1000;
+  padding: 8px 6px;
+}
+/* Light-mode popovers also go pure white to match the buttons +
+   parent screen — keeps the surface chrome consistent across the
+   entire chart UI. */
+html.light .tb-popover {
+  background: #FFFFFF;
+  border-color: #E1E4E8;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
+}
+
+/* Centered-modal variant of `.tb-popover`. Used for popovers too large
+   to anchor cleanly to a single button (Settings, today). The backdrop
+   dims the chart and traps the click — outside-click or ESC closes. */
+.tb-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+html.light .tb-modal-backdrop {
+  background: transparent;
+}
+.tb-modal {
+  position: relative;        /* override .tb-popover absolute positioning */
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+html.light .tb-modal {
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.20);
+}
+.tb-layout-popover {
+  width: 320px;
+  padding: 0;
+  border-radius: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  overflow: hidden;
+}
+html.light .tb-layout-popover {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+}
+.tb-layout-popover-content {
+  display: flex;
+  flex-direction: column;
+}
+.tb-layout-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--card-border);
+  background: var(--bg);
+}
+html.light .tb-layout-header {
+  background: #F8FAFC;
+  border-bottom-color: #E2E8F0;
+}
+.tb-layout-header-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+html.light .tb-layout-header-title { color: #0F172A; }
+.tb-layout-section {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--card-border);
+}
+.tb-layout-section:last-child { border-bottom: none; }
+html.light .tb-layout-section { border-bottom-color: #F1F5F9; }
+.tb-layout-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+  margin-bottom: 8px;
+}
+html.light .tb-layout-section-label { color: #64748B; }
+.tb-layout-row-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tb-layout-tile {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grid-soft);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-soft);
+  padding: 4px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+html.light .tb-layout-tile {
+  background: #F1F5F9;
+  color: #64748B;
+}
+.tb-layout-tile:hover {
+  background: rgba(88, 166, 255, 0.12);
+  color: var(--accent);
+  border-color: rgba(88, 166, 255, 0.30);
+  transform: translateY(-1px);
+}
+html.light .tb-layout-tile:hover {
+  background: rgba(0, 55, 183, 0.08);
+  color: var(--accent);
+  border-color: rgba(0, 55, 183, 0.25);
+}
+.tb-layout-tile--on,
+.tb-layout-tile--on:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  border-color: var(--card-border);
+  transform: none;
+  box-shadow: none;
+}
+html.light .tb-layout-tile--on,
+html.light .tb-layout-tile--on:hover {
+  background: #E2E8F0;
+  color: #0F172A;
+  border-color: #CBD5E1;
+}
+
+/* Timeframe + Style buttons — same chip shape, chevron on the right. */
+.tb-timeframe { gap: 4px; }
+.tb-timeframe-label { font-weight: 700; letter-spacing: 0.02em; }
+.tb-chevron { opacity: 0.6; margin-left: 2px; }
+.tb-style { gap: 4px; }
+
+/* Vertical list popover — used by Timeframe, Style, and any future
+   "list of options" control. */
+.tb-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+}
+.tb-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.tb-list-row:hover { background: var(--grid-soft); }
+.tb-list-row--on { color: var(--accent); font-weight: 600; }
+
+/* Timeframe popover — grouped sections with inverted selection. */
+.tb-timeframe-popover { padding: 0; overflow: hidden; }
+.tb-tf-list { min-width: 200px; padding: 0; }
+.tb-list-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--text-mute);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  user-select: none;
+  border: none;
+  border-top: 1px solid var(--card-border);
+  border-bottom: 1px solid var(--card-border);
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+.tb-list-section:hover { color: var(--text); }
+.tb-list-section-items { display: flex; flex-direction: column; }
+.tb-list-section-icon { opacity: 0.7; }
+.tb-tf-row { border-radius: 0; padding: 9px 16px; font-size: 12.5px; }
+.tb-tf-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-tf-row.tb-list-row--on:hover { background: var(--text); }
+.tb-list-row-check {
+  font-size: 11px;
+  margin-left: 12px;
+  color: var(--accent);
+  min-width: 10px;
+  text-align: right;
+}
+.tb-list-row-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 10px;
+  color: var(--text-soft);
+}
+.tb-list-row--on .tb-list-row-icon { color: var(--accent); }
+.tb-list-row-label { flex: 1; }
+
+/* Style popover — grouped, inverted-selection rows like Timeframe. */
+.tb-style-popover { padding: 0; overflow: hidden; }
+.tb-style-list { min-width: 220px; padding: 4px 0; }
+.tb-style-row {
+  border-radius: 0;
+  padding: 0 12px;
+  height: 36px;
+  font-size: 13px;
+  gap: 0;
+}
+.tb-style-row .tb-list-row-icon { margin-right: 10px; }
+.tb-style-row .tb-list-row-icon svg { width: 20px; height: 20px; }
+.tb-style-popover .tb-list-divider { display: none; }
+.tb-style-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-style-row.tb-list-row--on:hover { background: var(--text); }
+.tb-style-row.tb-list-row--on .tb-list-row-icon { color: var(--bg); }
+.tb-list-divider {
+  height: 1px;
+  background: var(--card-border);
+  margin: 6px 0;
+}
+
+/* Cursor mode button — icon only with chevron, like Style. */
+.tb-cursor { gap: 4px; padding: 0 8px; }
+.tb-cursor-icon { display: inline-flex; align-items: center; color: inherit; }
+
+/* Cursor mode popover — mirrors Style popover row UI. */
+.tb-cursor-popover { padding: 0; overflow: hidden; }
+.tb-cursor-popover .tb-list { min-width: 200px; padding: 4px 0; }
+.tb-cursor-popover .tb-list-row {
+  border-radius: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  gap: 0;
+}
+.tb-cursor-popover .tb-list-row .tb-list-row-icon { margin-right: 10px; }
+.tb-cursor-popover .tb-list-row .tb-list-row-icon svg { width: 20px; height: 20px; }
+.tb-cursor-popover .tb-list-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-cursor-popover .tb-list-row.tb-list-row--on:hover { background: var(--text); }
+.tb-cursor-popover .tb-list-row.tb-list-row--on .tb-list-row-icon { color: var(--bg); }
+.tb-cursor-popover .tb-list-row-check { display: none; }
+
+/* Draw button — when a tool is active, the button fills with accent and
+   the label switches to "Drawing: <name>". Same visual contract as the
+   Flutter widget so the migration is transparent. */
+.tb-draw { gap: 6px; }
+.tb-draw-label { font-weight: 600; letter-spacing: 0.02em; }
+.tb-draw--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+}
+.tb-draw--on:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  filter: brightness(0.92);
+}
+
+/* Refined popover surface — used by Draw (and forthcoming Settings /
+   Order Defaults) for the "title + section label + rows + divider + bar"
+   shape. */
+.tb-popover-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  padding: 10px 14px 2px;
+}
+.tb-popover-subtitle {
+  font-size: 11px;
+  color: var(--text-mute);
+  padding: 0 14px 10px;
+}
+
+/* Keyboard-shortcuts help popover (the "?" chip). */
+/* Above the Settings modal (backdrop z-index 2000) — the shortcuts popover is
+   opened from the info icon INSIDE Settings, so it must stack on top of it. */
+.tb-help-popover { width: 290px; padding-bottom: 8px; border-radius: 12px; z-index: 2100; }
+.tb-help-popover .tb-popover-title {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 14px 18px 2px;
+}
+.tb-help-popover .tb-popover-subtitle {
+  font-size: 12px;
+  color: var(--text-mute);
+  padding: 0 18px 12px;
+}
+.tb-shortcuts-group {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  padding: 10px 18px 4px;
+}
+.tb-shortcuts-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 18px;
+}
+.tb-shortcuts-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  flex: 1;
+}
+.tb-kbd {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  min-width: 64px;
+  text-align: center;
+  white-space: nowrap;
+}
+html.light .tb-kbd {
+  background: #F9F9F9;
+  border-color: #E1E4E8;
+}
+.tb-popover-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  padding: 6px 14px 4px;
+}
+.tb-popover-divider {
+  height: 1px;
+  background: var(--card-border);
+  margin: 8px 0;
+}
+
+/* Draw popover — mirrors the chart-style dropdown UI: flush full-width
+   rows, no inner padding, groups separated by a thin divider. */
+.tb-draw-popover { padding: 0; overflow: hidden; }
+.tb-draw-list { min-width: 220px; padding: 4px 0; }
+.tb-draw-row {
+  border-radius: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  gap: 0;
+}
+.tb-draw-row .tb-list-row-icon {
+  margin-right: 10px;
+  color: var(--text-mute);
+}
+.tb-draw-row .tb-list-row-icon svg { width: 20px; height: 20px; }
+.tb-draw-row:hover .tb-list-row-icon { color: var(--text); }
+.tb-draw-row.tb-list-row--on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-draw-row.tb-list-row--on:hover { background: var(--text); }
+.tb-draw-row.tb-list-row--on .tb-list-row-icon { color: var(--bg); }
+
+.tb-draw-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--card-border);
+}
+.tb-draw-action {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+/* .tb-draw-action:hover { background: var(--grid-strong); } */
+.tb-draw-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: var(--text-mute);
+}
+.tb-draw-action:hover .tb-draw-action-icon { color: var(--text); }
+.tb-draw-action-label { font-size: 10px; font-weight: 600; color: var(--text-soft); }
+.tb-draw-action:hover .tb-draw-action-label { color: var(--text); }
+/* Trash keeps the muted icon style but retains a red label as a subtle
+   destructive cue. */
+/* .tb-draw-action--danger .tb-draw-action-label { color: #EF4444; }
+.tb-draw-action--danger:hover .tb-draw-action-icon { color: #EF4444; }
+.tb-draw-action--danger:hover .tb-draw-action-label { color: #DC2626; } */
+
+/* Indicators (fx) button + popover. */
+.tb-fx { padding: 0 10px; }
+.tb-fx-icon {
+  font-style: italic;
+  font-weight: 600;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 13px;
+  letter-spacing: -0.02em;
+}
+.tb-fx-popover {
+  width: 360px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.tb-fx-popover-content { display: flex; flex-direction: column; min-height: 0; }
+
+/* Search input — clean, dark-friendly, no native shadow. */
+.tb-fx-search-wrap { padding: 10px 12px 8px; }
+.tb-fx-search {
+  width: 100%;
+  height: 32px;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 80ms ease;
+}
+.tb-fx-search:focus { border-color: var(--accent); }
+.tb-fx-search::placeholder { color: var(--text-mute); }
+
+/* Category chips row. */
+.tb-fx-categories {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.tb-fx-cat-chip {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-soft);
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+}
+.tb-fx-cat-chip--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  font-weight: 700;
+}
+/* Dark mode — MyntColors.secondaryDark for the selected category chip
+   (All / Trend / Momentum / Volatility in the Indicators popover). */
+html:not(.light) .tb-fx-cat-chip--on {
+  background: #0052CC;
+  border-color: #0052CC;
+  color: #FFFFFF;
+}
+
+/* Active indicators list. */
+.tb-fx-active-wrap { display: flex; flex-direction: column; }
+.tb-fx-active {
+  max-height: 180px;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
+.tb-fx-active-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  gap: 10px;
+  font-size: 13px;
+}
+.tb-fx-active-row:hover { background: var(--grid-soft); }
+.tb-fx-swatch {
+  width: 12px; height: 12px;
+  border-radius: 3px;
+  flex: 0 0 12px;
+}
+.tb-fx-active-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tb-fx-active-period {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-mute);
+}
+.tb-fx-remove {
+  margin-left: auto;
+  width: 28px; height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  border-radius: 4px;
+}
+.tb-fx-remove svg { width: 18px; height: 18px; }
+.tb-fx-remove:hover { color: var(--text); background: var(--grid-soft); }
+
+/* Catalog list — scrollable. */
+.tb-fx-catalog {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+.tb-fx-catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text);
+  text-align: left;
+  font-size: 13px;
+}
+.tb-fx-catalog-row:hover { background: var(--grid-soft); }
+.tb-fx-catalog-text { flex: 1; min-width: 0; }
+.tb-fx-catalog-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0;
+}
+.tb-fx-catalog-full {
+  font-size: 11px;
+  color: var(--text-mute);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-fx-catalog-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px; height: 20px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-mute);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tb-fx-catalog-row:hover .tb-fx-catalog-add {
+  background: var(--text);
+  color: var(--bg);
+}
+.tb-fx-empty {
+  font-size: 12px;
+  color: var(--text-mute);
+  padding: 8px 12px 14px;
+}
+
+/* ── Shared form controls (Order Defaults, future Settings popover) ─── */
+
+/* Tabs strip at the top of a multi-tab popover. */
+.tb-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px 8px;
+  border-bottom: 1px solid var(--card-border);
+  margin-bottom: 6px;
+}
+.tb-tab {
+  position: relative;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: -1px;       /* sit on top of the bottom border */
+}
+.tb-tab:hover { color: var(--text-soft); }
+.tb-tab--on {
+  color: var(--accent);
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent);
+}
+
+/* Row: label + description on left, control on right. */
+.tb-form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+}
+.tb-form-row + .tb-form-row {
+  border-top: 1px solid var(--card-border);
+}
+.tb-form-row-text { flex: 1; min-width: 0; }
+.tb-form-row-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tb-form-row-desc {
+  font-size: 10.5px;
+  color: var(--text-mute);
+  margin-top: 2px;
+}
+.tb-form-row-ctl { flex: 0 0 auto; }
+
+/* A control cell that holds an info icon next to the main control. */
+.tb-row-ctl-group { display: flex; align-items: center; gap: 8px; }
+.tb-row-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-mute);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.08s ease, background 0.08s ease;
+}
+.tb-row-info:hover { color: var(--accent); background: var(--grid-soft); }
+
+/* Switch — 32×18 pill toggle, accent when on. */
+.tb-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  background: var(--grid-strong);
+  border: none;
+  border-radius: 9px;
+  padding: 0;
+  transition: background 120ms ease;
+}
+.tb-switch-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 14px; height: 14px;
+  background: #FFFFFF;
+  border-radius: 50%;
+  transition: left 120ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.tb-switch--on { background: var(--accent); }
+.tb-switch--on .tb-switch-thumb { left: 16px; }
+/* Dark mode — use MyntColors.secondaryDark (#0052CC) for the switch on-state. */
+html:not(.light) .tb-switch--on { background: #0052CC; }
+
+/* Segmented — pill group of mutually-exclusive options. */
+.tb-segmented {
+  display: inline-flex;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tb-segmented-opt {
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+.tb-segmented-opt:hover { color: var(--text); }
+.tb-segmented-opt--on {
+  background: var(--accent);
+  color: #FFFFFF;
+}
+/* Dark mode — MyntColors.secondaryDark for the selected segmented option
+   (Delivery/Intraday, Normal/Intraday in Order Defaults). */
+html:not(.light) .tb-segmented-opt--on {
+  background: #0052CC;
+  color: #FFFFFF;
+}
+
+/* Number stepper — minus / input / plus. */
+.tb-stepper {
+  display: inline-flex;
+  align-items: center;
+  background: var(--grid-soft);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tb-stepper-btn {
+  width: 24px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tb-stepper-btn:hover { color: var(--accent); }
+.tb-stepper-input {
+  width: 56px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  outline: none;
+}
+.tb-stepper-input:focus { color: var(--accent); }
+
+/* Order Defaults popover specifics. */
+.tb-od-popover { width: 420px; max-height: 80vh; overflow: hidden;
+  display: flex; flex-direction: column;
+  border-radius: 12px; }
+.tb-od-popover .tb-form-row + .tb-form-row,
+.tb-settings-popover .tb-form-row + .tb-form-row { border-top: none; }
+.tb-od-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tb-od-header .tb-popover-title { flex: 1; }
+.tb-od-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  cursor: pointer !important;
+  padding: 6px;
+  margin: 8px 8px 0 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, color 120ms ease;
+}
+.tb-od-close * { cursor: pointer !important; }
+.tb-od-close:hover { background: var(--grid-soft); color: var(--text); }
+.tb-od-popover-content { display: flex; flex-direction: column; min-height: 0; }
+.tb-od-body {
+  overflow-y: auto;
+  max-height: 60vh;
+  padding-bottom: 8px;
+}
+
+/* Order Defaults + Settings — app-theme overrides (scoped). Removes hover
+   affordances and aligns typography / radii with the in-app dialog style. */
+.tb-od-popover .tb-popover-title,
+.tb-settings-popover .tb-popover-title,
+.tb-fx-popover .tb-popover-title {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 14px 13px 2px;
+}
+.tb-od-popover .tb-popover-subtitle,
+.tb-settings-popover .tb-popover-subtitle,
+.tb-fx-popover .tb-popover-subtitle {
+  font-size: 12px;
+  color: var(--text-mute);
+  padding: 4px 13px 5px;
+}
+.tb-fx-popover .tb-fx-search-wrap { padding: 4px 12px 18px; }
+
+/* Indicators (fx) popover — app-theme overrides. Removes hover affordance on
+   category chips and aligns radii / sizing with the in-app dialog style. */
+.tb-fx-popover { border-radius: 8px; }
+.tb-fx-popover .tb-popover-section-label { padding: 6px 12px 4px; }
+.tb-fx-popover .tb-popover-divider { margin: 4px 0; }
+.tb-fx-popover .tb-fx-cat-chip { transition: none; }
+.tb-fx-popover .tb-fx-cat-chip:hover {
+  color: var(--text-soft);
+  background: var(--grid-soft);
+  border-color: var(--card-border);
+}
+.tb-fx-popover .tb-fx-cat-chip--on,
+.tb-fx-popover .tb-fx-cat-chip--on:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+}
+html:not(.light) .tb-fx-popover .tb-fx-cat-chip--on,
+html:not(.light) .tb-fx-popover .tb-fx-cat-chip--on:hover {
+  background: #0052CC;
+  border-color: #0052CC;
+  color: #FFFFFF;
+}
+.tb-od-popover .tb-tabs,
+.tb-settings-popover .tb-tabs {
+  gap: 8px;
+  padding: 0 18px 0;
+  margin-bottom: 8px;
+}
+.tb-od-popover .tb-tab,
+.tb-settings-popover .tb-tab {
+  padding: 10px 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-mute);
+}
+.tb-od-popover .tb-tab:hover,
+.tb-settings-popover .tb-tab:hover { color: var(--text-mute); }
+.tb-od-popover .tb-tab--on,
+.tb-od-popover .tb-tab--on:hover,
+.tb-settings-popover .tb-tab--on,
+.tb-settings-popover .tb-tab--on:hover {
+  color: var(--accent);
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent);
+}
+.tb-od-popover .tb-form-row-label,
+.tb-settings-popover .tb-form-row-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tb-od-popover .tb-form-row-desc,
+.tb-settings-popover .tb-form-row-desc {
+  font-size: 11px;
+}
+.tb-od-popover .tb-segmented,
+.tb-settings-popover .tb-segmented {
+  border-radius: 8px;
+}
+.tb-od-popover .tb-segmented-opt,
+.tb-settings-popover .tb-segmented-opt {
+  font-size: 12px;
+  font-weight: 600;
+}
+.tb-od-popover .tb-segmented-opt:hover,
+.tb-settings-popover .tb-segmented-opt:hover { color: var(--text-mute); }
+.tb-od-popover .tb-segmented-opt--on,
+.tb-od-popover .tb-segmented-opt--on:hover,
+.tb-settings-popover .tb-segmented-opt--on,
+.tb-settings-popover .tb-segmented-opt--on:hover { color: #FFFFFF; }
+.tb-od-popover .tb-stepper,
+.tb-settings-popover .tb-stepper {
+  border-radius: 8px;
+}
+.tb-od-popover .tb-stepper-btn:hover,
+.tb-settings-popover .tb-stepper-btn:hover { color: var(--text-soft); }
+.tb-od-popover .tb-stepper-input:focus,
+.tb-settings-popover .tb-stepper-input:focus { color: var(--text); }
+
+/* Settings popover specifics. */
+.tb-settings-popover { width: 380px; max-height: 80vh; overflow: hidden;
+  display: flex; flex-direction: column;
+  border-radius: 12px; }
+.tb-settings-popover-content { display: flex; flex-direction: column; min-height: 0; }
+.tb-settings-body {
+  overflow-y: auto;
+  max-height: 60vh;
+  padding-bottom: 8px;
+}
+
+/* Slim scrollbar — mirrors the basket-order / "Trade from Chart" dialog
+   styling. Applied to every scrollable child of the chart-engine
+   popovers (Settings body, Indicators active + catalog lists). */
+.tb-settings-body,
+.tb-fx-active,
+.tb-fx-catalog {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+.tb-settings-body::-webkit-scrollbar,
+.tb-fx-active::-webkit-scrollbar,
+.tb-fx-catalog::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.tb-settings-body::-webkit-scrollbar-track,
+.tb-fx-active::-webkit-scrollbar-track,
+.tb-fx-catalog::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tb-settings-body::-webkit-scrollbar-thumb,
+.tb-fx-active::-webkit-scrollbar-thumb,
+.tb-fx-catalog::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+}
+.tb-settings-body::-webkit-scrollbar-thumb:hover,
+.tb-fx-active::-webkit-scrollbar-thumb:hover,
+.tb-fx-catalog::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+}
+html.light .tb-settings-body,
+html.light .tb-fx-active,
+html.light .tb-fx-catalog {
+  scrollbar-color: rgba(100, 116, 139, 0.30) transparent;
+}
+html.light .tb-settings-body::-webkit-scrollbar-thumb,
+html.light .tb-fx-active::-webkit-scrollbar-thumb,
+html.light .tb-fx-catalog::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.30);
+}
+html.light .tb-settings-body::-webkit-scrollbar-thumb:hover,
+html.light .tb-fx-active::-webkit-scrollbar-thumb:hover,
+html.light .tb-fx-catalog::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.50);
+}
+.tb-settings-body .tb-popover-section-label {
+  margin-top: 6px;
+}
+
+/* Color picker — colored square with built-in native picker, plus a reset
+   button. Native input is hidden behind the swatch but still receives the
+   click. */
+.tb-color { display: inline-flex; align-items: center; gap: 6px; }
+.tb-color-swatch {
+  position: relative;
+  width: 28px;
+  height: 22px;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  background: transparent;
+  overflow: hidden;
+}
+.tb-color-swatch--empty {
+  background: repeating-linear-gradient(
+      45deg,
+      var(--grid-soft) 0 4px,
+      var(--grid-strong) 4px 8px);
+  border-style: dashed;
+}
+.tb-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.tb-color-reset {
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-mute);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tb-color-reset:hover { color: var(--accent); border-color: var(--card-border); }
+
+/* Symbol typeahead — input field + result popover. */
+.tb-sym-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tb-sym-exch {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--grid-soft);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.tb-sym-exch[hidden] { display: none; }
+.tb-sym-input {
+  width: 220px;
+  height: 28px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  outline: none;
+  transition: border-color 80ms ease;
+}
+html.light .tb-sym-input {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+}
+html.light .tb-sym-input:focus {
+  border-color: var(--accent);
+}
+.tb-sym-input::placeholder {
+  color: var(--text-mute);
+  font-weight: 400;
+}
+.tb-sym-input:focus {
+  border-color: var(--accent);
+}
+
+.tb-sym-popover {
+  min-width: 220px;
+  max-width: 360px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.tb-sym-state {
+  padding: 12px 14px;
+  font-size: 11px;
+  color: var(--text-mute);
+}
+.tb-sym-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+.tb-sym-row:hover,
+.tb-sym-row--on { background: var(--grid-soft); }
+.tb-sym-row-main { min-width: 0; flex: 1; }
+.tb-sym-row-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-sym-row-meta {
+  font-size: 10px;
+  color: var(--text-mute);
+  margin-top: 2px;
+}
+
+/* Layout grid — `gap` + tinted background creates a visible divider line
+   between panes; splitters sit on top of the gap for drag-to-resize.
+   `min-height: 0` is mandatory inside a flex parent so the grid does not
+   inflate to its panes' natural content height. */
+#layout {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  gap: 2px;
+  background: var(--card-border);
+  position: relative;
+  overflow: hidden;
+}
+
+/* CSS grid items default to `min-content` minimum size on the grid axis.
+   Without explicit `min-height: 0` + `min-width: 0`, a chart pane whose
+   canvas reports a large intrinsic size forces the grid track to expand
+   past `1fr`, pushing other panes off-screen. */
+.pane {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  cursor: crosshair;
+  outline: none;
+  background: var(--bg);
+  min-height: 0;
+  min-width: 0;
+}
+/* Border drawn on top of the canvas via pseudo-element so it doesn't get
+   buried under the canvas's opaque background. Default is a hairline; the
+   .active state replaces it with a 2px accent stroke. */
+.pane::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid transparent;
+  pointer-events: none;
+  z-index: 5;
+}
+.pane.active::after {
+  border: 2px solid var(--accent);
+}
+/* Single-pane layouts: the active border is meaningless (there's only one
+   pane to ever be active) — drop it so the chart edge sits cleanly. */
+#layout.single-pane .pane.active::after {
+  border: 1px solid transparent;
+}
+
+/* Floating pane-control bar — bottom-CENTER of the main candle area.
+   Stays above any sub-panes via the `--main-chart-bottom` CSS var that
+   chart.js updates from `_subPaneTotalH`. Hidden by default; revealed
+   when the cursor is near the bar (JS-managed `.visible` class via
+   chart-engine.js's mousemove proximity check). */
+.pane-ctrl {
+  position: absolute;
+  left: 50%;
+  /* Lifted off the X-axis labels — sits a comfortable distance above
+     them rather than touching, matching TradingView's resting height. */
+  bottom: calc(var(--main-chart-bottom, 0px) + 50px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 6;
+  user-select: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+.pane-ctrl.visible,
+.pane-ctrl:hover {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pane-ctrl-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+  color: #1F2937;
+  cursor: pointer;
+  padding: 0;
+  outline: none;
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.04),
+    0 2px 4px rgba(0, 0, 0, 0.219);
+  transition: color 100ms ease, border-color 100ms ease,
+              background 100ms ease, box-shadow 100ms ease;
+}
+.pane-ctrl-btn:hover {
+  color: var(--accent);
+  border-color: #D1D5DB;
+  background: #F9FAFB;
+}
+.pane-ctrl-btn:focus-visible,
+.pane-ctrl-btn:active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 4px 10px rgba(37, 99, 235, 0.25);
+}
+/* Dark-mode override — keep the same white-on-floating-shadow feel but
+   tinted for OLED comfort. Buttons still read as a distinct cluster
+   against the chart's dark canvas. */
+html:not(.light) .pane-ctrl-btn {
+  background: #1F2937;
+  border-color: #374151;
+  color: #E5E7EB;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.30);
+}
+html:not(.light) .pane-ctrl-btn:hover {
+  background: #111827;
+  border-color: #4B5563;
+  color: var(--accent);
+}
+html:not(.light) .pane-ctrl-btn:focus-visible,
+html:not(.light) .pane-ctrl-btn:active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #FFFFFF;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.30),
+    0 4px 10px rgba(37, 99, 235, 0.35);
+}
+.pane.dragging { cursor: grabbing; }
+.pane.zoom-y { cursor: ns-resize; }
+.pane.zoom-x { cursor: ew-resize; }
+.pane canvas { display: block; width: 100%; height: 100%; }
+
+/* Splitters — absolutely positioned overlays on top of the grid gaps. The
+   hit area is wider than the visible gap (8px each) so they're easy to
+   grab; hover/drag tints them with the accent colour. */
+.splitter {
+  position: absolute;
+  background: transparent;
+  z-index: 20;
+  user-select: none;
+}
+.splitter.col { cursor: col-resize; }
+.splitter.row { cursor: row-resize; }
+.splitter:hover, .splitter.dragging {
+  background: var(--accent);
+}
+
+#overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg);
+  pointer-events: none;
+  z-index: 10;
+}
+#overlay[hidden] { display: none; }
+.overlay-card {
+  padding: 14px 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  text-align: center;
+  max-width: 460px;
+}
+#overlay-title { font-size: 13px; font-weight: 600; color: var(--text); }
+#overlay-detail { margin-top: 4px; font-size: 11px; }
+.muted { color: var(--text-mute); }
+
+/* ── Left drawing rail (full-height, flush-left, TradingView-style) ───────── */
+.draw-rail {
+  position: absolute;
+  /* Inset by the active-pane border width (2px) so the rail sits INSIDE the
+     pane's `.active::after` accent frame instead of painting over it — the
+     left/top-left/bottom-left border stays visible while the rail is open. */
+  left: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: 44px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2px 0;
+  background: var(--bg);
+  border-right: 1px solid var(--card-border);
+}
+.draw-rail[hidden] { display: none; }
+/* The group buttons scroll if the catalogue is taller than the chart; the
+   cursor (top) and the action cluster (bottom) stay pinned. */
+.draw-rail-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+  scrollbar-width: thin;
+}
+.draw-rail-tools::-webkit-scrollbar { width: 4px; }
+.draw-rail-tools::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 2px; }
+.draw-rail-sep { width: 20px; height: 1px; background: var(--card-border); margin: 4px auto; flex-shrink: 0; }
+.draw-rail-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.draw-rail-ic { display: flex; align-items: center; justify-content: center; }
+.draw-rail-ic svg { width: 20px; height: 20px; }
+.draw-rail-btn:hover { background: var(--grid-soft); color: var(--text); }
+.draw-rail-btn--active { background: rgba(120, 120, 120, 0.18); color: var(--text); }
+.draw-rail-btn--active:hover { background: rgba(120, 120, 120, 0.24); color: var(--text); }
+.draw-rail-btn--on { color: var(--accent); }
+.draw-rail-btn--lock.draw-rail-btn--on {
+  background: #FFFFFF;
+  color: #121212;
+}
+.draw-rail-btn--lock.draw-rail-btn--on:hover { background: #FFFFFF; color: #121212; }
+html:not(.light) .draw-rail-btn { color: #FFFFFF; }
+html:not(.light) .draw-rail-btn:hover,
+html:not(.light) .draw-rail-btn--active { color: #FFFFFF; }
+html:not(.light) .draw-rail-btn--on { color: var(--accent); }
+html:not(.light) .draw-rail-btn--lock.draw-rail-btn--on { color: #121212; }
+html:not(.light) .tb-chip { color: #D1D5DB; }
+html:not(.light) .tb-chip:hover { color: #FFFFFF; }
+html:not(.light) .tb-chip.tb-instant--on,
+html:not(.light) .tb-chip.tb-instant--on:hover { color: #FFFFFF; }
+.draw-rail-btn--danger:hover { background: rgba(239, 68, 68, 0.14); color: #EF4444; }
+.draw-rail-collapse { color: var(--text-mute); }
+/* Caret on the RIGHT edge of the icon button, vertically centred, pointing
+   right (the flyout opens to the right). Always faintly visible so the "opens
+   a list" affordance is obvious, brightening to the accent on hover. Hovering
+   the button (not just this caret) opens the group's flyout, so the caret is a
+   hint rather than a tiny click target. */
+.draw-rail-caret {
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 18px;
+  color: var(--text-mute);
+  opacity: 0.7;
+  border-radius: 4px;
+  transition: opacity 0.08s ease, color 0.08s ease, background 0.08s ease;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.draw-rail-btn:hover .draw-rail-caret,
+.draw-rail-btn--active .draw-rail-caret { opacity: 1; }
+.draw-rail-caret:hover { color: var(--accent); background: var(--grid-soft); }
+
+/* Collapsed → a slim blue tab pinned to the left edge. */
+.draw-rail-reopen {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  width: 16px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: var(--accent);
+  color: #FFFFFF;
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.22);
+}
+.draw-rail-reopen[hidden] { display: none; }
+.draw-rail-reopen svg { width: 13px; height: 13px; }
+html:not(.light) .draw-rail-reopen { background: #0052CC; color: #FFFFFF; }
+.draw-rail-reopen svg { color: #FFFFFF; stroke: #FFFFFF; }
+
+/* Floating tooltip for rail buttons. */
+.draw-rail-tip {
+  position: fixed;
+  z-index: 4000;
+  background: #1F2937;
+  color: #FFFFFF;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.30);
+}
+.draw-rail-tip[hidden] { display: none; }
+
+/* Draw-rail flyout popover — mirrors the chart-style dropdown UI (image 2):
+   220px min width, padded list, flush rows, dark active row. */
+.tb-popover[data-kind="draw-rail"] {
+  padding: 0;
+  overflow: hidden;
+}
+.tb-popover[data-kind="draw-rail"] .tb-draw-popover-content {
+  padding: 4px 0;
+  white-space: nowrap;
+}
+.draw-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: 0;
+  padding: 0 12px;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  font-size: 13px;
+}
+.draw-rail-row .draw-rail-row-ic { margin-right: 10px; }
+.draw-rail-row-ic { display: inline-flex; color: var(--text-soft); flex-shrink: 0; }
+.draw-rail-row-ic svg { width: 20px; height: 20px; }
+.draw-rail-row:hover .draw-rail-row-ic { color: var(--text); }
+.tb-list-row--active {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tb-list-row--active:hover { background: var(--text); }
+.tb-list-row--active .tb-list-row-label,
+.tb-list-row--active .draw-rail-row-ic { color: var(--bg); }
+/* The active row has a dark (var(--text)) background, so its icon must stay
+   light (var(--bg)) even on hover — otherwise the generic
+   `.draw-rail-row:hover .draw-rail-row-ic` rule (higher specificity) repaints
+   it dark and it vanishes against the dark row. Specificity (0,4,0) wins. */
+.draw-rail-row.tb-list-row--active:hover .draw-rail-row-ic,
+.draw-rail-row.tb-list-row--active:hover .tb-list-row-label { color: var(--bg); }
+
+/* Lab ---------------------------------------------------------------------- */
+.tb-lab > span { font-size: 12px; }
+.tb-lab-popover { width: 420px; max-width: 92vw; }
+.tb-lab-body {
+  margin-top: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.tb-lab-empty,
+.tb-lab-note {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tb-lab-empty { padding: 24px 4px; text-align: center; }
+.tb-lab-note {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--card-border);
+  font-style: italic;
+}
+
+/* Stat cards */
+.tb-lab-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 6px;
+}
+.tb-lab-stat {
+  flex: 1 1 70px;
+  min-width: 70px;
+  padding: 8px 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+}
+.tb-lab-stat-val { font-size: 15px; font-weight: 700; color: var(--text); }
+.tb-lab-stat-lbl {
+  margin-top: 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+}
+.tb-lab-stat--up .tb-lab-stat-val { color: #22C55E; }
+.tb-lab-stat--down .tb-lab-stat-val { color: #EF4444; }
+
+/* Match list */
+.tb-lab-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.tb-lab-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+.tb-lab-row + .tb-lab-row { border-top: 1px solid var(--card-border); }
+.tb-lab-row-date { color: var(--text-soft); }
+.tb-lab-row-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tb-lab-up { color: #22C55E; }
+.tb-lab-down { color: #EF4444; }
+
+/* Oracle bands */
+.tb-lab-bands {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 6px;
+}
+.tb-lab-band {
+  flex: 1 1 0;
+  padding: 7px 4px;
+  text-align: center;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+}
+.tb-lab-band-lbl {
+  font-size: 10px;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tb-lab-band-val {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.tb-lab-odds-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.tb-lab-target-input {
+  width: 90px;
+  padding: 7px 9px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  outline: none;
+}
+.tb-lab-target-input:focus { border-color: var(--accent); }
+.tb-lab-odds-suffix { font-size: 12px; color: var(--text-soft); }
+
+/* Market Clock */
+.tb-lab-clock {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 6px;
+}
+.tb-lab-clock-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.tb-lab-clock-lbl {
+  width: 42px;
+  flex-shrink: 0;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+.tb-lab-clock-track {
+  flex: 1 1 auto;
+  height: 10px;
+  background: var(--card-border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.tb-lab-clock-fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+}
+.tb-lab-up-bg { background: #22C55E; }
+.tb-lab-down-bg { background: #EF4444; }
+.tb-lab-clock-val {
+  width: 48px;
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Lab — floating panel + projection controls + radial clock (Phase 31) */
+.tb-lab-panel {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  width: 360px;
+  max-height: calc(100vh - 70px);
+  display: flex;
+  flex-direction: column;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+  z-index: 1500;
+  overflow: hidden;
+}
+html.light .tb-lab-panel { background: #FFFFFF; box-shadow: 0 14px 36px rgba(15, 23, 42, 0.14); }
+.tb-lab-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px 8px;
+}
+.tb-lab-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.tb-lab-close {
+  border: none; background: transparent; color: var(--text-mute);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.tb-lab-close:hover { color: var(--text); }
+.tb-lab-tabs { padding: 0 12px; }
+.tb-lab-panel .tb-lab-body {
+  padding: 10px 14px 14px;
+  overflow-y: auto;
+  width: auto;
+}
+.tb-lab-controls { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 10px; }
+.tb-lab-field { display: flex; flex-direction: column; gap: 3px; }
+.tb-lab-field-lbl { font-size: 10px; color: var(--text-mute); font-weight: 600; }
+.tb-lab-select {
+  height: 28px; padding: 0 6px; border-radius: 6px;
+  border: 1px solid var(--card-border); background: var(--card-bg);
+  color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+html.light .tb-lab-select { background: #FFFFFF; }
+.tb-lab-btn {
+  margin-left: auto; height: 28px; padding: 0 12px; border-radius: 6px;
+  border: 1px solid var(--card-border); background: var(--grid-soft);
+  color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tb-lab-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* Echoes list */
+.tb-lab-elist { display: flex; flex-direction: column; }
+.tb-lab-erow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 2px; border-bottom: 1px solid var(--grid-soft);
+}
+.tb-lab-erow-idx { width: 18px; color: var(--text-mute); font-size: 11px; text-align: right; }
+.tb-lab-spark { flex: 0 0 auto; }
+.tb-lab-erow-date { flex: 1 1 auto; font-size: 12px; color: var(--text-soft); }
+.tb-lab-erow-val { font-size: 13px; font-weight: 700; }
+/* Oracle odds */
+.tb-lab-odds-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tb-lab-quick { display: flex; gap: 6px; margin-bottom: 10px; }
+.tb-lab-chip {
+  height: 26px; padding: 0 10px; border-radius: 6px;
+  border: 1px solid var(--card-border); background: var(--card-bg);
+  color: var(--text-soft); font: inherit; font-size: 12px; cursor: pointer;
+}
+.tb-lab-chip:hover { border-color: var(--accent); color: var(--accent); }
+.tb-lab-odds-out { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.tb-lab-odds-line {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; color: var(--text-soft);
+}
+.tb-lab-odds-pct { font-weight: 700; color: var(--text); }
+/* Market clock */
+.tb-lab-modes { display: flex; gap: 6px; margin-bottom: 12px; justify-content: center; }
+.tb-lab-mode {
+  height: 26px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--card-border); background: transparent;
+  color: var(--text-soft); font: inherit; font-size: 12px; cursor: pointer;
+}
+.tb-lab-mode--on { background: var(--accent); color: #FFFFFF; border-color: var(--accent); }
+.tb-lab-rose { display: block; margin: 0 auto; }
+.tb-lab-weekdays {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 6px; height: 70px; margin: 14px 6px 4px;
+}
+.tb-lab-wd { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
+.tb-lab-wd-bar { width: 70%; border-radius: 3px 3px 0 0; }
+.tb-lab-wd-lbl { font-size: 10px; color: var(--text-mute); }

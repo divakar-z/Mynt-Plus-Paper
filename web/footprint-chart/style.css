@@ -1,0 +1,111 @@
+/* Footprint canvas — theme-aware (Flutter pushes the active theme via
+   postMessage; chart.js toggles the .light class on <html>). */
+
+/* Pull the same Geist font Flutter declares in pubspec.yaml. Flutter serves
+   the font files under /assets/fonts/Geist/... so the iframe can use them
+   directly. */
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Regular.ttf') format('truetype');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Medium.ttf') format('truetype');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-SemiBold.ttf') format('truetype');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/assets/fonts/Geist/Geist-Bold.ttf') format('truetype');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+:root {
+  /* Dark (default) */
+  --bg: #0B0F14;
+  --topbar-bg: #0E141C;
+  --topbar-border: #1F2937;
+  --text: #D1D5DB;
+  --text-soft: #9CA3AF;
+  --text-mute: #6B7280;
+  --dot: #374151;
+  --overlay-bg: rgba(11,15,20,0.94);
+  --card-bg: #111827;
+  --card-border: #1F2937;
+}
+html.light {
+  --bg: #FFFFFF;
+  --topbar-bg: #F8FAFC;
+  --topbar-border: #E2E8F0;
+  --text: #0F172A;
+  --text-soft: #475569;
+  --text-mute: #64748B;
+  --dot: #CBD5E1;
+  --overlay-bg: rgba(248,250,252,0.94);
+  --card-bg: #F1F5F9;
+  --card-border: #E2E8F0;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+}
+
+#root { display: flex; flex-direction: column; height: 100vh; }
+
+#topbar {
+  height: 36px;
+  flex: 0 0 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--topbar-bg);
+  border-bottom: 1px solid var(--topbar-border);
+  font-size: 11px;
+}
+#topbar .brand { font-weight: 600; letter-spacing: 0.6px; color: var(--text-soft); text-transform: uppercase; }
+#topbar .meta { display: flex; align-items: center; gap: 8px; color: var(--text-soft); }
+#topbar .meta #sym { font-weight: 700; color: var(--text); letter-spacing: 0.4px; }
+#topbar .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--dot); }
+
+.status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 10px; }
+.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status-live { color: #10B981; background: rgba(16,185,129,0.12); }
+.status-quiet { color: #D97706; background: rgba(217,119,6,0.12); }
+.status-stale { color: #EA580C; background: rgba(234,88,12,0.12); }
+.status-offline { color: #DC2626; background: rgba(220,38,38,0.12); }
+
+#chart-wrap { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+#chart-wrap.dragging { cursor: grabbing; }
+#chart-wrap.zoom-y { cursor: ns-resize; }
+#chart-wrap.zoom-x { cursor: ew-resize; }
+
+#chart { display: block; width: 100%; height: 100%; }
+
+#overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg);
+  pointer-events: none;
+}
+#overlay[hidden] { display: none; }
+#overlay .overlay-card {
+  padding: 14px 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  text-align: center;
+  max-width: 460px;
+}
+#overlay-title { font-size: 13px; font-weight: 600; color: var(--text); }
+#overlay-detail { margin-top: 4px; font-size: 11px; }
+.muted { color: var(--text-mute); }

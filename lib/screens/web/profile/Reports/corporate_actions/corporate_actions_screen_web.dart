@@ -158,8 +158,7 @@ class _CorporateActionsScreenWebState
                 .compareTo(_displayExchange(b.exchange));
             break;
           case 2:
-            cmp = (a.biddingStartDate ?? '')
-                .compareTo(b.biddingStartDate ?? '');
+            cmp = _opensOnValue(a).compareTo(_opensOnValue(b));
             break;
           case 3:
             cmp = (a.biddingEndDate ?? '').compareTo(b.biddingEndDate ?? '');
@@ -296,7 +295,10 @@ class _CorporateActionsScreenWebState
 
   Widget _orderActionCell(
       BuildContext context, CorporateAction item, LDProvider lp) {
-    final isPending = item.orderstatus == 'pending';
+    // Cancellable = order still live at the exchange. Terminal statuses
+    // (completed, rejected, failed, cancel) fall through to a fresh "Order".
+    final statusLower = (item.orderstatus ?? '').trim().toLowerCase();
+    final isPending = statusLower == 'pending' || statusLower == 'success';
 
     final actionColor = isPending
         ? resolveThemeColor(context,
@@ -333,10 +335,8 @@ class _CorporateActionsScreenWebState
   /// Same shape/size as the type badge so the table stays visually uniform.
   Widget _statusCell(BuildContext context, CorporateAction item) {
     final status = (item.orderstatus ?? '').trim();
-    final isPending = status == 'pending';
-    final isRejected = status == 'Rejected';
 
-    if (!isPending && !isRejected) {
+    if (status.isEmpty || status == 'null') {
       return Align(
         alignment: Alignment.centerLeft,
         child: Text(
@@ -350,19 +350,35 @@ class _CorporateActionsScreenWebState
       );
     }
 
-    final color = isPending
-        ? resolveThemeColor(context,
-            dark: MyntColors.warningDark, light: MyntColors.warning)
-        : resolveThemeColor(context,
+    // statuses: Rejected, failed, completed, success, pending, cancel.
+    final lower = status.toLowerCase();
+    final Color color;
+    switch (lower) {
+      case 'success':
+      case 'completed':
+        color = resolveThemeColor(context,
+            dark: MyntColors.profitDark, light: MyntColors.profit);
+        break;
+      case 'pending':
+        color = resolveThemeColor(context,
+            dark: MyntColors.warningDark, light: MyntColors.warning);
+        break;
+      case 'rejected':
+      case 'failed':
+        color = resolveThemeColor(context,
             dark: MyntColors.lossDark, light: MyntColors.loss);
+        break;
+      default:
+        color = resolveThemeColor(context,
+            dark: MyntColors.secondaryDark, light: MyntColors.secondary);
+    }
 
-    final label = isPending ? 'Pending' : 'Rejected';
+    final label = status;
     final reason = (item.rejectionreason ?? '').trim();
-    final tooltipMsg = isRejected
-        ? (reason.isEmpty
-            ? 'Order was rejected by the exchange'
-            : 'Rejected: $reason')
-        : 'Order is pending';
+    final tooltipMsg = (lower == 'rejected' || lower == 'failed') &&
+            reason.isNotEmpty
+        ? '$status: $reason'
+        : status;
 
     final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -772,6 +788,10 @@ class _CorporateActionsScreenWebState
       padding: const EdgeInsets.all(16),
       child: shadcn.OutlinedContainer(
         child: LayoutBuilder(builder: (context, constraints) {
+          // OFS hides the "Closes On" column (the backend doesn't send a close
+          // date for OFS); CA keeps it. Drives the column count + widths below.
+          final bool isOfsTab = lp.selectvalueofcpaction == 'OFS';
+
           // Min widths per column (must fit header + typical content).
           const double companyMin = 220;
           const double companyPreferred = 340;
@@ -781,10 +801,12 @@ class _CorporateActionsScreenWebState
           const double actionMin = 100;
           const double statusMin = 120;
 
+          // Non-company columns: exch, opensOn, [closesOn], type, action, status.
+          final int otherCols = isOfsTab ? 5 : 6;
           final totalMin = companyMin +
               exchMin +
               dateMin + // Opens On
-              dateMin + // Closes On
+              (isOfsTab ? 0 : dateMin) + // Closes On (CA only)
               typeMin +
               actionMin +
               statusMin;
@@ -795,7 +817,7 @@ class _CorporateActionsScreenWebState
           // then distribute the remainder equally across the other columns.
           final companyExtra =
               extra.clamp(0.0, companyPreferred - companyMin);
-          final perOther = ((extra - companyExtra) / 6)
+          final perOther = ((extra - companyExtra) / otherCols)
               .clamp(0.0, double.infinity);
 
           final companyW = companyMin + companyExtra;
@@ -805,15 +827,24 @@ class _CorporateActionsScreenWebState
           final actionW = actionMin + perOther;
           final statusW = statusMin + perOther;
 
-          final columnWidths = <int, shadcn.TableSize>{
-            0: shadcn.FixedTableSize(companyW),
-            1: shadcn.FixedTableSize(exchW),
-            2: shadcn.FixedTableSize(dateW), // Opens On
-            3: shadcn.FixedTableSize(dateW), // Closes On
-            4: shadcn.FixedTableSize(typeW),
-            5: shadcn.FixedTableSize(actionW),
-            6: shadcn.FixedTableSize(statusW),
-          };
+          final columnWidths = isOfsTab
+              ? <int, shadcn.TableSize>{
+                  0: shadcn.FixedTableSize(companyW),
+                  1: shadcn.FixedTableSize(exchW),
+                  2: shadcn.FixedTableSize(dateW), // Opens On
+                  3: shadcn.FixedTableSize(typeW),
+                  4: shadcn.FixedTableSize(actionW),
+                  5: shadcn.FixedTableSize(statusW),
+                }
+              : <int, shadcn.TableSize>{
+                  0: shadcn.FixedTableSize(companyW),
+                  1: shadcn.FixedTableSize(exchW),
+                  2: shadcn.FixedTableSize(dateW), // Opens On
+                  3: shadcn.FixedTableSize(dateW), // Closes On
+                  4: shadcn.FixedTableSize(typeW),
+                  5: shadcn.FixedTableSize(actionW),
+                  6: shadcn.FixedTableSize(statusW),
+                };
 
           return Column(
             children: [
@@ -826,7 +857,7 @@ class _CorporateActionsScreenWebState
                       _headerCell(context, _headers[0], 0),
                       _headerCell(context, _headers[1], 1),
                       _headerCell(context, _headers[2], 2),
-                      _headerCell(context, _headers[3], 3),
+                      if (!isOfsTab) _headerCell(context, _headers[3], 3),
                       _headerCell(context, _headers[4], 4),
                       _headerCell(context, _headers[5], 5, sortable: false),
                       _headerCell(context, _headers[6], 6, sortable: false),
@@ -845,7 +876,7 @@ class _CorporateActionsScreenWebState
                     itemCount: filtered.length,
                     itemBuilder: (context, index) {
                       final item = filtered[index];
-                      return _buildRow(context, lp, item, columnWidths);
+                      return _buildRow(context, lp, item, columnWidths, isOfsTab);
                     },
                   ),
                 ),
@@ -857,11 +888,25 @@ class _CorporateActionsScreenWebState
     );
   }
 
+  // "Opens On" keeps `biddingStartDate` as the primary field (CA rows populate
+  // it and already display correctly), and falls back to `openondate` only when
+  // biddingStartDate is empty — the OFS case, where the open date arrives in
+  // `openondate` instead. This fixes OFS without touching CA. Returns '' when
+  // neither is set.
+  String _opensOnValue(CorporateAction item) {
+    final bs = item.biddingStartDate;
+    if (bs != null && bs.isNotEmpty && bs != 'null') return bs;
+    final od = item.openondate;
+    if (od != null && od.isNotEmpty && od != 'null') return od;
+    return '';
+  }
+
   Widget _buildRow(
     BuildContext context,
     LDProvider lp,
     CorporateAction item,
     Map<int, shadcn.TableSize> columnWidths,
+    bool isOfsTab,
   ) {
     return shadcn.Table(
         columnWidths: columnWidths,
@@ -895,27 +940,26 @@ class _CorporateActionsScreenWebState
               _bodyCell(
                 context,
                 Text(
-                  item.biddingStartDate?.isNotEmpty == true
-                      ? item.biddingStartDate!
-                      : '-',
+                  _opensOnValue(item).isEmpty ? '-' : _opensOnValue(item),
                   style: _bodyStyle(context,
                       color: resolveThemeColor(context,
                           dark: MyntColors.textSecondaryDark,
                           light: MyntColors.textSecondary)),
                 ),
               ),
-              _bodyCell(
-                context,
-                Text(
-                  item.biddingEndDate?.isNotEmpty == true
-                      ? item.biddingEndDate!
-                      : '-',
-                  style: _bodyStyle(context,
-                      color: resolveThemeColor(context,
-                          dark: MyntColors.textSecondaryDark,
-                          light: MyntColors.textSecondary)),
+              if (!isOfsTab)
+                _bodyCell(
+                  context,
+                  Text(
+                    item.biddingEndDate?.isNotEmpty == true
+                        ? item.biddingEndDate!
+                        : '-',
+                    style: _bodyStyle(context,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.textSecondaryDark,
+                            light: MyntColors.textSecondary)),
+                  ),
                 ),
-              ),
               _bodyCell(context, _typeBadge(context, item.issueType)),
               _bodyCell(context, _orderActionCell(context, item, lp)),
               _bodyCell(context, _statusCell(context, item)),

@@ -650,6 +650,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           ],
           // Show Create Group button and close icon when Position Groups view is shown
           if (_showGroupsView) ...[
+            _buildGroupFilterButton(theme, positionBook),
+            SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             MyntIconTextButton(
               label: 'New Group',
               // iconAsset: assets.addCircleIcon,
@@ -931,6 +933,167 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                     ),
                   ),
                 ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Filter dropdown for position groups: underlying vs underlying + expiry
+  Widget _buildGroupFilterButton(
+      ThemesProvider theme, PortfolioProvider positionBook) {
+    final buttonSize = context.responsive<double>(
+      mobile: 32,
+      tablet: 36,
+      desktop: 40,
+    );
+    final iconSize = context.responsive<double>(
+      mobile: 16,
+      tablet: 18,
+      desktop: 20,
+    );
+
+    return Builder(
+      builder: (buttonContext) {
+        return Tooltip(
+          message: positionBook.positionGroupFilter == 'underlying_expiry'
+              ? 'Group: Underlying + Expiry'
+              : 'Group: Underlying',
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => _showGroupFilterPopup(buttonContext, theme),
+              child: Container(
+                width: buttonSize,
+                height: buttonSize,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: SvgPicture.asset(
+                    assets.searchFilter,
+                    width: iconSize,
+                    colorFilter: ColorFilter.mode(
+                      resolveThemeColor(
+                        context,
+                        dark: MyntColors.iconDark,
+                        light: MyntColors.icon,
+                      ),
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showGroupFilterPopup(BuildContext context, ThemesProvider theme) {
+    shadcn.showPopover(
+      context: context,
+      alignment: Alignment.topCenter,
+      offset: const Offset(0, 8),
+      overlayBarrier: shadcn.OverlayBarrier(
+        borderRadius: shadcn.Theme.of(context).borderRadiusLg,
+      ),
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: shadcn.Theme.of(context).borderRadiusLg,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 12,
+                spreadRadius: 2,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: shadcn.ModalContainer(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              width: 200,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildGroupFilterMenuItem('Underlying', 'underlying', theme),
+                  _buildGroupFilterMenuItem(
+                      'Underlying + Expiry', 'underlying_expiry', theme),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGroupFilterMenuItem(
+      String label, String value, ThemesProvider theme) {
+    return Consumer(
+      builder: (context, ref, _) {
+        final currentFilter = ref
+            .watch(portfolioProvider.select((p) => p.positionGroupFilter));
+        final isSelected = currentFilter == value;
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              ref.read(portfolioProvider).setPositionGroupFilter(value);
+              shadcn.closeOverlay(context);
+            },
+            splashColor: resolveThemeColor(
+              context,
+              dark: MyntColors.rippleDark,
+              light: MyntColors.rippleLight,
+            ),
+            highlightColor: resolveThemeColor(
+              context,
+              dark: MyntColors.highlightDark,
+              light: MyntColors.highlightLight,
+            ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(4),
+                color: isSelected
+                    ? resolveThemeColor(
+                        context,
+                        dark: MyntColors.primaryDark.withOpacity(0.12),
+                        light: const Color(0xFFE8F0FE),
+                      )
+                    : Colors.transparent,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: MyntWebTextStyles.body(
+                        context,
+                        fontWeight:
+                            isSelected ? MyntFonts.semiBold : MyntFonts.medium,
+                        color: isSelected
+                            ? resolveThemeColor(
+                                context,
+                                dark: MyntColors.primaryDark,
+                                light: MyntColors.primary,
+                              )
+                            : resolveThemeColor(
+                                context,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary,
+                              ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1411,13 +1574,24 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     List<PositionBookModel> filtered = positions.toList();
 
     // Apply search filter - use ValueNotifier value
-    final searchQuery = _searchQuery.value;
+    final searchQuery = _searchQuery.value.toLowerCase().trim();
     if (searchQuery.isNotEmpty) {
       filtered = filtered.where((position) {
-        final symbol = position.symbol?.toLowerCase() ?? '';
-        final exch = position.exch?.toLowerCase() ?? '';
-        final searchLower = searchQuery.toLowerCase();
-        return symbol.contains(searchLower) || exch.contains(searchLower);
+        // Match the displayed contract name (master/dname/tsym) and its
+        // parsed parts so expiry ("JUL", "24 JUL 26") and strike/option
+        // ("270 CE") searches work, not just the underlying symbol.
+        // Keep in sync with the table filter in position_table.dart.
+        final searchable = [
+          position.masterName,
+          position.dname,
+          position.tsym,
+          position.symbol,
+          position.expDate,
+          position.option,
+          position.exch,
+        ];
+        return searchable.any(
+            (field) => (field ?? '').toLowerCase().contains(searchQuery));
       }).toList();
     }
 
@@ -1978,7 +2152,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     PortfolioProvider positionBook,
     String uniqueId,
   ) {
-    final displayText =
+    final displayText = position.masterName ??
         '${position.symbol ?? ''} ${position.exch ?? ''} ${position.expDate ?? ''} ${position.option ?? ''}';
 
     // ✅ Use ValueListenableBuilder to avoid rebuilding entire table on hover

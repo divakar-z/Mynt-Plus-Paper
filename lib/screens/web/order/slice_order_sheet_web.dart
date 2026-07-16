@@ -35,6 +35,8 @@ class SliceOrderSheetWeb extends StatefulWidget {
   final int lotSize;
   final bool isBracketOrderEnabled;
   final VoidCallback? onClose;
+  // Closes the parent Place Order window after slices are placed (web only).
+  final VoidCallback? onParentClose;
 
   const SliceOrderSheetWeb({
     super.key,
@@ -56,6 +58,7 @@ class SliceOrderSheetWeb extends StatefulWidget {
     required this.lotSize,
     required this.isBracketOrderEnabled,
     this.onClose,
+    this.onParentClose,
   });
 
   // Static overlay entry to track current slice order overlay
@@ -81,6 +84,7 @@ class SliceOrderSheetWeb extends StatefulWidget {
     required TextEditingController mktProtCtrl,
     required int lotSize,
     required bool isBracketOrderEnabled,
+    VoidCallback? onParentClose,
   }) {
     // Close existing slice order overlay if one is already open
     if (_currentOverlayEntry != null) {
@@ -127,6 +131,7 @@ class SliceOrderSheetWeb extends StatefulWidget {
                 mktProtCtrl: mktProtCtrl,
                 lotSize: lotSize,
                 isBracketOrderEnabled: isBracketOrderEnabled,
+                onParentClose: onParentClose,
                 onClose: () {
                   overlayEntry.remove();
                   _currentOverlayEntry = null;
@@ -387,7 +392,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
                                         }
 
                                         // Use the slice order with confirmation function
-                                        orders.slicePlaceOrderWithConfirmation(context, placeOrderInputs, widget.quantity, widget.reminder);
+                                        orders.slicePlaceOrderWithConfirmation(context, placeOrderInputs, widget.quantity, widget.reminder, onWebParentClose: widget.onParentClose);
 
                                       } catch (e) {
                                         // Handle any unexpected errors
@@ -405,7 +410,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
                                 elevation: 0,
                                 backgroundColor: widget.isBuy
                                     ? (theme.isDarkMode ? MyntColors.secondary : MyntColors.primary)
-                                    : (theme.isDarkMode ? MyntColors.lossDark : MyntColors.error),
+                                    : (theme.isDarkMode ? MyntColors.errorDark : MyntColors.tertiary),
                                 disabledBackgroundColor: (theme.isDarkMode ? MyntColors.secondary : MyntColors.primary).withOpacity(0.5),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(5),
@@ -455,7 +460,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
         Row(
           children: [
             Text(
-              "${widget.scripInfo.symbol} ",
+              "${widget.scripInfo.masterName ?? widget.scripInfo.symbol} ",
               style: WebTextStyles.custom(
                 fontSize: 13,
                 isDarkTheme: theme.isDarkMode,
@@ -466,7 +471,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
               ),
             ),
             Text(
-              "${widget.scripInfo.option}",
+              "${widget.scripInfo.masterName == null ? (widget.scripInfo.option ?? '') : ''}",
               style: WebTextStyles.custom(
                 fontSize: 13,
                 isDarkTheme: theme.isDarkMode,
@@ -484,7 +489,7 @@ class _SliceOrderSheetWebState extends State<SliceOrderSheetWeb> {
             CustomExchBadge(exch: "${widget.scripInfo.exch}"),
             const SizedBox(width: 8),
             Text(
-              "${widget.scripInfo.expDate}",
+              "${widget.scripInfo.masterName == null ? (widget.scripInfo.expDate ?? '') : ''}",
               style: WebTextStyles.custom(
                 fontSize: 12,
                 isDarkTheme: theme.isDarkMode,

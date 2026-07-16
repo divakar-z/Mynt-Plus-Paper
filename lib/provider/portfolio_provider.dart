@@ -62,6 +62,17 @@ class PortfolioProvider extends DefaultChangeNotifier {
   List<HoldingsModel> _nonSealableHoldings = [];
   List<HoldingsModel> get nonSealableHoldings => _nonSealableHoldings;
 
+  // ---------------------------------------------------------------------------
+  // MTF (Margin Trading Facility) holdings — fetched with prd:"F".
+  // Kept as a SEPARATE parallel state from the equity (prd:"C") holdings above
+  // so the live-shipping Equity tab can never regress from this addition.
+  // ---------------------------------------------------------------------------
+  List<HoldingsModel>? _tmtfHoldingsModel = [];
+  List<HoldingsModel>? _mtfHoldingsModel = [];
+  List<HoldingsModel>? get mtfHoldingsModel => _mtfHoldingsModel;
+  List<HoldingsModel>? _mtfHoldingSearchItem = [];
+  List<HoldingsModel>? get mtfHoldingSearchItem => _mtfHoldingSearchItem;
+
   List<PositionBookModel>? _tpostionBookModel = [];
 
   List<PositionBookModel>? _postionBookModel = [];
@@ -110,6 +121,20 @@ class PortfolioProvider extends DefaultChangeNotifier {
   String get totPnlPercHolding => _totPnlPercHolding;
   String _totInvesHold = "0.00";
   String get totInvesHold => _totInvesHold;
+
+  // MTF holdings summary totals (mirror of the equity totals above).
+  double _totalMtfPnl = 0.00;
+  double get totalMtfPnl => _totalMtfPnl;
+  double _totalMtfCurrentVal = 0.00;
+  double get totalMtfCurrentVal => _totalMtfCurrentVal;
+  double _mtfOneDayChng = 0.00;
+  double get mtfOneDayChng => _mtfOneDayChng;
+  double _mtfOneDayChngPer = 0.00;
+  double get mtfOneDayChngPer => _mtfOneDayChngPer;
+  String _totMtfPnlPerc = "0.00";
+  String get totMtfPnlPerc => _totMtfPnlPerc;
+  String _totMtfInvest = "0.00";
+  String get totMtfInvest => _totMtfInvest;
 
   int _exitPositionQty = 0;
   int get exitPositionQty => _exitPositionQty;
@@ -208,6 +233,12 @@ class PortfolioProvider extends DefaultChangeNotifier {
   bool _isRefreshingHoldings = false;
   bool get isRefreshingHoldings => _isRefreshingHoldings;
 
+  // MTF loader flags (mirror of the equity holdings loaders above).
+  bool _mtfHoldLoader = false;
+  bool get mtfHoldLoader => _mtfHoldLoader;
+  bool _isRefreshingMtf = false;
+  bool get isRefreshingMtf => _isRefreshingMtf;
+
   bool _mfhloader = false;
   bool get mfhloader => _mfhloader;
 
@@ -242,6 +273,30 @@ class PortfolioProvider extends DefaultChangeNotifier {
   final List<String> _posGrpNames = ["All position", "Group by symbol"];
 
   List<String> get posGrpNames => _posGrpNames;
+
+  // Position group filter: 'underlying' (default) groups by symbol only,
+  // 'underlying_expiry' groups by symbol + expiry (only affects default
+  // F&O groups — equity rows without expDate stay grouped by symbol; custom
+  // groups are not affected).
+  String _positionGroupFilter = 'underlying';
+  String get positionGroupFilter => _positionGroupFilter;
+
+  void setPositionGroupFilter(String value) {
+    if (value != 'underlying' && value != 'underlying_expiry') return;
+    if (_positionGroupFilter == value) return;
+    _positionGroupFilter = value;
+    getPositionGroupNames();
+    for (var symbol in _groupPositionSym) {
+      if (_groupedBySymbol.containsKey(symbol)) {
+        final groupData = _groupedBySymbol[symbol]['groupList'];
+        final isCustomGrp = _groupedBySymbol[symbol]['isCustomGrp'] ?? false;
+        if (groupData != null && groupData.isNotEmpty) {
+          positionGroupCal(_isDay, groupData, symbol, isCustomGrp);
+        }
+      }
+    }
+    notifyListeners();
+  }
 
   List<GetGroupSymbol> _getPositionGroupSymbol = [];
   List<GetGroupSymbol> get getPositionGroupSymbol => _getPositionGroupSymbol;
@@ -704,6 +759,10 @@ changeHoldingsTabIndex(int index) {
             element.exchTsym![0].symbol = "${spilitSymbol["symbol"]}";
             element.exchTsym![0].expDate = "${spilitSymbol["expDate"]}";
             element.exchTsym![0].option = "${spilitSymbol["option"]}";
+            // After e-DIS, the broker mirrors the SAME shares into both the
+            // POA and Non-POA fields — settled into dpQty + npoadqty, and T1
+            // into btstqty + npoadt1qty. Use max() on each pair so the mirrored
+            // qty is counted once (summing would double-count an e-DIS'd holding).
             int qty = (
                     // int.parse("${element.npoadqty ?? 0}") +
                     // int.parse("${element.brkcolqty ?? 0}") +
@@ -711,8 +770,8 @@ changeHoldingsTabIndex(int index) {
                     max(int.parse("${element.dpQty ?? 0}"),
                             int.parse("${element.npoadqty ?? 0}")) +
                         int.parse("${element.holdqty ?? 0}") +
-                        int.parse("${element.btstqty ?? 0}")  +
-                        int.parse("${element.npoadt1qty ?? 0}")) -
+                        max<int>(int.parse("${element.btstqty ?? 0}"),
+                            int.parse("${element.npoadt1qty ?? 0}"))) -
                 int.parse("${element.trdqty ?? 0}");
             element.currentQty = qty;
             // FIX: Update holdQty without wiping existing socket data
@@ -791,6 +850,302 @@ changeHoldingsTabIndex(int index) {
       _isRefreshingHoldings = false;
       notifyListeners();
     }
+  }
+
+  // ===========================================================================
+  // MTF (Margin Trading Facility) holdings — prd:"F".
+  // These methods are a deliberate, isolated mirror of the equity holdings
+  // logic above. They operate ONLY on the MTF state so the live Equity tab is
+  // unaffected. Row processing is intentionally duplicated (not refactored into
+  // a shared helper) to avoid any risk of regressing the equity path.
+  // ===========================================================================
+  Future fetchMtfHoldings(context, String initail,
+      {bool isRefresh = false}) async {
+    double invest = 0.0;
+    try {
+      if (isRefresh) {
+        _isRefreshingMtf = true;
+      } else if (_mtfHoldingsModel == null || _mtfHoldingsModel!.isEmpty) {
+        _mtfHoldLoader = true;
+      }
+      notifyListeners();
+
+      // Fetch holdings under the MTF product (prd:"F").
+      final result = await api.getHolding(prd: "F");
+      if (result['stat'] == 'success') {
+        _tmtfHoldingsModel = result['data'];
+      } else {
+        if (result['stat'] == 'no data') {
+          _mtfHoldingsModel = [];
+        } else if (result['emsg'] == "Session Expired :  Invalid Session Key") {
+          ref.read(authProvider).ifSessionExpired(context);
+        }
+        _tmtfHoldingsModel = [];
+      }
+
+      // Merge fresh data into existing rows (preserve socket-updated values),
+      // mirroring the equity merge.
+      if (_mtfHoldingsModel!.isNotEmpty && _tmtfHoldingsModel!.isNotEmpty) {
+        for (var newHolding in _tmtfHoldingsModel!) {
+          final index = _mtfHoldingsModel!.indexWhere((oldHolding) =>
+              oldHolding.exchTsym![0].token == newHolding.exchTsym![0].token);
+          if (index != -1) {
+            _mtfHoldingsModel![index].updateFrom(newHolding);
+          } else {
+            _mtfHoldingsModel!.add(newHolding);
+          }
+        }
+      } else {
+        _totMtfInvest = "0.00";
+        _totMtfPnlPerc = "0.00";
+        _totalMtfPnl = 0.00;
+        _totalMtfCurrentVal = 0.00;
+        _mtfOneDayChng = 0.00;
+        _mtfOneDayChngPer = 0.00;
+        _mtfHoldingsModel = _tmtfHoldingsModel;
+      }
+
+      if (_mtfHoldingsModel!.isNotEmpty &&
+          _mtfHoldingsModel![0].stat != "Not_Ok") {
+        // Sort A→Z by trading symbol (same as equity).
+        _mtfHoldingsModel!.sort(
+            (a, b) => a.exchTsym![0].tsym!.compareTo(b.exchTsym![0].tsym!));
+
+        for (var element in _mtfHoldingsModel!) {
+          element.isExitHoldings = false;
+
+          Map spilitSymbol = spilitTsym(value: "${element.exchTsym![0].tsym}");
+          element.exchTsym![0].symbol = "${spilitSymbol["symbol"]}";
+          element.exchTsym![0].expDate = "${spilitSymbol["expDate"]}";
+          element.exchTsym![0].option = "${spilitSymbol["option"]}";
+
+          int qty = (max(int.parse("${element.dpQty ?? 0}"),
+                          int.parse("${element.npoadqty ?? 0}")) +
+                      int.parse("${element.holdqty ?? 0}") +
+                      max<int>(int.parse("${element.btstqty ?? 0}"),
+                          int.parse("${element.npoadt1qty ?? 0}"))) -
+                  int.parse("${element.trdqty ?? 0}");
+          element.currentQty = qty;
+
+          double avgCost = double.parse(
+              "${element.upldprc == "0.00" ? element.exchTsym![0].close ?? 0.0 : element.upldprc ?? 0.00}");
+          element.avgPrc = "$avgCost";
+          element.invested = (qty * avgCost).toStringAsFixed(2);
+          invest += double.parse("${element.invested}");
+
+          element.saleableQty = (int.parse("${element.holdqty ?? 0}") +
+                  int.parse("${element.dpQty ?? 0}") +
+                  int.parse("${element.btstqty ?? 0}")) -
+              int.parse("${element.usedqty ?? 0}");
+          if (element.sellAmt != null && element.sellAmt != "0.000000") {
+            element.rpnl = (double.parse("${element.sellAmt ?? 0.00}") -
+                    ((double.parse("${element.trdqty ?? 0.00}")) *
+                        (double.parse("${element.avgPrc ?? 0.00}"))))
+                .toStringAsFixed(2);
+          }
+        }
+
+        _totMtfInvest = invest.toStringAsFixed(2);
+
+        if (initail == "Refresh") {
+          await requestWSMtfHoldings(isSubscribe: true, context: context);
+        }
+      } else if (_mtfHoldingsModel!.isNotEmpty &&
+          _mtfHoldingsModel![0].emsg ==
+              "Session Expired :  Invalid Session Key" &&
+          _mtfHoldingsModel![0].stat == "Not_Ok") {
+        ref.read(authProvider).ifSessionExpired(context);
+      }
+
+      // Seed row values + totals from the live socket cache for first paint.
+      seedMtfHoldingsFromCache();
+      notifyListeners();
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API MTF Holdings", "Error": "$e"});
+      notifyListeners();
+    } finally {
+      _mtfHoldLoader = false;
+      _isRefreshingMtf = false;
+      notifyListeners();
+    }
+  }
+
+  // WebSocket subscription request for MTF holdings scrips (mirror of
+  // requestWSHoldings but built from the MTF list).
+  requestWSMtfHoldings(
+      {required bool isSubscribe, required BuildContext context}) {
+    if (kIsWeb && !isSubscribe) return;
+    try {
+      String input = "";
+      if (_mtfHoldingsModel != null &&
+          _mtfHoldingsModel!.isNotEmpty &&
+          _mtfHoldingsModel![0].stat != "Not_Ok") {
+        for (var i = 0; i < _mtfHoldingsModel!.length; i++) {
+          input +=
+              "${_mtfHoldingsModel![i].exchTsym![0].exch}|${_mtfHoldingsModel![i].exchTsym![0].token}#";
+        }
+      }
+      if (input.isNotEmpty) {
+        ref.read(websocketProvider).establishConnection(
+            channelInput: input,
+            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            context: context);
+      }
+    } catch (e) {}
+  }
+
+  // Seed MTF rows + totals from the cached socket data (used right after a
+  // fetch so the first paint shows live LTP / current value / P&L).
+  void seedMtfHoldingsFromCache() {
+    if (_mtfHoldingsModel == null || _mtfHoldingsModel!.isEmpty) return;
+    try {
+      final socketDatas = ref.read(websocketProvider).socketDatas;
+      for (final holding in _mtfHoldingsModel!) {
+        final token = holding.exchTsym?.isNotEmpty == true
+            ? holding.exchTsym![0].token
+            : null;
+        if (token == null) continue;
+        final cached = socketDatas[token];
+        if (cached is Map<String, dynamic>) {
+          updateMtfHoldingValues(token, cached);
+        }
+      }
+    } catch (e) {}
+    mtfPnlHoldCal();
+  }
+
+  // Per-tick update for an MTF row (mirror of updateHoldingValues). Driven by
+  // the holdings screen's own socket-stream listener so the shared WebSocket
+  // provider stays untouched.
+  void updateMtfHoldingValues(String token, Map<String, dynamic> socketData) {
+    if (_mtfHoldingsModel == null) return;
+
+    var index = -1;
+    for (int i = 0; i < _mtfHoldingsModel!.length; i++) {
+      if (_mtfHoldingsModel![i].exchTsym![0].token == token) {
+        index = i;
+        break;
+      }
+    }
+    if (index == -1) return;
+
+    var holding = _mtfHoldingsModel![index];
+    bool hasUpdates = false;
+
+    final newLp = socketData['lp']?.toString();
+    final newPc = socketData['pc']?.toString();
+    final newChng = socketData['chng']?.toString();
+    final newClose = socketData['c']?.toString();
+
+    if (_isValidValue(newLp)) {
+      holding.exchTsym![0].lp = newLp;
+      hasUpdates = true;
+    }
+    if (_isValidValue(newPc)) {
+      holding.exchTsym![0].perChange = newPc;
+      hasUpdates = true;
+    }
+    if (_isValidValue(newChng)) {
+      holding.exchTsym![0].change = newChng;
+      hasUpdates = true;
+    }
+    if (_isValidValue(newClose)) {
+      holding.exchTsym![0].close = newClose;
+      hasUpdates = true;
+    }
+
+    if (hasUpdates) {
+      _updateMtfDerivedValues(holding);
+    }
+  }
+
+  // Mirror of _updateDerivedValues, scoped to a single MTF row. Totals are
+  // recomputed separately via mtfPnlHoldCal (called by the screen listener).
+  void _updateMtfDerivedValues(HoldingsModel holding) {
+    final qty = holding.currentQty ?? 0;
+    if (qty < 0) return;
+
+    final lpDouble = double.tryParse(holding.exchTsym![0].lp ?? '0.0') ?? 0.0;
+    if (lpDouble <= 0) return;
+
+    holding.currentValue = (qty * lpDouble).toStringAsFixed(2);
+
+    final closeVal =
+        double.tryParse(holding.exchTsym![0].close ?? "0.00") ?? 0.0;
+    final avgCost = double.tryParse(holding.upldprc == "0.00"
+            ? (closeVal > 0
+                ? closeVal.toString()
+                : holding.exchTsym![0].close ?? '0.0')
+            : holding.upldprc ?? '0.00') ??
+        0.0;
+    if (avgCost <= 0) return;
+
+    holding.invested = (qty * avgCost).toStringAsFixed(2);
+    final investedValue = double.tryParse(holding.invested ?? '0.00') ?? 0.00;
+
+    final currentValue = double.tryParse(holding.currentValue ?? "0.00") ?? 0.0;
+    holding.exchTsym![0].profitNloss = ((currentValue - investedValue) +
+            double.tryParse(holding.rpnl ?? '0.0')!)
+        .toStringAsFixed(2);
+
+    if (investedValue > 0.0 || double.tryParse(holding.sellAmt ?? '0.0')! > 0) {
+      final profitValue =
+          double.tryParse(holding.exchTsym![0].profitNloss ?? "0.00") ?? 0.0;
+      holding.exchTsym![0].pNlChng = ((profitValue /
+                  (investedValue +
+                      (double.tryParse(holding.sellAmt ?? '0.0')!))) *
+              100)
+          .toStringAsFixed(2);
+    }
+
+    if (closeVal > 0) {
+      holding.exchTsym![0].oneDayChg =
+          ((lpDouble - closeVal) * qty).toStringAsFixed(2);
+    }
+  }
+
+  // Recompute MTF headline totals (mirror of pnlHoldCal, synchronous since the
+  // MTF list is small).
+  void mtfPnlHoldCal() {
+    if (_mtfHoldingsModel == null || _mtfHoldingsModel!.isEmpty) return;
+
+    double totalPnl = 0.0;
+    double dayChange = 0.0;
+    double invest = 0.0;
+    double currentVal = 0.0;
+
+    for (final holding in _mtfHoldingsModel!) {
+      if (holding.exchTsym == null || holding.exchTsym!.isEmpty) continue;
+      final profitNlossStr = holding.exchTsym![0].profitNloss;
+      final profitNloss = profitNlossStr != null
+          ? (double.tryParse(profitNlossStr) ?? 0.0)
+          : (double.tryParse(holding.rpnl ?? '0.0') ?? 0.0);
+      final oneDayChg =
+          double.tryParse(holding.exchTsym![0].oneDayChg ?? '0.0') ?? 0.0;
+      final invested = double.tryParse(holding.invested ?? '0.0') ?? 0.0;
+      final currentValue =
+          double.tryParse(holding.currentValue ?? '0.0') ?? 0.0;
+
+      totalPnl += profitNloss;
+      dayChange += oneDayChg;
+      invest += invested;
+      currentVal += currentValue;
+    }
+
+    _totalMtfPnl = totalPnl;
+    _mtfOneDayChng = dayChange;
+    _totalMtfCurrentVal = currentVal;
+    _totMtfInvest = invest.toStringAsFixed(2);
+    _mtfOneDayChngPer = currentVal > 0 ? (dayChange / currentVal) * 100 : 0.0;
+    _totMtfPnlPerc =
+        invest > 0 ? ((totalPnl / invest) * 100).toStringAsFixed(2) : '0.00';
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      notifyListeners();
+    });
   }
 
   Future fetchPositionBook(BuildContext context, bool isDay, {bool isRefresh = false}) async {
@@ -2543,7 +2898,8 @@ changeHoldingsTabIndex(int index) {
           List<String> splitVal = element.dname!.split(" ");
 
           element.symbol = splitVal[0];
-          element.expDate = "${splitVal[1]} ${splitVal[2]}";
+          // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+          element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
           element.option = splitVal.length > 4
               ? "${splitVal[3]} ${splitVal[4]}"
               : splitVal[3];
@@ -2630,12 +2986,18 @@ changeHoldingsTabIndex(int index) {
     try {
       _groupedBySymbol = {};
       for (var element in _allPostionList) {
-        if (_groupedBySymbol.containsKey(element.symbol)) {
-          _groupedBySymbol['${element.symbol}']["groupList"]
+        final expDate = element.expDate?.toString() ?? '';
+        final hasExpiry = expDate.isNotEmpty && expDate != '-';
+        final groupKey =
+            (_positionGroupFilter == 'underlying_expiry' && hasExpiry)
+                ? "${element.symbol} $expDate"
+                : "${element.symbol}";
+        if (_groupedBySymbol.containsKey(groupKey)) {
+          _groupedBySymbol[groupKey]["groupList"]
               .add(jsonDecode(jsonEncode(element)));
         } else {
           _groupedBySymbol.addAll({
-            "${element.symbol}": {
+            groupKey: {
               "isCustomGrp": false,
               "totMtm": "0.00",
               "totPnl": "0.00",

@@ -802,9 +802,10 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
         switch (col) {
           case 0: cellText = position.sPrdtAli ?? 'N/A'; break;
           case 1:
-            final sym = (position.dname != null && position.dname!.isNotEmpty)
-                ? position.dname!.replaceAll('-EQ', '').trim()
-                : (position.tsym ?? '').replaceAll('-EQ', '').trim();
+            final sym = position.masterName ??
+                ((position.dname != null && position.dname!.isNotEmpty)
+                    ? position.dname!.replaceAll('-EQ', '').trim()
+                    : (position.tsym ?? '').replaceAll('-EQ', '').trim());
             final exch = (position.exch != null && position.exch!.isNotEmpty &&
                 (position.expDate == null || position.expDate!.isEmpty))
                 ? ' ${position.exch}' : '';
@@ -1078,9 +1079,10 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
             break;
           case 1: cellText = order.trantype == 'B' ? 'BUY' : 'SELL'; break;
           case 2:
-            final sym = (order.dname != null && order.dname!.isNotEmpty)
-                ? order.dname!.replaceAll('-EQ', '').trim()
-                : (order.tsym ?? '').replaceAll('-EQ', '').trim();
+            final sym = order.masterName ??
+                ((order.dname != null && order.dname!.isNotEmpty)
+                    ? order.dname!.replaceAll('-EQ', '').trim()
+                    : (order.tsym ?? '').replaceAll('-EQ', '').trim());
             final exch = order.exch ?? '';
             final symW = _measureOrderTextWidth(sym, textStyle);
             final exchW = exch.isNotEmpty
@@ -1690,9 +1692,10 @@ class _ScalperPositionTableRowState
       color: textColor,
     );
 
-    final instrumentText = (position.dname != null && position.dname!.isNotEmpty)
-        ? position.dname!.replaceAll("-EQ", "").trim()
-        : (position.tsym ?? '').replaceAll("-EQ", "").trim();
+    final instrumentText = position.masterName ??
+        ((position.dname != null && position.dname!.isNotEmpty)
+            ? position.dname!.replaceAll("-EQ", "").trim()
+            : (position.tsym ?? '').replaceAll("-EQ", "").trim());
 
     final showExchange = position.exch != null &&
         position.exch!.isNotEmpty &&
@@ -2616,9 +2619,10 @@ class _ScalperOrderTableRowState extends State<_ScalperOrderTableRow> {
     );
 
     // Instrument display - use dname if available, otherwise tsym
-    final instrumentText = (order.dname != null && order.dname!.isNotEmpty)
-        ? order.dname!.replaceAll('-EQ', '').trim()
-        : (order.tsym ?? '').replaceAll('-EQ', '').trim();
+    final instrumentText = order.masterName ??
+        ((order.dname != null && order.dname!.isNotEmpty)
+            ? order.dname!.replaceAll('-EQ', '').trim()
+            : (order.tsym ?? '').replaceAll('-EQ', '').trim());
 
     // Check if order is open (cancellable)
     final isOpen = statusText == 'OPEN' ||
@@ -3096,8 +3100,9 @@ class _ScalperGttDialogState extends ConsumerState<_ScalperGttDialog> {
   @override
   Widget build(BuildContext context) {
     final position = widget.position;
-    final instrumentName = (position.dname ?? position.tsym ?? '')
-        .replaceAll('-EQ', '')
+    final instrumentName = position.masterName ??
+        (position.dname ?? position.tsym ?? '')
+            .replaceAll('-EQ', '')
         .trim();
     final netqty = int.tryParse(position.netqty?.toString() ?? '0') ?? 0;
     final absQty = netqty.abs();
@@ -3526,9 +3531,10 @@ class _ScalperExitPositionDialogState
     final count = widget.positions.length;
     final isSingle = count == 1 && !widget.isExitAll;
     final instrumentName = isSingle
-        ? (widget.positions.first.dname ?? widget.positions.first.tsym ?? '')
-            .replaceAll('-EQ', '')
-            .trim()
+        ? (widget.positions.first.masterName ??
+            (widget.positions.first.dname ?? widget.positions.first.tsym ?? '')
+                .replaceAll('-EQ', '')
+                .trim())
         : '';
 
     // Check if any position has active GTT orders
@@ -3710,9 +3716,10 @@ class _ScalperCancelOrdersDialogState
     final count = widget.orders.length;
     final isSingle = count == 1 && !widget.isCancelAll;
     final instrumentName = isSingle
-        ? (widget.orders.first.dname ?? widget.orders.first.tsym ?? '')
-            .replaceAll('-EQ', '')
-            .trim()
+        ? (widget.orders.first.masterName ??
+            (widget.orders.first.dname ?? widget.orders.first.tsym ?? '')
+                .replaceAll('-EQ', '')
+                .trim())
         : '';
 
     return PointerInterceptor(

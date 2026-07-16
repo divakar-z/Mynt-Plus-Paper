@@ -86,6 +86,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   int _qrStart = _qrCountdownStart;
   int _qrRefreshCount = 0;
   bool _qrExpired = false;
+  bool _qrImageLoaded = false;
 
   // New Password — transient max-length error.
   // Fired only when the user actually attempts to type/paste beyond 12 chars
@@ -202,8 +203,16 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
         // Set up QR login success listener
         _setupQrLoginListener();
 
-        // Auto-login check
-        await ref.read(webAuthProvider).checkAutoLogin(context);
+        // Auto-login check — skipped when arriving from the OAuth flow (a
+        // client_id is present in the URL). There the user must see the login
+        // form to re-auth as the account that owns the app_key; auto-login would
+        // silently bounce a still-valid session to the dashboard and abandon the
+        // OAuth authorization.
+        final fromOAuth =
+            (Uri.base.queryParameters['client_id'] ?? '').trim().isNotEmpty;
+        if (!fromOAuth) {
+          await ref.read(webAuthProvider).checkAutoLogin(context);
+        }
 
         // Mark initialization complete (show login form if no auto-login)
         if (mounted) {
@@ -588,10 +597,13 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
       _showOtpScreen = false;
       _showForgotPassword = false; // Ensure other screens are hidden
       _qrExpired = false;
+      _qrImageLoaded = false;
     });
 
-    // Begin user-visible countdown
-    _startQrCountdown();
+    // Countdown is started by the Image.network frameBuilder once the QR
+    // PNG is actually decoded — so slow networks don't eat into the timer.
+    _qrCountdownTimer?.cancel();
+    _qrCountdownTimer = null;
   }
 
   /// Cancel QR Login - Back to Login Form
@@ -642,7 +654,12 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
           // a Reload icon. User stays on the QR screen and can tap Reload
           // to start a fresh cycle (counter resets via _handleQrLogin).
           ref.read(webAuthProvider).cancelQrLogin();
-          if (mounted) setState(() => _qrExpired = true);
+          if (mounted) {
+            setState(() {
+              _qrExpired = true;
+              _qrImageLoaded = false;
+            });
+          }
         }
       } else {
         setState(() => _qrStart--);
@@ -1017,7 +1034,29 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                               ),
                                             )
                                           : (wa.qrLoginImageUrl != null
-                                              ? Image.network(wa.qrLoginImageUrl!)
+                                               ? Stack(
+                                                  alignment: Alignment.center,
+                                                  children: [
+                                                    MyntLoader.simple(size: MyntLoaderSize.medium),
+                                                    Image.network(
+                                                      wa.qrLoginImageUrl!,
+                                                      frameBuilder: (context, child, frame, wasSyncLoaded) {
+                                                        if (wasSyncLoaded || frame != null) {
+                                                          if (!_qrImageLoaded) {
+                                                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                                                              if (mounted && !_qrImageLoaded) {
+                                                                setState(() => _qrImageLoaded = true);
+                                                                _startQrCountdown();
+                                                              }
+                                                            });
+                                                          }
+                                                          return child;
+                                                        }
+                                                        return const SizedBox.shrink();
+                                                      },
+                                                    ),
+                                                  ],
+                                                )
                                               : MyntLoader.simple(size: MyntLoaderSize.medium)),
                                     ),
                                     const SizedBox(height: 16),
@@ -1030,7 +1069,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                           dark: MyntColors.textSecondaryDark,
                                           light: MyntColors.textSecondary)),
                                     ),
-                                    if (!_qrExpired) ...[
+                                    if (!_qrExpired && _qrImageLoaded) ...[
                                       const SizedBox(height: 12),
                                       Text(
                                         "QR expires in ${formattedTime(timeInSecond: _qrStart)}",
@@ -1052,7 +1091,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                           padding: const EdgeInsets.only(right: 12.0),
                                           child: InkWell(
                                             onTap: _handleCancelQrLogin,
-                                            child: Text("Back to login", style: MyntWebTextStyles.body(context, fontWeight: FontWeight.bold, color: MyntColors.primary)),
+                                            child: Text("Back to login", style: MyntWebTextStyles.body(context, fontWeight: FontWeight.bold, color:resolveThemeColor(context, dark:  MyntColors.secondaryDark, light:  MyntColors.primary))),
                                           ),
                                         ),
                                       ],

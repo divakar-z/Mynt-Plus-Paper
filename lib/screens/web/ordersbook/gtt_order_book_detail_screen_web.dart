@@ -298,7 +298,7 @@ class _GttOrderBookDetailScreenWebState
             children: [
               Flexible(
                 child: Text(
-                  "${_gttOrder.symbol?.replaceAll("-EQ", "").toUpperCase() ?? ''} ${_gttOrder.expDate ?? ''} ${_gttOrder.option ?? ''} ",
+                  "${_gttOrder.displayName} ",
                   style: MyntWebTextStyles.title(
                     context,
                     color: resolveThemeColor(context,
@@ -883,7 +883,7 @@ class _GttOrderBookDetailScreenWebState
                         child: TextButton(
                           onPressed: () => Navigator.of(dialogContext).pop(true),
                           style: TextButton.styleFrom(
-                            backgroundColor: resolveThemeColor(context,
+                            backgroundColor: resolveThemeColor(dialogContext,
                                 dark: MyntColors.errorDark,
                                 light: MyntColors.tertiary),
                             shape: RoundedRectangleBorder(

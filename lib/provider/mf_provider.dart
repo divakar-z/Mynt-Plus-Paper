@@ -11,6 +11,7 @@ import 'package:mynt_plus/models/mf_model/all_mf_holdings_model.dart';
 import 'package:mynt_plus/models/mf_model/allcatlistviewmodel.dart';
 import 'package:mynt_plus/models/mf_model/mf_bestnewapi_list_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_hold_singlepage_model.dart';
+import 'package:mynt_plus/models/mf_model/mf_demat_holding_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_holding_new_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_order_det_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_sip_cancel_mess_model.dart';
@@ -179,6 +180,14 @@ class MFProvider extends DefaultChangeNotifier {
 
   mf_holdoing_new? _mfholdingnew;
   mf_holdoing_new? get mfholdingnew => _mfholdingnew;
+
+  // "Mutual Fund Beta" holdings (demat_holdings endpoint) — separate from the
+  // live MF holdings above so the existing tab is untouched.
+  MfDematHolding? _mfDematHolding;
+  MfDematHolding? get mfDematHolding => _mfDematHolding;
+
+  bool _dematHoldLoad = false;
+  bool get dematHoldLoad => _dematHoldLoad;
 
   bool _mforderloader = false;
   bool get mforderloader => _mforderloader;
@@ -452,6 +461,14 @@ class MFProvider extends DefaultChangeNotifier {
 
   void recdemevalu() {
     redemptionQty.text = _holssinglelist![0].avgQty!;
+  }
+
+  /// Sets the single-holding list directly from a caller-supplied item.
+  /// Used by the Mutual Fund Beta tab, which already has its own holding object
+  /// (with scheme code) rather than one looked up from [mfholdingnew].
+  void setHoldSingleListItem(dynamic item) {
+    _holssinglelist = [item];
+    notifyListeners();
   }
 
   String _paymentName = "UPI";
@@ -1590,6 +1607,19 @@ class MFProvider extends DefaultChangeNotifier {
     }
   }
 
+  Future<void> fetchmfdematholding() async {
+    try {
+      _dematHoldLoad = true;
+      notifyListeners();
+      _mfDematHolding = await api.getmfdemathldapi();
+    } catch (e) {
+      _dematHoldLoad = false;
+    } finally {
+      _dematHoldLoad = false;
+      notifyListeners();
+    }
+  }
+
   void fetchmfholdsingpage(String isin, {bool isAllMf = false}) async {
     // print("qqqq|${isin}---");
 
@@ -2693,7 +2723,16 @@ class MFProvider extends DefaultChangeNotifier {
         _investloader = false;
         _loadingMessage = null;
         notifyListeners();
-        warningMessage(context, "${_mfPlaceOrderResponces?.remarks}");
+        // Show the backend error (emsg) in a toast; fall back to remarks /
+        // response_message so the regular MF tab's existing messages still work.
+        final res = _mfPlaceOrderResponces;
+        final candidates = [res?.emsg, res?.remarks, res?.responseMessage];
+        final errMsg = candidates.firstWhere(
+          (m) => m != null && m.isNotEmpty && m != 'null',
+          orElse: () => 'Unable to place the order.',
+        )!;
+        warningMessage(
+            context, "$errMsg\nPlease contact our support team.");
       }
       //     // showModalBottomSheet(
       //     //     context: context,

@@ -37,6 +37,20 @@ import '../market_watch/tv_chart/chart_iframe_guard.dart';
 import '../../../utils/overlay_manager.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 
+
+/// Rejects a keystroke that would make a numeric field invalid, keeping the
+/// last valid value instead of clearing it. Empty is always allowed so the
+/// user can still backspace the field clear. Replaces the earlier anchored
+/// allow-filter, which wiped the whole field on any non-matching input
+/// (a letter, or a 3rd decimal digit) and then fired a spurious
+/// "cannot be empty" warning.
+TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
+    TextInputFormatter.withFunction((oldValue, newValue) =>
+        (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
+            ? newValue
+            : oldValue);
+
+
 // InheritedWidget to pass close callback to child widgets
 class _ModifyPlaceOrderDialogCloseNotifier extends InheritedWidget {
   final VoidCallback onClose;
@@ -431,7 +445,7 @@ class _ModifyPlaceOrderScreenState
         price = priceCtrl.text;
       }
 
-      _isMarketOrder = prcType == "MKT";
+      _isMarketOrder = prcType == "MKT" || prcType == "SL-MKT";
       _isStoplossOrder = prcType == "SL-LMT" || prcType == "SL-MKT";
       _isBOCOOrderEnabled = widget.modifyOrderArgs.sPrdtAli == "BO" ||
           widget.modifyOrderArgs.sPrdtAli == "CO";
@@ -516,7 +530,7 @@ class _ModifyPlaceOrderScreenState
                                 child: Row(
                                   children: [
                                     Text(
-                                      "${(widget.scripInfo.symbol ?? widget.orderArg.tSym).replaceAll("-EQ", "")} ",
+                                      "${widget.scripInfo.masterName ?? (widget.scripInfo.symbol ?? widget.orderArg.tSym).replaceAll("-EQ", "")} ",
                                       style: WebTextStyles.title(
                                         isDarkTheme: theme.isDarkMode,
                                         color: resolveThemeColor(context,
@@ -527,7 +541,8 @@ class _ModifyPlaceOrderScreenState
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),
-                                    if ((widget.scripInfo.expDate ?? '').isNotEmpty)
+                                    if (widget.scripInfo.masterName == null &&
+                                        (widget.scripInfo.expDate ?? '').isNotEmpty)
                                       Text(
                                         " ${widget.scripInfo.expDate ?? ''} ",
                                         style: WebTextStyles.title(
@@ -540,7 +555,8 @@ class _ModifyPlaceOrderScreenState
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                       ),
-                                    if ((widget.scripInfo.option ?? '').isNotEmpty)
+                                    if (widget.scripInfo.masterName == null &&
+                                        (widget.scripInfo.option ?? '').isNotEmpty)
                                       Text(
                                         widget.scripInfo.option ?? '',
                                         style: WebTextStyles.sub(
@@ -1215,7 +1231,7 @@ class _ModifyPlaceOrderScreenState
                                                     ? colors.darkGrey
                                                     : const Color(0xffF1F3F8),
                                                 inputFormatters: [
-                                                  FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}$')),
+                                                  _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                                                 ],
                                                 onChanged: (value) {
                                                   double inputPrice =
@@ -1301,8 +1317,32 @@ class _ModifyPlaceOrderScreenState
                               if (prcType == "MKT" ||
                                   prcType == "SL-MKT") ...[
                                 const SizedBox(height: 16),
-                                marketProtectionDisclaimer(theme, context,
-                                    widget.scripInfo, mktProtCtrl.text),
+                                // Market protection is not editable on modify
+                                // (vendor does not allow changing it) — show only.
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 16),
+                                  child: Row(
+                                    children: [
+                                      Text("Market Protected by",
+                                          style: WebTextStyles.sub(
+                                            isDarkTheme: theme.isDarkMode,
+                                            color: resolveThemeColor(context,
+                                                dark: MyntColors.primaryDark,
+                                                light: MyntColors.primary),
+                                          )),
+                                      const SizedBox(width: 6),
+                                      Text("${mktProtCtrl.text} %",
+                                          style: WebTextStyles.para(
+                                            isDarkTheme: theme.isDarkMode,
+                                            color: resolveThemeColor(context,
+                                                dark: MyntColors.primaryDark,
+                                                light: MyntColors.primary),
+                                            fontWeight: WebFonts.semiBold,
+                                          )),
+                                    ],
+                                  ),
+                                ),
                                 // const SizedBox(height: 16),
                               ],
                               // Advance Option section
@@ -2345,13 +2385,18 @@ class _ModifyPlaceOrderScreenState
                                                                           ? "${widget.scripInfo.exch == 'MCX' ? 'Lot' : 'Quantity'} cannot be 0"
                                                                           : "Price cannot be 0");
                                                                 } else if (_hasValidCircuitBreakerValues &&
-                                                                    ((double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) < double.parse("${widget.scripInfo.lc}")) ||
-                                                                    (double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) >
+                                                                    prcType != "MKT" &&
+                                                                    prcType != "SL-MKT" &&
+                                                                    ((double.parse(priceCtrl.text) < double.parse("${widget.scripInfo.lc}")) ||
+                                                                    (double.parse(priceCtrl.text) >
                                                                         double.parse(
                                                                             "${widget.scripInfo.uc}")))) {
+                                                                  // Skip for MKT/SL-MKT: they have no limit price ("Market"),
+                                                                  // so a price-vs-circuit check would falsely block the modify
+                                                                  // (mirrors the Place screen, which gates this to limit orders).
                                                                   ResponsiveSnackBar.showWarning(
                                                                       context,
-                                                                      double.parse(prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text) <
+                                                                      double.parse(priceCtrl.text) <
                                                                               double.parse("${widget.scripInfo.lc}")
                                                                           ? "Price can not be lesser than Lower Circuit Limit ${widget.scripInfo.lc}"
                                                                           : "Price can not be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
@@ -2597,7 +2642,7 @@ class _ModifyPlaceOrderScreenState
                         : MyntColors.textSecondary,
                   ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   onChanged: (value) {
                     double inputPrice = double.tryParse(value) ?? 0;
@@ -2845,7 +2890,7 @@ class _ModifyPlaceOrderScreenState
                                           ? colors.darkGrey
                                           : const Color(0xffF1F3F8),
                                       inputFormatters: [
-                                        FilteringTextInputFormatter.allow(
+                                        _rejectIfNoMatch(
                                           RegExp(r'^(0|[1-9][0-9]{0,19})$'),
                                         ),
                                       ],

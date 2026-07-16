@@ -58,6 +58,7 @@ class WebChartManager {
               token: _pendingSymbol!['token'],
               tsym: _pendingSymbol!['tsym'],
               isDarkMode: _pendingSymbol!['isDarkMode'],
+              decorativeName: _pendingSymbol!['decorativeName'],
               prefs: prefs,
             );
             _currentToken = _pendingSymbol!['token'];
@@ -123,6 +124,10 @@ class WebChartManager {
     required String token,
     required String tsym,
     required bool isDarkMode,
+    // Decorative/display name (from DerivativeMaster) used for the chart title.
+    // Optional — falls back to [tsym] when null/empty so existing callers keep
+    // working unchanged.
+    String? decorativeName,
   }) {
     // Skip if same token and same theme (but NOT if we haven't successfully loaded a user symbol yet)
     // This prevents skipping when we failed to load the first symbol due to timing issues
@@ -145,6 +150,7 @@ class WebChartManager {
       'token': token,
       'tsym': tsym,
       'isDarkMode': isDarkMode,
+      'decorativeName': decorativeName,
     };
 
     // Find ALL chart iframes in the document (not just the stored reference)
@@ -164,6 +170,7 @@ class WebChartManager {
             token: token,
             tsym: tsym,
             isDarkMode: isDarkMode,
+            decorativeName: decorativeName,
             prefs: prefs,
           );
           try {
@@ -182,7 +189,8 @@ class WebChartManager {
     // use URL reload instead of postMessage to ensure it loads correctly
     // (TradingView may not be ready to receive postMessage yet)
     if (isFirstUserSymbol) {
-      _reloadAllIframesWithUrl(allChartIframes, exch, token, tsym, isDarkMode);
+      _reloadAllIframesWithUrl(
+          allChartIframes, exch, token, tsym, isDarkMode, decorativeName);
       _currentToken = token;
       _currentDarkMode = isDarkMode;
       _hasLoadedUserSymbol = true;
@@ -201,8 +209,10 @@ class WebChartManager {
         if (contentWindow != null) {
           // Send as JSON string - dart:html Map serialization may not work cross-origin
           // The TradingView page needs to JSON.parse this
+          final dispName = _resolveDispName(
+              exch: exch, tsym: tsym, decorativeName: decorativeName);
           final jsonMessage =
-              '{"action":"changeScript","exch":"$exch","token":"$token","tsym":"$tsym","dark":"${isDarkMode.toString()}"}';
+              '{"action":"changeScript","exch":"$exch","token":"$token","tsym":"$tsym","dispname":"$dispName","dark":"${isDarkMode.toString()}"}';
           contentWindow.postMessage(jsonMessage, '*');
           successCount++;
         }
@@ -213,7 +223,8 @@ class WebChartManager {
 
     // If postMessage failed for all iframes, fallback to URL reload
     if (successCount == 0 && allChartIframes.isNotEmpty) {
-      _reloadAllIframesWithUrl(allChartIframes, exch, token, tsym, isDarkMode);
+      _reloadAllIframesWithUrl(
+          allChartIframes, exch, token, tsym, isDarkMode, decorativeName);
     }
   }
 
@@ -242,6 +253,7 @@ class WebChartManager {
     String token,
     String tsym,
     bool isDarkMode,
+    String? decorativeName,
   ) {
     final prefs = locator<Preferences>();
     final newUrl = _buildUrl(
@@ -249,6 +261,7 @@ class WebChartManager {
       token: token,
       tsym: tsym,
       isDarkMode: isDarkMode,
+      decorativeName: decorativeName,
       prefs: prefs,
     );
 
@@ -266,11 +279,34 @@ class WebChartManager {
     required String token,
     required String tsym,
     required bool isDarkMode,
+    String? decorativeName,
   }) {
-    changeSymbol(exch: exch, token: token, tsym: tsym, isDarkMode: isDarkMode);
+    changeSymbol(
+      exch: exch,
+      token: token,
+      tsym: tsym,
+      isDarkMode: isDarkMode,
+      decorativeName: decorativeName,
+    );
     show();
   }
 
+
+  /// Final display name shown as the chart title. Prefers the decorative name
+  /// (from DerivativeMaster) and falls back to [tsym] when it's null/empty.
+  /// Any "-EQ" suffix is trimmed so the title reads "SENSEXETF" instead of
+  /// "SENSEXETF-EQ".
+  String _resolveDispName({
+    required String exch,
+    required String tsym,
+    String? decorativeName,
+  }) {
+    var name = (decorativeName == null || decorativeName.isEmpty)
+        ? tsym
+        : decorativeName;
+    name = name.replaceAll('-EQ', '');
+    return name.trim();
+  }
 
   String _buildUrl({
     required String exch,
@@ -278,10 +314,18 @@ class WebChartManager {
     required String tsym,
     required bool isDarkMode,
     required Preferences prefs,
+    // Decorative/display name for the chart title. Falls back to [tsym] when
+    // null/empty. Encoded because master names contain spaces (e.g.
+    // "NIFTY 21 JUL 26 23450 PE").
+    String? decorativeName,
   }) {
     // Add timestamp for cache-busting to ensure fresh load when symbol changes
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return "https://zebu-feuat.web.app/tv?src=web&symbol=$tsym&user=${prefs.clientId}&usession=${prefs.clientSession}&token=$token&exch=$exch&dark=$isDarkMode&_t=$timestamp";
+    final dispName = _resolveDispName(
+        exch: exch, tsym: tsym, decorativeName: decorativeName);
+    final url =
+        "https://zebu-mobchart.web.app/tv?src=web&symbol=$tsym&dispname=${Uri.encodeComponent(dispName)}&user=${prefs.clientId}&usession=${prefs.clientSession}&token=$token&exch=$exch&dark=$isDarkMode&_t=$timestamp";
+    return url;
   }
 }
 

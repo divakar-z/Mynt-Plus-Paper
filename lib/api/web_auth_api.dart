@@ -43,16 +43,25 @@ class WebAuthApi {
       
       final inputType = _getInputType(mobileOrClientId);
       
+      // OAuth flow: the login URL carries the partner app key as ?client_id=...
+      // In that case the login is marked device=OAUTH and the app key is sent as
+      // `authid`, so the backend ties this login to that app key. Normal logins
+      // keep device=WEB and omit authid.
+      final oauthClientId = (Uri.base.queryParameters['client_id'] ?? '').trim();
+      final isOAuth = oauthClientId.isNotEmpty;
+
       Map<String, dynamic> data = {
-        'device': 'WEB', // Web-specific source
+        'device': isOAuth ? 'OAUTH' : 'WEB',
         inputType: mobileOrClientId.toUpperCase(),
         'password': password,
       };
+      if (isOAuth) {
+        data['authid'] = oauthClientId;
+      }
 
-      
       final res = await http.post(
-        uri, 
-        headers: _defaultHeaders, 
+        uri,
+        headers: _defaultHeaders,
         body: jsonEncode(data),
       );
 
@@ -90,15 +99,20 @@ class WebAuthApi {
     required String mobileOrClientId,
     required String source,
     required BuildContext context,
+    bool isTotp = false,
   }) async {
     try {
       final uri = Uri.parse('$_loginBaseUrl/otp_send');
-      
+
       final inputType = _getInputType(mobileOrClientId);
-      
+
       Map<String, dynamic> data = {
         'device': source,
         inputType: mobileOrClientId.toUpperCase(),
+        // Flags the OTP request as part of the TOTP-setup flow so the backend
+        // can handle it accordingly. Only sent during TOTP setup; regular
+        // login OTP requests keep the original payload.
+        if (isTotp) 'is_totp': true,
       };
 
       
@@ -134,12 +148,21 @@ class WebAuthApi {
       
       final inputType = _getInputType(mobileOrClientId);
       
+      // OAuth flow: the login URL carries the partner app key as ?client_id=...
+      // In that case mark source=OAUTH and forward the app key as `authid`, same
+      // as MobileLogin. Normal OTP verifies keep the passed-in source, no authid.
+      final oauthClientId = (Uri.base.queryParameters['client_id'] ?? '').trim();
+      final isOAuth = oauthClientId.isNotEmpty;
+
       Map<String, dynamic> data = {
-        'source': source,
+        'source': isOAuth ? 'OAUTH' : source,
         'otp': otp,
         inputType: mobileOrClientId.toUpperCase(),
       };
-      
+      if (isOAuth) {
+        data['authid'] = oauthClientId;
+      }
+
       // Add log data if provided
       if (logData != null) {
         data['log'] = logData;

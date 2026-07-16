@@ -146,7 +146,7 @@ class PositionListBottomSheet extends ConsumerWidget {
                                               Row(
                                                 children: [
                                                   Text(
-                                                    "${position.symbol!.toUpperCase()} ",
+                                                    "${position.masterName ?? position.symbol!.toUpperCase()} ",
                                                     style: MyntWebTextStyles.body(
                                                       context,
                                                       fontWeight: MyntFonts.medium,
@@ -159,7 +159,7 @@ class PositionListBottomSheet extends ConsumerWidget {
                                                   ),
                                                   Flexible(
                                                     child: Text(
-                                                      "${position.option}",
+                                                      "${position.masterName == null ? (position.option ?? '') : ''}",
                                                       style: MyntWebTextStyles.body(
                                                         context,
                                                         fontWeight: MyntFonts.medium,
@@ -176,7 +176,7 @@ class PositionListBottomSheet extends ConsumerWidget {
                                             ),
                                             const SizedBox(height: 4),
                                             Text(
-                                              "${position.exch}  ${position.expDate}",
+                                              "${position.exch}  ${position.masterName == null ? (position.expDate ?? '') : ''}",
                                               style: MyntWebTextStyles.para(
                                                 context,
                                                 color: resolveThemeColor(

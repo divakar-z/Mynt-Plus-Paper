@@ -1009,7 +1009,17 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
 
       switch (_sortColumnIndex!) {
         case 0: // Time
-          comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
+          // Parse to a real DateTime — the raw "HH:mm:ss dd-MM-yyyy" string
+          // compares by clock only and mis-orders across dates (AMO orders).
+          final aDate = _tryParseOrderTime(a.norentm);
+          final bDate = _tryParseOrderTime(b.norentm);
+          if (aDate != null && bDate != null) {
+            comparison = aDate.compareTo(bDate);
+          } else if (aDate == null && bDate == null) {
+            comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
+          } else {
+            comparison = aDate == null ? 1 : -1;
+          }
           break;
         case 1: // Type (BUY/SELL)
           comparison = (a.trantype ?? '').compareTo(b.trantype ?? '');
@@ -1046,6 +1056,9 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
   }
 
   String _formatInstrumentText(OrderBookModel order) {
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = order.masterName;
+    if (master != null && master.isNotEmpty) return master;
     if (order.tsym != null && order.tsym!.isNotEmpty) {
       // Remove "-EQ" suffix and don't include exchange
       return order.tsym!.replaceAll("-EQ", "").trim();
@@ -1094,6 +1107,18 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
     if (status == 'TRIGGER_PENDING') return 'Trigger Pending';
 
     return order.status!;
+  }
+
+  // Parses the API's "HH:mm:ss dd-MM-yyyy" order timestamp into a DateTime.
+  // Returns null for empty/unexpected values so callers can fall back safely.
+  DateTime? _tryParseOrderTime(String? value) {
+    if (value == null || value.isEmpty) return null;
+    final parts = value.split(' ');
+    if (parts.length != 2) return null;
+    final dateParts = parts[1].split('-');
+    if (dateParts.length != 3) return null;
+    return DateTime.tryParse(
+        '${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[0]}');
   }
 
   // Format time with seconds (e.g., "11:18:07")

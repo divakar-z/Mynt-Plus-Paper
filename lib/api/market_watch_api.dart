@@ -300,6 +300,26 @@ mixin MarketWatchApi on ApiCore {
     }
   }
 
+  /// Derivative contract master (NFO/BFO/MCX/NCOM): a flat map of "EXCH:token" ->
+  /// ready display name, fetched once on login and cached in DerivativeMaster so
+  /// every screen can resolve a contract's name from one source. [exchanges] are
+  /// the user's entitled derivative exchanges, sent as ?exch=NFO,BFO,MCX.
+  Future<Map<String, String>> getDerivativeMaster(
+      {required List<String> exchanges}) async {
+    try {
+      final uri = Uri.parse(
+          '${apiLinks.derivativeMaster}?exch=${exchanges.join(',')}');
+      final res = await apiClient.get(uri, headers: defaultHeaders);
+      final json = jsonDecode(res.body);
+      if (json is Map) {
+        return json.map((k, v) => MapEntry(k.toString(), v.toString()));
+      }
+      return <String, String>{};
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// Search scrip for Strategy Builder - properly encodes exchange filter array
   Future<SearchScripNewModel> searchScripForStrategyBuilder({
     required String searchText,
@@ -521,6 +541,42 @@ mixin MarketWatchApi on ApiCore {
   }
 
 
+
+  // Variant used by the chart engine. Takes explicit from/to unix-epoch
+  // seconds (matches the EODChartData API contract directly) so callers
+  // that already compute their own time range — like the chart engine's
+  // infinite-scroll extend path — don't have to round-trip through a
+  // timeframe-string enum.
+  Future<List<EodChartData>> getEODChartDataRange({
+    required String tsym,
+    required String exch,
+    required int fromEpoch,
+    required int toEpoch,
+  }) async {
+    final uri = Uri.parse(apiLinks.eodchartdata);
+    final formattedSymbol = "$exch:$tsym";
+    final payload =
+        'jData={"sym": "$formattedSymbol","from": "$fromEpoch","to": "$toEpoch"}'
+        '&jKey=${prefs.clientSession}';
+    final res = await apiClient.post(uri, headers: defaultHeaders, body: payload);
+    final json = jsonDecode(res.body);
+    if (json is Map &&
+        json['stat'] == 'Not_Ok' &&
+        json['emsg'] == 'Session Expired :  Invalid Session Key') {
+      throw Exception('Session Expired :  Invalid Session Key');
+    }
+    if (json is List) {
+      return json.map((item) {
+        // Backend wraps each row as a JSON string inside the outer array.
+        final itemData = jsonDecode(item as String);
+        return EodChartData.fromJson(itemData as Map<String, dynamic>);
+      }).toList();
+    }
+    if (json is Map) {
+      return [EodChartData.fromJson(json as Map<String, dynamic>)];
+    }
+    throw Exception('Unexpected EOD response format');
+  }
 
   Future<List<EodChartData>> getEODChartData(String tsym, String exch, {String timeframe = "1Y"}) async {
     try {

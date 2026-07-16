@@ -205,7 +205,12 @@ DateTime parseDate(String dateStr) {
 }
 
 // Cached compiled RegExp — avoids recompilation on every call (1500× per fetchOrderBook)
-final RegExp _tsymDatePattern = RegExp(r'\d{2}[A-Z]{3}\d{2,4}');
+// Month names are whitelisted: a generic [A-Z]{3} false-matches inside symbols
+// that contain digits (e.g. 360ONE30JUN26C1040 matched "60ONE30" as a date).
+// The 2-digit year is optional with a no-more-digits guard: BFO symbols carry
+// no year and the strike follows the month directly (360ONE26JUN1040CE).
+final RegExp _tsymDatePattern = RegExp(
+    r'\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{2}(?!\d))?');
 
 Map spilitTsym({required String value}) {
   String symbol = "";
@@ -225,20 +230,28 @@ Map spilitTsym({required String value}) {
     String month = date.substring(2, 5);
     String year = date.substring(5);
 
-    expDate = '$day $month $year';
-    if (value.substring(index + dateMatch.length).contains("P")) {
-      option = value.substring(index + dateMatch.length).replaceAll("P", "PE ");
-    } else if (value.substring(index + dateMatch.length).contains("C")) {
-      option = value.substring(index + dateMatch.length).replaceAll("C", "CE ");
-    } else if (value.substring(index + dateMatch.length).contains("F")) {
-      option =
-          value.substring(index + dateMatch.length).replaceAll("F", "FUT ");
+    expDate = year.isEmpty ? '$day $month' : '$day $month $year';
+    String rest = value.substring(index + dateMatch.length);
+    // BFO-style symbols put the strike before CE/PE (e.g. 360ONE26JUN1040CE);
+    // the replace-and-swap below assumes the NFO order (C/P before strike).
+    final RegExpMatch? strikeFirst =
+        RegExp(r'^(\d+(?:\.\d+)?)(CE|PE)$').firstMatch(rest);
+    if (strikeFirst != null) {
+      option = '${strikeFirst.group(1)} ${strikeFirst.group(2)}';
     } else {
-      option = value.substring(index + dateMatch.length);
-    }
-    if (option.isNotEmpty) {
-      List<String> swapStr = option.split(" ");
-      option = "${swapStr[1]} ${swapStr[0]}";
+      if (rest.contains("P")) {
+        option = rest.replaceAll("P", "PE ");
+      } else if (rest.contains("C")) {
+        option = rest.replaceAll("C", "CE ");
+      } else if (rest.contains("F")) {
+        option = rest.replaceAll("F", "FUT ");
+      } else {
+        option = rest;
+      }
+      if (option.isNotEmpty) {
+        List<String> swapStr = option.split(" ");
+        option = "${swapStr[1]} ${swapStr[0]}";
+      }
     }
   } else {
     symbol = value;
@@ -246,6 +259,83 @@ Map spilitTsym({required String value}) {
     option = "";
   }
 
+  return {"symbol": symbol, "expDate": expDate, "option": option};
+}
+
+/// BFO (BSE F&O) options: the display name (`dname`) gives the correct symbol and
+/// day+month (e.g. "SENSEX 09 JUL PE 77800") but no year, while the tsym encodes
+/// the year as the two digits right after the symbol (e.g. "SENSEX2670977700CE"
+/// -> "26"). This keeps the dname-derived day+month untouched and only appends
+/// the year from the tsym -> "09 JUL 26". Falls back to just day+month when the
+/// year can't be read cleanly, so nothing regresses. (TC_440 root fix)
+String bfoExpiryWithYear(List<String> dnameParts, String? tsym) {
+  if (dnameParts.length < 3) return dnameParts.join(" ").trim();
+  final dayMon = "${dnameParts[1]} ${dnameParts[2]}";
+  final sym = dnameParts[0].toUpperCase();
+  final ts = (tsym ?? "").toUpperCase();
+  if (sym.isNotEmpty && ts.startsWith(sym) && ts.length >= sym.length + 2) {
+    final yy = ts.substring(sym.length, sym.length + 2);
+    if (RegExp(r'^\d{2}$').hasMatch(yy)) return "$dayMon $yy";
+  }
+  return dayMon;
+}
+
+/// In-memory cache of the derivative contract master (NFO/BFO/MCX), fetched once
+/// on login from the DerivativeMaster API. Keyed by "EXCH:token" -> ready display
+/// name (e.g. "SENSEX 30 JUL 2026 FUT" / "360ONE 25 AUG 2026 CE 1000"). Lets every
+/// screen resolve a contract's name from one backend source instead of deriving
+/// it from tsym/dname per-endpoint.
+class DerivativeMaster {
+  DerivativeMaster._();
+  static final Map<String, String> _names = {};
+
+  static bool get isLoaded => _names.isNotEmpty;
+
+  static void setAll(Map<String, String> data) {
+    _names
+      ..clear()
+      ..addAll(data);
+  }
+
+  /// Empties the cache. Called on logout so the next account starts clean and
+  /// never reads the previous session's fetched set.
+  static void clear() => _names.clear();
+
+  /// Ready display name for a contract, or null if not present in the master.
+  static String? nameFor(String? exch, String? token) {
+    if (exch == null || token == null || exch.isEmpty || token.isEmpty) {
+      return null;
+    }
+    return _names['$exch:$token'];
+  }
+
+  /// Split parts (symbol / expDate / option) of a contract's master name, or
+  /// null when the contract isn't in the master. Lets a screen source every
+  /// piece from the master instead of mixing the master name with [spilitTsym].
+  static Map<String, String>? partsFor(String? exch, String? token) {
+    final name = nameFor(exch, token);
+    if (name == null || name.isEmpty) return null;
+    return spilitMaster(value: name);
+  }
+}
+
+/// Splits a DerivativeMaster display name (e.g. "NIFTY 21 JUL 26 23450 PE",
+/// "ZINC 31 JUL 26 FUT") into the same parts as [spilitTsym] so screens can show
+/// the pieces separately, all sourced from the master. The source year is
+/// accepted as 2- or 4-digit and always returned two-digit ("21 JUL 26") to
+/// match the existing expiry format and the "expiry today" tag logic. Falls back
+/// to the whole string as the symbol when no "DD MON YY(YY)" date is present.
+Map<String, String> spilitMaster({required String value}) {
+  final match = RegExp(r'(\d{1,2}) ([A-Za-z]{3}) (\d{2,4})').firstMatch(value);
+  if (match == null) {
+    return {"symbol": value.trim(), "expDate": "", "option": ""};
+  }
+  final symbol = value.substring(0, match.start).trim();
+  final day = match.group(1)!;
+  final month = match.group(2)!.toUpperCase();
+  final year = match.group(3)!; // 2- or 4-digit; normalised to 2 below
+  final expDate = "$day $month ${year.substring(year.length - 2)}";
+  final option = value.substring(match.end).trim();
   return {"symbol": symbol, "expDate": expDate, "option": option};
 }
 

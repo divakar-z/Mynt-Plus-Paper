@@ -422,6 +422,12 @@ mixin OrderAPI on ApiCore {
       if (input.bpprc.isNotEmpty && double.parse(input.blprc) > 0) {
         payload.addAll({"bpprc": input.bpprc});
       }
+      // Market protection applies only to market-type orders (mirrors the
+      // prc:'0' rule above and the place-order payload). Sent as a percentage.
+      if ((input.prctyp == 'MKT' || input.prctyp == 'SL-MKT') &&
+          input.mktProt.isNotEmpty) {
+        payload.addAll({"mkt_protection": input.mktProt});
+      }
       // if (input.trailprc.isNotEmpty) {
       //   payload.addAll({"trailprc": input.trailprc});
       // }
@@ -645,6 +651,9 @@ mixin OrderAPI on ApiCore {
   Future<PlaceGttOrderModel> placeOCOOrderAPI(PlaceOcoOrderInput input) async {
     try {
       final uri = Uri.parse(apiLinks.placeOCOOrderURL);
+      // ai_t is LMT_BOS_O for both buy and sell OCO — confirmed against a
+      // working sell-side OCO request (the doc's "LMT_SOB_O for sell" is
+      // not what the broker actually accepts).
       Map payload = {
         "uid": prefs.clientId,
         "ai_t": "LMT_BOS_O",

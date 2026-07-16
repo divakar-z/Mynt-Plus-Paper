@@ -313,6 +313,10 @@ class _PositionDetailScreenWebState
 
   // Helper method to format instrument display text (same logic as position_table.dart)
   String _formatInstrumentText() {
+    // Priority 0: backend display name from the DerivativeMaster (derivatives).
+    final master = _positionData.masterName;
+    if (master != null && master.isNotEmpty) return master;
+
     // Priority 1: Use dname (display name) if available
     if (_positionData.dname != null && _positionData.dname!.isNotEmpty) {
       return _positionData.dname!.replaceAll("-EQ", "").trim();

@@ -9,18 +9,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
+import 'package:uuid/uuid.dart';
 
 import '../../../api/core/api_link.dart';
 import '../../../locator/locator.dart';
 import '../../../locator/preference.dart';
-import '../../../provider/auth_provider.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../routes/web_router.dart';
 import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../utils/responsive_snackbar.dart';
 
-enum _OAuthStage { checking, validating, ready, invalid, restricted, mismatch }
+enum _OAuthStage { checking, validating, ready, invalid, restricted }
 
 class OAuthLoginScreen extends ConsumerStatefulWidget {
   const OAuthLoginScreen({super.key, this.clientId});
@@ -38,6 +38,9 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
   _OAuthStage _stage = _OAuthStage.checking;
   String _dname = '';
   String _uid = '';
+  // The session (nwc_id) that actually validated — main web session or the
+  // OAuth-only session. Used when submitting the authorize (mynt-auth) call.
+  String? _authNwcId;
 
   @override
   void initState() {
@@ -48,10 +51,8 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
   @override
   void didUpdateWidget(OAuthLoginScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // When the URL's client_id changes (e.g. user clicked "Continue as ...",
-    // which rewrites the URL via context.go), GoRouter reuses this widget but
-    // passes a new clientId. Reset and re-bootstrap so mismatch/validate runs
-    // against the new value.
+    // When the URL's client_id changes, GoRouter reuses this widget but passes a
+    // new clientId. Reset and re-bootstrap so validate runs against the new value.
     if (oldWidget.clientId != widget.clientId) {
       setState(() {
         _stage = _OAuthStage.checking;
@@ -64,15 +65,21 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
 
   String get _clientId => (widget.clientId ?? '').trim();
 
-  String? get _nwcId {
-    final s = locator<Preferences>().clientSession ?? '';
-    return s.isEmpty ? null : s;
-  }
-
-  bool get _hasSession {
+  /// Sessions to try for validate/auth, in priority order:
+  ///   1. the main web session (clientSession), then
+  ///   2. the OAuth-only session.
+  /// We do NOT filter the OAuth session locally — mynt-validate is the single
+  /// source of truth: each session is sent and only a uid means "owns this key".
+  /// Keeping the OAuth session separate is what lets the main web session survive
+  /// while an OAuth login for a different account is in play.
+  List<String> get _candidateSessions {
     final pref = locator<Preferences>();
-    return (pref.clientId ?? '').isNotEmpty &&
-        (pref.clientSession ?? '').isNotEmpty;
+    final out = <String>[];
+    final main = (pref.clientSession ?? '').trim();
+    if (main.isNotEmpty) out.add(main);
+    final oauth = (pref.oauthSession ?? '').trim();
+    if (oauth.isNotEmpty) out.add(oauth);
+    return out;
   }
 
   Future<void> _bootstrap() async {
@@ -81,115 +88,99 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
       return;
     }
 
-    if (!_hasSession) {
-      // Pass client_id through the URL so it survives page refresh / back nav.
-      // auth_provider reads this off Uri.base after successful login to route back here.
-      if (!mounted) return;
-      context.go(
-        '${WebRoutes.login}?client_id=${Uri.encodeQueryComponent(_clientId)}',
-      );
-      return;
-    }
-
-    // Compare URL's client_id (stripped of _U suffix) with the logged-in user's
-    // clientId. If they differ, ask the user whether to continue as themselves
-    // or switch account — don't silently force one or the other.
-    final pref = locator<Preferences>();
-    final loggedInClient = (pref.clientId ?? '').trim();
-    final urlClientStripped = _clientId.replaceFirst(RegExp(r'_U$'), '');
-    if (loggedInClient.isNotEmpty && urlClientStripped != loggedInClient) {
-      setState(() => _stage = _OAuthStage.mismatch);
-      return;
-    }
-
+    // Validate first — always, even with no session (an empty nwc_id) — so an
+    // invalid app key shows Restricted immediately instead of after a pointless
+    // login, matching the vendor. No local account comparison; the backend's
+    // response (uid / "no data" / neither) decides the screen.
     setState(() => _stage = _OAuthStage.validating);
     await _validate();
   }
 
-  void _onContinueAsLoggedIn() {
-    final loggedInClient =
-        (locator<Preferences>().clientId ?? '').trim();
-    if (loggedInClient.isEmpty) return;
-    final newClientId = '${loggedInClient}_U';
-    // Rewrite URL with the logged-in user's client_id so state matches URL.
-    // The route rebuilds OAuthLoginScreen with the new clientId → validate runs.
-    context.go(
-      '${WebRoutes.oauthAuthorize}?client_id=${Uri.encodeQueryComponent(newClientId)}',
-    );
-  }
-
   Future<void> _validate() async {
-    final nwcId = _nwcId;
-    if (nwcId == null) {
-      setState(() => _stage = _OAuthStage.invalid);
-      return;
+    // Try the real sessions in priority order (main web session first, then the
+    // OAuth session). When there are none, still make ONE attempt with a throwaway
+    // random nwc_id so the backend can tell us whether the app key is even valid.
+    // (Our mynt-validate rejects an empty nwc_id, but a non-empty random one lets
+    // the session-independent key check run: an invalid key returns "no data" →
+    // Restricted; a valid key returns no uid → login.)
+    final sessions = _candidateSessions;
+    final toTry = sessions.isEmpty ? [const Uuid().v4()] : sessions;
+
+    // The first session that returns a uid wins; a session that doesn't own the
+    // key (Ok, no uid) just falls through to the next.
+    for (final nwcId in toTry) {
+      final json = await _postValidate(nwcId);
+      if (!mounted) return;
+
+      if (json == null) {
+        // Hard error (non-200 / exception). The endpoint is the same for every
+        // session, so retrying with another won't help — surface it.
+        setState(() => _stage = _OAuthStage.invalid);
+        return;
+      }
+
+      final stat = json['stat'];
+      final uid = (json['uid'] ?? '').toString();
+      final emsg = (json['emsg'] ?? '').toString().toLowerCase();
+
+      if (stat == 'Ok' && uid.isNotEmpty) {
+        setState(() {
+          _stage = _OAuthStage.ready;
+          _dname = (json['dname'] ?? '').toString();
+          _uid = uid;
+          _authNwcId = nwcId; // remember the session that authorised
+        });
+        return;
+      }
+      if (stat == 'Not_Ok' && emsg.contains('no data')) {
+        // App key not valid for OAuth at all — session-independent, so stop.
+        setState(() => _stage = _OAuthStage.restricted);
+        return;
+      }
+      // stat=Ok but no uid → this session doesn't own the key; try the next one.
     }
 
+    // No session could authorise the key — send the user to /login to sign in as
+    // the owning account. No logout: the main web session must stay alive.
+    _redirectToLogin();
+  }
+
+  /// POSTs one validate attempt. Returns the parsed JSON, or null on a hard
+  /// error (non-200 status or exception).
+  Future<Map<String, dynamic>?> _postValidate(String nwcId) async {
     final payload = {'client_id': _clientId, 'nwc_id': nwcId};
     if (kDebugMode) log('mynt-validate Request => $payload');
-
     try {
       final res = await http.post(
         Uri.parse(_validateUrl),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       );
-
       if (kDebugMode) {
         log('mynt-validate status => ${res.statusCode}');
         log('mynt-validate body => ${res.body}');
       }
-
-      if (!mounted) return;
-
-      if (res.statusCode != 200) {
-        setState(() => _stage = _OAuthStage.invalid);
-        return;
-      }
-
-      final json = jsonDecode(res.body) as Map<String, dynamic>;
-      final stat = json['stat'];
-      final uid = (json['uid'] ?? '').toString();
-      // Backend contract: a valid caller returns stat=Ok AND a uid. Anything else
-      // (stat=Not_Ok, missing uid, or account-mismatch) is treated as a session
-      // that can't authorise this client — clear it and send the user to /login,
-      // preserving client_id so they can return after re-login.
-      final emsg = (json['emsg'] ?? '').toString().toLowerCase();
-      if (stat == 'Ok' && uid.isNotEmpty) {
-        setState(() {
-          _stage = _OAuthStage.ready;
-          _dname = (json['dname'] ?? '').toString();
-          _uid = uid;
-        });
-      } else if (stat == 'Not_Ok' && emsg.contains('no data')) {
-        // API-only user — not allowed to use this OAuth flow. Show a dedicated
-        // restricted screen instead of logging them out.
-        setState(() => _stage = _OAuthStage.restricted);
-      } else {
-        _redirectToLoginAsExpired();
-      }
+      if (res.statusCode != 200) return null;
+      return jsonDecode(res.body) as Map<String, dynamic>;
     } catch (e) {
       if (kDebugMode) log('mynt-validate error => $e');
-      if (!mounted) return;
-      setState(() => _stage = _OAuthStage.invalid);
+      return null;
     }
   }
 
-  Future<void> _redirectToLoginAsExpired() async {
-    // Mirror the app's standard logout flow (profile dropdown / logged-user
-    // bottom sheet both use this): await fetchLogout so server-side APIs
-    // (getLogout + getDeskLogout) finish invalidating the session before we
-    // navigate. Pass a custom target so the OAuth client_id survives into the
-    // login URL and we can return afterwards.
-    await ref.read(authProvider).fetchLogout(
-          context,
-          target:
-              '${WebRoutes.login}?client_id=${Uri.encodeQueryComponent(_clientId)}',
-        );
+  void _redirectToLogin() {
+    if (!mounted) return;
+    // Send the user to /login WITHOUT logging out — the session is shared across
+    // tabs, so we must not invalidate it server-side. /login skips its auto-login
+    // redirect when a client_id is present, so the login form is shown (not the
+    // dashboard), and after a successful login the user is routed back here.
+    context.go(
+      '${WebRoutes.login}?client_id=${Uri.encodeQueryComponent(_clientId)}',
+    );
   }
 
   void _onAuthorisePressed() {
-    final nwcId = _nwcId;
+    final nwcId = _authNwcId;
     if (_clientId.isEmpty || nwcId == null) {
       ResponsiveSnackBar.showError(context, 'Session not found.');
       return;
@@ -258,110 +249,7 @@ class _OAuthLoginScreenState extends ConsumerState<OAuthLoginScreen> {
         return _buildAuthoriseView();
       case _OAuthStage.restricted:
         return _buildRestrictedView();
-      case _OAuthStage.mismatch:
-        return _buildMismatchView();
     }
-  }
-
-  Widget _buildMismatchView() {
-    final cardColor = resolveThemeColor(
-      context,
-      dark: MyntColors.cardDark,
-      light: MyntColors.card,
-    );
-    final borderColor = resolveThemeColor(
-      context,
-      dark: MyntColors.cardBorderDark,
-      light: MyntColors.cardBorder,
-    );
-    final secondaryText = resolveThemeColor(
-      context,
-      dark: MyntColors.textTertiaryDark,
-      light: MyntColors.textTertiary,
-    );
-
-    final loggedInClient = (locator<Preferences>().clientId ?? '').trim();
-    final urlClientStripped =
-        _clientId.replaceFirst(RegExp(r'_U$'), '');
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 36),
-      decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(5),
-        border: Border.all(color: borderColor),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildLogo(),
-          Text(
-            'Account Mismatch',
-            textAlign: TextAlign.center,
-            style: MyntWebTextStyles.head(
-              context,
-              fontWeight: MyntFonts.bold,
-            ),
-          ),
-          const SizedBox(height: 12),
-          RichText(
-            textAlign: TextAlign.center,
-            text: TextSpan(
-              style: MyntWebTextStyles.body(
-                context,
-                color: secondaryText,
-              ),
-              children: [
-                const TextSpan(text: 'You are logged in as '),
-                TextSpan(
-                  text: loggedInClient,
-                  style: MyntWebTextStyles.body(
-                    context,
-                    fontWeight: MyntFonts.bold,
-                  ),
-                ),
-                const TextSpan(
-                    text: ', but this link is requesting access for '),
-                TextSpan(
-                  text: urlClientStripped,
-                  style: MyntWebTextStyles.body(
-                    context,
-                    fontWeight: MyntFonts.bold,
-                  ),
-                ),
-                const TextSpan(text: '.'),
-              ],
-            ),
-          ),
-          const SizedBox(height: 28),
-          SizedBox(
-            height: 44,
-            child: MyntPrimaryButton(
-              label: 'Continue as $loggedInClient',
-              isFullWidth: true,
-              onPressed: _onContinueAsLoggedIn,
-            ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 44,
-            child: MyntOutlinedButton(
-              label: 'Logout',
-              isFullWidth: true,
-              onPressed: () async {
-                await _redirectToLoginAsExpired();
-              },
-              textColor: resolveThemeColor(
-                context,
-                dark: MyntColors.textWhite,
-                light: MyntColors.primary,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   // Backend returns dname like "ZP00285 s apikey". Product wants it shown as

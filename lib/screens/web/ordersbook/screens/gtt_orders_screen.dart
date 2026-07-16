@@ -243,7 +243,22 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
 
     final List<GttOrderBookModel> gttOrders;
     if (showTriggered) {
-      gttOrders = orderBook.triggeredGttOrders ?? [];
+      // Triggered orders come from a separate lazily-fetched list that
+      // searchOrders doesn't cover, so filter here at build time — always
+      // fresh even when the fetch completes mid-search.
+      final triggered = orderBook.triggeredGttOrders ?? [];
+      gttOrders = (searchQuery.isNotEmpty && isGttOrdersTab)
+          ? triggered
+              .where((e) => orderBook.contractMatches(searchQuery, [
+                    e.masterName,
+                    e.tsym,
+                    e.symbol,
+                    e.expDate,
+                    e.option,
+                    e.exch,
+                  ]))
+              .toList()
+          : triggered;
     } else {
       gttOrders = (searchQuery.isNotEmpty && isGttOrdersTab)
           ? (orderBook.gttOrderBookSearch ?? [])
@@ -360,15 +375,15 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                               child: Padding(
                                 padding: const EdgeInsets.all(16.0),
                                 child: NoDataFoundWeb(
-                                  title: showTriggered
-                                      ? "No Triggered GTT Orders"
-                                      : (searchQuery.isNotEmpty
-                                          ? "No GTT Orders Found"
+                                  title: searchQuery.isNotEmpty
+                                      ? "No GTT Orders Found"
+                                      : (showTriggered
+                                          ? "No Triggered GTT Orders"
                                           : "No GTT Orders"),
-                                  subtitle: showTriggered
-                                      ? "You don't have any triggered GTT orders yet."
-                                      : (searchQuery.isNotEmpty
-                                          ? "No GTT orders match your search \"$searchQuery\"."
+                                  subtitle: searchQuery.isNotEmpty
+                                      ? "No GTT orders match your search \"$searchQuery\"."
+                                      : (showTriggered
+                                          ? "You don't have any triggered GTT orders yet."
                                           : "You don't have any GTT orders yet."),
                                   primaryEnabled: false,
                                   secondaryEnabled: false,
@@ -769,7 +784,8 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             cellText = _formatCreatedDate(order);
             break;
           case 1: // Instrument
-            final symbol = (order.tsym ?? '').replaceAll("-EQ", "").trim();
+            final symbol =
+                order.masterName ?? (order.tsym ?? '').replaceAll("-EQ", "").trim();
             final exchange = order.exch ?? '';
             final exchangeText = exchange.isNotEmpty ? ' $exchange' : '';
             final symbolWidth = _measureTextWidth(symbol, textStyle);
@@ -891,8 +907,9 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
     final status = gttOrder.gttOrderCurrentStatus?.toUpperCase() ?? '';
     final isPending = status == 'PENDING' || status == 'TRIGGER_PENDING';
     final uniqueId = '${gttOrder.alId ?? ''}_${gttOrder.tsym ?? ''}';
-    // Format instrument: remove "-EQ" and show symbol + exchange separately
-    final symbol = gttOrder.tsym ?? '';
+    // Format instrument: prefer the backend display name (DerivativeMaster) for
+    // derivatives, else the tsym; remove "-EQ" and show exchange separately.
+    final symbol = gttOrder.masterName ?? (gttOrder.tsym ?? '');
     final displayText = symbol.replaceAll("-EQ", "").trim();
 
     return GestureDetector(
