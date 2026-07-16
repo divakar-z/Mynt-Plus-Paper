@@ -27,6 +27,7 @@ class TrendingOiScreen extends ConsumerStatefulWidget {
 class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
   _Leg _leg = _Leg.both;
   bool _priceFuture = false;
+  final ScrollController _tableScroll = ScrollController();
 
   @override
   void initState() {
@@ -39,6 +40,7 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
 
   @override
   void dispose() {
+    _tableScroll.dispose();
     ref.read(oiChartsProvider).deactivate();
     super.dispose();
   }
@@ -102,11 +104,24 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
                     SizedBox(height: chartH, child: _chartCard(context, data)),
                     const SizedBox(height: 12),
                     Expanded(
-                      child: SingleChildScrollView(
-                        child: DashSectionCard(
-                          title: 'Strike sentiment',
-                          subtitle: 'Day OI change + buildup per strike',
-                          child: OiSentimentTable(data: data),
+                      // Always-visible scrollbar, same as the Market Depth
+                      // panel (RawScrollbar with a permanent thumb + track).
+                      child: RawScrollbar(
+                        controller: _tableScroll,
+                        thumbVisibility: true,
+                        trackVisibility: true,
+                        trackColor: Colors.grey.withValues(alpha: 0.1),
+                        thumbColor: Colors.grey.withValues(alpha: 0.3),
+                        thickness: 6,
+                        radius: const Radius.circular(3),
+                        interactive: true,
+                        child: SingleChildScrollView(
+                          controller: _tableScroll,
+                          child: DashSectionCard(
+                            title: 'Strike sentiment',
+                            subtitle: '(Day OI change + buildup per strike)',
+                            child: OiSentimentTable(data: data),
+                          ),
                         ),
                       ),
                     ),
@@ -131,8 +146,10 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
         ),
         const SizedBox(width: 12),
         _legToggle(context),
-        const Spacer(),
-        if (priceAvailable) _priceToggle(context, data),
+        if (priceAvailable) ...[
+          const SizedBox(width: 12),
+          _priceToggle(context, data),
+        ],
       ],
     );
   }
@@ -184,10 +201,7 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
     final priceLine = priceIsFuture ? data.futureSeries : data.spotSeries;
     final priceLabel = priceIsFuture ? 'Future' : 'Spot';
 
-    return shadcn.OutlinedContainer(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        child: Column(
+    return  Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
@@ -204,19 +218,25 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
                     '  ·  ATM ${InstaOptionsFormat.price(data.atmStrike)}'
                     '  ·  ${data.interval}',
                     overflow: TextOverflow.ellipsis,
-                    style: MyntWebTextStyles.caption(context, color: muted),
+                    style: MyntWebTextStyles.para(context, color: muted),
                   ),
                 ),
-                const Spacer(),
-                Icon(Icons.zoom_in, size: 14, color: muted),
-                const SizedBox(width: 3),
-                Text('scroll / drag to zoom',
-                    style: MyntWebTextStyles.caption(context, color: muted)),
               ],
             ),
             const SizedBox(height: 10),
-            _legend(context, ordered, priceAvailable, priceIsFuture),
-            const SizedBox(height: 6),
+            // Legend left; the zoom hint pinned to the right of the same row.
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                    child: _legend(
+                        context, ordered, priceAvailable, priceIsFuture)),
+                const SizedBox(width: 8),                
+                Text('scroll / drag to zoom',
+                    style: MyntWebTextStyles.para(context, color: muted)),
+              ],
+            ),
+            const SizedBox(height: 10),
             Expanded(
               child: series.isEmpty
                   ? _chartPlaceholder(context)
@@ -230,9 +250,7 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
                     ),
             ),
           ],
-        ),
-      ),
-    );
+        );
   }
 
   Widget _legend(BuildContext context, List<double> ordered,
@@ -242,41 +260,46 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
     final priceColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
 
-    Widget group(String label, bool isCall) => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('$label ',
-                style: MyntWebTextStyles.caption(context, color: muted)
-                    .copyWith(fontWeight: MyntFonts.semiBold)),
-            for (final s in ordered) ...[
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(
-                    color: oiLegColor(ordered, s, isCall),
-                    borderRadius: BorderRadius.circular(2)),
-              ),
-              const SizedBox(width: 3),
-              Text('${s.toInt()}  ',
-                  style: MyntWebTextStyles.caption(context, color: muted)),
-            ],
-          ],
-        );
+    // Each swatch+strike pair is its own wrap item, so a long strike
+    // selection flows onto extra lines instead of overflowing (one giant Row
+    // per group can't be broken by the Wrap).
+    List<Widget> group(String label, bool isCall) => [
+          Text(label,
+              style: MyntWebTextStyles.body(context, color: priceColor)
+                  .copyWith(fontWeight: MyntFonts.bold)),
+          for (final s in ordered)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                      color: oiLegColor(ordered, s, isCall),
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+                const SizedBox(width: 3),
+                Text('${s.toInt()}',
+                    style: MyntWebTextStyles.para(context, color: muted)),
+              ],
+            ),
+        ];
 
     return Wrap(
-      spacing: 16,
+      spacing: 10,
       runSpacing: 6,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        if (_leg != _Leg.pe) group('Calls', true),
-        if (_leg != _Leg.ce) group('Puts', false),
+        if (_leg != _Leg.pe) ...group('Calls', true),
+        if (_leg != _Leg.ce) ...group('Puts', false),
         if (priceShown)
           Row(mainAxisSize: MainAxisSize.min, children: [
             _DashedKey(color: priceColor),
             const SizedBox(width: 5),
             Text(priceIsFuture ? 'Future' : 'Spot',
-                style: MyntWebTextStyles.caption(context, color: muted)
-                    .copyWith(fontWeight: MyntFonts.semiBold)),
+                style: MyntWebTextStyles.body(context, color: resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary))
+                    .copyWith(fontWeight: MyntFonts.bold)),
           ]),
       ],
     );
@@ -322,51 +345,67 @@ class _Segmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    final accent = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    // Scanner-style segmented toggle (same as the OI Statistics and Most
+    // Active toggles): selected = solid brand-blue fill + white text.
+    final border = shadcn.Theme.of(context).colorScheme.border;
+
+    return Container(
+      height: 30,
+      decoration: BoxDecoration(
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < items.length; i++)
+            _seg(context, items[i],
+                isFirst: i == 0, isLast: i == items.length - 1),
+        ],
+      ),
+    );
+  }
+
+  Widget _seg(BuildContext context, _SegItem it,
+      {required bool isFirst, required bool isLast}) {
+    final active = it.value == selected;
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final disabled = resolveThemeColor(context,
         dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: border, width: 0.5),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final it in items)
-              MouseRegion(
-                cursor: it.enabled
-                    ? SystemMouseCursors.click
-                    : SystemMouseCursors.basic,
-                child: GestureDetector(
-                  onTap: it.enabled ? () => onSelect(it.value) : null,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    color: it.value == selected
-                        ? accent.withValues(alpha: 0.14)
-                        : Colors.transparent,
-                    child: Text(it.label,
-                        style: MyntWebTextStyles.caption(context,
-                            color: !it.enabled
-                                ? disabled
-                                : (it.value == selected ? accent : muted),
-                            fontWeight: it.value == selected
-                                ? MyntFonts.semiBold
-                                : MyntFonts.medium)),
-                  ),
-                ),
-              ),
-          ],
+    // Selected segment's outer corners round to match the container (5).
+    const r = Radius.circular(5);
+    final radius = BorderRadius.only(
+      topLeft: isFirst ? r : Radius.zero,
+      bottomLeft: isFirst ? r : Radius.zero,
+      topRight: isLast ? r : Radius.zero,
+      bottomRight: isLast ? r : Radius.zero,
+    );
+    return MouseRegion(
+      cursor:
+          it.enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: it.enabled ? () => onSelect(it.value) : null,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? resolveThemeColor(context,
+                    dark: MyntColors.secondary, light: MyntColors.primary)
+                : Colors.transparent,
+            borderRadius: radius,
+          ),
+          child: Text(it.label,
+              style: MyntWebTextStyles.para(context,
+                  color: !it.enabled
+                      ? disabled
+                      : (active ? Colors.white : muted),
+                  fontWeight:
+                      active ? MyntFonts.semiBold : MyntFonts.medium)),
         ),
       ),
     );

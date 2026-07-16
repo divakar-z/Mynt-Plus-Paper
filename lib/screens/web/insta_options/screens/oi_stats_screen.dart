@@ -115,7 +115,7 @@ class _OiStatsScreenState extends ConsumerState<OiStatsScreen> {
                 const Spacer(),
                 
                 Text('scroll / drag to zoom',
-                    style: MyntWebTextStyles.caption(context, color: muted)),
+                    style: MyntWebTextStyles.para(context, color: muted)),
               ],
             ),
             const SizedBox(height: 12),

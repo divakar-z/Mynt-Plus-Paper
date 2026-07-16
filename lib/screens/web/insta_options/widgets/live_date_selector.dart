@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mynt_plus/models/insta_options/dashboard/dates_response.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/date_calendar.dart';
 
 /// One date control for every InstaOptions screen: a **LIVE / Today** pill
@@ -89,8 +90,6 @@ class _LivePill extends StatelessWidget {
         dark: MyntColors.profitDark, light: MyntColors.profit);
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final fg = active ? live : muted;
 
     return MouseRegion(
@@ -98,28 +97,32 @@ class _LivePill extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: active ? live.withValues(alpha: 0.12) : Colors.transparent,
-            border: Border.all(color: active ? live : border, width: active ? 1 : 0.5),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _Dot(color: fg, pulsing: active),
-              const SizedBox(width: 6),
-              Text('LIVE',
-                  style: MyntWebTextStyles.bodySmall(context,
-                          color: fg, fontWeight: MyntFonts.bold)
-                      .copyWith(letterSpacing: 0.4)),
-              if (active && time != null) ...[
+        // Dashed-outline pill matching the Net-points chip: faint tint fill,
+        // dashed border + text in the pill colour (green live / grey idle).
+        child: CustomPaint(
+          painter: DashedBorderPainter(color: fg, radius: 6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: fg.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(5),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _Dot(color: fg, pulsing: active),
                 const SizedBox(width: 6),
-                Text(time!,
-                    style: MyntWebTextStyles.caption(context, color: fg)),
+                Text('LIVE',
+                    style: MyntWebTextStyles.bodySmall(context,
+                            color: fg, fontWeight: MyntFonts.bold)
+                        .copyWith(letterSpacing: 0.4)),
+                if (active && time != null) ...[
+                  const SizedBox(width: 6),
+                  Text(time!,
+                      style: MyntWebTextStyles.caption(context, color: fg)),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

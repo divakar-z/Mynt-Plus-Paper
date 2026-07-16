@@ -76,7 +76,7 @@ class _MostActiveSectionState extends State<MostActiveSection> {
               style: _cell(c, color: dashChangeColor(c, r.oiChangePct))),
         ),
         DashCol(
-          label: 'OI %',
+          label: 'OI chg %',
           sortKey: (r) => r.oiChangePct ?? 0,
           cell: (c, r) => Text(InstaOptionsFormat.changePct(r.oiChangePct),
               style: _cell(c)),

@@ -102,18 +102,16 @@ class _PcrScreenState extends ConsumerState<PcrScreen> {
                         lightColor: MyntColors.textPrimary,
                         fontWeight: MyntFonts.semiBold)),
                 const SizedBox(width: 10),
-                Icon(Icons.zoom_in, size: 14, color: muted),
-                const SizedBox(width: 3),
-                Text('scroll / drag to zoom',
-                    style: MyntWebTextStyles.caption(context, color: muted)),
-                const Spacer(),
                 Text('${data.interval} buckets',
-                    style: MyntWebTextStyles.caption(context, color: muted)),
+                    style: MyntWebTextStyles.para(context, color: muted)),
+                const Spacer(),               
+                Text('scroll / drag to zoom',
+                    style: MyntWebTextStyles.para(context, color: muted)),
               ],
             ),
             const SizedBox(height: 10),
             _legend(context),
-            const SizedBox(height: 6),
+            const SizedBox(height: 10),
             Expanded(child: PcrTimelineChart(data: data)),
           ],
         ),
@@ -130,14 +128,15 @@ class _PcrScreenState extends ConsumerState<PcrScreen> {
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     Widget swatch(Color c) => Container(
         width: 14,
-        height: 8,
+        height: 14,
         decoration:
             BoxDecoration(color: c, borderRadius: BorderRadius.circular(2)));
     Widget item(Widget mark, String label) =>
         Row(mainAxisSize: MainAxisSize.min, children: [
           mark,
           const SizedBox(width: 5),
-          Text(label, style: MyntWebTextStyles.caption(context, color: muted)),
+          Text(label, style: MyntWebTextStyles.para(context, color: resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary))),
         ]);
     return Row(
       children: [
@@ -201,8 +200,6 @@ class _SummaryTiles extends StatelessWidget {
         dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     final bg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
@@ -217,16 +214,21 @@ class _SummaryTiles extends StatelessWidget {
           Text(label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: MyntWebTextStyles.caption(context, color: muted)),
-          const SizedBox(height: 2),
+              style: MyntWebTextStyles.body(
+                context,
+                darkColor: MyntColors.textTertiaryDark,
+                lightColor: MyntColors.textTertiary,
+                fontWeight: MyntFonts.regular,
+              )),
+          const SizedBox(height: 4),
           Text(value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: MyntWebTextStyles.head(context,
+              style: MyntWebTextStyles.body(context,
                   color: color,
                   darkColor: color ?? MyntColors.textPrimaryDark,
                   lightColor: color ?? MyntColors.textPrimary,
-                  fontWeight: MyntFonts.semiBold)),
+                  fontWeight: MyntFonts.medium)),
         ],
       ),
     );

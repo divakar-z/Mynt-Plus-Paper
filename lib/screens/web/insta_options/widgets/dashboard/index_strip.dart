@@ -20,6 +20,30 @@ class IndexStrip extends StatefulWidget {
 class _IndexStripState extends State<IndexStrip> {
   final ScrollController _hScroll = ScrollController();
 
+  // Chevrons hide when there's nothing to scroll in their direction: at the
+  // far left the back chevron disappears, at the far right the forward one.
+  bool _canLeft = false;
+  bool _canRight = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _hScroll.addListener(_updateChevrons);
+  }
+
+  void _updateChevrons() {
+    if (!_hScroll.hasClients) return;
+    final pos = _hScroll.position;
+    final canLeft = pos.pixels > 1;
+    final canRight = pos.pixels < pos.maxScrollExtent - 1;
+    if (canLeft != _canLeft || canRight != _canRight) {
+      setState(() {
+        _canLeft = canLeft;
+        _canRight = canRight;
+      });
+    }
+  }
+
   @override
   void dispose() {
     _hScroll.dispose();
@@ -47,11 +71,14 @@ class _IndexStripState extends State<IndexStrip> {
         // (same pattern as the Home dashboard Indices section — no scrollbar).
         return Row(
           children: [
-            _ScrollButton(
-              icon: Icons.arrow_back_ios,
-              onTap: () => _page(-(_cardWidth + _spacing)),
-            ),
-            const SizedBox(width: 8),
+            // Chevrons only render when there's something to scroll their way.
+            if (_canLeft) ...[
+              _ScrollButton(
+                icon: Icons.arrow_back_ios,
+                onTap: () => _page(-(_cardWidth + _spacing)),
+              ),
+              const SizedBox(width: 8),
+            ],
             Expanded(
               child: SingleChildScrollView(
                 controller: _hScroll,
@@ -60,11 +87,13 @@ class _IndexStripState extends State<IndexStrip> {
                 child: Row(children: _cardChildren()),
               ),
             ),
-            const SizedBox(width: 8),
-            _ScrollButton(
-              icon: Icons.arrow_forward_ios,
-              onTap: () => _page(_cardWidth + _spacing),
-            ),
+            if (_canRight) ...[
+              const SizedBox(width: 8),
+              _ScrollButton(
+                icon: Icons.arrow_forward_ios,
+                onTap: () => _page(_cardWidth + _spacing),
+              ),
+            ],
           ],
         );
       },
@@ -89,6 +118,7 @@ class _IndexStripState extends State<IndexStrip> {
     _hScroll.animateTo(target,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
   }
+
 }
 
 /// Circular chevron paging button — mirrors the Home dashboard Indices scroller
@@ -111,8 +141,8 @@ class _ScrollButton extends StatelessWidget {
             onTap: onTap,
             borderRadius: BorderRadius.circular(20),
             child: Container(
-              width: 28,
-              height: 28,
+              width: 22,
+              height: 22,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: shadcn.Theme.of(context).colorScheme.card,
@@ -131,7 +161,7 @@ class _ScrollButton extends StatelessWidget {
               child: Center(
                 child: Icon(
                   icon,
-                  size: 12,
+                  size: 10,
                   color: resolveThemeColor(context,
                       dark: MyntColors.textPrimaryDark,
                       light: MyntColors.textPrimary),

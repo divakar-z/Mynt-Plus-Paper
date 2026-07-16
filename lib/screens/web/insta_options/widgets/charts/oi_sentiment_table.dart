@@ -33,31 +33,25 @@ class OiSentimentTable extends StatelessWidget {
               dark: MyntColors.textTertiaryDark,
               light: MyntColors.textTertiary)));
 
-  /// Leg OI with its day OI Δ% alongside (value + signed % on one line, so it
-  /// fits the fixed row height), right-aligned to the numeric column.
-  Widget _oiCell(BuildContext c, int? oi, double? pct) {
-    if (oi == null) return _dash(c);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Text(InstaOptionsFormat.oi(oi), style: _cell(c)),
-        if (pct != null) ...[
-          const SizedBox(width: 6),
-          Text(InstaOptionsFormat.changePct(pct),
-              style: MyntWebTextStyles.caption(c,
-                  color: dashChangeColor(c, pct))),
-        ],
-      ],
-    );
-  }
+  /// Leg OI — value coloured by its day-change direction (BuildUp-table
+  /// convention: OI carries the colour, the % column stays neutral).
+  Widget _oiCell(BuildContext c, int? oi, double? pct) => oi == null
+      ? _dash(c)
+      : Text(InstaOptionsFormat.oi(oi),
+          style: _cell(c, color: dashChangeColor(c, pct)));
+
+  /// Leg day OI change % — neutral text.
+  Widget _oiPctCell(BuildContext c, int? oi, double? pct) =>
+      (oi == null || pct == null)
+          ? _dash(c)
+          : Text(InstaOptionsFormat.changePct(pct), style: _cell(c));
 
   Widget _buildup(BuildContext c, String? category) => category == null
       ? _dash(c)
       : Align(
           alignment: Alignment.centerLeft,
-          child: DashCategoryChip(
-              category: BuildupCategory.fromWire(category), short: true),
+          // Full-label chip, same as the Market Dashboard BuildUp table.
+          child: DashCategoryChip(category: BuildupCategory.fromWire(category)),
         );
 
   Widget _strike(BuildContext c, OiTimelineRow r) {
@@ -69,19 +63,25 @@ class OiSentimentTable extends StatelessWidget {
         Text(r.strike.toInt().toString(), style: _cell(c, bold: true)),
         if (r.isAtm) ...[
           const SizedBox(width: 6),
+          // Same ATM badge as the strikes dropdown.
           Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text('ATM',
+                style: MyntWebTextStyles.caption(c,
+                        color: accent, fontWeight: MyntFonts.bold)
+                    .copyWith(fontSize: 9, letterSpacing: 0.5)),
           ),
         ],
       ],
     );
   }
 
-  // Six columns, all flex (width null) — they fill the panel width without the
-  // dead gap, yet stay within it (8 columns overflowed into a horizontal
-  // scroll). Each leg's OI and day Δ% share one stacked cell.
+  // Eight columns, all flex (width null) — equal widths filling the panel;
+  // on a narrow panel the table falls back to its horizontal scroll.
   List<DashCol<OiTimelineRow>> _cols(BuildContext context) {
     return [
       DashCol(
@@ -89,11 +89,18 @@ class OiSentimentTable extends StatelessWidget {
         sortKey: (r) => r.strike,
         cell: (c, r) => _strike(c, r),
       ),
+      // All columns left-aligned (no `numeric`) — right-aligned values sat
+      // flush against the next column and read as smashed pairs. OI and its
+      // day % are separate columns, like the Market Dashboard BuildUp table.
       DashCol(
-        label: 'CE OI · Δ%',
-        numeric: true,
+        label: 'CE OI',
         sortKey: (r) => r.ce?.oi ?? 0,
         cell: (c, r) => _oiCell(c, r.ce?.oi, r.ce?.oiChangePct),
+      ),
+      DashCol(
+        label: 'CE OI chg %',
+        sortKey: (r) => r.ce?.oiChangePct ?? 0,
+        cell: (c, r) => _oiPctCell(c, r.ce?.oi, r.ce?.oiChangePct),
       ),
       DashCol(
         label: 'CE Buildup',
@@ -102,7 +109,6 @@ class OiSentimentTable extends StatelessWidget {
       ),
       DashCol(
         label: 'PCR',
-        numeric: true,
         sortKey: (r) => r.pcr ?? 0,
         cell: (c, r) =>
             r.pcr == null ? _dash(c) : Text(InstaOptionsFormat.pcr(r.pcr), style: _cell(c)),
@@ -113,10 +119,14 @@ class OiSentimentTable extends StatelessWidget {
         cell: (c, r) => _buildup(c, r.pe?.category),
       ),
       DashCol(
-        label: 'PE OI · Δ%',
-        numeric: true,
+        label: 'PE OI',
         sortKey: (r) => r.pe?.oi ?? 0,
         cell: (c, r) => _oiCell(c, r.pe?.oi, r.pe?.oiChangePct),
+      ),
+      DashCol(
+        label: 'PE OI chg %',
+        sortKey: (r) => r.pe?.oiChangePct ?? 0,
+        cell: (c, r) => _oiPctCell(c, r.pe?.oi, r.pe?.oiChangePct),
       ),
     ];
   }

@@ -115,6 +115,9 @@ class PcrTimelineChart extends StatelessWidget {
             color: line,
             borderWidth: 0,
           ),
+          // No draw-in/morph animation on load or when the selection swaps
+          // the data — same correction as the other OI charts.
+          animationDuration: 0,
         ),
       ],
     );

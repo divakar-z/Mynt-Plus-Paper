@@ -102,7 +102,10 @@ class OiTimelineChart extends StatelessWidget {
         majorTickLines: const MajorTickLines(size: 0),
         title: AxisTitle(
             text: 'Open Interest',
-            textStyle: MyntWebTextStyles.caption(context, color: axisText)),
+            textStyle: MyntWebTextStyles.body(context,
+                darkColor: MyntColors.textPrimaryDark,
+                lightColor: MyntColors.textPrimary,
+                fontWeight: MyntFonts.medium)),
         axisLabelFormatter: (AxisLabelRenderDetails d) =>
             ChartAxisLabel(InstaOptionsFormat.oi(d.value), d.textStyle),
       ),
@@ -118,8 +121,10 @@ class OiTimelineChart extends StatelessWidget {
                 majorTickLines: const MajorTickLines(size: 0),
                 title: AxisTitle(
                     text: underlyingLabel.isEmpty ? priceLabel : underlyingLabel,
-                    textStyle:
-                        MyntWebTextStyles.caption(context, color: axisText)),
+                    textStyle: MyntWebTextStyles.body(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.medium)),
                 axisLabelFormatter: (AxisLabelRenderDetails d) =>
                     ChartAxisLabel(InstaOptionsFormat.price(d.value), d.textStyle),
               ),
@@ -153,6 +158,9 @@ class OiTimelineChart extends StatelessWidget {
             // dots swamp the line and it reads as scattered specks. A clean
             // solid stroke stays legible at any interval.
             markerSettings: const MarkerSettings(isVisible: false),
+            // No draw-in/morph animation on load or when the strikes /
+            // leg / interval selection swaps the data.
+            animationDuration: 0,
           ),
         if (hasPrice)
           LineSeries<PriceTick, DateTime>(
@@ -165,6 +173,7 @@ class OiTimelineChart extends StatelessWidget {
             width: 2.2,
             dashArray: const <double>[6, 3],
             markerSettings: const MarkerSettings(isVisible: false),
+            animationDuration: 0,
           ),
       ],
     );

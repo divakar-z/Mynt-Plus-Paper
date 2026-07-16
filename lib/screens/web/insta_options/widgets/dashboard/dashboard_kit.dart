@@ -10,6 +10,40 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 const Color kDashShortCov = Color(0xFF3E8EDE); // soft blue (replaces the teal)
 const Color kDashOrange = Color(0xFFE3852B);
 
+/// Paints a dashed rounded-rect border (BoxDecoration only does solid) — the
+/// roadmap-tag pill outline used by the Net-points chip and the LIVE badge.
+class DashedBorderPainter extends CustomPainter {
+  final Color color;
+  final double radius;
+
+  static const double _dash = 5;
+  static const double _gap = 3;
+
+  const DashedBorderPainter({required this.color, required this.radius});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+          Offset.zero & size, Radius.circular(radius)));
+    for (final metric in path.computeMetrics()) {
+      var dist = 0.0;
+      while (dist < metric.length) {
+        canvas.drawPath(metric.extractPath(dist, dist + _dash), paint);
+        dist += _dash + _gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant DashedBorderPainter old) =>
+      old.color != color || old.radius != radius;
+}
+
 /// Profit / loss / neutral colour for a signed value.
 Color dashChangeColor(BuildContext context, double? v) {
   if (v == null || v == 0) {
@@ -166,7 +200,7 @@ class DashSectionCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      subtitle!,
+                     subtitle!,
                       overflow: TextOverflow.ellipsis,
                       style: MyntWebTextStyles.caption(
                         context,

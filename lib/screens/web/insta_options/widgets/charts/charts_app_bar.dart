@@ -10,6 +10,7 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/live_date_selector.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 /// Shared app bar for the OI-chart screens: searchable underlying picker +
 /// expiry pills + (optional) intraday interval + trade-date calendar + refresh,
@@ -462,45 +463,64 @@ class _IntervalSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    final accent = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    // Scanner-style segmented toggle (same as the OI Statistics / Most Active
+    // toggles): selected = solid brand-blue fill + white text.
+    final border = shadcn.Theme.of(context).colorScheme.border;
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final intervals = OiChartsProvider.intervals;
 
     return Container(
+      height: 30,
       decoration: BoxDecoration(
-        border: Border.all(color: border, width: 0.5),
-        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(5),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final iv in OiChartsProvider.intervals)
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: () => onSelect(iv),
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: iv == current
-                        ? accent.withValues(alpha: 0.14)
-                        : Colors.transparent,
-                  ),
-                  child: Text(iv,
-                      style: MyntWebTextStyles.caption(context,
-                          color: iv == current ? accent : muted,
-                          fontWeight: iv == current
-                              ? MyntFonts.semiBold
-                              : MyntFonts.medium)),
-                ),
-              ),
-            ),
+          for (var i = 0; i < intervals.length; i++)
+            _seg(context, intervals[i], muted,
+                isFirst: i == 0, isLast: i == intervals.length - 1),
         ],
+      ),
+    );
+  }
+
+  Widget _seg(BuildContext context, String iv, Color muted,
+      {required bool isFirst, required bool isLast}) {
+    final active = iv == current;
+    // Selected segment's outer corners round to match the container (5).
+    const r = Radius.circular(5);
+    final radius = BorderRadius.only(
+      topLeft: isFirst ? r : Radius.zero,
+      bottomLeft: isFirst ? r : Radius.zero,
+      topRight: isLast ? r : Radius.zero,
+      bottomRight: isLast ? r : Radius.zero,
+    );
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => onSelect(iv),
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? resolveThemeColor(context,
+                    dark: MyntColors.secondary, light: MyntColors.primary)
+                : Colors.transparent,
+            borderRadius: radius,
+          ),
+          child: Text(iv,
+              style: MyntWebTextStyles.para(context,
+                  color: active ? Colors.white : muted,
+                  fontWeight:
+                      active ? MyntFonts.semiBold : MyntFonts.medium)),
+        ),
       ),
     );
   }

@@ -71,7 +71,7 @@ class ContributionMovers extends StatelessWidget {
     // Dashed-outline pill: faint tint fill, dashed border + text in the
     // direction colour (roadmap-tag style).
     return CustomPaint(
-      painter: _DashedBorderPainter(color: color, radius: 6),
+      painter: DashedBorderPainter(color: color, radius: 6),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -84,37 +84,4 @@ class ContributionMovers extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Paints a dashed rounded-rect border (BoxDecoration only does solid).
-class _DashedBorderPainter extends CustomPainter {
-  final Color color;
-  final double radius;
-
-  static const double _dash = 5;
-  static const double _gap = 3;
-
-  const _DashedBorderPainter({required this.color, required this.radius});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    final path = Path()
-      ..addRRect(RRect.fromRectAndRadius(
-          Offset.zero & size, Radius.circular(radius)));
-    for (final metric in path.computeMetrics()) {
-      var dist = 0.0;
-      while (dist < metric.length) {
-        canvas.drawPath(metric.extractPath(dist, dist + _dash), paint);
-        dist += _dash + _gap;
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DashedBorderPainter old) =>
-      old.color != color || old.radius != radius;
 }
