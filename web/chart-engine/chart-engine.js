@@ -539,6 +539,18 @@ function handleMessage(d) {
       if (chart) chart.setScripTradable(tradable);
       break;
     }
+    case 'setScripMeta': {
+      // Real tick size / lot / instrument type from GetSecurityInfo, landing
+      // after setPaneSymbol. instname drives the trading-strip COM/INDEX tag —
+      // must be forwarded, not dropped, or non-tradable symbols stay 'INDEX'.
+      const { paneId, ti, ls, instname } = d.value || {};
+      if (typeof paneId !== 'string') return;
+      const chart = panes.get(paneId);
+      if (chart && typeof chart.setScripMeta === 'function') {
+        chart.setScripMeta({ ti, ls, instname });
+      }
+      break;
+    }
     case 'setPaneTimeframe': {
       const { paneId, minutes } = d.value || {};
       if (!paneId || typeof minutes !== 'number') return;

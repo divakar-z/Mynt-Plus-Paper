@@ -392,6 +392,35 @@ class Chart {
     this._loadHistory();
   }
 
+  // Backfill scrip metadata (tick size / lot) IN PLACE, without reloading
+  // history — used when the broker's GetSecurityInfo lands AFTER setSymbol, so
+  // the price axis + crosshair + price snapping switch from the ti=0.05 default
+  // to the instrument's real tick (e.g. 0.10). Same symbol; only meta changes.
+  setScripMeta(meta) {
+    if (!this.scrip || !meta) return;
+    let changed = false;
+    const ti = Number(meta.ti);
+    if (isFinite(ti) && ti > 0 && ti !== this.scrip.ti) {
+      this.scrip.ti = ti;
+      changed = true;
+    }
+    const ls = Number(meta.ls);
+    if (isFinite(ls) && ls > 0 && ls !== this.scrip.ls) {
+      this.scrip.ls = ls;
+      changed = true;
+    }
+    // Real instrument type — drives the trading strip's centre tag for a
+    // NON-tradable symbol ('COM' for a commodity spot vs 'INDEX'). setSymbol
+    // seeds a placeholder 'EQ', so without this every non-tradable symbol
+    // showed 'INDEX'.
+    if (typeof meta.instname === 'string' && meta.instname &&
+        meta.instname !== this.scrip.instname) {
+      this.scrip.instname = meta.instname;
+      changed = true;
+    }
+    if (changed) this.scheduleRedraw();
+  }
+
   // Driven by GetSecurityInfo. `tradable` is the boolean derived from the
   // response's `nontrd` key (absent → true, "1" → false). Posted by the
   // Flutter shell once per scrip.
