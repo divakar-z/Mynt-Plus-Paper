@@ -18,6 +18,7 @@ import 'package:mynt_plus/screens/web/market_watch/set_alert_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/stock_report_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/scrip_detail_web.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:pointer_interceptor/pointer_interceptor.dart';
@@ -1255,6 +1256,8 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
               token: widget.wlValue.token,
               tsym: widget.wlValue.tsym,
               isDarkMode: ref.read(themeProvider).isDarkMode,
+              decorativeName: DerivativeMaster.nameFor(
+                  widget.wlValue.exch, widget.wlValue.token),
             );
             // Then update portal position and make it visible
             ref.read(userProfileProvider).setInlineChartTarget(

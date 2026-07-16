@@ -1535,6 +1535,7 @@ getOptionawait(String exch, String token) {
         token: token,
         tsym: tsym,
         isDarkMode: isDarkMode,
+        decorativeName: DerivativeMaster.nameFor(exch, token),
       );
     } else {
       await ConstantName.chartwebViewController!.evaluateJavascript(
