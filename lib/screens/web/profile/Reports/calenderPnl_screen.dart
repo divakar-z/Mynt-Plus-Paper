@@ -3079,15 +3079,23 @@ class _WebDailyCalendar extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Calculate cell size to fill 100% width
-        // Total width = dayLabels + sum(month groups) + gaps between months
         final totalWeeks = monthGroups.fold<int>(0, (sum, g) => sum + g.weeks.length);
         final totalMonthGaps = (monthGroups.length - 1) * monthGap;
         final availableWidth =
             constraints.maxWidth - dayLabelWidth - totalMonthGaps;
-        final cellStep = availableWidth / totalWeeks;
-        final cellGap = (cellStep * 0.18).clamp(2.0, 4.0);
-        final cellSize = cellStep - cellGap;
+
+        // Cells are sized to fill the width, but never smaller than a floor —
+        // a full financial year squeezed into the panel leaves cells too small
+        // to read the note dot. Below the floor we use the floor and let the
+        // grid scroll horizontally instead.
+        const double minCellStep = 22.0;
+        final double fillCellStep = availableWidth / totalWeeks;
+        final double cellStep =
+            fillCellStep < minCellStep ? minCellStep : fillCellStep;
+        final double cellGap = (cellStep * 0.18).clamp(3.0, 5.0);
+        final double cellSize = cellStep - cellGap;
+        // The grid's natural width; when it exceeds the panel it scrolls.
+        final double gridWidth = totalWeeks * cellStep + totalMonthGaps;
 
         Widget buildCell(DateTime? date) {
           if (date == null) {
@@ -3167,96 +3175,88 @@ class _WebDailyCalendar extends StatelessWidget {
           );
         }
 
-        return Column(
+        // The grid and its month labels use fixed cell widths and scroll
+        // horizontally together. The day-of-week labels stay pinned on the left,
+        // outside the scroll, so they never slide out of view.
+        final grid = Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Heatmap grid
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Day-of-week labels (Mon, Wed, Fri)
-                SizedBox(
-                  width: dayLabelWidth,
-                  child: Column(
-                    children: List.generate(7, (dayIndex) {
-                      return Container(
-                        height: cellSize + cellGap,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          dayLabels[dayIndex],
-                          style: TextStyle(
-                            fontFamily: MyntFonts.fontFamily,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w400,
-                            color: secondaryColor,
-                          ),
-                        ),
-                      );
-                    }),
+            for (int m = 0; m < monthGroups.length; m++) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: monthGroups[m].weeks.map((weekDays) {
+                  return Column(
+                    children:
+                        weekDays.map((date) => buildCell(date)).toList(),
+                  );
+                }).toList(),
+              ),
+              if (m < monthGroups.length - 1) SizedBox(width: monthGap),
+            ],
+          ],
+        );
+
+        final monthLabels = Row(
+          children: [
+            for (int m = 0; m < monthGroups.length; m++) ...[
+              SizedBox(
+                width: monthGroups[m].weeks.length * cellStep,
+                child: Center(
+                  child: Text(
+                    _monthAbbr(monthGroups[m].month),
+                    style: TextStyle(
+                      fontFamily: MyntFonts.fontFamily,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                      color: secondaryColor,
+                    ),
                   ),
                 ),
-                // Month groups with gaps between them
-                Expanded(
-                  child: Row(
+              ),
+              if (m < monthGroups.length - 1) SizedBox(width: monthGap),
+            ],
+          ],
+        );
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Day-of-week labels (Mon, Wed, Fri) — pinned, not scrolled.
+            SizedBox(
+              width: dayLabelWidth,
+              child: Column(
+                children: List.generate(7, (dayIndex) {
+                  return Container(
+                    height: cellSize + cellGap,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      dayLabels[dayIndex],
+                      style: TextStyle(
+                        fontFamily: MyntFonts.fontFamily,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w400,
+                        color: secondaryColor,
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: gridWidth,
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (int m = 0; m < monthGroups.length; m++) ...[
-                        // Month group
-                        Expanded(
-                          flex: monthGroups[m].weeks.length,
-                          child: Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.spaceBetween,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children:
-                                monthGroups[m].weeks.map((weekDays) {
-                              return Column(
-                                children: weekDays
-                                    .map((date) => buildCell(date))
-                                    .toList(),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                        // Gap between months
-                        if (m < monthGroups.length - 1)
-                          SizedBox(width: monthGap),
-                      ],
+                      grid,
+                      const SizedBox(height: 6),
+                      monthLabels,
                     ],
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            // Month labels below the grid — centered under each group
-            Row(
-              children: [
-                SizedBox(width: dayLabelWidth),
-                Expanded(
-                  child: Row(
-                    children: [
-                      for (int m = 0; m < monthGroups.length; m++) ...[
-                        Expanded(
-                          flex: monthGroups[m].weeks.length,
-                          child: Center(
-                            child: Text(
-                              _monthAbbr(monthGroups[m].month),
-                              style: TextStyle(
-                                fontFamily: MyntFonts.fontFamily,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w500,
-                                color: secondaryColor,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (m < monthGroups.length - 1)
-                          SizedBox(width: monthGap),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
+              ),
             ),
           ],
         );
@@ -3331,9 +3331,10 @@ class _HoverableHeatmapCellState extends State<_HoverableHeatmapCell> {
 
   @override
   Widget build(BuildContext context) {
-    // Cells are only a few pixels wide, so the marker is a dot rather than an
-    // icon — anything with detail is unreadable at this size.
-    final markerSize = (widget.cellSize * 0.34).clamp(2.5, 5.0);
+    // The note marker is a dot rather than an icon — even at the larger cell
+    // size, detail is unreadable. Sized to fill a clear share of the cell so it
+    // reads at a glance.
+    final markerSize = (widget.cellSize * 0.42).clamp(5.0, 9.0);
 
     return MouseRegion(
       cursor: widget.onTap != null

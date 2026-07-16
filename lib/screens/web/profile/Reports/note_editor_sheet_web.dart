@@ -45,6 +45,10 @@ Future<void> openNoteEditorSheet(
     context: context,
     position: shadcn.OverlayPosition.end,
     barrierColor: Colors.transparent,
+    // The editor is persistent: an accidental click outside must not discard a
+    // half-written note. It closes only through the X (or Save/Delete), and the
+    // X asks before dropping unsaved edits.
+    barrierDismissible: false,
     builder: (sheetContext) {
       final screenWidth = MediaQuery.of(sheetContext).size.width;
       final sheetWidth = screenWidth < 1300 ? screenWidth * 0.3 : 480.0;
@@ -108,6 +112,23 @@ class _NoteEditorContent extends ConsumerStatefulWidget {
   ConsumerState<_NoteEditorContent> createState() => _NoteEditorContentState();
 }
 
+/// An in-sheet confirmation prompt. Rendered inside the sheet's own Stack rather
+/// than a Material `showDialog`, which layers *below* the shadcn drawer overlay
+/// and so would be invisible and unreachable.
+class _ConfirmPrompt {
+  final String title;
+  final String message;
+  final String confirmLabel;
+  final Future<void> Function() onConfirm;
+
+  const _ConfirmPrompt({
+    required this.title,
+    required this.message,
+    required this.confirmLabel,
+    required this.onConfirm,
+  });
+}
+
 class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   late final TextEditingController _title;
   late final TextEditingController _comment;
@@ -115,6 +136,9 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   late final String _originalComment;
   bool _saving = false;
   bool _deleting = false;
+
+  /// Non-null while an inline confirm prompt (discard / delete) is showing.
+  _ConfirmPrompt? _confirm;
 
   @override
   void initState() {
@@ -182,14 +206,47 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     }
   }
 
-  Future<void> _delete() async {
+  /// The X. The editor is persistent, so this is the deliberate exit — if there
+  /// are unsaved edits it asks before dropping them, otherwise it closes.
+  void _handleClose() {
+    if (_saving || _deleting) return;
+    if (_dirty) {
+      setState(() {
+        _confirm = _ConfirmPrompt(
+          title: 'Discard changes?',
+          message: 'You have unsaved changes to this note. Closing now will '
+              'discard them.',
+          confirmLabel: 'Discard',
+          onConfirm: () async {
+            if (mounted) shadcn.closeSheet(context);
+          },
+        );
+      });
+      return;
+    }
+    shadcn.closeSheet(context);
+  }
+
+  void _requestDelete() {
+    if (widget.existing == null || _deleting) return;
+    setState(() {
+      _confirm = _ConfirmPrompt(
+        title: 'Delete this note?',
+        message: 'Your note for ${widget.noteDate} will be removed, along with '
+            'its tags and attachments. This cannot be undone.',
+        confirmLabel: 'Delete',
+        onConfirm: _performDelete,
+      );
+    });
+  }
+
+  Future<void> _performDelete() async {
     final note = widget.existing;
-    if (note == null || _deleting) return;
-
-    final confirmed = await _confirmDelete();
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _deleting = true);
+    if (note == null) return;
+    setState(() {
+      _confirm = null;
+      _deleting = true;
+    });
     try {
       await locator<ApiExporter>().deleteNote(note.noteId);
       ref.invalidate(notesForRangeProvider(widget.rangeKey));
@@ -204,65 +261,17 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     }
   }
 
-  /// Deletion is soft server-side but there is no undo exposed, so confirm.
-  Future<bool?> _confirmDelete() {
-    return showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 380),
-          child: Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: resolveThemeColor(dialogContext,
-                  dark: MyntColors.cardDark, light: MyntColors.card),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Delete this note?',
-                    style: MyntWebTextStyles.title(dialogContext,
-                        darkColor: MyntColors.textPrimaryDark,
-                        lightColor: MyntColors.textPrimary,
-                        fontWeight: MyntFonts.semiBold)),
-                const SizedBox(height: 8),
-                Text(
-                  'Your note for ${widget.noteDate} will be removed, along with '
-                  'its tags and attachments. This cannot be undone.',
-                  style: MyntWebTextStyles.bodySmall(dialogContext,
-                      darkColor: MyntColors.textSecondaryDark,
-                      lightColor: MyntColors.textSecondary),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    MyntTextButton(
-                      label: 'Cancel',
-                      onPressed: () => Navigator.of(dialogContext).pop(false),
-                    ),
-                    const SizedBox(width: 8),
-                    MyntPrimaryButton(
-                      label: 'Delete',
-                      backgroundColor: resolveThemeColor(dialogContext,
-                          dark: MyntColors.lossDark, light: MyntColors.loss),
-                      onPressed: () => Navigator.of(dialogContext).pop(true),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        _buildEditor(context),
+        if (_confirm != null) _buildConfirmOverlay(context, _confirm!),
+      ],
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildEditor(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -319,6 +328,67 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     );
   }
 
+  /// The discard / delete confirmation, drawn on top of the sheet content. It
+  /// lives inside the sheet's own render tree — not a Material dialog — so it
+  /// always paints above the shadcn drawer overlay and is actually reachable.
+  Widget _buildConfirmOverlay(BuildContext context, _ConfirmPrompt prompt) {
+    return Positioned.fill(
+      child: GestureDetector(
+        // Tapping the scrim cancels — but does not fall through to the editor.
+        onTap: () => setState(() => _confirm = null),
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.45),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.all(20),
+          child: GestureDetector(
+            onTap: () {}, // swallow taps on the card itself
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: resolveThemeColor(context,
+                    dark: MyntColors.cardDark, light: MyntColors.card),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(prompt.title,
+                      style: MyntWebTextStyles.title(context,
+                          darkColor: MyntColors.textPrimaryDark,
+                          lightColor: MyntColors.textPrimary,
+                          fontWeight: MyntFonts.semiBold)),
+                  const SizedBox(height: 8),
+                  Text(prompt.message,
+                      style: MyntWebTextStyles.bodySmall(context,
+                          darkColor: MyntColors.textSecondaryDark,
+                          lightColor: MyntColors.textSecondary)),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      MyntTextButton(
+                        label: 'Cancel',
+                        onPressed: () => setState(() => _confirm = null),
+                      ),
+                      const SizedBox(width: 8),
+                      MyntPrimaryButton(
+                        label: prompt.confirmLabel,
+                        backgroundColor: resolveThemeColor(context,
+                            dark: MyntColors.lossDark, light: MyntColors.loss),
+                        onPressed: () => prompt.onConfirm(),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
@@ -345,7 +415,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
               ],
             ),
           ),
-          MyntCloseButton(onPressed: () => shadcn.closeSheet(context)),
+          MyntCloseButton(onPressed: _handleClose),
         ],
       ),
     );
@@ -451,7 +521,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
               textColor: resolveThemeColor(context,
                   dark: MyntColors.lossDark, light: MyntColors.loss),
               isLoading: _deleting,
-              onPressed: _deleting ? null : _delete,
+              onPressed: _deleting ? null : _requestDelete,
             ),
           const Spacer(),
           // Rebuilds on every keystroke so the Save button's enabled state
