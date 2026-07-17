@@ -47,6 +47,15 @@ class LoginScreenWeb extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
+  // Short version shown in the login footer. Hovering it reveals the full
+  // build/release details (_appVersionLabel) in a tooltip.
+  static const String _appVersionShort = "Version 3.0.2";
+
+  // Full build/release details — surfaced only in the hover tooltip. Update
+  // this single string on each release.
+  static const String _appVersionLabel =
+      "Version 3.0.2 Build 1.0.512 Released on 16 Jul";
+
   bool _isProcessing = false;
   bool _isInitializing = true; // True until auto-login check completes
   late FocusNode focusNode;
@@ -2569,6 +2578,20 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                       dark: MyntColors.textSecondaryDark,
                                       light: MyntColors.textSecondary),
                                   ).copyWith(height: 1.5),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Tooltip(
+                                message: _appVersionLabel,
+                                child: Text(
+                                  _appVersionShort,
+                                  style: MyntWebTextStyles.para(
+                                    context,
+                                    color: resolveThemeColor(context,
+                                        dark: MyntColors.textSecondaryDark,
+                                        light: MyntColors.textSecondary),
+                                  ),
                                   textAlign: TextAlign.center,
                                 ),
                               ),
