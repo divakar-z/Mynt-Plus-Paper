@@ -38,7 +38,7 @@ class SectorContributionSection extends StatelessWidget {
         cell: (c, s) => EllipsisText(s.sector, style: _cell(c, bold: true)),
       ),
       DashCol(
-        label: 'No. of stocks',
+        label: 'Stocks',
         width: 110,
         sortKey: (s) => s.stocks,
         cell: (c, s) => Text('${s.stocks}', style: _cell(c)),

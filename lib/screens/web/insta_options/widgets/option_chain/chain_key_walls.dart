@@ -64,10 +64,25 @@ class ChainKeyWalls extends StatelessWidget {
             dark: MyntColors.lossDark, light: MyntColors.loss)
         : resolveThemeColor(context,
             dark: MyntColors.profitDark, light: MyntColors.profit);
+    final fg = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    // Title in primary; the descriptor rides in brackets, muted.
+    final parts = title.split(' · ');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: MyntWebTextStyles.caption(context, color: muted)),
+        Text.rich(
+          TextSpan(children: [
+            TextSpan(
+                text: parts.first,
+                style: MyntWebTextStyles.body(context,
+                    color: fg, fontWeight: MyntFonts.semiBold)),
+            if (parts.length > 1)
+              TextSpan(
+                  text: ' (${parts.sublist(1).join(' · ')})',
+                  style: MyntWebTextStyles.para(context, color: muted)),
+          ]),
+        ),
         const SizedBox(height: 6),
         for (final w in walls.take(3)) _row(context, w, call, color, maxOi),
       ],
@@ -85,12 +100,20 @@ class ChainKeyWalls extends StatelessWidget {
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final tertiary = resolveThemeColor(context,
         dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final profit = resolveThemeColor(context,
+        dark: MyntColors.profitDark, light: MyntColors.profit);
+    final loss = resolveThemeColor(context,
+        dark: MyntColors.lossDark, light: MyntColors.loss);
+    final fg = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final frac = maxOi <= 0 ? 0.0 : (w.oi / maxOi).clamp(0.0, 1.0);
     final building = chg != null && chg > 0;
-    final tagColor = building ? secondary : tertiary;
+    // Neutral chip: the word stays black; only the arrow + percentage carry
+    // the direction colour (green building / red easing).
+    final dirColor = building ? profit : loss;
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: border, width: 0.5)),
       ),
@@ -99,15 +122,15 @@ class ChainKeyWalls extends StatelessWidget {
           SizedBox(
             width: 50,
             child: Text(w.strike.toStringAsFixed(0),
-                style: MyntWebTextStyles.bodySmall(context,
+                style: MyntWebTextStyles.body(context,
                     color: color, fontWeight: MyntFonts.semiBold)),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(3),
+              borderRadius: BorderRadius.circular(0),
               child: Container(
-                height: 6,
+                height: 10,
                 color: track,
                 child: FractionallySizedBox(
                   alignment: Alignment.centerLeft,
@@ -119,38 +142,55 @@ class ChainKeyWalls extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           SizedBox(
-            width: 38,
+            // Wide enough for "9.99Cr" at body size — one line, no wrap.
+            width: 56,
             child: Text(InstaOptionsFormat.oi(w.oi),
                 textAlign: TextAlign.right,
-                style: MyntWebTextStyles.caption(context, color: secondary)),
+                maxLines: 1,
+                softWrap: false,
+                style: MyntWebTextStyles.body(context, color: secondary)),
           ),
           const SizedBox(width: 6),
           SizedBox(
-            width: 92,
+            width: 104,
             child: chg == null
                 ? Text('—',
                     textAlign: TextAlign.right,
                     style:
                         MyntWebTextStyles.caption(context, color: tertiary))
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Icon(
-                          building
-                              ? Icons.arrow_upward
-                              : Icons.arrow_downward,
-                          size: 11,
-                          color: tagColor),
-                      const SizedBox(width: 2),
-                      Flexible(
-                        child: Text(
-                          '${building ? 'building' : 'easing'} ${InstaOptionsFormat.pctCompact(chg.abs(), showSign: false)}',
-                          overflow: TextOverflow.ellipsis,
-                          style: MyntWebTextStyles.caption(context,
-                              color: tagColor),
-                        ),
+                : Align(
+                    alignment: Alignment.centerRight,
+                    // Neutral chip — word in black, arrow + % in the
+                    // direction colour.
+                    child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          
+                          Flexible(
+                            child: Text.rich(
+                              TextSpan(children: [
+                                TextSpan(
+                                    text: building ? 'Building ' : 'Easing ',
+                                    style: MyntWebTextStyles.para(context,
+                                            color: fg,
+                                            fontWeight: MyntFonts.regular)
+                                        ),
+                                TextSpan(
+                                    text: InstaOptionsFormat.pctCompact(
+                                        chg.abs(),
+                                        showSign: false),
+                                    style: MyntWebTextStyles.para(context,
+                                            color: dirColor,
+                                            fontWeight: MyntFonts.medium)
+                                        ),
+                              ]),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    
                   ),
           ),
         ],

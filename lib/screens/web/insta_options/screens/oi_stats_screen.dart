@@ -8,6 +8,7 @@ import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/charts/charts_app_bar.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/charts/oi_by_strike_chart.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 /// OI Statistics — per-strike CE/PE open interest as a zoomable column chart,
@@ -329,46 +330,16 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final loss = resolveThemeColor(context,
-        dark: MyntColors.lossDark, light: MyntColors.loss);
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          constraints: const BoxConstraints(maxWidth: 480),
-          decoration: BoxDecoration(
-            color: loss.withValues(alpha: 0.1),
-            border: Border.all(color: loss, width: 1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.cloud_off, color: loss, size: 20),
-                  const SizedBox(width: 8),
-                  Text('OI statistics failed to load',
-                      style: MyntWebTextStyles.body(context,
-                          color: loss, fontWeight: MyntFonts.semiBold)),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(message,
-                  style: MyntWebTextStyles.caption(context,
-                      darkColor: MyntColors.textSecondaryDark,
-                      lightColor: MyntColors.textSecondary)),
-              const SizedBox(height: 12),
-              TextButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
+    // App-standard error state (same widget Positions / Holdings / Scanner
+    // use) instead of the bespoke red panel.
+    return Center(
+      child: NoDataFoundWeb(
+        title: 'OI statistics failed to load',
+        subtitle: message,
+        primaryEnabled: true,
+        onPrimary: onRetry,
+        primaryLabel: 'Retry',
+        secondaryEnabled: false,
       ),
     );
   }

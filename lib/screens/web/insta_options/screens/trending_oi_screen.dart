@@ -10,6 +10,8 @@ import 'package:mynt_plus/screens/web/insta_options/widgets/charts/oi_sentiment_
 import 'package:mynt_plus/screens/web/insta_options/widgets/charts/oi_timeline_chart.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/charts/strike_multi_select.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/insta_tab_chip.dart';
+import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 enum _Leg { both, ce, pe }
@@ -27,6 +29,7 @@ class TrendingOiScreen extends ConsumerStatefulWidget {
 class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
   _Leg _leg = _Leg.both;
   bool _priceFuture = false;
+  int _tab = 0; // 0 = Intraday OI chart, 1 = Strike sentiment table
   final ScrollController _tableScroll = ScrollController();
 
   @override
@@ -82,56 +85,71 @@ class _TrendingOiScreenState extends ConsumerState<TrendingOiScreen> {
     final data = p.oiTimeline;
     if (data == null || data.isEmpty) return const _EmptyState();
 
-    // Pinned controls + chart, only the table scrolls — so the mouse wheel
-    // zooms the chart instead of scrolling the page past it.
+    // Chart and table split into two tabs — stacking both read as cluttered.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-          child: _controls(context, data),
+          child: Row(
+            children: [
+              InstaTabChip(
+                label: 'Intraday OI',
+                selected: _tab == 0,
+                onTap: () => setState(() => _tab = 0),
+              ),
+              const SizedBox(width: 6),
+              InstaTabChip(
+                label: 'Strike sentiment',
+                selected: _tab == 1,
+                onTap: () => setState(() => _tab = 1),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 12),
         Expanded(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final chartH = (c.maxHeight * 0.56).clamp(320.0, 600.0);
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SizedBox(height: chartH, child: _chartCard(context, data)),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      // Always-visible scrollbar, same as the Market Depth
-                      // panel (RawScrollbar with a permanent thumb + track).
-                      child: RawScrollbar(
-                        controller: _tableScroll,
-                        thumbVisibility: true,
-                        trackVisibility: true,
-                        trackColor: Colors.grey.withValues(alpha: 0.1),
-                        thumbColor: Colors.grey.withValues(alpha: 0.3),
-                        thickness: 6,
-                        radius: const Radius.circular(3),
-                        interactive: true,
-                        child: SingleChildScrollView(
-                          controller: _tableScroll,
-                          child: DashSectionCard(
-                            title: 'Strike sentiment',
-                            subtitle: '(Day OI change + buildup per strike)',
-                            child: OiSentimentTable(data: data),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+            child: _tab == 0 ? _chartTab(context, data) : _tableTab(data),
           ),
         ),
       ],
+    );
+  }
+
+  /// Tab 0 — the strike/leg/price controls with the chart filling the rest.
+  Widget _chartTab(BuildContext context, OiTimeline data) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _controls(context, data),
+        const SizedBox(height: 12),
+        Expanded(child: _chartCard(context, data)),
+      ],
+    );
+  }
+
+  /// Tab 1 — the sentiment table with an always-visible scrollbar (same as
+  /// the Market Depth panel).
+  Widget _tableTab(OiTimeline data) {
+    return RawScrollbar(
+      controller: _tableScroll,
+      thumbVisibility: true,
+      trackVisibility: true,
+      trackColor: Colors.grey.withValues(alpha: 0.1),
+      thumbColor: Colors.grey.withValues(alpha: 0.3),
+      thickness: 6,
+      radius: const Radius.circular(3),
+      interactive: true,
+      child: SingleChildScrollView(
+        controller: _tableScroll,
+        child: DashSectionCard(
+          title: 'Strike sentiment',
+          subtitle: '(Day OI change + buildup per strike)',
+          child: OiSentimentTable(data: data),
+        ),
+      ),
     );
   }
 
@@ -441,46 +459,16 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final loss = resolveThemeColor(context,
-        dark: MyntColors.lossDark, light: MyntColors.loss);
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          constraints: const BoxConstraints(maxWidth: 480),
-          decoration: BoxDecoration(
-            color: loss.withValues(alpha: 0.1),
-            border: Border.all(color: loss, width: 1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.cloud_off, color: loss, size: 20),
-                  const SizedBox(width: 8),
-                  Text('Trending OI failed to load',
-                      style: MyntWebTextStyles.body(context,
-                          color: loss, fontWeight: MyntFonts.semiBold)),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(message,
-                  style: MyntWebTextStyles.caption(context,
-                      darkColor: MyntColors.textSecondaryDark,
-                      lightColor: MyntColors.textSecondary)),
-              const SizedBox(height: 12),
-              TextButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
+    // App-standard error state (same widget Positions / Holdings / Scanner
+    // use) instead of the bespoke red panel.
+    return Center(
+      child: NoDataFoundWeb(
+        title: 'Trending OI failed to load',
+        subtitle: message,
+        primaryEnabled: true,
+        onPrimary: onRetry,
+        primaryLabel: 'Retry',
+        secondaryEnabled: false,
       ),
     );
   }

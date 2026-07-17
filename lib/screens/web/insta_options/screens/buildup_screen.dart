@@ -8,6 +8,7 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
 import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/buildup_pill.dart';
+import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 
 /// OI Buildup screen (README §10.8). Per-contract classification table.
 class BuildupScreen extends ConsumerWidget {
@@ -252,51 +253,18 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // App-standard error state (same widget Positions / Holdings / Scanner
+    // use) instead of the bespoke red panel.
     return Container(
       color: tokens.bgPrimary,
-      padding: const EdgeInsets.all(24),
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: tokens.loss.withValues(alpha: 0.1),
-            border: Border.all(color: tokens.loss, width: 1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.error_outline, color: tokens.loss, size: 20),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Failed to load buildup',
-                    style: MyntWebTextStyles.body(
-                      context,
-                      color: tokens.loss,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                message,
-                style: MyntWebTextStyles.caption(
-                  context,
-                  color: tokens.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
+        child: NoDataFoundWeb(
+          title: 'Failed to load buildup',
+          subtitle: message,
+          primaryEnabled: true,
+          onPrimary: onRetry,
+          primaryLabel: 'Retry',
+          secondaryEnabled: false,
         ),
       ),
     );

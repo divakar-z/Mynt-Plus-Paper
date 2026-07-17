@@ -384,9 +384,12 @@ class _ExpirySelector extends StatelessWidget {
     final muted = resolveThemeColor(context,
         dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
     if (expiries.isEmpty) {
+      // While loading, show nothing — the body spinner already says it.
+      // "No expiries" stays: that's real information for a non-F&O symbol.
+      if (loading) return const SizedBox.shrink();
       return Align(
         alignment: Alignment.centerLeft,
-        child: Text(loading ? 'Loading expiries…' : 'No expiries',
+        child: Text('No expiries',
             style: MyntWebTextStyles.caption(context, color: muted)),
       );
     }
@@ -535,26 +538,23 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    final btn = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: 34,
-          height: 34,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: resolveThemeColor(context,
-                dark: MyntColors.cardDark, light: MyntColors.card),
-            border: Border.all(color: border, width: 0.5),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(icon, size: 18, color: fg),
+    // Borderless icon button matching the Holdings / Market Dashboard refresh.
+    final dark = isDarkMode(context);
+    final iconColor = resolveThemeColor(context,
+        dark: MyntColors.textWhite, light: MyntColors.textPrimary);
+    final btn = SizedBox(
+      width: 40,
+      height: 40,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          splashColor:
+              (dark ? Colors.white : Colors.black).withValues(alpha: 0.15),
+          highlightColor:
+              (dark ? Colors.white : Colors.black).withValues(alpha: 0.08),
+          onTap: onTap,
+          child: Center(child: Icon(icon, size: 28, color: iconColor)),
         ),
       ),
     );

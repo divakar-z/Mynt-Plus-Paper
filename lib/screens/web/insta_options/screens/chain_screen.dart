@@ -14,7 +14,10 @@ import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_a
 import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_balance_bar.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_key_walls.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_ladder.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/insta_tab_chip.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/option_chain/chain_range_axis.dart';
+import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 
 /// Option Chain (Screen 2) — the NSE-style `CALLS | STRIKE | PUTS` ladder on the
 /// date-based backend. The app bar (underlying / date / expiry) stays put; only
@@ -30,15 +33,15 @@ class _ChainScreenState extends ConsumerState<ChainScreen> {
   final GlobalKey<ChainLadderState> _ladderKey = GlobalKey<ChainLadderState>();
   Set<String> _lastSubKeys = const <String>{};
 
-  // Collapsing the overview gives the ladder ~230px more height on short
-  // screens. Remembered across tab switches so it's a once-off, not per-visit.
-  static bool _overviewExpandedPref = true;
-  bool _overviewExpanded = _overviewExpandedPref;
+  // 0 = the Overview analytics, 1 = the ladder.
+  // Remembered across tab switches so it's a once-off, not per-visit.
+  static int _tabPref = 0;
+  int _tab = _tabPref;
   static final NumberFormat _grp = NumberFormat('#,##0');
 
-  void _toggleOverview() => setState(() {
-        _overviewExpanded = !_overviewExpanded;
-        _overviewExpandedPref = _overviewExpanded;
+  void _selectTab(int i) => setState(() {
+        _tab = i;
+        _tabPref = i;
       });
 
   @override
@@ -96,30 +99,50 @@ class _ChainScreenState extends ConsumerState<ChainScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _overviewHeader(context, effective),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            alignment: Alignment.topCenter,
-            child: _overviewExpanded
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const SizedBox(height: 12),
-                      ChainRangeAxis(data: effective),
-                      const SizedBox(height: 16),
-                      ChainBalanceBar(
-                          totalCeOi: effective.totalCeOi,
-                          totalPeOi: effective.totalPeOi,
-                          pcr: effective.pcr),
-                      const SizedBox(height: 18),
-                      ChainKeyWalls(data: effective),
-                    ],
-                  )
-                : const SizedBox(width: double.infinity),
+          // Overview and Ladder as separate tabs; the key-levels digest stays
+          // visible on the right of the tab row from both tabs.
+          Row(
+            children: [
+              InstaTabChip(
+                label: 'Overview',
+                selected: _tab == 0,
+                onTap: () => _selectTab(0),
+              ),
+              const SizedBox(width: 6),
+              InstaTabChip(
+                label: 'Option chain',
+                selected: _tab == 1,
+                onTap: () => _selectTab(1),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _compactSummary(context, effective),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
-          Expanded(child: ChainLadder(key: _ladderKey, data: effective)),
+          Expanded(
+            child: _tab == 1
+                ? ChainLadder(key: _ladderKey, data: effective)
+                : SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ChainRangeAxis(data: effective),
+                        const SizedBox(height: 16),
+                        ChainBalanceBar(
+                            totalCeOi: effective.totalCeOi,
+                            totalPeOi: effective.totalPeOi,
+                            pcr: effective.pcr),
+                        const SizedBox(height: 18),
+                        ChainKeyWalls(data: effective),
+                      ],
+                    ),
+                  ),
+          ),
         ],
       ),
     );
@@ -200,64 +223,53 @@ class _ChainScreenState extends ConsumerState<ChainScreen> {
     });
   }
 
-  /// Slim tappable bar that collapses the overview block. When collapsed it
-  /// keeps a one-line digest so the key levels aren't lost.
-  Widget _overviewHeader(BuildContext context, OptionChainData data) {
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+  /// Key-levels digest — grey labels, semiBold values, PCR in its band colour.
+  Widget _compactSummary(BuildContext context, OptionChainData data) {
     final muted = resolveThemeColor(context,
         dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-    final border = resolveThemeColor(context,
-        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _toggleOverview,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          decoration: BoxDecoration(
-            border: _overviewExpanded
-                ? null
-                : Border(bottom: BorderSide(color: border, width: 0.5)),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                  _overviewExpanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  size: 18,
-                  color: fg),
-              const SizedBox(width: 4),
-              Text('Overview',
-                  style: MyntWebTextStyles.caption(context,
-                      color: fg, fontWeight: MyntFonts.semiBold)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  _overviewExpanded ? '' : _compactSummary(data),
-                  overflow: TextOverflow.ellipsis,
-                  style: MyntWebTextStyles.caption(context, color: muted),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(_overviewExpanded ? 'Hide' : 'Show',
-                  style: MyntWebTextStyles.caption(context,
-                      color: muted, fontWeight: MyntFonts.medium)),
-            ],
-          ),
-        ),
-      ),
+    final fg = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    String s(double? v) => v == null ? '—' : _grp.format(v);
+    TextSpan label(String t) => TextSpan(
+        text: t, style: MyntWebTextStyles.body(context, color: muted));
+    TextSpan value(String t, {Color? color}) => TextSpan(
+        text: t,
+        style: MyntWebTextStyles.body(context,
+            color: color ?? fg, fontWeight: MyntFonts.semiBold));
+
+    return Text.rich(
+      TextSpan(children: [
+        label('Spot '),
+        value(InstaOptionsFormat.price(data.underlyingValue)),
+        label('  ·  ATM '),
+        value(s(data.atmStrike)),
+        label('  ·  PCR '),
+        value(InstaOptionsFormat.pcr(data.pcr),
+            color: _pcrColor(context, data.pcr)),
+        label('  ·  Max pain '),
+        value(s(data.maxPain)),
+      ]),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 
-  String _compactSummary(OptionChainData data) {
-    String s(double? v) => v == null ? '—' : _grp.format(v);
-    return 'Spot ${InstaOptionsFormat.price(data.underlyingValue)}'
-        '  ·  ATM ${s(data.atmStrike)}'
-        '  ·  PCR ${InstaOptionsFormat.pcr(data.pcr)}'
-        '  ·  Max pain ${s(data.maxPain)}';
+  /// PCR band colour: 0.70 or below bearish red, above 1.30 bullish green,
+  /// in between neutral amber — same bands as the rest of the module.
+  Color _pcrColor(BuildContext context, double? pcr) {
+    if (pcr == null) {
+      return resolveThemeColor(context,
+          dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    }
+    if (pcr <= 0.7) {
+      return resolveThemeColor(context,
+          dark: MyntColors.lossDark, light: MyntColors.loss);
+    }
+    if (pcr > 1.3) {
+      return resolveThemeColor(context,
+          dark: MyntColors.profitDark, light: MyntColors.profit);
+    }
+    return kDashOrange;
   }
 }
 
@@ -269,46 +281,16 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final loss = resolveThemeColor(context,
-        dark: MyntColors.lossDark, light: MyntColors.loss);
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          constraints: const BoxConstraints(maxWidth: 480),
-          decoration: BoxDecoration(
-            color: loss.withValues(alpha: 0.1),
-            border: Border.all(color: loss, width: 1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.cloud_off, color: loss, size: 20),
-                  const SizedBox(width: 8),
-                  Text('Chain failed to load',
-                      style: MyntWebTextStyles.body(context,
-                          color: loss, fontWeight: MyntFonts.semiBold)),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(message,
-                  style: MyntWebTextStyles.caption(context,
-                      darkColor: MyntColors.textSecondaryDark,
-                      lightColor: MyntColors.textSecondary)),
-              const SizedBox(height: 12),
-              TextButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
+    // App-standard error state (same widget Positions / Holdings / Scanner
+    // use) instead of the bespoke red panel.
+    return Center(
+      child: NoDataFoundWeb(
+        title: 'Chain failed to load',
+        subtitle: message,
+        primaryEnabled: true,
+        onPrimary: onRetry,
+        primaryLabel: 'Retry',
+        secondaryEnabled: false,
       ),
     );
   }

@@ -15,6 +15,7 @@ import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/index_stri
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/most_active_section.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/sector_performance_section.dart';
 import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/sentiment_gauge.dart';
+import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 
 /// Markets Dashboard (Screen 1) — date-based, one call per day. Composes the
 /// eight sections of INSTAOPTIONS dashboard v2 from [marketsDashboardProvider].
@@ -185,52 +186,18 @@ class _ErrorState extends StatelessWidget {
   Widget build(BuildContext context) {
     final bg = resolveThemeColor(context,
         dark: MyntColors.backgroundColorDark, light: MyntColors.backgroundColor);
-    final loss = resolveThemeColor(context,
-        dark: MyntColors.lossDark, light: MyntColors.loss);
+    // App-standard error state (same widget Positions / Holdings / Scanner
+    // use) instead of the bespoke red panel.
     return Container(
       color: bg,
-      padding: const EdgeInsets.all(24),
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          constraints: const BoxConstraints(maxWidth: 480),
-          decoration: BoxDecoration(
-            color: loss.withValues(alpha: 0.1),
-            border: Border.all(color: loss, width: 1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.cloud_off, color: loss, size: 20),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Dashboard failed to load',
-                    style: MyntWebTextStyles.body(context,
-                        color: loss, fontWeight: MyntFonts.semiBold),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                message,
-                style: MyntWebTextStyles.caption(
-                  context,
-                  darkColor: MyntColors.textSecondaryDark,
-                  lightColor: MyntColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
+        child: NoDataFoundWeb(
+          title: 'Dashboard failed to load',
+          subtitle: message,
+          primaryEnabled: true,
+          onPrimary: onRetry,
+          primaryLabel: 'Retry',
+          secondaryEnabled: false,
         ),
       ),
     );

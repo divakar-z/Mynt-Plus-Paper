@@ -35,11 +35,11 @@ class ChainBalanceBar extends StatelessWidget {
       children: [
         Row(
           children: [
-            Text('Calls OI ${InstaOptionsFormat.oi(totalCeOi)}',
-                style: MyntWebTextStyles.caption(context, color: red)),
+            // Label in primary; only the bracketed quantity carries the
+            // direction colour (same treatment as the wall titles).
+            _sideLabel(context, 'Calls OI', totalCeOi, red),
             const Spacer(),
-            Text('Puts OI ${InstaOptionsFormat.oi(totalPeOi)}',
-                style: MyntWebTextStyles.caption(context, color: green)),
+            _sideLabel(context, 'Puts OI', totalPeOi, green),
           ],
         ),
         const SizedBox(height: 7),
@@ -56,7 +56,7 @@ class ChainBalanceBar extends StatelessWidget {
                     right: 0,
                     top: 6,
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(5),
+                      // borderRadius: BorderRadius.circular(5),
                       child: Row(
                         children: [
                           Expanded(
@@ -80,11 +80,11 @@ class ChainBalanceBar extends StatelessWidget {
                     top: 0,
                     child: Container(
                       padding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: card,
                         border: Border.all(color: band),
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(5),
                       ),
                       child: Text('PCR ${InstaOptionsFormat.pcr(pcr)}',
                           style: MyntWebTextStyles.caption(context,
@@ -97,6 +97,24 @@ class ChainBalanceBar extends StatelessWidget {
           },
         ),
       ],
+    );
+  }
+
+  Widget _sideLabel(
+      BuildContext context, String label, int oi, Color valueColor) {
+    final fg = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(
+            text: label,
+            style: MyntWebTextStyles.para(context,
+                color: fg, fontWeight: MyntFonts.semiBold)),
+        TextSpan(
+            text: ' (${InstaOptionsFormat.oi(oi)})',
+            style: MyntWebTextStyles.para(context,
+                color: valueColor, fontWeight: MyntFonts.medium)),
+      ]),
     );
   }
 
