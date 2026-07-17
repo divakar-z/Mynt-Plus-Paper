@@ -25,13 +25,15 @@ class _ContributionDetailTabsState extends State<ContributionDetailTabs> {
 
   @override
   Widget build(BuildContext context) {
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
     final border = resolveThemeColor(context,
         dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
-    final count = _tab == 0
-        ? '${widget.data.sectorContribution.length} sectors'
-        : '${widget.data.constituents.length} stocks';
+    // Count text is currently hidden (see the commented Text below); its
+    // locals go with it.
+    // final muted = resolveThemeColor(context,
+    //     dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    // final count = _tab == 0
+    //     ? '${widget.data.sectorContribution.length} sectors'
+    //     : '${widget.data.constituents.length} stocks';
 
     return shadcn.Card(
       padding: EdgeInsets.zero,

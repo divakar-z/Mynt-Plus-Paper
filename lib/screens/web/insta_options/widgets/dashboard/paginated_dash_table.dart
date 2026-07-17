@@ -216,7 +216,9 @@ class _PageBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Resolve via the shadcn theme (like the rest of the module) — the
+    // Material theme stays light even when the app is dark.
+    final isDark = isDarkMode(context);
     // Accent (blue) text + arrow when actionable; muted secondary colour when
     // at the first / last page — mirrors the "New Watchlist" accent-text button
     // (borderless, subtle hover, no persistent background).

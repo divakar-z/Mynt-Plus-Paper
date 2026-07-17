@@ -234,8 +234,10 @@ class _DashTableState<T> extends State<DashTable<T>> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           alignment: col.numeric ? Alignment.centerRight : Alignment.centerLeft,
+          // A step lighter than the card fill in dark mode, so the header
+          // strip stands off the body (cardDark == the card bg, blended in).
           color: resolveThemeColor(context,
-              dark: MyntColors.cardDark, light: MyntColors.listItemBg),
+              dark: MyntColors.cardHoverDark, light: MyntColors.listItemBg),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment:

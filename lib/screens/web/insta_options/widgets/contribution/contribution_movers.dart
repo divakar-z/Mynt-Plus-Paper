@@ -114,15 +114,21 @@ class ContributionMovers extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final maxAbs = data.maxAbsContribution;
-    final contributors = data.contributors.take(perSide).toList();
-    final detractors = data.detractors.take(perSide).toList();
+    // One table for both sides — in live mode a stock can flip between
+    // contributor and detractor as the market moves, so fixed group tables
+    // would churn rows between them. Points-descending keeps contributors on
+    // top and the biggest drags at the bottom naturally.
+    final rows = <Constituent>[
+      ...data.contributors.take(perSide),
+      ...data.detractors.take(perSide),
+    ];
     final muted = resolveThemeColor(context,
         dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
 
     return DashSectionCard(
       title: 'Contribution to the move',
       trailing: _netChip(context),
-      child: (contributors.isEmpty && detractors.isEmpty)
+      child: rows.isEmpty
           ? Padding(
               padding: const EdgeInsets.symmetric(vertical: 20),
               child: Center(
@@ -130,42 +136,13 @@ class ContributionMovers extends StatelessWidget {
                     style: MyntWebTextStyles.caption(context, color: muted)),
               ),
             )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (contributors.isNotEmpty) ...[
-                  _group(context, 'Top contributors', muted),
-                  DashTable<Constituent>(
-                    columns: _cols(context, maxAbs),
-                    rows: contributors,
-                    initialSortCol: 3, // Points, descending
-                  ),
-                ],
-                if (detractors.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  _group(context, 'Top detractors', muted),
-                  DashTable<Constituent>(
-                    columns: _cols(context, maxAbs),
-                    rows: detractors,
-                    initialSortCol: 3,
-                    // Biggest drag first (most negative points on top).
-                    initialAscending: true,
-                  ),
-                ],
-              ],
+          : DashTable<Constituent>(
+              columns: _cols(context, maxAbs),
+              rows: rows,
+              initialSortCol: 3, // Points, descending
             ),
     );
   }
-
-  Widget _group(BuildContext context, String label, Color muted) => Padding(
-        padding: const EdgeInsets.only(top: 4, bottom: 8),
-        child: Text(
-          label.toUpperCase(),
-          style: MyntWebTextStyles.body(context,
-                  color: muted, fontWeight: MyntFonts.semiBold)
-              .copyWith(letterSpacing: 0.5),
-        ),
-      );
 
   Widget _netChip(BuildContext context) {
     final pc = data.pointChange;

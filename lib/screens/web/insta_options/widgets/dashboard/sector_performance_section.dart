@@ -77,7 +77,9 @@ class _Cell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Resolve via the shadcn theme (like the rest of the module) — the
+    // Material theme stays light even when the app is dark.
+    final isDark = isDarkMode(context);
     final up = sector.avgChangePct >= 0;
     final neutral = sector.avgChangePct.abs() < 0.05;
     final profit = resolveThemeColor(context,

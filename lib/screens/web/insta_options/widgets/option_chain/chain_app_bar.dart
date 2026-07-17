@@ -65,11 +65,11 @@ class ChainAppBar extends ConsumerWidget {
                 ref.read(optionChainProvider).selectDate(_iso(d)),
           ),
           const SizedBox(width: 8),
-          _IconBtn(
-              icon: Icons.my_location,
-              tooltip: 'Center on ATM',
-              onTap: onRecenter),
-          const SizedBox(width: 6),
+          // _IconBtn(
+          //     icon: Icons.my_location,
+          //     tooltip: 'Center on ATM',
+          //     onTap: onRecenter),
+          // const SizedBox(width: 6),
           _IconBtn(
               icon: Icons.refresh,
               tooltip: 'Refresh',

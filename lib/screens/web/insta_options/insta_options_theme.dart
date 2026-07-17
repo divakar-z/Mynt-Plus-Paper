@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
+import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 
 /// Resolved theme tokens for the InstaOptions Analytics module.
 ///
 /// Maps the README's internal token names (bgPrimary, accent, profit, etc.)
-/// onto MyntColors light/dark fields, picking the right variant based on
-/// `Theme.of(context).brightness`. Use `InstaOptionsTokens.of(context)`
-/// everywhere; do not hard-code hex.
+/// onto MyntColors light/dark fields, picking the right variant from the
+/// **shadcn** theme brightness (via [isDarkMode]) — the same source every
+/// other widget in this module resolves against. Reading the Material
+/// `Theme.of(context)` here left these tokens light while the rest of the
+/// app went dark. Use `InstaOptionsTokens.of(context)` everywhere; do not
+/// hard-code hex.
 class InstaOptionsTokens {
   final Color bgPrimary;
   final Color bgSecondary;
@@ -48,10 +52,8 @@ class InstaOptionsTokens {
     required this.sdMarker,
   });
 
-  static InstaOptionsTokens of(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return dark ? _dark : _light;
-  }
+  static InstaOptionsTokens of(BuildContext context) =>
+      isDarkMode(context) ? _dark : _light;
 
   static final InstaOptionsTokens _light = InstaOptionsTokens._(
     bgPrimary: MyntColors.backgroundColor,
