@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/marketwatch_model/get_quotes.dart';
 import 'package:mynt_plus/screens/web/chart_engine/chart_engine_shell_screen.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 
 /// In-house chart engine embedded in the symbol details screen as the
 /// "Trade from Chart" mode replacement for the TradingView portal.
@@ -44,7 +45,8 @@ class _EmbeddedChartViewState extends ConsumerState<EmbeddedChartView> {
         exch: v.exch,
         token: v.token,
         tsym: v.tsym,
-        dispName: v.tsym,
+        dispName: (DerivativeMaster.nameFor(v.exch, v.token) ?? v.tsym)
+            .replaceAll('-EQ', ''),
         // Lot size + tick size aren't on `DepthInputArgs`. Defaults here
         // are conservative; the chart engine's own GetSecurityInfo fetch
         // (kicked off by `setPaneSymbol`) backfills correct values + the

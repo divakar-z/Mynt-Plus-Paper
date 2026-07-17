@@ -64,6 +64,7 @@ class ApiLinks {
   String get searchScrip => '$goMyntURL/SearchScrip';
   // String get searchScripNew => '${bemynt}global/SearchScrip';
 String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
+  String get derivativeMaster => 'https://ws.mynt.in/search/DerivativeMaster';
   String get searchOptScript => '${bemynt}global/SearchOptScript';
   String get technicalData => '$goMyntURL/GetTechnicals';
   String get watchListrename => '$goMyntURL/RenameMW';

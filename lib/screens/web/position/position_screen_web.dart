@@ -1574,13 +1574,24 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     List<PositionBookModel> filtered = positions.toList();
 
     // Apply search filter - use ValueNotifier value
-    final searchQuery = _searchQuery.value;
+    final searchQuery = _searchQuery.value.toLowerCase().trim();
     if (searchQuery.isNotEmpty) {
       filtered = filtered.where((position) {
-        final symbol = position.symbol?.toLowerCase() ?? '';
-        final exch = position.exch?.toLowerCase() ?? '';
-        final searchLower = searchQuery.toLowerCase();
-        return symbol.contains(searchLower) || exch.contains(searchLower);
+        // Match the displayed contract name (master/dname/tsym) and its
+        // parsed parts so expiry ("JUL", "24 JUL 26") and strike/option
+        // ("270 CE") searches work, not just the underlying symbol.
+        // Keep in sync with the table filter in position_table.dart.
+        final searchable = [
+          position.masterName,
+          position.dname,
+          position.tsym,
+          position.symbol,
+          position.expDate,
+          position.option,
+          position.exch,
+        ];
+        return searchable.any(
+            (field) => (field ?? '').toLowerCase().contains(searchQuery));
       }).toList();
     }
 
@@ -2141,7 +2152,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     PortfolioProvider positionBook,
     String uniqueId,
   ) {
-    final displayText =
+    final displayText = position.masterName ??
         '${position.symbol ?? ''} ${position.exch ?? ''} ${position.expDate ?? ''} ${position.option ?? ''}';
 
     // ✅ Use ValueListenableBuilder to avoid rebuilding entire table on hover

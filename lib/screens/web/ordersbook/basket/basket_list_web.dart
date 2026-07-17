@@ -1577,9 +1577,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                   crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
                                     Text(
-                                      "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
-                                          .replaceAll("-EQ", "")
-                                          .toUpperCase(),
+                                      (scrip.masterName?.isNotEmpty == true)
+                                          ? scrip.masterName!
+                                          : "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
+                                              .replaceAll("-EQ", "")
+                                              .toUpperCase(),
                                       style: WebTextStyles.symbolList(
                                         isDarkTheme: theme.isDarkMode,
                                         color: theme.isDarkMode
@@ -1587,7 +1589,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                             : WebColors.textPrimary,
                                       ),
                                     ),
-                                    if (scrip.option != null &&
+                                    if (scrip.masterName == null &&
+                                        scrip.option != null &&
                                         scrip.option.toString().isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(left: 4),
@@ -1601,7 +1604,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                           ),
                                         ),
                                       ),
-                                    if (scrip.expDate != null &&
+                                    if (scrip.masterName == null &&
+                                        scrip.expDate != null &&
                                         scrip.expDate.toString().isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(left: 4),
@@ -3151,7 +3155,9 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   Future<void> _handleDeleteBasketScript(
       Map<String, dynamic> item, int index, ThemesProvider theme) async {
     // Show confirmation dialog
-    final symbol = item['symbol']?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = DerivativeMaster.nameFor(
+            item['exch']?.toString(), item['token']?.toString()) ??
+        (item['symbol']?.replaceAll("-EQ", "") ?? 'N/A');
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) {
@@ -3547,7 +3553,10 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
   @override
   Widget build(BuildContext context) {
     final tsym = widget.item['tsym']?.toString() ?? widget.item['symbol']?.toString() ?? '';
-    final displayText = tsym.replaceAll("-EQ", "").trim();
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = DerivativeMaster.nameFor(
+        widget.item['exch']?.toString(), widget.item['token']?.toString());
+    final displayText = master ?? tsym.replaceAll("-EQ", "").trim();
     final exch = widget.item['exch']?.toString() ?? '';
 
     return SizedBox.expand(

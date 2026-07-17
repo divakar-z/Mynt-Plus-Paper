@@ -530,7 +530,7 @@ class _ModifyPlaceOrderScreenState
                                 child: Row(
                                   children: [
                                     Text(
-                                      "${(widget.scripInfo.symbol ?? widget.orderArg.tSym).replaceAll("-EQ", "")} ",
+                                      "${widget.scripInfo.masterName ?? (widget.scripInfo.symbol ?? widget.orderArg.tSym).replaceAll("-EQ", "")} ",
                                       style: WebTextStyles.title(
                                         isDarkTheme: theme.isDarkMode,
                                         color: resolveThemeColor(context,
@@ -541,7 +541,8 @@ class _ModifyPlaceOrderScreenState
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),
-                                    if ((widget.scripInfo.expDate ?? '').isNotEmpty)
+                                    if (widget.scripInfo.masterName == null &&
+                                        (widget.scripInfo.expDate ?? '').isNotEmpty)
                                       Text(
                                         " ${widget.scripInfo.expDate ?? ''} ",
                                         style: WebTextStyles.title(
@@ -554,7 +555,8 @@ class _ModifyPlaceOrderScreenState
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                       ),
-                                    if ((widget.scripInfo.option ?? '').isNotEmpty)
+                                    if (widget.scripInfo.masterName == null &&
+                                        (widget.scripInfo.option ?? '').isNotEmpty)
                                       Text(
                                         widget.scripInfo.option ?? '',
                                         style: WebTextStyles.sub(

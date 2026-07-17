@@ -979,8 +979,9 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
         order.status == "OPEN" ||
         order.status == "TRIGGER_PENDING";
 
-    // Format instrument: remove "-EQ" and don't include exchange
-    final symbol = order.tsym ?? '';
+    // Format instrument: prefer the backend display name (DerivativeMaster) for
+    // derivatives, else the tsym; remove "-EQ" and don't include exchange.
+    final symbol = order.masterName ?? (order.tsym ?? '');
     final displayText = symbol.replaceAll("-EQ", "").trim();
 
     return GestureDetector(

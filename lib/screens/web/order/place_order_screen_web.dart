@@ -1249,7 +1249,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   runSpacing: 2,
                                                   children: [
                                                 Text(
-                                                  "${widget.scripInfo.symbol!.replaceAll("-EQ", "")} ",
+                                                  "${widget.scripInfo.masterName ?? widget.scripInfo.symbol!.replaceAll("-EQ", "")} ",
                                                   style: WebTextStyles.title(
                                                     isDarkTheme:
                                                         theme.isDarkMode,
@@ -1274,8 +1274,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                 //         FontWeight.w400),
                                                 //     overflow: TextOverflow.ellipsis,
                                                 //     maxLines: 1),
-                                                if (widget.scripInfo.expDate!
-                                                    .isNotEmpty)
+                                                if (widget.scripInfo.masterName ==
+                                                        null &&
+                                                    widget.scripInfo.expDate!
+                                                        .isNotEmpty)
                                                   Text(
                                                     " ${widget.scripInfo.expDate} ",
                                                     style: WebTextStyles.title(
@@ -1302,8 +1304,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                 //             : colors.colorBlack,
                                                 //         14,
                                                 //         FontWeight.w400)),
-                                                if (widget.scripInfo.option!
-                                                    .isNotEmpty)
+                                                if (widget.scripInfo.masterName ==
+                                                        null &&
+                                                    widget.scripInfo.option!
+                                                        .isNotEmpty)
                                                   Text(
                                                     widget.scripInfo.option!,
                                                     style: WebTextStyles.sub(
