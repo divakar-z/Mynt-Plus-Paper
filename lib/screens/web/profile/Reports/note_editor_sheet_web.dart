@@ -1,3 +1,11 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
+// dart:html is deliberate — the P&L Summary is a web-only screen and the PDF
+// attachment download needs the browser's blob/anchor machinery, the same
+// pattern every report download helper in /screens/web uses.
+
+import 'dart:html' as html;
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart' hide Table, TableRow, TableCell;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +17,7 @@ import '../../../../locator/locator.dart';
 import '../../../../models/journal_notes_model/journal_note.dart';
 import '../../../../models/journal_notes_model/journal_notes_exception.dart';
 import '../../../../models/journal_notes_model/journal_tag.dart';
+import '../../../../models/journal_notes_model/note_attachment.dart';
 import '../../../../models/journal_notes_model/segment_group.dart';
 import '../../../../provider/journal_notes/journal_notes_provider.dart';
 import '../../../../res/mynt_web_color_styles.dart';
@@ -90,6 +99,11 @@ Future<void> openNoteEditorSheet(
   // through Save — so the grid's cached copy of the note can be stale by the
   // time the sheet closes. One refresh here covers every exit path.
   ref.invalidate(notesForRangeProvider(rangeKey));
+
+  // Attachment bytes are held in the provider so thumbnails don't refetch on
+  // every rebuild; the cost is they stay resident. Drop them all when the
+  // editor closes — up to 3 × 5 MB per note is too much to keep around.
+  ref.invalidate(attachmentBytesProvider);
 }
 
 /// Preset swatches offered when creating or recolouring a tag. Stored on the
@@ -192,6 +206,19 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   final TextEditingController _editTagName = TextEditingController();
   String _editTagColor = _kTagPalette.first;
 
+  /// Attachments already stored on the server for this note.
+  late List<NoteAttachment> _attachments;
+
+  /// Files picked on a NEW note, which has no note_id to upload to yet. They
+  /// upload right after the first save — the same deferral as queued tags.
+  final List<({Uint8List bytes, String filename})> _queuedFiles = [];
+
+  /// An upload or delete is in flight — attachment controls ignore taps.
+  bool _attachmentBusy = false;
+
+  /// Non-null while the full-size image preview overlay is showing.
+  ({String filename, Uint8List bytes})? _imagePreview;
+
   @override
   void initState() {
     super.initState();
@@ -200,6 +227,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     _title = TextEditingController(text: _originalTitle);
     _comment = TextEditingController(text: _originalComment);
     _tags = List.of(widget.existing?.tags ?? const []);
+    _attachments = List.of(widget.existing?.attachments ?? const []);
     // Open/close the tag panel with focus; new keystrokes restart keyboard
     // navigation from the top.
     _tagFocus.addListener(_onTagFocusChanged);
@@ -244,14 +272,18 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   bool get _dirty =>
       _title.text != _originalTitle || _comment.text != _originalComment;
 
-  /// Save is allowed when a new note has something in it (text or tags), or an
-  /// existing note has been changed. Recomputed on every keystroke via the
-  /// footer's [AnimatedBuilder] — the enabled state must not go stale.
+  /// Save is allowed when a new note has something in it (text, tags or
+  /// queued files), or an existing note has been changed. Recomputed on every
+  /// keystroke via the footer's [AnimatedBuilder] — the enabled state must
+  /// not go stale.
   ///
-  /// Tag edits on an existing note apply immediately and never pass through
-  /// Save, so only the text drives dirtiness there.
+  /// Tag and attachment edits on an existing note apply immediately and never
+  /// pass through Save, so only the text drives dirtiness there.
   bool get _canSave =>
-      !_saving && (_isNew ? (_hasContent || _tags.isNotEmpty) : _dirty);
+      !_saving &&
+      (_isNew
+          ? (_hasContent || _tags.isNotEmpty || _queuedFiles.isNotEmpty)
+          : _dirty);
 
   /// The snapshot to send on save.
   ///
@@ -276,9 +308,11 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         pnl: _effectiveSnapshot,
       );
 
-      // A new note's tags were only selected locally — it had no note_id to
-      // attach them to until now. (Existing notes attach immediately.)
-      String? tagWarning;
+      // A new note's tags and files were only held locally — it had no
+      // note_id to attach them to until now. (Existing notes apply both
+      // immediately.) The note itself is already saved, so failures here
+      // warn rather than fail: reopening the note offers a retry.
+      final warnings = <String>[];
       if (_isNew && _tags.isNotEmpty) {
         try {
           await locator<ApiExporter>().attachTags(
@@ -286,9 +320,26 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
             tagIds: [for (final t in _tags) t.tagId],
           );
         } on JournalNotesException catch (e) {
-          // The note itself is saved; reopening it offers a retry.
-          tagWarning = 'Note saved, but tags could not be attached — '
-              '${e.message}';
+          warnings.add('tags could not be attached — ${e.message}');
+        }
+      }
+      if (_isNew && _queuedFiles.isNotEmpty) {
+        var failed = 0;
+        for (final f in _queuedFiles) {
+          try {
+            await locator<ApiExporter>().uploadAttachment(
+              noteId: saved.note.noteId,
+              bytes: f.bytes,
+              filename: f.filename,
+            );
+          } on JournalNotesException {
+            failed++;
+          }
+        }
+        if (failed > 0) {
+          warnings.add(
+              '$failed attachment${failed == 1 ? '' : 's'} could not be '
+              'uploaded');
         }
       }
 
@@ -298,8 +349,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       // openSheet is a shadcn drawer, not a route — Navigator.pop would not
       // close it and would leave the save spinner hung.
       shadcn.closeSheet(context);
-      if (tagWarning != null) {
-        error(context, tagWarning);
+      if (warnings.isNotEmpty) {
+        error(context, 'Note saved, but ${warnings.join('; ')}.');
       } else {
         successMessage(context, _isNew ? 'Note saved' : 'Note updated');
       }
@@ -313,12 +364,14 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   /// The X. The editor is persistent, so this is the deliberate exit — if there
   /// are unsaved edits it asks before dropping them, otherwise it closes.
   ///
-  /// On a new note the locally-queued tag selection is unsaved work too; on an
-  /// existing note tag changes are already persisted and only text counts.
+  /// On a new note the locally-queued tags and files are unsaved work too; on
+  /// an existing note tag/attachment changes are already persisted and only
+  /// text counts.
   void _handleClose() {
     if (_saving || _deleting) return;
-    final hasUnsavedWork =
-        _isNew ? (_hasContent || _tags.isNotEmpty) : _dirty;
+    final hasUnsavedWork = _isNew
+        ? (_hasContent || _tags.isNotEmpty || _queuedFiles.isNotEmpty)
+        : _dirty;
     if (hasUnsavedWork) {
       setState(() {
         _confirm = _ConfirmPrompt(
@@ -563,6 +616,142 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     return a.name.toLowerCase().compareTo(b.name.toLowerCase());
   }
 
+  // --- Attachment operations -------------------------------------------------
+
+  static const int _kMaxAttachments = 3;
+  static const int _kMaxAttachmentBytes = 5 * 1024 * 1024;
+
+  int get _attachmentCount => _attachments.length + _queuedFiles.length;
+
+  /// Pick files and upload (existing note) or queue them (new note). The
+  /// backend enforces 3 × 5 MB × JPEG/PNG/PDF; the same limits are checked
+  /// here first so obvious rejections never cost a round-trip.
+  Future<void> _pickAttachments() async {
+    if (_attachmentBusy) return;
+    final slots = _kMaxAttachments - _attachmentCount;
+    if (slots <= 0) return;
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
+      withData: true, // bytes, not paths — dart:io paths don't exist on web
+      allowMultiple: true,
+    );
+    if (result == null || result.files.isEmpty || !mounted) return;
+
+    var files = result.files.where((f) => f.bytes != null).toList();
+    final oversize = [
+      for (final f in files)
+        if (f.bytes!.length > _kMaxAttachmentBytes) f.name,
+    ];
+    if (oversize.isNotEmpty) {
+      error(context,
+          'Larger than 5 MB and skipped: ${oversize.join(', ')}.');
+      files.removeWhere((f) => f.bytes!.length > _kMaxAttachmentBytes);
+    }
+    if (files.length > slots) {
+      files = files.sublist(0, slots);
+      error(context,
+          'A note can carry at most $_kMaxAttachments attachments — extra '
+          'files were skipped.');
+    }
+    if (files.isEmpty) return;
+
+    final noteId = widget.existing?.noteId;
+    if (noteId == null) {
+      // No note to attach to yet — hold the bytes until the first save.
+      setState(() => _queuedFiles
+          .addAll([for (final f in files) (bytes: f.bytes!, filename: f.name)]));
+      return;
+    }
+
+    setState(() => _attachmentBusy = true);
+    for (final f in files) {
+      try {
+        final uploaded = await locator<ApiExporter>().uploadAttachment(
+          noteId: noteId,
+          bytes: f.bytes!,
+          filename: f.name,
+        );
+        if (!mounted) return;
+        setState(() => _attachments.add(uploaded));
+      } on JournalNotesException catch (e) {
+        if (!mounted) return;
+        error(context, '${f.name}: ${e.message}');
+      }
+    }
+    if (mounted) setState(() => _attachmentBusy = false);
+  }
+
+  void _requestDeleteAttachment(NoteAttachment attachment) {
+    setState(() {
+      _confirm = _ConfirmPrompt(
+        title: 'Remove this attachment?',
+        message: '"${attachment.filename}" will be removed from this note. '
+            'This cannot be undone.',
+        confirmLabel: 'Remove',
+        onConfirm: () => _performDeleteAttachment(attachment),
+      );
+    });
+  }
+
+  Future<void> _performDeleteAttachment(NoteAttachment attachment) async {
+    setState(() {
+      _confirm = null;
+      _attachmentBusy = true;
+    });
+    try {
+      await locator<ApiExporter>().deleteAttachment(attachment.attachmentId);
+      if (!mounted) return;
+      setState(() {
+        _attachments
+            .removeWhere((a) => a.attachmentId == attachment.attachmentId);
+        _attachmentBusy = false;
+      });
+    } on JournalNotesException catch (e) {
+      if (!mounted) return;
+      setState(() => _attachmentBusy = false);
+      error(context, e.message);
+    }
+  }
+
+  /// PDFs download rather than render — the server forces
+  /// `Content-Disposition: attachment` — and `Image.network` can't send the
+  /// Authorization header anyway, so the bytes come through the API client
+  /// and leave through a browser blob.
+  Future<void> _downloadAttachmentFile(NoteAttachment attachment) async {
+    if (_attachmentBusy) return;
+    setState(() => _attachmentBusy = true);
+    try {
+      final result = await locator<ApiExporter>()
+          .downloadAttachment(attachment.attachmentId);
+      if (!mounted) return;
+      setState(() => _attachmentBusy = false);
+      final blob = html.Blob(
+          [result.bytes], result.contentType ?? attachment.contentType);
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      html.AnchorElement(href: url)
+        ..setAttribute('download', result.filename ?? attachment.filename)
+        ..click();
+      html.Url.revokeObjectUrl(url);
+    } on JournalNotesException catch (e) {
+      if (!mounted) return;
+      setState(() => _attachmentBusy = false);
+      error(context, e.message);
+    }
+  }
+
+  static String _formatBytes(int bytes) {
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) return '${(bytes / 1024).round()} KB';
+    return '$bytes B';
+  }
+
+  static bool _looksLikePdf(String filename) =>
+      filename.toLowerCase().endsWith('.pdf');
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -571,6 +760,9 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
           _buildManageTagsView(context)
         else
           _buildEditor(context),
+        if (_imagePreview != null)
+          _buildImagePreviewOverlay(context, _imagePreview!),
+        // Confirm stays topmost — a delete confirm can open over the preview.
         if (_confirm != null) _buildConfirmOverlay(context, _confirm!),
       ],
     );
@@ -626,12 +818,332 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                 ),
                 const SizedBox(height: 16),
                 _buildTagsSection(context),
+                const SizedBox(height: 16),
+                _buildAttachmentsSection(context),
               ],
             ),
           ),
         ),
         _buildFooter(context),
       ],
+    );
+  }
+
+  // --- Attachments UI --------------------------------------------------------
+
+  Widget _buildAttachmentsSection(BuildContext context) {
+    final count = _attachmentCount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _label(context, 'Attachments'),
+            const Spacer(),
+            Text(
+              '$count of $_kMaxAttachments',
+              style: MyntWebTextStyles.caption(context,
+                  darkColor: MyntColors.textTertiaryDark,
+                  lightColor: MyntColors.textTertiary),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final a in _attachments) _buildServerAttachmentTile(context, a),
+            for (var i = 0; i < _queuedFiles.length; i++)
+              _buildQueuedFileTile(context, i),
+            if (count < _kMaxAttachments) _buildAddTile(context),
+          ],
+        ),
+        if (_queuedFiles.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Uploads when the note is saved.',
+            style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textTertiaryDark,
+                lightColor: MyntColors.textTertiary),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// The shared tile frame: an 84px square with the content clipped inside,
+  /// a remove × in the corner, and the filename captioned underneath.
+  Widget _buildAttachmentTileShell(
+    BuildContext context, {
+    required Widget child,
+    required String filename,
+    required String semanticsLabel,
+    required VoidCallback onRemove,
+    VoidCallback? onTap,
+  }) {
+    return SizedBox(
+      width: 84,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Stack(
+            children: [
+              Semantics(
+                label: semanticsLabel,
+                button: onTap != null,
+                child: InkWell(
+                  onTap: _attachmentBusy ? null : onTap,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 84,
+                    height: 84,
+                    clipBehavior: Clip.antiAlias,
+                    decoration: BoxDecoration(
+                      color: resolveThemeColor(context,
+                          dark: MyntColors.inputBgDark,
+                          light: MyntColors.inputBg),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.borderMutedDark,
+                              light: MyntColors.borderMuted)),
+                    ),
+                    child: child,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Semantics(
+                  label: 'Remove $filename',
+                  button: true,
+                  child: InkWell(
+                    onTap: _attachmentBusy ? null : onRemove,
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        // Dark scrim so the × stays visible over any image.
+                        color: Colors.black.withValues(alpha: 0.55),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close_rounded,
+                          size: 12, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            filename,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textSecondaryDark,
+                lightColor: MyntColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildServerAttachmentTile(
+      BuildContext context, NoteAttachment attachment) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    if (attachment.isImage) {
+      final bytesAsync =
+          ref.watch(attachmentBytesProvider(attachment.attachmentId));
+      final bytes = bytesAsync.value;
+      return _buildAttachmentTileShell(
+        context,
+        filename: attachment.filename,
+        semanticsLabel: 'Preview attachment ${attachment.filename}',
+        onRemove: () => _requestDeleteAttachment(attachment),
+        onTap: bytes == null
+            ? null
+            : () => setState(() => _imagePreview =
+                (filename: attachment.filename, bytes: bytes)),
+        child: bytesAsync.when(
+          loading: () => const Center(
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+          error: (_, __) =>
+              Icon(Icons.broken_image_outlined, size: 22, color: secondary),
+          data: (b) =>
+              Image.memory(b, width: 84, height: 84, fit: BoxFit.cover),
+        ),
+      );
+    }
+
+    // PDF: no inline render — the tile is a download button.
+    return _buildAttachmentTileShell(
+      context,
+      filename: attachment.filename,
+      semanticsLabel: 'Download attachment ${attachment.filename}',
+      onRemove: () => _requestDeleteAttachment(attachment),
+      onTap: () => _downloadAttachmentFile(attachment),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.picture_as_pdf_rounded, size: 24, color: secondary),
+          const SizedBox(height: 4),
+          Text(
+            _formatBytes(attachment.byteSize),
+            style: MyntWebTextStyles.caption(context, color: secondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQueuedFileTile(BuildContext context, int index) {
+    final file = _queuedFiles[index];
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final isPdf = _looksLikePdf(file.filename);
+
+    return _buildAttachmentTileShell(
+      context,
+      filename: file.filename,
+      semanticsLabel: isPdf
+          ? 'Queued attachment ${file.filename}'
+          : 'Preview queued attachment ${file.filename}',
+      // Nothing on the server yet — removing is instant, no confirm needed.
+      onRemove: () => setState(() => _queuedFiles.removeAt(index)),
+      onTap: isPdf
+          ? null
+          : () => setState(() =>
+              _imagePreview = (filename: file.filename, bytes: file.bytes)),
+      child: isPdf
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.picture_as_pdf_rounded, size: 24, color: secondary),
+                const SizedBox(height: 4),
+                Text(
+                  _formatBytes(file.bytes.length),
+                  style: MyntWebTextStyles.caption(context, color: secondary),
+                ),
+              ],
+            )
+          : Image.memory(file.bytes, width: 84, height: 84, fit: BoxFit.cover),
+    );
+  }
+
+  Widget _buildAddTile(BuildContext context) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Semantics(
+      label: 'Add attachment',
+      button: true,
+      child: InkWell(
+        onTap: _attachmentBusy ? null : _pickAttachments,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 84,
+          height: 84,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.borderMutedDark,
+                  light: MyntColors.borderMuted),
+            ),
+          ),
+          child: _attachmentBusy
+              ? const Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.add_photo_alternate_outlined,
+                        size: 22, color: secondary),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Add',
+                      style: MyntWebTextStyles.caption(context,
+                          color: secondary, fontWeight: MyntFonts.medium),
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// Full-size image view, drawn inside the sheet's own Stack for the same
+  /// reason as the confirm prompt: a Material dialog would layer below the
+  /// shadcn drawer. Scrim tap or the × closes it.
+  Widget _buildImagePreviewOverlay(
+      BuildContext context, ({String filename, Uint8List bytes}) preview) {
+    return Positioned.fill(
+      child: GestureDetector(
+        onTap: () => setState(() => _imagePreview = null),
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.72),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      preview.filename,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: MyntWebTextStyles.bodySmall(context,
+                          color: Colors.white,
+                          fontWeight: MyntFonts.medium),
+                    ),
+                  ),
+                  Semantics(
+                    label: 'Close preview',
+                    button: true,
+                    child: InkWell(
+                      onTap: () => setState(() => _imagePreview = null),
+                      borderRadius: BorderRadius.circular(999),
+                      child: const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: Icon(Icons.close_rounded,
+                            size: 20, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {}, // taps on the image itself don't close
+                  child: Center(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.memory(preview.bytes, fit: BoxFit.contain),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
