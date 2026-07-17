@@ -375,7 +375,8 @@ class _ChartOverlaysMixin {
     if (ov.kind === 'alert') return [6, 4];
     if (ov.kind === 'limit' || ov.kind === 'tp' || ov.kind === 'ocoTp') return [6, 4];
     if (ov.kind === 'sl-l') return [4, 4];
-    return [2, 3]; // sl / ocoSl
+    if (ov.kind === 'ocoSl') return [2, 2]; // OCO stop leg: red DOTTED (BRD)
+    return [2, 3]; // sl
   }
 
   _overlayLineWidth(ov) {

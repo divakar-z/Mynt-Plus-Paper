@@ -1633,6 +1633,19 @@ html:not(.light) .draw-rail-reopen { background: #0052CC; color: #FFFFFF; }
 .draw-rail-row.tb-list-row--active:hover .draw-rail-row-ic,
 .draw-rail-row.tb-list-row--active:hover .tb-list-row-label { color: var(--bg); }
 
+/* Landscape / short viewports (phone rotated): the drawing rail is full chart
+   height, but its pinned cursor + action cluster (magnet / lock / hide / trash
+   / collapse) eat most of the limited height, leaving the scrollable tool
+   groups cramped ("very short to scroll"). Shrink every rail control so several
+   more tool groups stay visible + scrollable. Desktop / tablet are taller than
+   this, so the web rail is unchanged. */
+@media (max-height: 540px) {
+  .draw-rail { width: 40px; }
+  .draw-rail-btn { width: 30px; height: 30px; }
+  .draw-rail-ic svg { width: 17px; height: 17px; }
+  .draw-rail-sep { margin: 2px auto; }
+}
+
 /* Lab ---------------------------------------------------------------------- */
 .tb-lab > span { font-size: 12px; }
 .tb-lab-popover { width: 420px; max-width: 92vw; }

@@ -276,6 +276,21 @@ class Chart {
     // threshold is 120s.
     this._stalenessTicker = setInterval(() => {
       if (this._lastTickAt) this.scheduleRedraw();
+      // Self-heal a DROPPED live-tick route. If we have a scrip and are inside
+      // the session window but no tick has been APPLIED recently, the pane was
+      // likely unregistered from tokenToPanes (an earlier history-load failure
+      // unsubscribed the old token and never re-subscribed the new one) — so the
+      // router silently drops every live tick and the candle freezes while the
+      // feed is fine. Re-subscribe (IDEMPOTENT — a pure no-op when the pane is
+      // already registered) to re-register the route so ticks flow again.
+      if (this.scrip) {
+        const nowMs = Date.now();
+        const staleMs = this._lastTickAt ? nowMs - this._lastTickAt : Infinity;
+        if (staleMs > 15000 &&
+            this._isSessionWindow(Math.floor(nowMs / 1000))) {
+          this.subscribe({ exch: this.scrip.exch, token: this.scrip.token });
+        }
+      }
     }, 5000);
 
     // Bucket advancement — thinly-traded options/commodities don't tick
@@ -381,6 +396,15 @@ class Chart {
     if (oldKey === newKey) return;
     if (this.scrip) this.unsubscribe({ exch: this.scrip.exch, token: this.scrip.token });
     this.scrip = scrip;
+    // Subscribe NOW — decoupled from the history load. The live-tick route
+    // (tokenToPanes → ingestTick) is keyed by THIS subscription, and it used to
+    // be registered ONLY in the history-load SUCCESS handler (_applyHistory). So
+    // a failed / lost history fetch (flaky network) unsubscribed the old token
+    // here but never subscribed the new one → the pane was missing from
+    // tokenToPanes → every live tick was dropped by the router → frozen candle +
+    // climbing Stale pill despite a perfectly live feed. subscribe() is
+    // idempotent, so the later success-path call is a harmless no-op.
+    this.subscribe({ exch: scrip.exch, token: scrip.token });
     this._scripTradable = null;  // shell will push the API result via setScripTradable
     this._resetData();
     this._renkoBricks = [];
