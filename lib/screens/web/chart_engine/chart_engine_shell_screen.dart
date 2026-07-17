@@ -14,6 +14,7 @@ import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/active_pane_symbol_request.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_oi_data.dart';
+import 'package:mynt_plus/screens/web/chart_engine/state/chart_order_validation.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/indicator_schema.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/pane_runtime_status.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/overlay_payload.dart';
@@ -1987,6 +1988,54 @@ class _ChartEngineShellScreenState
     if (effectiveInstant &&
         kind != OrderPrefillKind.blank &&
         price != null) {
+      // ── Circuit / trigger validation (parity with PlaceOrderScreenWeb) ─────
+      // The instant path used to fire straight to the API with NO circuit/LTP/
+      // trigger checks. Gate it exactly like the regular order screen; block +
+      // toast on any violation. Fetch scrip info once if not already cached so
+      // the circuit band is available.
+      var vInfo = _cachedScripInfo(scrip);
+      if (vInfo == null) {
+        try {
+          await ref
+              .read(marketWatchProvider)
+              .fetchScripInfo(scrip.token, scrip.exch, context, false);
+        } catch (_) {}
+        if (!mounted) return;
+        vInfo = _cachedScripInfo(scrip) ??
+            ref.read(marketWatchProvider).scripInfoModel;
+      }
+      final isBuyKind = kind == OrderPrefillKind.buyLimit ||
+          kind == OrderPrefillKind.buyStopMkt ||
+          kind == OrderPrefillKind.buyStopLmt;
+      final isSlMktKind = kind == OrderPrefillKind.buyStopMkt ||
+          kind == OrderPrefillKind.sellStopMkt;
+      final isSlLmtKind = kind == OrderPrefillKind.buyStopLmt ||
+          kind == OrderPrefillKind.sellStopLmt;
+      final vPrctype = isSlMktKind
+          ? 'SL-MKT'
+          : (isSlLmtKind ? 'SL-LMT' : 'LMT');
+      // For SL orders the click price is the TRIGGER; the SL-LMT limit is
+      // trigger ± ti (identical to buildPlaceOrderInput). Plain limit uses price.
+      final vTrigger = (isSlMktKind || isSlLmtKind) ? price : null;
+      final vLimit = isSlMktKind
+          ? null
+          : (isSlLmtKind
+              ? (isBuyKind ? price + scrip.ti : price - scrip.ti)
+              : price);
+      final vErr = validateChartOrder(
+        isBuy: isBuyKind,
+        prctype: vPrctype,
+        price: vLimit,
+        trigger: vTrigger,
+        uc: vInfo?.uc,
+        lc: vInfo?.lc,
+        ltp: _currentSpotLtp(scrip),
+      );
+      if (vErr != null) {
+        ResponsiveSnackBar.showWarning(context, vErr);
+        return;
+      }
+
       final deviceInfo = ref.read(authProvider).deviceInfo;
       final defaults = ref.read(orderDefaultsProvider);
       // Freeze-qty slicing: the exchange rejects an order whose quantity
@@ -2152,6 +2201,17 @@ class _ChartEngineShellScreenState
     Overlay.of(context).insert(_plusMenuEntry!);
   }
 
+  /// Re-push the current (unchanged) overlays for [paneIndex] so a REJECTED
+  /// drag snaps the line back to its stored price — the JS holds the dragged
+  /// line optimistically (`_pendingOverlayMoves`) until an overlay push
+  /// overwrites it.
+  void _snapBackOverlays(int paneIndex) {
+    final session = ref.read(chartEngineSessionProvider);
+    if (paneIndex < 0 || paneIndex >= session.panes.length) return;
+    _post(encodeSetOverlays(
+        paneIndex.toString(), session.panes[paneIndex].overlays.toJson()));
+  }
+
   void _handleOverlayDragEnded(int paneIndex, String overlayId, double newPrice) {
     final session = ref.read(chartEngineSessionProvider);
     if (paneIndex < 0 || paneIndex >= session.panes.length) return;
@@ -2190,6 +2250,28 @@ class _ChartEngineShellScreenState
       final alId = overlayId.substring(isTp ? 'ocoTp-'.length : 'ocoSl-'.length);
       final gtt = _findOcoByAlId(alId);
       if (gtt == null) return;
+      // ── Validate the dragged leg BEFORE the confirm (circuit + LTP-direction).
+      // The OCO's exit side gives the position direction: exit SELL → long
+      // (Target above LTP, Stop below), exit BUY → short (mirrored). Dragging a
+      // long's Target below the LTP used to be wrongly accepted; block + snap.
+      final exitTrantype = gtt.placeOrderParams?.trantype ??
+          gtt.placeOrderParamsLeg2?.trantype ??
+          gtt.trantype ??
+          'S';
+      final legInfo = _cachedScripInfo(scrip);
+      final legErr = validateChartOcoLeg(
+        isTp: isTp,
+        isLong: exitTrantype == 'S',
+        price: newPrice,
+        uc: legInfo?.uc,
+        lc: legInfo?.lc,
+        ltp: _currentSpotLtp(scrip),
+      );
+      if (legErr != null) {
+        ResponsiveSnackBar.showWarning(context, legErr);
+        _snapBackOverlays(paneIndex);
+        return;
+      }
       // ignore: discarded_futures
       showOcoLegModifyDialog(
         context: context,
@@ -2248,6 +2330,26 @@ class _ChartEngineShellScreenState
     }
     // kindPrefix == 'ord' (LMT): only `prc` changes; newTrigger stays null →
     // ModifyOrderInput.trgprc falls back to prc.
+
+    // ── Circuit / trigger validation (parity with PlaceOrderScreenWeb) ────────
+    // Gate the dragged value exactly like the order screen; on violation toast
+    // + snap the line back (re-push overlays) and send NO modify. Applies to
+    // BOTH the instant and confirm paths below.
+    final dragInfo = _cachedScripInfo(scrip);
+    final dragErr = validateChartOrder(
+      isBuy: order.trantype == 'B',
+      prctype: order.prctyp ?? '',
+      price: finalNewPrice,
+      trigger: newTrigger,
+      uc: dragInfo?.uc,
+      lc: dragInfo?.lc,
+      ltp: _currentSpotLtp(scrip),
+    );
+    if (dragErr != null) {
+      ResponsiveSnackBar.showWarning(context, dragErr);
+      _snapBackOverlays(paneIndex);
+      return;
+    }
 
     if (session.effectiveInstantFor(paneIndex)) {
       // Same ModifyOrderInput construction as showModifyOrderDialog.
@@ -2373,6 +2475,20 @@ class _ChartEngineShellScreenState
     final tpInit = snap(isLong ? ltp * 1.02 : ltp * 0.98);
     final slInit = snap(isLong ? ltp * 0.98 : ltp * 1.02);
 
+    // Circuit band for the OCO card's UC/LC validation (TC_523/524). Cache hit
+    // when the chart already warmed the scrip info; else one quick fetch.
+    var ocoInfo = _cachedScripInfo(scrip);
+    if (ocoInfo == null) {
+      try {
+        await ref
+            .read(marketWatchProvider)
+            .fetchScripInfo(scrip.token, scrip.exch, context, false);
+      } catch (_) {}
+      if (!mounted) return;
+      ocoInfo = _cachedScripInfo(scrip) ??
+          ref.read(marketWatchProvider).scripInfoModel;
+    }
+
     final result = await showOcoTpSlDialog(
       context: context,
       tsym: tsym,
@@ -2381,6 +2497,8 @@ class _ChartEngineShellScreenState
       tpInit: tpInit,
       slInit: slInit,
       ti: ti,
+      uc: ocoInfo?.uc,
+      lc: ocoInfo?.lc,
     );
     if (result == null || !mounted) return;
 
