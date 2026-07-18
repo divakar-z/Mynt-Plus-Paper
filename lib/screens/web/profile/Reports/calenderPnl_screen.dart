@@ -9,7 +9,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../models/desk_reports_model/calender_pnl_model.dart';
 import '../../../../models/journal_notes_model/journal_note.dart';
+import '../../../../models/journal_notes_model/journal_tag.dart';
 import '../../../../models/journal_notes_model/segment_group.dart';
+import '../../../../models/journal_notes_model/tag_pnl_analytics.dart';
 import '../../../../provider/journal_notes/journal_notes_provider.dart';
 import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/thems.dart';
@@ -23,6 +25,10 @@ import '../../../../sharedWidget/snack_bar.dart';
 import 'charges_dialog_web.dart';
 import 'note_editor_sheet_web.dart';
 import 'pnl_stats_summary_web.dart';
+
+/// The table view under the heat map. "Journal" is conditional — it only
+/// exists once the client has journalled at least once (see [hasAnyNotesProvider]).
+enum _ReportView { dateWise, scriptWise, journal }
 
 class CalenderpnlScreen extends ConsumerStatefulWidget {
   final VoidCallback? onBack;
@@ -42,7 +48,26 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
 
   bool _isInitialized = false;
   int _selectedSegmentIndex = 0;
-  bool _isDateWiseView = true;
+  _ReportView _reportView = _ReportView.dateWise;
+
+  /// Tag ids selected as filters in the Journal tab. Empty = show every note.
+  /// Multi-select is match-any: a note is shown if it carries ANY selected tag.
+  final Set<int> _journalTagFilter = {};
+
+  /// The "Untagged" pseudo-filter: when on, notes with no tags match too.
+  bool _journalUntagged = false;
+
+  /// The tag-filter dropdown is open (an inline searchable checklist). Kept a
+  /// popover-free inline panel so it scales to many tags without an Overlay.
+  bool _journalFilterOpen = false;
+
+  /// Search text inside the filter dropdown — the reason the filter scales past
+  /// 20+ tags: you type to narrow instead of scrolling a wall of rows.
+  final TextEditingController _journalTagSearch = TextEditingController();
+
+  /// The collapsible "tag performance" (costly-behaviour ranking). Collapsed by
+  /// default so the notes stay the focus; expand to see the ranked P&L bars.
+  bool _journalRankingOpen = false;
 
   // Expandable date rows
   final Set<DateTime> _expandedDates = {};
@@ -124,6 +149,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     disposeScrollToLoad();
     _tableScrollController.dispose();
     _hoveredRowKey.dispose();
+    _journalTagSearch.dispose();
     super.dispose();
   }
 
@@ -416,13 +442,38 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     // blocks the P&L view — markers simply appear once they land.
     final noteGroup = SegmentGroup.fromTabLabel(ledgerprovider.selectedSegment);
     final notesRangeKey = _notesRangeKey(ledgerprovider);
-    final notesByDate = notesRangeKey == null
-        ? const <String, JournalNote>{}
-        : (ref.watch(notesForRangeProvider(notesRangeKey)).value ??
-            const <String, JournalNote>{});
+    final notesAsync = notesRangeKey == null
+        ? null
+        : ref.watch(notesForRangeProvider(notesRangeKey));
+    final notesByDate = notesAsync?.value ?? const <String, JournalNote>{};
+    // Until the notes list has resolved at least once, a noted day looks
+    // un-noted (its marker hasn't loaded). Offering "add" in that window let a
+    // tap open the editor in add-mode over a note that already exists — the
+    // reported "says add but the note is there" bug. Withhold the add
+    // affordance until notes are ready so the marker and the tap always agree.
+    final notesReady = notesAsync?.hasValue ?? false;
     final snapshotsByDate = noteGroup == null
         ? const <String, NotePnlSnapshot>{}
         : _snapshotsByDate(ledgerprovider, noteGroup);
+
+    // The Journal tab is offered only once the client has journalled at least
+    // once. Gated on the whole financial year and across all segments — not the
+    // visible sub-range or the active tab — so the tab does not blink in and out
+    // as the user moves the dates or switches asset class. The list and
+    // analytics *inside* it are still scoped to the visible range and segment.
+    final fyStart = _getFinancialYearStart(ledgerprovider.startTaxDate);
+    final fyEnd = _getFinancialYearEnd(ledgerprovider.startTaxDate);
+    final hasAnyNotes = ref
+            .watch(hasAnyNotesProvider(NotesRangeKey(
+                from: _isoDate(fyStart), to: _isoDate(fyEnd))))
+            .value ??
+        false;
+    // If the tab vanishes (e.g. the last note was deleted) while it is
+    // selected, fall back rather than render an orphaned view.
+    final showJournal = hasAnyNotes && noteGroup != null;
+    final effectiveView = (_reportView == _ReportView.journal && !showJournal)
+        ? _ReportView.dateWise
+        : _reportView;
 
     return SingleChildScrollView(
       controller: _tableScrollController,
@@ -452,7 +503,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 ledgerprovider.setTab(false);
               },
               notedDates: notesByDate.keys.toSet(),
-              notableDates: snapshotsByDate.keys.toSet(),
+              notableDates:
+                  notesReady ? snapshotsByDate.keys.toSet() : const <String>{},
               onNoteTap: (notesRangeKey == null || noteGroup == null)
                   ? null
                   : (date) {
@@ -472,20 +524,23 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
             ),
           ),
           const SizedBox(height: 16),
-          // Date Wise / Script Wise tabs
+          // Date Wise / Script Wise / Journal tabs
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _buildViewTabs(context),
+            child: _buildViewTabs(context, showJournal: showJournal),
           ),
           const SizedBox(height: 16),
           // Table content based on selected tab
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _isDateWiseView
-                ? _buildDateWiseSection(
-                    context, sortedDates, ledgerprovider, isCommodity)
-                : _buildScriptWiseSection(
-                    context, sortedDates, ledgerprovider, isCommodity),
+            child: switch (effectiveView) {
+              _ReportView.dateWise => _buildDateWiseSection(
+                  context, sortedDates, ledgerprovider, isCommodity),
+              _ReportView.scriptWise => _buildScriptWiseSection(
+                  context, sortedDates, ledgerprovider, isCommodity),
+              _ReportView.journal =>
+                _buildJournalSection(context, ledgerprovider, noteGroup!),
+            },
           ),
           const SizedBox(height: 24),
         ],
@@ -958,24 +1013,29 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
-  // --- Date Wise / Script Wise Tabs ---
-  Widget _buildViewTabs(BuildContext context) {
+  // --- Date Wise / Script Wise / Journal Tabs ---
+  Widget _buildViewTabs(BuildContext context, {required bool showJournal}) {
     return Row(
       children: [
-        _buildViewTab('Date Wise', _isDateWiseView),
+        _buildViewTab('Date Wise', _ReportView.dateWise),
         const SizedBox(width: 24),
-        _buildViewTab('Script Wise', !_isDateWiseView),
+        _buildViewTab('Script Wise', _ReportView.scriptWise),
+        if (showJournal) ...[
+          const SizedBox(width: 24),
+          _buildViewTab('Journal', _ReportView.journal),
+        ],
       ],
     );
   }
 
-  Widget _buildViewTab(String label, bool isActive) {
+  Widget _buildViewTab(String label, _ReportView view) {
+    final isActive = _reportView == view;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () {
           setState(() {
-            _isDateWiseView = label == 'Date Wise';
+            _reportView = view;
             displayedItemCount = ScrollToLoadMixin.itemsPerPage;
           });
         },
@@ -1010,6 +1070,904 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
           ),
         ),
       ),
+    );
+  }
+
+  // --- Insights (tag → P&L) Section ---
+  //
+  // The whole point of this tab is honest comparison, so the baseline rows
+  // ("All days", "Untagged days") are never hidden: users tag losses far more
+  // than wins, so a tag's own average overstates its effect until you see it
+  // next to the baseline. Tags below the sample threshold show their day count
+  // and total but not an average — three unlucky days are not a pattern.
+  // --- Journal (notes list + costly-behaviour tag ranking) -----------------
+  //
+  // One surface for the notes: a scannable list you can filter by tag, with a
+  // "what costs me money" ranking on top. The ranking leans on TOTAL P&L (always
+  // known) rather than averages — a per-day average stays hidden below 5 days,
+  // but a tag's total is meaningful from the first day. Every tag row is a
+  // multi-select filter over the list below (match-any).
+  Widget _buildJournalSection(
+      BuildContext context, LDProvider lp, SegmentGroup group) {
+    final rangeKey = _notesRangeKey(lp);
+    final pnlAsync = ref.watch(tagPnlProvider(TagPnlKey(
+      from: _isoDate(lp.startTaxDate),
+      to: _isoDate(lp.endTaxDate),
+      group: group,
+    )));
+    final notesByDate = rangeKey == null
+        ? const <String, JournalNote>{}
+        : (ref.watch(notesForRangeProvider(rangeKey)).value ??
+            const <String, JournalNote>{});
+    // Most recent first — noteDate is ISO, so a lexical sort is a date sort.
+    final notes = notesByDate.values.toList()
+      ..sort((a, b) => b.noteDate.compareTo(a.noteDate));
+
+    return pnlAsync.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.only(top: 48),
+        child: Center(
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      error: (e, _) => _buildJournalMessage(
+          context, 'Could not load your journal. Please try again.'),
+      data: (analytics) {
+        if (notes.isEmpty && analytics.isEmpty) {
+          return _buildJournalMessage(
+              context,
+              'No notes in this range yet. Add a note to a trading day on the '
+              'heat map and it will show up here.');
+        }
+        return _buildJournalContent(
+            context, analytics, notes, group, lp, rangeKey);
+      },
+    );
+  }
+
+  Widget _buildJournalMessage(BuildContext context, String message) {
+    return shadcn.OutlinedContainer(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: Center(
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: MyntWebTextStyles.bodySmall(context,
+                darkColor: MyntColors.textSecondaryDark,
+                lightColor: MyntColors.textSecondary),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A note passes the filter if no filter is set, or it carries any selected
+  /// tag, or the untagged filter is on and it has no tags. Pure display filter
+  /// — the per-tag numbers stay backend-computed.
+  bool _journalMatches(JournalNote n) {
+    if (_journalTagFilter.isEmpty && !_journalUntagged) return true;
+    if (_journalUntagged && n.tags.isEmpty) return true;
+    return n.tags.any((t) => _journalTagFilter.contains(t.tagId));
+  }
+
+  Widget _buildJournalContent(
+    BuildContext context,
+    TagPnlAnalytics a,
+    List<JournalNote> notes,
+    SegmentGroup group,
+    LDProvider lp,
+    NotesRangeKey? rangeKey,
+  ) {
+    final visible = notes.where(_journalMatches).toList();
+    // No inner "Journal" header here: the tab already reads "Journal" and the
+    // date range sits in the range picker at the top of the screen. Repeating
+    // both was pure duplication.
+    return shadcn.OutlinedContainer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // A real filter control: a dropdown that opens a searchable checklist,
+          // with the active filters shown as removable chips. Scales past 20+
+          // tags because you type to narrow instead of scrolling every tag.
+          _buildJournalFilterBar(context, a),
+          if (_journalFilterOpen) _buildJournalFilterPanel(context, a),
+          _insightHairline(context),
+          // The costly-behaviour ranking, now a collapsible insight rather than
+          // masquerading as the filter.
+          _buildJournalRanking(context, a),
+          _insightHairline(context),
+          _buildNotesList(context, visible, group, lp, rangeKey),
+          _buildJournalProvisionalNote(context, a),
+        ],
+      ),
+    );
+  }
+
+  // --- Tag ranking (what costs money) + filters -----------------------------
+
+  /// The filter bar: a dropdown trigger + the active filters as removable chips.
+  /// The trigger opens an inline searchable checklist ([_buildJournalFilterPanel])
+  /// so the control stays one line regardless of how many tags exist.
+  Widget _buildJournalFilterBar(BuildContext context, TagPnlAnalytics a) {
+    final anyFilter = _journalTagFilter.isNotEmpty || _journalUntagged;
+    final count = _journalTagFilter.length + (_journalUntagged ? 1 : 0);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final border = resolveThemeColor(context,
+        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final active = _journalFilterOpen || anyFilter;
+    final byId = {for (final t in a.tags) t.tagId: t};
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Semantics(
+            label: 'Filter by tag',
+            button: true,
+            child: InkWell(
+              onTap: () => setState(() {
+                _journalFilterOpen = !_journalFilterOpen;
+                if (!_journalFilterOpen) _journalTagSearch.clear();
+              }),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: active ? accent : border),
+                  color: active ? accent.withValues(alpha: 0.06) : null,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.filter_list_rounded,
+                        size: 16, color: active ? accent : secondary),
+                    const SizedBox(width: 6),
+                    Text(
+                      count == 0 ? 'Filter by tag' : 'Filtered',
+                      style: MyntWebTextStyles.bodySmall(context,
+                          color: active ? accent : null,
+                          darkColor: MyntColors.textPrimaryDark,
+                          lightColor: MyntColors.textPrimary,
+                          fontWeight: MyntFonts.medium),
+                    ),
+                    if (count > 0) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                            color: accent,
+                            borderRadius: BorderRadius.circular(999)),
+                        child: Text('$count',
+                            style: MyntWebTextStyles.caption(context,
+                                color: Colors.white,
+                                fontWeight: MyntFonts.semiBold)),
+                      ),
+                    ],
+                    const SizedBox(width: 4),
+                    Icon(
+                        _journalFilterOpen
+                            ? Icons.keyboard_arrow_up_rounded
+                            : Icons.keyboard_arrow_down_rounded,
+                        size: 18,
+                        color: secondary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          for (final id in _journalTagFilter)
+            if (byId[id] != null)
+              _buildJournalActiveChip(
+                context,
+                name: byId[id]!.name ?? 'tag',
+                color: hexToColor(byId[id]!.color, fallback: secondary),
+                onRemove: () => setState(() => _journalTagFilter.remove(id)),
+              ),
+          if (_journalUntagged)
+            _buildJournalActiveChip(
+              context,
+              name: 'Untagged',
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textTertiaryDark,
+                  light: MyntColors.textTertiary),
+              onRemove: () => setState(() => _journalUntagged = false),
+            ),
+          if (anyFilter)
+            Semantics(
+              label: 'Clear all tag filters',
+              button: true,
+              child: InkWell(
+                onTap: () => setState(() {
+                  _journalTagFilter.clear();
+                  _journalUntagged = false;
+                }),
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  child: Text('Clear all',
+                      style: MyntWebTextStyles.caption(context,
+                          darkColor: MyntColors.primaryDark,
+                          lightColor: MyntColors.primary,
+                          fontWeight: MyntFonts.medium)),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildJournalActiveChip(BuildContext context,
+      {required String name,
+      required Color color,
+      required VoidCallback onRemove}) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 4, 4, 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+              width: 8,
+              height: 8,
+              decoration:
+                  BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 6),
+          Text(name,
+              style: MyntWebTextStyles.caption(context,
+                  darkColor: MyntColors.textPrimaryDark,
+                  lightColor: MyntColors.textPrimary,
+                  fontWeight: MyntFonts.medium)),
+          const SizedBox(width: 2),
+          Semantics(
+            label: 'Remove filter $name',
+            button: true,
+            child: InkWell(
+              onTap: onRemove,
+              borderRadius: BorderRadius.circular(999),
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: Icon(Icons.close_rounded,
+                    size: 13,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The searchable tag checklist. Worst-P&L first, each row showing the tag's
+  /// total and day count so choosing a filter also tells you what it cost.
+  Widget _buildJournalFilterPanel(BuildContext context, TagPnlAnalytics a) {
+    final q = _journalTagSearch.text.trim().toLowerCase();
+    final tags = [...a.tags]..sort((x, y) => x.totalPnl.compareTo(y.totalPnl));
+    final shown = [
+      for (final t in tags)
+        if (q.isEmpty || (t.name ?? '').toLowerCase().contains(q)) t,
+    ];
+    final showUntagged =
+        a.untagged.dayCount > 0 && (q.isEmpty || 'untagged'.contains(q));
+    final border = resolveThemeColor(context,
+        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: border),
+        color: resolveThemeColor(context,
+            dark: MyntColors.cardDark, light: MyntColors.card),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+            child: Material(
+              type: MaterialType.transparency,
+              child: TextField(
+                controller: _journalTagSearch,
+                onChanged: (_) => setState(() {}),
+                style: MyntWebTextStyles.bodySmall(context,
+                    darkColor: MyntColors.textPrimaryDark,
+                    lightColor: MyntColors.textPrimary),
+                decoration: InputDecoration(
+                  isDense: true,
+                  prefixIcon: Icon(Icons.search_rounded,
+                      size: 18, color: secondary),
+                  prefixIconConstraints:
+                      const BoxConstraints(minWidth: 34, minHeight: 34),
+                  hintText: 'Search ${tags.length} tags…',
+                  hintStyle: MyntWebTextStyles.bodySmall(context,
+                      darkColor: MyntColors.textTertiaryDark,
+                      lightColor: MyntColors.textTertiary),
+                  contentPadding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                  filled: true,
+                  fillColor: resolveThemeColor(context,
+                      dark: MyntColors.inputBgDark, light: MyntColors.inputBg),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: border)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: border)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.primaryDark,
+                              light: MyntColors.primary))),
+                ),
+              ),
+            ),
+          ),
+          Divider(height: 1, color: border),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 240),
+            child: (shown.isEmpty && !showUntagged)
+                ? Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text('No tags match “$q”.',
+                        style: MyntWebTextStyles.caption(context,
+                            color: secondary)),
+                  )
+                : ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    shrinkWrap: true,
+                    children: [
+                      for (final t in shown)
+                        _filterPanelRow(
+                          context,
+                          name: t.name ?? 'tag',
+                          color: hexToColor(t.color, fallback: secondary),
+                          total: t.totalPnl,
+                          dayCount: t.dayCount,
+                          selected: _journalTagFilter.contains(t.tagId),
+                          onTap: t.tagId == null
+                              ? null
+                              : () => setState(() {
+                                    final id = t.tagId!;
+                                    if (!_journalTagFilter.remove(id)) {
+                                      _journalTagFilter.add(id);
+                                    }
+                                  }),
+                        ),
+                      if (showUntagged)
+                        _filterPanelRow(
+                          context,
+                          name: 'Untagged',
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.textTertiaryDark,
+                              light: MyntColors.textTertiary),
+                          total: a.untagged.totalPnl,
+                          dayCount: a.untagged.dayCount,
+                          selected: _journalUntagged,
+                          onTap: () => setState(
+                              () => _journalUntagged = !_journalUntagged),
+                        ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterPanelRow(BuildContext context,
+      {required String name,
+      required Color color,
+      required double total,
+      required int dayCount,
+      required bool selected,
+      required VoidCallback? onTap}) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return Semantics(
+      label: '${selected ? 'Remove filter' : 'Filter by'} $name',
+      button: true,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          child: Row(
+            children: [
+              Icon(
+                  selected
+                      ? Icons.check_box_rounded
+                      : Icons.check_box_outline_blank_rounded,
+                  size: 18,
+                  color: selected ? accent : secondary),
+              const SizedBox(width: 10),
+              Container(
+                  width: 9,
+                  height: 9,
+                  decoration:
+                      BoxDecoration(color: color, shape: BoxShape.circle)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(name,
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.bodySmall(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary)),
+              ),
+              const SizedBox(width: 8),
+              Text(_formatAmount(total),
+                  style: MyntWebTextStyles.caption(context,
+                      color: _getPnlColor(context, total))),
+              const SizedBox(width: 8),
+              Text('$dayCount ${dayCount == 1 ? 'day' : 'days'}',
+                  style: MyntWebTextStyles.caption(context, color: secondary)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The costly-behaviour ranking as a collapsible insight. Shows the worst
+  /// three tags by default (biggest losses first); "Show all" expands the rest.
+  /// Read-only — filtering is the job of the filter bar above, so the two roles
+  /// are no longer conflated.
+  Widget _buildJournalRanking(BuildContext context, TagPnlAnalytics a) {
+    if (a.tags.isEmpty) return const SizedBox.shrink();
+    final tags = [...a.tags]..sort((x, y) => x.totalPnl.compareTo(y.totalPnl));
+    var maxAbs = 0.0;
+    for (final t in tags) {
+      if (t.totalPnl.abs() > maxAbs) maxAbs = t.totalPnl.abs();
+    }
+    if (maxAbs <= 0) maxAbs = 1;
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final expandable = tags.length > 3;
+    final top = tags.take(_journalRankingOpen ? tags.length : 3).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: expandable
+              ? () => setState(
+                  () => _journalRankingOpen = !_journalRankingOpen)
+              : null,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: [
+                Icon(Icons.leaderboard_rounded, size: 15, color: secondary),
+                const SizedBox(width: 8),
+                Text('WHAT COSTS YOU MOST',
+                    style: MyntWebTextStyles.caption(context,
+                            color: secondary, fontWeight: MyntFonts.medium)
+                        .copyWith(letterSpacing: 0.5)),
+                const Spacer(),
+                if (expandable)
+                  Text(
+                      _journalRankingOpen
+                          ? 'Show less'
+                          : 'Show all (${tags.length})',
+                      style: MyntWebTextStyles.caption(context,
+                          darkColor: MyntColors.primaryDark,
+                          lightColor: MyntColors.primary,
+                          fontWeight: MyntFonts.medium)),
+              ],
+            ),
+          ),
+        ),
+        for (final t in top) _buildRankingRow(context, t, maxAbs),
+        // Plain-English version of the backend's double-counting note: only
+        // shown when a day actually carries more than one tag, right where the
+        // overlapping totals are, so it reads as context rather than jargon.
+        if (a.doubleCounting.hasOverlap)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+            child: _insightCaveatLine(
+              context,
+              Icons.info_outline_rounded,
+              'A day with more than one tag counts toward each of them, so '
+              'these totals overlap and won’t add up to your overall P&L.',
+            ),
+          ),
+        const SizedBox(height: 6),
+      ],
+    );
+  }
+
+  Widget _buildRankingRow(
+      BuildContext context, TagPnlStats s, double maxAbs) {
+    final color = hexToColor(s.color,
+        fallback: resolveThemeColor(context,
+            dark: MyntColors.textSecondaryDark,
+            light: MyntColors.textSecondary));
+    final frac = (s.totalPnl.abs() / maxAbs).clamp(0.02, 1.0);
+    final meta = (s.sufficientSample && s.winRate != null)
+        ? '${s.dayCount} days · ${(s.winRate! * 100).round()}% '
+            '${s.winDays}W ${s.lossDays}L'
+        : '${s.dayCount} day${s.dayCount == 1 ? '' : 's'}';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                  width: 9,
+                  height: 9,
+                  decoration:
+                      BoxDecoration(color: color, shape: BoxShape.circle)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(s.name ?? 'tag',
+                    overflow: TextOverflow.ellipsis,
+                    style: _getTextStyle(context)),
+              ),
+              Text(_formatAmount(s.totalPnl),
+                  style: _getTextStyle(context,
+                      color: _getPnlColor(context, s.totalPnl))),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(child: _pnlBar(context, frac, s.totalPnl >= 0)),
+              const SizedBox(width: 10),
+              Text(meta,
+                  style: MyntWebTextStyles.caption(context,
+                      darkColor: MyntColors.textTertiaryDark,
+                      lightColor: MyntColors.textTertiary)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _pnlBar(BuildContext context, double fraction, bool positive) {
+    final track = resolveThemeColor(context,
+        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
+    final fill = positive
+        ? resolveThemeColor(context,
+            dark: MyntColors.profitDark, light: MyntColors.profit)
+        : resolveThemeColor(context,
+            dark: MyntColors.lossDark, light: MyntColors.loss);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        height: 6,
+        color: track,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FractionallySizedBox(
+            widthFactor: fraction,
+            heightFactor: 1,
+            child: Container(color: fill),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- Notes list -----------------------------------------------------------
+
+  Widget _buildNotesList(
+    BuildContext context,
+    List<JournalNote> notes,
+    SegmentGroup group,
+    LDProvider lp,
+    NotesRangeKey? rangeKey,
+  ) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final snapshots = _snapshotsByDate(lp, group);
+    // Render incrementally, like the Date Wise / Script Wise tables: only the
+    // first `displayedItemCount` rows are built, and the shared scroll listener
+    // ([ScrollToLoadMixin]) appends more as the page scrolls near the bottom.
+    // A year of daily notes is 200+ rows — building them all at once would jank.
+    final displayed = takeDisplayed(notes);
+    final remaining = notes.length - displayed.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            notes.isEmpty
+                ? 'No notes match this filter'
+                : remaining > 0
+                    ? 'Showing ${displayed.length} of ${notes.length} notes'
+                    : '${notes.length} note${notes.length == 1 ? '' : 's'}',
+            style: MyntWebTextStyles.caption(context, color: secondary),
+          ),
+        ),
+        if (notes.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            child: Text('Clear the tag filter above to see every note.',
+                style: MyntWebTextStyles.caption(context, color: secondary)),
+          )
+        else ...[
+          for (var i = 0; i < displayed.length; i++) ...[
+            if (i > 0) _insightHairline(context),
+            _buildJournalNoteRow(context, displayed[i], group, rangeKey,
+                snapshots[displayed[i].noteDate]),
+          ],
+          // Scrolling loads more automatically; this is an explicit fallback
+          // and makes the "there's more" state obvious.
+          if (remaining > 0) ...[
+            _insightHairline(context),
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Semantics(
+                  label: 'Show more notes',
+                  button: true,
+                  child: InkWell(
+                    onTap: () => setState(() =>
+                        displayedItemCount += ScrollToLoadMixin.itemsPerPage),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      child: Text(
+                        'Show '
+                        '${remaining < ScrollToLoadMixin.itemsPerPage ? remaining : ScrollToLoadMixin.itemsPerPage} '
+                        'more',
+                        style: MyntWebTextStyles.caption(context,
+                            darkColor: MyntColors.primaryDark,
+                            lightColor: MyntColors.primary,
+                            fontWeight: MyntFonts.medium),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _buildJournalNoteRow(
+    BuildContext context,
+    JournalNote note,
+    SegmentGroup group,
+    NotesRangeKey? rangeKey,
+    NotePnlSnapshot? snapshot,
+  ) {
+    final pnl = note.pnl?.realised ?? snapshot?.realised;
+    final title = note.title.trim();
+    final comment = note.comment.trim();
+    final headline = title.isNotEmpty
+        ? title
+        : (comment.isNotEmpty ? comment : 'Untitled note');
+    // Only show the comment as a preview line when it isn't already the headline.
+    final preview = title.isNotEmpty ? comment : '';
+    final d = DateTime.tryParse(note.noteDate);
+    final day = d != null ? DateFormat('dd').format(d) : '';
+    final mon = d != null ? DateFormat('MMM').format(d) : note.noteDate;
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+
+    return Semantics(
+      label: 'View note ${note.noteDate}',
+      button: true,
+      child: InkWell(
+        onTap: rangeKey == null
+            ? null
+            : () => openNoteEditorSheet(
+                  context,
+                  ref: ref,
+                  noteDate: note.noteDate,
+                  group: group,
+                  existing: note,
+                  snapshot: snapshot,
+                  rangeKey: rangeKey,
+                  // Reading a note opens it read-only; the pencil edits.
+                  startInEdit: false,
+                ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Date badge — day number over month, so the row scans by date.
+              SizedBox(
+                width: 40,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(day,
+                        style: MyntWebTextStyles.body(context,
+                            darkColor: MyntColors.textPrimaryDark,
+                            lightColor: MyntColors.textPrimary,
+                            fontWeight: MyntFonts.semiBold)),
+                    Text(mon,
+                        style:
+                            MyntWebTextStyles.caption(context, color: muted)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(headline,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _getTextStyle(context)
+                            .copyWith(fontWeight: MyntFonts.semiBold)),
+                    if (preview.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(preview,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: MyntWebTextStyles.caption(context,
+                              color: secondary)),
+                    ],
+                    if (note.tags.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 5,
+                        runSpacing: 5,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          for (final t in note.tags.take(3))
+                            _journalMiniTag(context, t),
+                          if (note.tags.length > 3)
+                            Text('+${note.tags.length - 3}',
+                                style: MyntWebTextStyles.caption(context,
+                                    color: muted)),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (pnl != null)
+                    Text(_formatAmount(pnl),
+                        style: _getTextStyle(context,
+                                color: _getPnlColor(context, pnl))
+                            .copyWith(fontWeight: MyntFonts.semiBold)),
+                  if (note.attachments.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.attach_file_rounded,
+                            size: 12, color: muted),
+                        const SizedBox(width: 2),
+                        Text('${note.attachments.length}',
+                            style: MyntWebTextStyles.caption(context,
+                                color: muted)),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A compact tag pill (colour dot + name) for the note rows — richer than a
+  /// bare dot, still small enough to sit several to a row.
+  Widget _journalMiniTag(BuildContext context, JournalTag tag) {
+    final color = hexToColor(tag.color,
+        fallback: resolveThemeColor(context,
+            dark: MyntColors.textSecondaryDark,
+            light: MyntColors.textSecondary));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+              width: 6,
+              height: 6,
+              decoration:
+                  BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 5),
+          Text(tag.name,
+              style: MyntWebTextStyles.caption(context,
+                  darkColor: MyntColors.textSecondaryDark,
+                  lightColor: MyntColors.textSecondary,
+                  fontWeight: MyntFonts.medium)),
+        ],
+      ),
+    );
+  }
+
+  Widget _insightHairline(BuildContext context) => Divider(
+        height: 1,
+        thickness: 1,
+        color: resolveThemeColor(context,
+            dark: MyntColors.dividerDark, light: MyntColors.divider),
+      );
+
+  /// A plain-English "some of these are provisional" note at the foot of the
+  /// Journal — only when a day was journalled before the market closed. The
+  /// backend's raw wording is deliberately not used; it reads as jargon.
+  Widget _buildJournalProvisionalNote(
+      BuildContext context, TagPnlAnalytics a) {
+    if (!a.dataQuality.hasProvisional) return const SizedBox.shrink();
+    final n = a.dataQuality.provisionalSnapshotCount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _insightHairline(context),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: _insightCaveatLine(
+            context,
+            Icons.schedule_rounded,
+            '$n ${n == 1 ? 'note was' : 'notes were'} saved before the market '
+            'closed, so ${n == 1 ? 'its' : 'their'} P&L may still change.',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _insightCaveatLine(BuildContext context, IconData icon, String text) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: muted),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: MyntWebTextStyles.caption(context, color: muted),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2577,6 +3535,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     required String rowKey,
     required Widget child,
     bool alignRight = false,
+    Color? baseTint,
   }) {
     return shadcn.TableCell(
       theme: const shadcn.TableCellTheme(
@@ -2599,12 +3558,14 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
             return Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              // A persistent tint (used for the analytics baseline rows) shows
+              // through until hover, which paints its own wash on top.
               color: isHovered
                   ? resolveThemeColor(context,
                           dark: MyntColors.primaryDark,
                           light: MyntColors.primary)
                       .withValues(alpha: 0.06)
-                  : null,
+                  : baseTint,
               alignment: alignRight ? Alignment.centerRight : null,
               child: child,
             );

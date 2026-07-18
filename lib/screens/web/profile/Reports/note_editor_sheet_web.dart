@@ -40,6 +40,11 @@ bool _isSheetOpening = false;
 /// resent on every save, including edits — omitting it clears the stored
 /// snapshot and drops the note from analytics. A null [snapshot] means the day
 /// had no P&L row to read, and the note will be invisible to analytics.
+///
+/// [startInEdit] opens straight into the editing form. Defaults to false, so an
+/// existing note opens read-only (view) and the user taps the pencil to edit —
+/// reading a note should never drop you into a form. Adding a note to a blank
+/// day passes true, since there is nothing to view yet.
 Future<void> openNoteEditorSheet(
   BuildContext context, {
   required WidgetRef ref,
@@ -48,6 +53,7 @@ Future<void> openNoteEditorSheet(
   required JournalNote? existing,
   required NotePnlSnapshot? snapshot,
   required NotesRangeKey rangeKey,
+  bool startInEdit = false,
 }) async {
   if (_isSheetOpening) return;
   _isSheetOpening = true;
@@ -87,6 +93,8 @@ Future<void> openNoteEditorSheet(
             existing: existing,
             snapshot: snapshot,
             rangeKey: rangeKey,
+            // A new note has nothing to view, so it always starts in the form.
+            startInEdit: startInEdit || existing == null,
           ),
         ),
       );
@@ -135,6 +143,7 @@ class _NoteEditorContent extends ConsumerStatefulWidget {
   final JournalNote? existing;
   final NotePnlSnapshot? snapshot;
   final NotesRangeKey rangeKey;
+  final bool startInEdit;
 
   const _NoteEditorContent({
     required this.noteDate,
@@ -142,6 +151,7 @@ class _NoteEditorContent extends ConsumerStatefulWidget {
     required this.existing,
     required this.snapshot,
     required this.rangeKey,
+    required this.startInEdit,
   });
 
   @override
@@ -219,9 +229,15 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   /// Non-null while the full-size image preview overlay is showing.
   ({String filename, Uint8List bytes})? _imagePreview;
 
+  /// Whether the sheet is showing the editing form. False means the read-only
+  /// view; the pencil in the header flips it true. A new note starts true
+  /// (there is nothing to view); an existing note starts in view.
+  late bool _editing;
+
   @override
   void initState() {
     super.initState();
+    _editing = widget.startInEdit;
     _originalTitle = widget.existing?.title ?? '';
     _originalComment = widget.existing?.comment ?? '';
     _title = TextEditingController(text: _originalTitle);
@@ -369,9 +385,11 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   /// text counts.
   void _handleClose() {
     if (_saving || _deleting) return;
-    final hasUnsavedWork = _isNew
-        ? (_hasContent || _tags.isNotEmpty || _queuedFiles.isNotEmpty)
-        : _dirty;
+    // The read-only view has no unsaved edits to protect — close straight away.
+    final hasUnsavedWork = _editing &&
+        (_isNew
+            ? (_hasContent || _tags.isNotEmpty || _queuedFiles.isNotEmpty)
+            : _dirty);
     if (hasUnsavedWork) {
       setState(() {
         _confirm = _ConfirmPrompt(
@@ -781,52 +799,195 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildSnapshotSummary(context),
-                const SizedBox(height: 20),
-                _label(context, 'Title'),
-                const SizedBox(height: 6),
-                MyntTextField(
-                  controller: _title,
-                  placeholder: 'What happened today?',
-                  maxLength: 200,
-                  size: MyntTextFieldSize.medium,
-                  textStyle: MyntWebTextStyles.body(context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textPrimary),
-                ),
-                const SizedBox(height: 16),
-                _label(context, 'Notes'),
-                const SizedBox(height: 6),
-                SizedBox(
-                  height: 180,
-                  child: MyntTextField(
-                    controller: _comment,
-                    placeholder:
-                        'Why did you take these trades? What would you do '
-                        'differently?',
-                    height: 180,
-                    maxLines: 8,
-                    maxLength: 20000,
-                    size: MyntTextFieldSize.medium,
-                    textStyle: MyntWebTextStyles.body(context,
-                        darkColor: MyntColors.textPrimaryDark,
-                        lightColor: MyntColors.textPrimary),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                _buildTagsSection(context),
-                const SizedBox(height: 16),
-                _buildAttachmentsSection(context),
-              ],
-            ),
+            child: _editing ? _buildEditBody(context) : _buildViewBody(context),
           ),
         ),
-        _buildFooter(context),
+        // The read-only view has no footer actions; editing is entered from the
+        // header pencil, and Save/Delete only make sense in the form.
+        if (_editing) _buildFooter(context),
       ],
     );
+  }
+
+  Widget _buildEditBody(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSnapshotSummary(context),
+        const SizedBox(height: 20),
+        _label(context, 'Title'),
+        const SizedBox(height: 6),
+        MyntTextField(
+          controller: _title,
+          placeholder: 'What happened today?',
+          maxLength: 200,
+          size: MyntTextFieldSize.medium,
+          textStyle: MyntWebTextStyles.body(context,
+              darkColor: MyntColors.textPrimaryDark,
+              lightColor: MyntColors.textPrimary),
+        ),
+        const SizedBox(height: 16),
+        _label(context, 'Notes'),
+        const SizedBox(height: 6),
+        SizedBox(
+          height: 180,
+          child: MyntTextField(
+            controller: _comment,
+            placeholder: 'Why did you take these trades? What would you do '
+                'differently?',
+            height: 180,
+            maxLines: 8,
+            maxLength: 20000,
+            size: MyntTextFieldSize.medium,
+            textStyle: MyntWebTextStyles.body(context,
+                darkColor: MyntColors.textPrimaryDark,
+                lightColor: MyntColors.textPrimary),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildTagsSection(context),
+        const SizedBox(height: 16),
+        _buildAttachmentsSection(context),
+      ],
+    );
+  }
+
+  /// The read-only view. Same content as the form — P&L hero, title, comment,
+  /// tags, attachments — but nothing editable: no text fields, chips can't be
+  /// removed, attachments open but can't be added or deleted.
+  Widget _buildViewBody(BuildContext context) {
+    final note = widget.existing;
+    final title = note?.title.trim() ?? '';
+    final comment = note?.comment.trim() ?? '';
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final meta = _viewMetaLine();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSnapshotSummary(context),
+        const SizedBox(height: 20),
+        // The title is the note's headline, not a labelled field.
+        Text(
+          title.isEmpty ? 'Untitled note' : title,
+          style: MyntWebTextStyles.title(context,
+              color: title.isEmpty ? muted : null,
+              darkColor: MyntColors.textPrimaryDark,
+              lightColor: MyntColors.textPrimary,
+              fontWeight: MyntFonts.semiBold),
+        ),
+        if (meta.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(Icons.schedule_rounded, size: 12, color: muted),
+              const SizedBox(width: 5),
+              Text(meta,
+                  style: MyntWebTextStyles.caption(context, color: muted)),
+            ],
+          ),
+        ],
+        const SizedBox(height: 18),
+        _viewSection(
+          context,
+          Icons.notes_rounded,
+          'Notes',
+          Text(
+            comment.isEmpty ? 'No notes written for this day.' : comment,
+            style: MyntWebTextStyles.body(context,
+                    color: comment.isEmpty ? muted : null,
+                    darkColor: MyntColors.textPrimaryDark,
+                    lightColor: MyntColors.textPrimary)
+                .copyWith(height: 1.55),
+          ),
+        ),
+        _viewSection(
+          context,
+          Icons.sell_outlined,
+          'Tags',
+          _tags.isEmpty
+              ? _viewNone(context)
+              : Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [for (final tag in _tags) _tagChip(context, tag)],
+                ),
+        ),
+        _viewSection(
+          context,
+          Icons.attach_file_rounded,
+          'Attachments',
+          _attachments.isEmpty
+              ? _viewNone(context)
+              : Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  // Read-only: the tile still previews / downloads, but readOnly
+                  // hides the remove ×.
+                  children: [
+                    for (final a in _attachments)
+                      _buildServerAttachmentTile(context, a, readOnly: true),
+                  ],
+                ),
+          last: true,
+        ),
+      ],
+    );
+  }
+
+  /// A read-only section: a divider, an icon-led uppercase header, then content.
+  /// Gives the view real structure instead of a stack of tiny labels.
+  Widget _viewSection(BuildContext context, IconData icon, String label,
+      Widget child,
+      {bool last = false}) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Divider(
+          height: 1,
+          color: resolveThemeColor(context,
+              dark: MyntColors.dividerDark, light: MyntColors.divider),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Icon(icon, size: 14, color: muted),
+            const SizedBox(width: 7),
+            Text(
+              label.toUpperCase(),
+              style: MyntWebTextStyles.caption(context,
+                      color: muted, fontWeight: MyntFonts.medium)
+                  .copyWith(letterSpacing: 0.6),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        child,
+        SizedBox(height: last ? 0 : 18),
+      ],
+    );
+  }
+
+  Widget _viewNone(BuildContext context) => Text(
+        'None',
+        style: MyntWebTextStyles.caption(context,
+            darkColor: MyntColors.textTertiaryDark,
+            lightColor: MyntColors.textTertiary),
+      );
+
+  /// "Added 12 May 2026" (+ "· edited 13 May" when it was changed later).
+  String _viewMetaLine() {
+    final c = widget.existing?.createdAt;
+    if (c == null) return '';
+    final added = 'Added ${DateFormat('d MMM yyyy').format(c)}';
+    final u = widget.existing?.updatedAt;
+    if (u != null && u.difference(c).inMinutes.abs() > 1) {
+      return '$added · edited ${DateFormat('d MMM').format(u)}';
+    }
+    return added;
   }
 
   // --- Attachments UI --------------------------------------------------------
@@ -873,7 +1034,9 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   }
 
   /// The shared tile frame: an 84px square with the content clipped inside,
-  /// a remove × in the corner, and the filename captioned underneath.
+  /// a remove × in the corner, and the filename captioned underneath. In
+  /// [readOnly] the × is omitted — the read-only note view can still open the
+  /// attachment but not remove it.
   Widget _buildAttachmentTileShell(
     BuildContext context, {
     required Widget child,
@@ -881,6 +1044,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     required String semanticsLabel,
     required VoidCallback onRemove,
     VoidCallback? onTap,
+    bool readOnly = false,
   }) {
     return SizedBox(
       width: 84,
@@ -913,30 +1077,31 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                   ),
                 ),
               ),
-              Positioned(
-                top: 4,
-                right: 4,
-                child: Semantics(
-                  label: 'Remove $filename',
-                  button: true,
-                  child: InkWell(
-                    onTap: _attachmentBusy ? null : onRemove,
-                    borderRadius: BorderRadius.circular(999),
-                    child: Container(
-                      width: 18,
-                      height: 18,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        // Dark scrim so the × stays visible over any image.
-                        color: Colors.black.withValues(alpha: 0.55),
-                        shape: BoxShape.circle,
+              if (!readOnly)
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: Semantics(
+                    label: 'Remove $filename',
+                    button: true,
+                    child: InkWell(
+                      onTap: _attachmentBusy ? null : onRemove,
+                      borderRadius: BorderRadius.circular(999),
+                      child: Container(
+                        width: 18,
+                        height: 18,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          // Dark scrim so the × stays visible over any image.
+                          color: Colors.black.withValues(alpha: 0.55),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.close_rounded,
+                            size: 12, color: Colors.white),
                       ),
-                      child: const Icon(Icons.close_rounded,
-                          size: 12, color: Colors.white),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
           const SizedBox(height: 4),
@@ -954,7 +1119,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   }
 
   Widget _buildServerAttachmentTile(
-      BuildContext context, NoteAttachment attachment) {
+      BuildContext context, NoteAttachment attachment,
+      {bool readOnly = false}) {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
 
@@ -964,6 +1130,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       final bytes = bytesAsync.value;
       return _buildAttachmentTileShell(
         context,
+        readOnly: readOnly,
         filename: attachment.filename,
         semanticsLabel: 'Preview attachment ${attachment.filename}',
         onRemove: () => _requestDeleteAttachment(attachment),
@@ -990,6 +1157,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     // PDF: no inline render — the tile is a download button.
     return _buildAttachmentTileShell(
       context,
+      readOnly: readOnly,
       filename: attachment.filename,
       semanticsLabel: 'Download attachment ${attachment.filename}',
       onRemove: () => _requestDeleteAttachment(attachment),
@@ -2005,7 +2173,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _isNew ? 'Add note' : 'Edit note',
+                  _editing ? (_isNew ? 'Add note' : 'Edit note') : 'View note',
                   style: MyntWebTextStyles.title(context,
                       darkColor: MyntColors.textPrimaryDark,
                       lightColor: MyntColors.textPrimary,
@@ -2022,6 +2190,20 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
               ],
             ),
           ),
+          // In the read-only view the pencil is the way into editing.
+          if (!_editing)
+            Semantics(
+              label: 'Edit note',
+              button: true,
+              child: InkWell(
+                onTap: () => setState(() => _editing = true),
+                borderRadius: BorderRadius.circular(999),
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(Icons.edit_outlined, size: 20, color: accent),
+                ),
+              ),
+            ),
           MyntCloseButton(onPressed: _handleClose),
         ],
       ),
