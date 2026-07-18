@@ -131,8 +131,17 @@ class _ChartDrawingsMixin {
       if (!isInProgress && dragRect &&
           Number.isFinite(dragRect.x) && Number.isFinite(dragRect.y) &&
           Number.isFinite(dragRect.w) && Number.isFinite(dragRect.h)) {
+        // Touch: a finger can't hit a thin mouse-sized drag band, so tapping a
+        // just-drawn line to SELECT it (to edit / delete) usually misses.
+        // Inflate the HIT rect (not the drawn line) by a finger-sized pad so a
+        // tap NEAR the drawing still selects it. Desktop keeps the tight band
+        // (pad 0) — `window.__chartTouch` is set only by mobile_touch.js.
+        const _dp = window.__chartTouch ? 12 : 0;
         this._drawingHits.push({
-          rect: dragRect,
+          rect: _dp
+              ? { x: dragRect.x - _dp, y: dragRect.y - _dp,
+                  w: dragRect.w + _dp * 2, h: dragRect.h + _dp * 2 }
+              : dragRect,
           drawingId: d.id,
           action: 'drag',
           kind: d.kind,
@@ -161,8 +170,12 @@ class _ChartDrawingsMixin {
           ctx.rect(hx - hs, hy - hs, hs * 2, hs * 2);
           ctx.fill();
           ctx.stroke();
+          // Touch: widen the reshape-handle grab (mouse ~14px → finger ~32px)
+          // so dragging an endpoint to reshape/extend is actually possible.
+          const _hp = window.__chartTouch ? 12 : 3;
           this._drawingHandleHits.push({
-            rect: { x: hx - hs - 3, y: hy - hs - 3, w: hs * 2 + 6, h: hs * 2 + 6 },
+            rect: { x: hx - hs - _hp, y: hy - hs - _hp,
+                    w: hs * 2 + _hp * 2, h: hs * 2 + _hp * 2 },
             drawingId: d.id,
             pointIndex: pi,
           });

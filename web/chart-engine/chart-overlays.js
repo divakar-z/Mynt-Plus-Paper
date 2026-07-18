@@ -211,20 +211,26 @@ class _ChartOverlaysMixin {
         action: 'close', overlayId: ov.id,
       });
 
-      // Also let users click on the line itself — both sides of the chip,
-      // since the chip now sits in the middle of the plot.
+      // Also let users click on — and DRAG — the line itself, both sides of the
+      // chip. The grab band is thin (6px) for a mouse, but finger-sized on touch
+      // (window.__chartTouch, set by mobile_touch.js): a 6px band is impossible
+      // to hit with a finger, so a touch-drag missed the line and PANNED the
+      // chart instead ("can't drag the line to modify"). Wider band = grabbable.
       if (onScreen) {
+        const lineBandH = window.__chartTouch ? 24 : 6;
+        const lineBandY = y - lineBandH / 2;
         if (chipLeft > plot.left + 6) {
           this._overlayHits.push({
-            rect: { x: plot.left, y: y - 3, w: chipLeft - plot.left, h: 6 },
+            rect: { x: plot.left, y: lineBandY,
+                    w: chipLeft - plot.left, h: lineBandH },
             action: 'open', overlayId: ov.id,
           });
         }
         const rightStart = chipLeft + chipW;
         if (rightStart < plot.right - 6) {
           this._overlayHits.push({
-            rect: { x: rightStart, y: y - 3,
-                    w: plot.right - rightStart, h: 6 },
+            rect: { x: rightStart, y: lineBandY,
+                    w: plot.right - rightStart, h: lineBandH },
             action: 'open', overlayId: ov.id,
           });
         }
@@ -347,10 +353,14 @@ class _ChartOverlaysMixin {
     // Deeper violet so the right-axis price chip's white text stays readable
     // (the previous #A78BFA was too light — text-on-chip contrast washed out).
     if (ov.kind === 'optionStrike') return '#8B5CF6';
-    // Colour every tradable line by its ORDER SIDE — buy = long/blue, sell =
-    // short/red. A buy order (e.g. an SL/TP covering a short position) must
-    // read blue, not red. The TP/SL role is shown by the label + dash style,
-    // not the colour.
+    // OCO bracket legs are coloured by ROLE (not side): the target reads GREEN
+    // (profit-taking exit) and the stop reads RED, regardless of long/short — so
+    // the two legs are never the same colour (by-side made both red on a long).
+    if (ov.kind === 'ocoTp' || ov.kind === 'tp') return this.palette.bull;
+    if (ov.kind === 'ocoSl') return this.palette.short;
+    // Every OTHER tradable line by its ORDER SIDE — buy = long/blue, sell =
+    // short/red. A buy order (e.g. an SL covering a short position) must read
+    // blue, not red; for those the TP/SL role is shown by the label + dash style.
     return ov.side === 'buy' ? this.palette.long : this.palette.short;
   }
 
@@ -365,7 +375,8 @@ class _ChartOverlaysMixin {
     if (ov.kind === 'alert') return [6, 4];
     if (ov.kind === 'limit' || ov.kind === 'tp' || ov.kind === 'ocoTp') return [6, 4];
     if (ov.kind === 'sl-l') return [4, 4];
-    return [2, 3]; // sl / ocoSl
+    if (ov.kind === 'ocoSl') return [2, 2]; // OCO stop leg: red DOTTED (BRD)
+    return [2, 3]; // sl
   }
 
   _overlayLineWidth(ov) {

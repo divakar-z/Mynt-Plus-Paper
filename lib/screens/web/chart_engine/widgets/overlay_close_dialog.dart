@@ -13,6 +13,7 @@ import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/market_watch_provider.dart';
 import 'package:mynt_plus/provider/order_provider.dart';
 import 'package:mynt_plus/provider/portfolio_provider.dart';
+import 'package:mynt_plus/screens/web/chart_engine/state/chart_order_validation.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
@@ -947,6 +948,8 @@ Future<({double tp, double sl})?> showOcoTpSlDialog({
   required double tpInit,
   required double slInit,
   required double ti,
+  String? uc,
+  String? lc,
 }) {
   return _showIframeSafeDialog<({double tp, double sl})>(
     context: context,
@@ -957,6 +960,8 @@ Future<({double tp, double sl})?> showOcoTpSlDialog({
       tpInit: tpInit,
       slInit: slInit,
       ti: ti,
+      uc: uc,
+      lc: lc,
     ),
   );
 }
@@ -968,6 +973,8 @@ class _OcoTpSlCard extends StatefulWidget {
   final double tpInit;
   final double slInit;
   final double ti;
+  final String? uc;
+  final String? lc;
   const _OcoTpSlCard({
     required this.tsym,
     required this.isLong,
@@ -975,6 +982,8 @@ class _OcoTpSlCard extends StatefulWidget {
     required this.tpInit,
     required this.slInit,
     required this.ti,
+    this.uc,
+    this.lc,
   });
 
   @override
@@ -1039,6 +1048,13 @@ class _OcoTpSlCardState extends State<_OcoTpSlCard> {
             'Stop-loss must be above the current price (${ltp.toStringAsFixed(_decimals)}).');
         return;
       }
+    }
+    // Circuit-limit check (TC_523/524): neither leg may sit outside [lc, uc].
+    final circErr =
+        validateChartOco(target: tp, stop: sl, uc: widget.uc, lc: widget.lc);
+    if (circErr != null) {
+      setState(() => _error = circErr);
+      return;
     }
     Navigator.of(context).pop((tp: tp, sl: sl));
   }
