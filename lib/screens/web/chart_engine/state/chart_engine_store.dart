@@ -877,37 +877,75 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
       _schedulePersist();
       return;
     }
-    final ls = scrip.ls > 0 ? scrip.ls : 1;
-    // Initial qty for the new symbol respects Order Defaults → Trade
-    // Quantity (per instrument family). Futures/options multiply by lot
-    // size so the user's "2 lots" setting becomes 2*ls units; equity is
-    // a raw share count (no lot multiplier).
-    //
-    // Family detection: prefer the broker's `instname` when present, but
-    // fall back to parsing the tsym + the lot size, because several entry
-    // paths (top-bar typeahead, watchlist, saved-session restore) yield
-    // ChartScrips with an empty `instname` even for derivatives. Without
-    // the fallback those land in the equity branch and qty silently
-    // collapses to `equityDefaultQty` (usually 1).
+    // Initial qty for the new symbol respects Order Defaults → Trade Quantity
+    // (per instrument family). See [_qtyForScrip] for the family detection.
     final defaults = ref.read(orderDefaultsProvider);
-    final instname = scrip.instname.toUpperCase();
-    final isOption = instname.startsWith('OPT') ||
-        parseOptionTsym(scrip.tsym) != null;
-    final isFuture = instname.startsWith('FUT') ||
-        // Lot size > 1 with a non-option tsym ≈ a futures/derivative
-        // contract on this broker. Stocks are always ls=1.
-        (!isOption && ls > 1);
-    int initialQty;
-    if (isOption) {
-      initialQty = defaults.optionsDefaultQty * ls;
-    } else if (isFuture) {
-      initialQty = defaults.futuresDefaultQty * ls;
-    } else {
-      initialQty = defaults.equityDefaultQty;
-    }
-    if (initialQty <= 0) initialQty = ls;
+    final initialQty = _qtyForScrip(scrip, defaults);
     state = state.copyWithPane(
         index, state.panes[index].copyWith(scrip: scrip, qty: initialQty));
+    _schedulePersist();
+  }
+
+  /// Seed quantity for [scrip] from the user's Order Defaults → Trade Quantity
+  /// (per instrument family). Futures/options multiply the per-family lot count
+  /// by the contract lot size so the user's "2 lots" setting becomes 2*ls
+  /// units; equity is a raw share count (no lot multiplier).
+  ///
+  /// Family detection prefers the broker's `instname` when present, but falls
+  /// back to parsing the tsym + the lot size, because several entry paths
+  /// (top-bar typeahead, watchlist, saved-session restore) yield ChartScrips
+  /// with an empty `instname` even for derivatives. Without the fallback those
+  /// land in the equity branch and qty silently collapses to `equityDefaultQty`
+  /// (usually 1).
+  int _qtyForScrip(ChartScrip scrip, OrderDefaults defaults) {
+    final ls = scrip.ls > 0 ? scrip.ls : 1;
+    final instname = scrip.instname.toUpperCase();
+    final isOption =
+        instname.startsWith('OPT') || parseOptionTsym(scrip.tsym) != null;
+    final isFuture = instname.startsWith('FUT') ||
+        // Lot size > 1 with a non-option tsym ≈ a futures/derivative contract
+        // on this broker. Stocks are always ls=1.
+        (!isOption && ls > 1);
+    int qty;
+    if (isOption) {
+      qty = defaults.optionsDefaultQty * ls;
+    } else if (isFuture) {
+      qty = defaults.futuresDefaultQty * ls;
+    } else {
+      qty = defaults.equityDefaultQty;
+    }
+    if (qty <= 0) qty = ls;
+    return qty;
+  }
+
+  /// Recomputes every scrip'd pane's quantity from [defaults] using the SAME
+  /// family detection + lot multiplier as [setPaneSymbol]. Called when the user
+  /// changes a per-family Trade Quantity default so panes that were seeded once
+  /// at symbol-set time pick up the new value (e.g. a GOLDM futures pane, lot
+  /// 100, goes 100 → 200 when the futures default changes 1 → 2). Panes with no
+  /// scrip are left untouched. There is NO manual per-pane qty override flag, so
+  /// every scrip'd pane is reseeded. The resulting session change re-pushes
+  /// `encodeSetPaneQty` to the iframe via the shell's session listener.
+  void reseedQtyFromDefaults(OrderDefaults defaults) {
+    if (state.panes.isEmpty) return;
+    final updated = <PaneState>[];
+    var changed = false;
+    for (final pane in state.panes) {
+      final scrip = pane.scrip;
+      if (scrip == null) {
+        updated.add(pane);
+        continue;
+      }
+      final newQty = _qtyForScrip(scrip, defaults);
+      if (newQty == pane.qty) {
+        updated.add(pane);
+        continue;
+      }
+      updated.add(pane.copyWith(qty: newQty));
+      changed = true;
+    }
+    if (!changed) return;
+    state = state.copyWith(panes: updated);
     _schedulePersist();
   }
 
