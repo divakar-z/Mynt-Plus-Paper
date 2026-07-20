@@ -2061,10 +2061,10 @@ changeHoldingsTabIndex(int index) {
                   channel: defaultTargetPlatform == TargetPlatform.android
                       ? '${ref.read(authProvider).deviceInfo["brand"]}'
                       : "${ref.read(authProvider).deviceInfo["model"]}",
-                      frzqty: ((int.parse(element.frzqty.toString()) /
-                              int.parse(element.ls.toString()))
+                       frzqty: ((int.parse(element.frzqty?.toString() ?? "0") /
+                              int.parse(element.ls?.toString() ?? "1"))
                           .floor() *
-                      int.parse(element.ls.toString())));
+                      int.parse(element.ls?.toString() ?? "1")));
                await fetchExitPosition(context, placeOrderInput, true, true);
                       
               // _placeOrderModel = await api.getPlaceOrder(
@@ -2106,10 +2106,10 @@ changeHoldingsTabIndex(int index) {
                   channel: defaultTargetPlatform == TargetPlatform.android
                       ? '${ref.read(authProvider).deviceInfo["brand"]}'
                       : "${ref.read(authProvider).deviceInfo["model"]}",
-                  frzqty: ((int.parse(element.frzqty.toString()) /
-                              int.parse(element.ls.toString()))
+                  frzqty: ((int.parse(element.frzqty?.toString() ?? "0") /
+                              int.parse(element.ls?.toString() ?? "1"))
                           .floor() *
-                      int.parse(element.ls.toString())));
+                      int.parse(element.ls?.toString() ?? "1")));
               await fetchExitPosition(context, placeOrderInput, true, true);
             }
           }
@@ -3084,7 +3084,7 @@ changeHoldingsTabIndex(int index) {
       int qty = int.parse(placeOrderInput.qty);
       int frzqty = int.parse(placeOrderInput.frzqty.toString());
 
-      if (qty > frzqty) {
+      if (frzqty > 0 && qty > frzqty) {
         int fullOrders = qty ~/ frzqty;
         int remainingQty = qty % frzqty;
 
