@@ -450,7 +450,7 @@ class PaneState {
   final bool showCrosshairLines;
   const PaneState({
     this.scrip,
-    this.timeframeMinutes = 1,
+    this.timeframeMinutes = 5,
     this.overlays = const ChartOverlays(),
     this.qty = 1,
     this.indicators = const [],
@@ -561,7 +561,7 @@ class PaneState {
       scrip: j['scrip'] is Map
           ? ChartScrip.fromJson(j['scrip'] as Map<String, dynamic>)
           : null,
-      timeframeMinutes: (j['timeframeMinutes'] as num?)?.toInt() ?? 1,
+      timeframeMinutes: (j['timeframeMinutes'] as num?)?.toInt() ?? 5,
       overlays: j['overlays'] is Map
           ? ChartOverlays.fromJson(j['overlays'] as Map<String, dynamic>)
           : const ChartOverlays(),
