@@ -1901,6 +1901,9 @@ class _ChartEngineShellScreenState
         ref
             .read(chartEngineSessionProvider.notifier)
             .backfillPaneScripMetadata(paneIndex, ls: meta.ls, ti: meta.ti);
+        // Also correct the ENGINE's copy of the tick (setPaneSymbol seeded it
+        // once and won't re-push) so the axis/snap tick matches ChartScrip.ti.
+        _post(encodeSetScripMeta('$paneIndex', ti: meta.ti, ls: meta.ls));
       }
       return;
     }
@@ -1929,6 +1932,9 @@ class _ChartEngineShellScreenState
             .read(chartEngineSessionProvider.notifier)
             .backfillPaneScripMetadata(paneIndex,
                 ls: lotSize, ti: tickSize);
+        // Also correct the ENGINE's copy of the tick (setPaneSymbol seeded it
+        // once and won't re-push) so the axis/snap tick matches ChartScrip.ti.
+        _post(encodeSetScripMeta('$paneIndex', ti: tickSize, ls: lotSize));
       }
     }).catchError((_) {});
   }
@@ -2107,12 +2113,32 @@ class _ChartEngineShellScreenState
       realInfo = _cachedScripInfo(scrip) ??
           ref.read(marketWatchProvider).scripInfoModel;
     }
+    // Point the shared `getQuotes` at THIS scrip before opening, mirroring the
+    // watchlist Buy path (fetchScripInfo + fetchScripQuote). The order popup's
+    // Market-Info panel dereferences `marketWatchProvider.getQuotes!` for its
+    // base quote + static fields, and overlays live O/H/L/Bid/Ask/Vol from
+    // `socketDatas[token]` — which the chart already populates via its own
+    // pane subscription (_handleSubscribe subscribes both 't' and 'd'). The
+    // missing piece was this getQuotes fetch, so F&O popups showed 0s. It is a
+    // pure data fetch (no WS subscribe/unsubscribe) so it can't disturb the
+    // chart's iframe subscription, and it's cheap when the quote is cached.
+    try {
+      await ref
+          .read(marketWatchProvider)
+          .fetchScripQuote(scrip.token, scrip.exch, context);
+    } catch (_) {
+      // Best-effort; the popup still opens with static/prefill data.
+    }
+    if (!mounted) return;
     final args = buildOrderScreenArgs(
       scrip: scrip,
       qty: qty,
       kind: kind,
       price: price,
       realScripInfo: realInfo,
+      // Real live LTP so the screen validates the trigger against the actual
+      // last-traded price (not the order's own price) and shows it correctly.
+      liveLtp: _currentSpotLtp(scrip),
       // Drives the Bracket-Order pre-fill when the user has auto-SL + TP on.
       orderDefaults: ref.read(orderDefaultsProvider),
     );
@@ -2180,6 +2206,7 @@ class _ChartEngineShellScreenState
         symbol: scrip.tsym,
         qty: pane.qty,
         price: price,
+        ti: scrip.ti,
         ltp: liveLtp,
         onPick: (kind) {
           closeMenu();
@@ -3108,6 +3135,22 @@ class _ChartEngineShellScreenState
     // popover renders from this mirror; field changes flow back via the
     // `updateOrderDefaults` patch message.
     ref.listen(orderDefaultsProvider, (prev, next) {
+      // BUG A — a per-family Trade Quantity change must reseed every pane's
+      // qty. setPaneSymbol seeds it only once (at symbol-set time), so an
+      // already-shown symbol (e.g. GOLDM futures, lot 100) stayed at the old
+      // qty when the user later changed the default. Recompute with the same
+      // family logic; the resulting session change re-pushes encodeSetPaneQty
+      // via the chartEngineSessionProvider listener above. Run before the
+      // _iframeReady guard so state stays correct even if the change lands
+      // while the iframe is (re)loading.
+      if (prev == null ||
+          prev.equityDefaultQty != next.equityDefaultQty ||
+          prev.futuresDefaultQty != next.futuresDefaultQty ||
+          prev.optionsDefaultQty != next.optionsDefaultQty) {
+        ref
+            .read(chartEngineSessionProvider.notifier)
+            .reseedQtyFromDefaults(next);
+      }
       if (!_iframeReady) return;
       if (prev == next) return;
       _post(encodeSetOrderDefaults(next.toJson()));

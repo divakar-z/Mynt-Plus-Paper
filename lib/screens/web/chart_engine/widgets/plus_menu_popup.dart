@@ -9,6 +9,11 @@ class PlusMenuPopup extends StatelessWidget {
   final String symbol;
   final int qty;
   final double price;
+  // The scrip's real tick size. The SL-Limit rows offset the limit from the
+  // (already grid-snapped) trigger by this — the SAME `scrip.ti` the order
+  // builders use — so the label matches the trigger's grid AND the order that
+  // gets placed. Was hardcoded 0.05, which mismatched real 0.10-tick scrips.
+  final double ti;
   // Live last-traded price for the symbol. Drives the buy-side / sell-side
   // menu split: clicks BELOW ltp expose buy-limit + sell-stop variants
   // (the classic "buy on dip / cut a long" zone); clicks ABOVE ltp expose
@@ -25,6 +30,7 @@ class PlusMenuPopup extends StatelessWidget {
     required this.symbol,
     required this.qty,
     required this.price,
+    required this.ti,
     required this.onPick,
     required this.onSetAlert,
     required this.onDismiss,
@@ -120,7 +126,7 @@ class PlusMenuPopup extends StatelessWidget {
                         Icons.arrow_upward, long,
                         () { onPick(OrderPrefillKind.buyStopMkt); }),
                     item('Buy $qty $symbol @ $priceStr stop, '
-                        '${(price + 0.05).toStringAsFixed(2)} limit',
+                        '${(price + ti).toStringAsFixed(2)} limit',
                         Icons.arrow_upward, long,
                         () { onPick(OrderPrefillKind.buyStopLmt); }),
                   ] else ...[
@@ -131,7 +137,7 @@ class PlusMenuPopup extends StatelessWidget {
                         Icons.arrow_downward, short,
                         () { onPick(OrderPrefillKind.sellStopMkt); }),
                     item('Sell $qty $symbol @ $priceStr stop, '
-                        '${(price - 0.05).toStringAsFixed(2)} limit',
+                        '${(price - ti).toStringAsFixed(2)} limit',
                         Icons.arrow_downward, short,
                         () { onPick(OrderPrefillKind.sellStopLmt); }),
                   ],
