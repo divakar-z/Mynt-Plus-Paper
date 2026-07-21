@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import '../res/global_state_text.dart';
 
 final NumberFormat numberFormat = NumberFormat("##,##,##,##,##0.00", "hi");
@@ -406,7 +407,7 @@ String convertToISOFormat(String dateTimeString) {
 TextStyle textStylebanner(Color color, double fontSize, fWeight) {
   if (kIsWeb) {
     return TextStyle(
-      fontFamily: 'tenon',
+      fontFamily: dyslexiaFontOr('tenon'),
       fontWeight: fWeight,
       color: color,
       fontSize: fontSize,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:intl/intl.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
@@ -150,7 +151,7 @@ class _BasketListState extends ConsumerState<BasketList> {
   TextStyle _geistTextStyle(
       {Color? color, double? fontSize, FontWeight? fontWeight}) {
     return TextStyle(
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       color: color,
       fontSize: fontSize,
       fontWeight: fontWeight,
@@ -297,7 +298,7 @@ class _BasketListState extends ConsumerState<BasketList> {
   // Calculate minimum column widths dynamically
   Map<int, double> _calculateMinWidths(
       List<dynamic> baskets, BuildContext context) {
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 24.0;
     const sortIconWidth = 24.0;
 

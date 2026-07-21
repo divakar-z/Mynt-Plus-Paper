@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:fluttertoast/fluttertoast.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
 import '../api/core/api_export.dart';
 import '../locator/locator.dart';
@@ -344,7 +344,7 @@ class StocksProvider extends DefaultChangeNotifier {
                   padding: const EdgeInsets.symmetric(horizontal: 10.0),
                   child: Text(
                     item["symbol"].toString(),
-                    style: GoogleFonts.inter(
+                    style: dysInter(
                         textStyle: const TextStyle(
                             fontWeight: FontWeight.w500,
                             color: Color(0xff000000),
@@ -374,7 +374,7 @@ class StocksProvider extends DefaultChangeNotifier {
                   padding: const EdgeInsets.symmetric(horizontal: 10.0),
                   child: Text(
                     item.toString(),
-                    style: GoogleFonts.inter(
+                    style: dysInter(
                         textStyle: const TextStyle(
                             fontWeight: FontWeight.w500,
                             color: Color(0xff000000),
@@ -417,7 +417,7 @@ class StocksProvider extends DefaultChangeNotifier {
                   padding: const EdgeInsets.symmetric(horizontal: 10.0),
                   child: Text(
                     item.toString(),
-                    style: GoogleFonts.inter(
+                    style: dysInter(
                         textStyle: const TextStyle(
                             fontWeight: FontWeight.w500,
                             color: Color(0xff000000),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/res/res.dart';
 
@@ -27,7 +27,7 @@ class InvestIPO extends ConsumerWidget {
               const SizedBox(height: 12),
               ListTile(
                 title: Text("Invest in IPOs",
-                    style: GoogleFonts.inter(
+                    style: dysInter(
                         textStyle: _textStyle(_titleColor, 20, FontWeight.w600))),
                 subtitle: const Column(
                   children: [

@@ -14,6 +14,7 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:mynt_plus/firebase_options.dart';
 import 'package:mynt_plus/locator/constant.dart';
 import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/sharedWidget/accessibility/chart_a11y_filter.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/focus_indicator_overlay.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/highlight_links_overlay.dart';
 import 'package:mynt_plus/sharedWidget/chart_overlay_widget.dart';
@@ -424,108 +425,79 @@ class MyApp extends ConsumerWidget {
 
               // Shadcn widgets resolve their font from Theme.typography.sans,
               // which hardcodes 'GeistSans' and beats DefaultTextStyle. When
-              // dyslexia is on, override that typography so every shadcn Text,
-              // Button, Dialog, etc. picks up the dyslexia-friendly font.
-              if (a11y.dyslexiaSupportEnabled) {
-                final shadcnTheme = shadcn.Theme.of(context);
-                // Reuse the Lexend style loaded by google_fonts — passing it
-                // through shadcn's typography ensures every shadcn Text,
-                // Button, Dialog etc. resolves to the downloaded Lexend font
-                // rather than falling through to Roboto on CanvasKit.
-                content = shadcn.Theme(
-                  data: shadcnTheme.copyWith(
-                    typography: () => shadcnTheme.typography.copyWith(
-                      sans: () => dyslexiaStyle,
-                    ),
-                  ),
-                  child: content,
-                );
-              }
+              // Dyslexia Support is on we override that typography so every
+              // shadcn Text/Button/Dialog picks up the dyslexia-friendly font.
+              //
+              // IMPORTANT: this wrapper — and the ColorFiltered / _AdhdSpotlight
+              // wrappers below — are ALWAYS mounted, even when their toggle is
+              // off (they simply do nothing then). Previously they were added
+              // and removed with `if (toggle) content = Wrapper(content)`, which
+              // changed the tree depth above the router content every time a
+              // toggle flipped. That reparented the split-home screen's
+              // GlobalKey'd subtree while an inherited widget (MediaQuery/Theme)
+              // was notifying, tripping InheritedElement.notifyClients ("not a
+              // descendant") and red-screening the panel. Keeping the depth
+              // constant makes that reparent — and the crash — impossible.
+              final shadcnTheme = shadcn.Theme.of(context);
+              content = shadcn.Theme(
+                data: a11y.dyslexiaSupportEnabled
+                    ? shadcnTheme.copyWith(
+                        typography: () => shadcnTheme.typography.copyWith(
+                          sans: () => dyslexiaStyle,
+                        ),
+                      )
+                    : shadcnTheme, // no-op: re-inject the current theme unchanged
+                child: content,
+              );
 
-              // Highlight Links: paint a persistent yellow bg + border over
-              // every semantics-declared button/link in the tree so every
-              // tappable surface is visible at a glance (WCAG 1.4.11). The
-              // previous Theme-based approach only coloured hover/focus
-              // states and so appeared to do nothing at rest.
+              // Single, always-present colour filter for the mutually-exclusive
+              // colour modes (Grayscale / Invert / Blue-Light / Smart-Contrast /
+              // Theme-Tone — exclusivity is enforced in AccessibilityNotifier).
+              // At most one matrix is ever active; when none is,
+              // [_activeColorMatrix] returns the identity matrix (a no-op). One
+              // ColorFiltered stays mounted at all times so the subtree below
+              // never reparents. This also collapses the five separate filters
+              // into one shared source (resolves the former a11y Fix 7 TODO).
+              content = ColorFiltered(
+                colorFilter: ColorFilter.matrix(_activeColorMatrix(a11y)),
+                child: content,
+              );
+
+              // Highlight Links (WCAG 1.4.11): outline every semantics-declared
+              // button/link. Always wraps; paints only when enabled.
               content = HighlightLinksOverlay(
                 enabled: a11y.highlightLinksEnabled,
                 child: content,
               );
 
-              // Focus Indicator: paint a high-contrast ring around the
-              // widget currently holding primary focus so keyboard users can
-              // always see where input will land (WCAG 2.4.7).
+              // Focus Indicator (WCAG 2.4.7): high-contrast ring on the widget
+              // holding primary focus. Always wraps; paints only when enabled.
               content = FocusIndicatorOverlay(
                 enabled: a11y.focusIndicatorEnabled,
                 child: content,
               );
-                if (a11y.grayscaleEnabled) {
-                  content = ColorFiltered(
-                    colorFilter: const ColorFilter.matrix(<double>[
-                      0.2126, 0.7152, 0.0722, 0, 0,
-                      0.2126, 0.7152, 0.0722, 0, 0,
-                      0.2126, 0.7152, 0.0722, 0, 0,
-                      0,      0,      0,      1, 0,
-                    ]),
-                    child: content,
-                  );
-                }
-                if (a11y.invertColoursEnabled) {
-                  content = ColorFiltered(
-                    colorFilter: const ColorFilter.matrix(<double>[
-                      -1,  0,  0, 0, 255,
-                       0, -1,  0, 0, 255,
-                       0,  0, -1, 0, 255,
-                       0,  0,  0, 1,   0,
-                    ]),
-                    child: content,
-                  );
-                }
-                if (a11y.blueLightFilterEnabled) {
-                  // Warm amber tint — dampens blue, nudges red/green.
-                  content = ColorFiltered(
-                    colorFilter: const ColorFilter.matrix(<double>[
-                      1.0, 0,   0,   0, 15,
-                      0,   1.0, 0,   0, 5,
-                      0,   0,   0.7, 0, 0,
-                      0,   0,   0,   1, 0,
-                    ]),
-                    child: content,
-                  );
-                }
-                if (a11y.adhdFocusAssistEnabled) {
-                  // Spotlight: dark overlay across the screen with a soft
-                  // hole around the cursor — narrows visual attention to one
-                  // small area at a time.
-                  content = _AdhdSpotlight(child: content);
-                }
-                if (a11y.smartContrastEnabled) {
-                  // Contrast boost: multiply each channel by 1.3 and
-                  // recenter around mid-grey (128*(1-1.3) = -38.4).
-                  content = ColorFiltered(
-                    colorFilter: const ColorFilter.matrix(<double>[
-                      1.3, 0,   0,   0, -38.4,
-                      0,   1.3, 0,   0, -38.4,
-                      0,   0,   1.3, 0, -38.4,
-                      0,   0,   0,   1,   0,
-                    ]),
-                    child: content,
-                  );
-                }
-                final toneTint = _themeToneTint(a11y.themeTone);
-                if (toneTint != null) {
-                  // Multiply blend lets the tint paint over white/light
-                  // backgrounds while leaving dark text and icons largely
-                  // unchanged — behaves like a background-colour shift
-                  // rather than a full-screen overlay.
-                  content = ColorFiltered(
-                    colorFilter: ColorFilter.mode(
-                      toneTint,
-                      BlendMode.multiply,
-                    ),
-                    child: content,
-                  );
-                }
+
+              // ADHD Focus Assist: dark curtain above the cursor line to narrow
+              // visual attention. Always mounted; paints only when enabled.
+              content = _AdhdSpotlight(
+                enabled: a11y.adhdFocusAssistEnabled,
+                child: content,
+              );
+
+              // The Flutter-canvas colour work above does not touch the chart
+              // HTML platform views (composited outside the canvas), so mirror
+              // the same adjustments onto their DOM host elements via CSS. The
+              // Theme Tone rides along as its raw [r,g,b] channel scales so the
+              // chart background lands on the exact same tone colour as the app.
+              // Idempotent + observes the DOM, so charts opened later inherit it.
+              final toneTint = themeToneTint(a11y.themeTone);
+              ChartA11yFilter.instance.apply(
+                filter: composeChartCssFilter(a11y),
+                toneTint: toneTint == null
+                    ? null
+                    : <double>[toneTint.r, toneTint.g, toneTint.b],
+                blueLight: a11y.blueLightFilterEnabled,
+              );
               return content;
             },
           );
@@ -556,29 +528,83 @@ class MyApp extends ConsumerWidget {
   }
 }
 
-/// Soft tint colour for the selected [ThemeTone]. Applied with
-/// [BlendMode.multiply] so it primarily shifts white/light backgrounds and
-/// leaves dark text/icons readable. Returns `null` for no tone.
-Color? _themeToneTint(ThemeTone tone) {
-  switch (tone) {
-    case ThemeTone.none:
-      return null;
-    case ThemeTone.blue:
-      return const Color(0xFFCCE5FF);
-    case ThemeTone.warm:
-      return const Color(0xFFFFF4CC);
-    case ThemeTone.cool:
-      return const Color(0xFFDEF5E4);
-    case ThemeTone.sepia:
-      return const Color(0xFFFFD6D9);
+/// Identity colour matrix — leaves every pixel untouched. Used when no colour
+/// mode is active so the single always-mounted [ColorFiltered] is a no-op.
+const List<double> _identityColorMatrix = <double>[
+  1, 0, 0, 0, 0,
+  0, 1, 0, 0, 0,
+  0, 0, 1, 0, 0,
+  0, 0, 0, 1, 0,
+];
+
+/// Returns the colour matrix for whichever mutually-exclusive colour mode is
+/// active — Grayscale, Invert, Blue-Light, Smart-Contrast or Theme-Tone — or
+/// [_identityColorMatrix] when none is. Exclusivity is enforced in
+/// [AccessibilityNotifier] (enabling one clears the rest), so this can select
+/// the first match rather than compose several. Single source of truth for the
+/// on-canvas matrices; the chart surfaces mirror these via [ChartA11yFilter].
+List<double> _activeColorMatrix(AccessibilityNotifier a11y) {
+  if (a11y.grayscaleEnabled) {
+    return const <double>[
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0,      0,      0,      1, 0,
+    ];
   }
+  if (a11y.invertColoursEnabled) {
+    return const <double>[
+      -1,  0,  0, 0, 255,
+       0, -1,  0, 0, 255,
+       0,  0, -1, 0, 255,
+       0,  0,  0, 1,   0,
+    ];
+  }
+  if (a11y.blueLightFilterEnabled) {
+    // Warm amber tint — dampens blue, nudges red/green.
+    return const <double>[
+      1.0, 0,   0,   0, 15,
+      0,   1.0, 0,   0, 5,
+      0,   0,   0.7, 0, 0,
+      0,   0,   0,   1, 0,
+    ];
+  }
+  if (a11y.smartContrastEnabled) {
+    // Contrast boost: multiply each channel by 1.3 and recenter around
+    // mid-grey (128 * (1 - 1.3) = -38.4).
+    return const <double>[
+      1.3, 0,   0,   0, -38.4,
+      0,   1.3, 0,   0, -38.4,
+      0,   0,   1.3, 0, -38.4,
+      0,   0,   0,   1,   0,
+    ];
+  }
+  final toneTint = themeToneTint(a11y.themeTone);
+  if (toneTint != null) {
+    // Diagonal matrix scaling each RGB channel toward the tone colour —
+    // mathematically identical to multiplying content by the tint, but on the
+    // same ColorFilter.matrix path as the modes above (ColorFilter.mode +
+    // BlendMode.multiply blanked the whole page flat on this CanvasKit build).
+    return <double>[
+      toneTint.r, 0, 0, 0, 0,
+      0, toneTint.g, 0, 0, 0,
+      0, 0, toneTint.b, 0, 0,
+      0, 0, 0, 1, 0,
+    ];
+  }
+  return _identityColorMatrix;
 }
 
 /// Spotlight overlay for the ADHD Focus Assist toggle. Tracks the cursor via
 /// a translucent [MouseRegion] (so clicks/hover still reach the app below)
-/// and paints a dark veil with a soft circular hole around the pointer.
+/// and paints a dark veil above the cursor line.
+///
+/// Always mounted (see the wrapper comment in [MyApp.build]); when [enabled]
+/// is false it stops tracking and paints nothing, but its internal
+/// MouseRegion→Stack structure stays identical so [child] never reparents.
 class _AdhdSpotlight extends StatefulWidget {
-  const _AdhdSpotlight({required this.child});
+  const _AdhdSpotlight({required this.enabled, required this.child});
+  final bool enabled;
   final Widget child;
 
   @override
@@ -589,26 +615,43 @@ class _AdhdSpotlightState extends State<_AdhdSpotlight> {
   Offset? _pos;
 
   @override
+  void didUpdateWidget(covariant _AdhdSpotlight old) {
+    super.didUpdateWidget(old);
+    // Clear any stale cursor position when the toggle turns off so a later
+    // re-enable doesn't flash the veil at the old spot before the next hover.
+    if (!widget.enabled && _pos != null) {
+      _pos = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MouseRegion(
       opaque: false,
-      onHover: (e) {
-        if (_pos != e.position) setState(() => _pos = e.position);
-      },
-      onExit: (_) {
-        if (_pos != null) setState(() => _pos = null);
-      },
+      onHover: widget.enabled
+          ? (e) {
+              if (_pos != e.position) setState(() => _pos = e.position);
+            }
+          : null,
+      onExit: widget.enabled
+          ? (_) {
+              if (_pos != null) setState(() => _pos = null);
+            }
+          : null,
       child: Stack(
         children: [
           widget.child,
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                size: Size.infinite,
-                painter: _SpotlightPainter(_pos),
+          // Leaf overlay (no GlobalKey): adding/removing it at index 1 does not
+          // reparent [child] at index 0, so this stays crash-safe.
+          if (widget.enabled)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  size: Size.infinite,
+                  painter: _SpotlightPainter(_pos),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

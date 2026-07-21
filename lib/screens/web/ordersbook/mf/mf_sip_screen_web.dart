@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart' show InkWell, Icons, IconData, Icon, TextPainter, TextSpan, TextStyle, TextDirection, GestureDetector, HitTestBehavior, Row, SizedBox, Widget, BuildContext, Color, Colors, EdgeInsets, Alignment, MainAxisAlignment, MainAxisSize, TextOverflow, Axis, FontWeight, Container, MouseRegion, Expanded, Align, Text, ScrollController, SingleChildScrollView, Scrollbar, Column, LayoutBuilder, ValueKey, Padding, BoxDecoration, BorderRadius, Border, showDialog, ValueNotifier, ValueListenableBuilder, Stack, Positioned, Clip, Tooltip, MediaQuery, BoxShadow, Offset, Center;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 
@@ -153,7 +154,7 @@ class _MFSipdetScreenWebState extends ConsumerState<MFSipdetScreenWeb> {
   // Helper method to ensure Geist font is always applied
   TextStyle _geistTextStyle({Color? color, double? fontSize, FontWeight? fontWeight}) {
     return TextStyle(
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       color: color,
       fontSize: fontSize,
       fontWeight: fontWeight,

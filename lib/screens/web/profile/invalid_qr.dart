@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mobile_scanner/src/mobile_scanner_controller.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/res/global_state_text.dart';
@@ -84,7 +84,7 @@ class InValidQRui extends ConsumerWidget {
 }
 
 textStyle(Color color, double fontSize, fWeight) {
-  return GoogleFonts.inter(
+  return dysInter(
       textStyle: TextStyle(
     fontWeight: fWeight,
     color: color,

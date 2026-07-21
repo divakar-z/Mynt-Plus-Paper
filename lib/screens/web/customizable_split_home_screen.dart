@@ -1665,18 +1665,31 @@ class _CustomizableSplitHomeScreenState
   Widget _buildRightSideAppBar(bool isDarkMode) {
     final screenWidth = MediaQuery.of(context).size.width;
 
+    // Accessibility widens the app-bar nav: a larger Font Size scale and the
+    // OpenDyslexic dyslexia face both need more horizontal room per item, so
+    // the fixed pixel breakpoints below would overflow the header off-screen.
+    // Inflate the thresholds by roughly the same factor the text grows by, so
+    // nav items collapse into the hamburger drawer a little earlier (they stay
+    // reachable there) instead of spilling past the right edge. Watched so the
+    // breakpoints recompute the moment the user toggles these options.
+    final a11y = ref.watch(accessibilityProvider);
+    // OpenDyslexic renders ~1.3x wider (wider glyphs + added letter spacing).
+    final a11yNavFactor =
+        a11y.textScale * (a11y.dyslexiaSupportEnabled ? 1.3 : 1.0);
+
     // Responsive breakpoints - Option 2 implementation
     final isMobileTablet = screenWidth < 900; // Full mobile/tablet mode
 
     // Left navigation - hide ALL at once when space is not available
-    final showAllLeftNav = screenWidth >= 1650; // Show MF, IPO, Bonds, Options together
+    final showAllLeftNav =
+        screenWidth >= 1650 * a11yNavFactor; // Show MF, IPO, Bonds, Options together
 
     // Right navigation - hide ALL at once (not one by one)
     // When left nav is visible: need more space, so hide right nav items earlier
     // When left nav is hidden: have more space, so can show right nav items longer
     final showAllRightNav = showAllLeftNav
-        ? (screenWidth >= 1550)  // If left nav visible, need 1550px to show all right nav
-        : (screenWidth >= 950);  // If left nav hidden, only need 950px to show all right nav
+        ? (screenWidth >= 1550 * a11yNavFactor)  // If left nav visible, need 1550px to show all right nav
+        : (screenWidth >= 950 * a11yNavFactor);  // If left nav hidden, only need 950px to show all right nav
 
     // Determine which items to show in hamburger drawer
     // Desktop mode: Show only hidden items in drawer

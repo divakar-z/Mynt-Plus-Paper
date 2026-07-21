@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:flutter/material.dart'
     show
@@ -943,12 +944,12 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
 
     final headerStyle = TextStyle(
       fontSize: fontSize,
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       fontWeight: MyntFonts.semiBold, // w600 for headers
     );
     final cellStyle = TextStyle(
       fontSize: fontSize,
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       fontWeight: MyntFonts.medium, // w500 for data cells
     );
 

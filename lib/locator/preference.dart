@@ -582,6 +582,17 @@ class Preferences {
   String getScalperPosFilter(String userId) =>
       _prefInstance?.getString('${_scalperPosFilter}_$userId') ?? 'all';
 
+  // ── Accessibility panel ───────────────────────────────────────────
+  // The whole panel state is persisted as one opaque JSON blob owned by
+  // AccessibilityNotifier (same "opaque JSON owned by the caller" pattern as
+  // the chart-engine session), so adding a new toggle doesn't need a bespoke
+  // key/getter/setter here each time.
+  Future<void> setAccessibilitySettings(String json) async =>
+      await _prefInstance!.setString(_accessibilitySettings, json);
+
+  String? get accessibilitySettings =>
+      _prefInstance?.getString(_accessibilitySettings);
+
 }
 
 const String _userTheme = 'userTheme';
@@ -715,3 +726,6 @@ const String _scalperPosFilter = "scalperPosFilter";
 
 //// CHART ENGINE SESSION
 const String _chartEngineSession = 'chartEngineSessionV1';
+
+//// ACCESSIBILITY PANEL
+const String _accessibilitySettings = 'accessibilitySettingsV1';

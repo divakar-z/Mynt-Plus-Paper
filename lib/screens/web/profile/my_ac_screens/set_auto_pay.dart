@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 
 class SetAutoPay extends StatefulWidget {
   const SetAutoPay({super.key});
@@ -84,7 +84,7 @@ class _SetAutoPayState extends State<SetAutoPay> {
                 SvgPicture.asset('assets/profile/setautopaylogo.svg'),
                 Text(
                   'How it works',
-                  style: GoogleFonts.inter(
+                  style: dysInter(
                       fontSize: 18,
                       color: const Color(0xff000000),
                       letterSpacing: 0.36,
@@ -187,7 +187,7 @@ class _SetAutoPayState extends State<SetAutoPay> {
   }
 
   TextStyle textStyle(Color color, double fontSize, fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle: TextStyle(
       fontWeight: fWeight,
       color: color,

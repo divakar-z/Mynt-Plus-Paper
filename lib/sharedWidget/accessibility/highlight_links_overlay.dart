@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -30,9 +32,19 @@ class HighlightLinksOverlay extends StatefulWidget {
 }
 
 class _HighlightLinksOverlayState extends State<HighlightLinksOverlay> {
+  // Cap the semantics-tree walk in _recompute to at most once per this window.
+  // A persistent frame callback fires ~60x/sec during scroll/animation; without
+  // this the full-tree walk ran on every one of those frames even though the
+  // highlight barely moves. A trailing pass guarantees the final resting state
+  // is correct after motion stops. 250ms is invisible for a static overlay.
+  static const Duration _throttle = Duration(milliseconds: 250);
+
   SemanticsHandle? _semanticsHandle;
   List<Rect> _rects = const <Rect>[];
   bool _scheduled = false;
+  bool _frameCallbackAdded = false;
+  final Stopwatch _sinceLastRecompute = Stopwatch();
+  Timer? _trailingTimer;
 
   @override
   void initState() {
@@ -49,19 +61,31 @@ class _HighlightLinksOverlayState extends State<HighlightLinksOverlay> {
 
   @override
   void dispose() {
+    _trailingTimer?.cancel();
     _detach();
     super.dispose();
   }
 
   void _attach() {
     _semanticsHandle ??= SemanticsBinding.instance.ensureSemantics();
-    // Persistent frame callback so we pick up semantics changes as they
-    // happen (scroll, dialog open/close, navigation) without polling.
-    SchedulerBinding.instance.addPersistentFrameCallback(_onFrame);
-    _schedule();
+    // Persistent frame callbacks can't be removed once added, so register
+    // exactly once for this State's lifetime and gate the body on `enabled`.
+    // (Previously this re-added a callback on every toggle-on, accumulating
+    // duplicate no-op walks for the rest of the session.)
+    if (!_frameCallbackAdded) {
+      _frameCallbackAdded = true;
+      SchedulerBinding.instance.addPersistentFrameCallback(_onFrame);
+    }
+    // Paint immediately on enable rather than waiting out the throttle window.
+    _forceRecompute();
   }
 
   void _detach() {
+    _trailingTimer?.cancel();
+    _trailingTimer = null;
+    _sinceLastRecompute
+      ..stop()
+      ..reset();
     _semanticsHandle?.dispose();
     _semanticsHandle = null;
     if (mounted && _rects.isNotEmpty) {
@@ -69,9 +93,36 @@ class _HighlightLinksOverlayState extends State<HighlightLinksOverlay> {
     }
   }
 
+  // Runs every frame while enabled, but does real work at most once per
+  // [_throttle]: a cheap stopwatch check gates the expensive walk. Frames that
+  // fall inside the window schedule a single trailing recompute so the overlay
+  // still settles correctly once scrolling/animation stops.
   void _onFrame(Duration _) {
     if (!widget.enabled) return;
+    final elapsed = _sinceLastRecompute.elapsed;
+    if (!_sinceLastRecompute.isRunning || elapsed >= _throttle) {
+      _forceRecompute();
+    } else {
+      _scheduleTrailing(_throttle - elapsed);
+    }
+  }
+
+  void _forceRecompute() {
+    _sinceLastRecompute
+      ..reset()
+      ..start();
+    _trailingTimer?.cancel();
+    _trailingTimer = null;
     _schedule();
+  }
+
+  void _scheduleTrailing(Duration delay) {
+    if (_trailingTimer != null) return;
+    _trailingTimer = Timer(delay, () {
+      _trailingTimer = null;
+      if (!mounted || !widget.enabled) return;
+      _forceRecompute();
+    });
   }
 
   void _schedule() {

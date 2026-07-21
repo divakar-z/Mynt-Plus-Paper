@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:timeline_tile/timeline_tile.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -86,7 +86,7 @@ class MFtimelineWidgetWeb extends StatelessWidget {
   }
 
   TextStyle textStyle(Color color, double fontSize, FontWeight fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
       textStyle: TextStyle(
         fontWeight: fWeight,
         color: color,

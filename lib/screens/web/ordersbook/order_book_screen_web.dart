@@ -908,7 +908,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                     shadcn.TabItem(
                       child: DefaultTextStyle(
                         style: TextStyle(
-                          fontFamily: 'Geist',
+                          fontFamily: dyslexiaFontOr('Geist'),
                           color: _mfTabIndex == 0
                               ? (theme.isDarkMode
                                   ? WebDarkColors.primary
@@ -922,7 +922,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                     shadcn.TabItem(
                       child: DefaultTextStyle(
                         style: TextStyle(
-                          fontFamily: 'Geist',
+                          fontFamily: dyslexiaFontOr('Geist'),
                           color: _mfTabIndex == 1
                               ? (theme.isDarkMode
                                   ? WebDarkColors.primary

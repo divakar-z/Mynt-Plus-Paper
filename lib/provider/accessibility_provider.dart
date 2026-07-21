@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../locator/locator.dart';
+import '../locator/preference.dart';
 import '../services/web_hover_reader.dart';
 import '../services/web_speech_service.dart';
 import 'core/default_change_notifier.dart';
@@ -24,6 +27,24 @@ const String defaultUiFontFamily = 'Geist';
 String _uiFontFamily = defaultUiFontFamily;
 String get uiFontFamily => _uiFontFamily;
 
+/// Font family forced when Dyslexia Support is on.
+const String dyslexiaFontFamily = 'OpenDyslexic';
+
+/// True while Dyslexia Support is active. Mirrored as a top-level flag (kept in
+/// sync from AccessibilityNotifier.toggleDyslexiaSupport) so pure text-style
+/// helpers — which have no BuildContext/ref — can stay dyslexia-aware.
+bool _dyslexiaFontActive = false;
+bool get dyslexiaFontActive => _dyslexiaFontActive;
+
+/// Resolves a font family that stays dyslexia-aware: returns [dyslexiaFontFamily]
+/// when Dyslexia Support is on, otherwise the caller's own [fallback]. Use this
+/// at every call site that would otherwise hardcode a family (`'Geist'`,
+/// `'Inter'`, `'tenon'`, …) so the toggle swaps the font app-wide. An explicit
+/// `fontFamily:` on a TextStyle does NOT inherit the root DefaultTextStyle, so
+/// those sites must opt in through this helper to switch.
+String dyslexiaFontOr(String fallback) =>
+    _dyslexiaFontActive ? dyslexiaFontFamily : fallback;
+
 /// Overall colour tone applied on top of the existing theme. `none` is the
 /// off state; the remaining values map 1:1 to the coloured dots in the panel.
 enum ThemeTone { none, blue, warm, cool, sepia }
@@ -41,6 +62,7 @@ class AccessibilityNotifier extends DefaultChangeNotifier {
       onHover: (x, y) => _scheduleSpeak(Offset(x, y)),
       onLeave: _stopAndReset,
     );
+    _load();
   }
 
   static const _dwell = Duration(milliseconds: 250);
@@ -85,23 +107,50 @@ class AccessibilityNotifier extends DefaultChangeNotifier {
   double get textScale => _textScaleSteps[_textScaleIndex];
   bool get textScaleEnabled => _textScaleIndex != _textScaleBaseline;
 
+  /// The colour-adjustment options — Grayscale, Invert Colours, Blue Light
+  /// Filter, Smart Contrast and Theme Tone — are mutually exclusive. Each one
+  /// applies a full-screen colour matrix in `MyApp.build`; stacking several
+  /// (Invert + Grayscale, Theme Tone + Blue Light, …) composites into muddy,
+  /// unreadable output, so the group behaves like a single-choice mode:
+  /// enabling any one clears the others. Kept in the notifier (not the panel)
+  /// so every entry point stays consistent. The text/overlay/audio options
+  /// (Screen Reader, Font Size, Dyslexia, Highlight Links, Focus Indicator,
+  /// ADHD Focus Assist) are independent and intentionally left combinable.
+  void _clearColourFiltersExcept({
+    bool grayscale = false,
+    bool invert = false,
+    bool blueLight = false,
+    bool smartContrast = false,
+    bool themeTone = false,
+  }) {
+    if (!grayscale) _grayscaleEnabled = false;
+    if (!invert) _invertColoursEnabled = false;
+    if (!blueLight) _blueLightFilterEnabled = false;
+    if (!smartContrast) _smartContrastEnabled = false;
+    if (!themeTone) _themeTone = ThemeTone.none;
+  }
+
   void toggleGrayscale() {
     _grayscaleEnabled = !_grayscaleEnabled;
+    if (_grayscaleEnabled) _clearColourFiltersExcept(grayscale: true);
     notifyListeners();
   }
 
   void toggleInvertColours() {
     _invertColoursEnabled = !_invertColoursEnabled;
+    if (_invertColoursEnabled) _clearColourFiltersExcept(invert: true);
     notifyListeners();
   }
 
   void toggleBlueLightFilter() {
     _blueLightFilterEnabled = !_blueLightFilterEnabled;
+    if (_blueLightFilterEnabled) _clearColourFiltersExcept(blueLight: true);
     notifyListeners();
   }
 
   void toggleSmartContrast() {
     _smartContrastEnabled = !_smartContrastEnabled;
+    if (_smartContrastEnabled) _clearColourFiltersExcept(smartContrast: true);
     notifyListeners();
   }
 
@@ -112,7 +161,8 @@ class AccessibilityNotifier extends DefaultChangeNotifier {
 
   void toggleDyslexiaSupport() {
     _dyslexiaSupportEnabled = !_dyslexiaSupportEnabled;
-    _uiFontFamily = _dyslexiaSupportEnabled ? 'OpenDyslexic' : defaultUiFontFamily;
+    _dyslexiaFontActive = _dyslexiaSupportEnabled;
+    _uiFontFamily = _dyslexiaSupportEnabled ? dyslexiaFontFamily : defaultUiFontFamily;
     notifyListeners();
   }
 
@@ -130,6 +180,7 @@ class AccessibilityNotifier extends DefaultChangeNotifier {
   /// so each coloured dot behaves like an independent toggle.
   void setThemeTone(ThemeTone tone) {
     _themeTone = (_themeTone == tone) ? ThemeTone.none : tone;
+    if (_themeTone != ThemeTone.none) _clearColourFiltersExcept(themeTone: true);
     notifyListeners();
   }
 
@@ -307,35 +358,127 @@ class AccessibilityNotifier extends DefaultChangeNotifier {
     WebSpeechService.instance.stop();
     super.dispose();
   }
+
+  // ── Persistence ────────────────────────────────────────────────────
+  // Preferences.init() runs in main() before runApp, and this notifier is
+  // created lazily on first watch — so the saved values are already available
+  // and _load() can run synchronously with no first-frame flash of defaults.
+
+  /// Restores the preferences written by [_persist] on construction.
+  void _load() {
+    final raw = locator<Preferences>().accessibilitySettings;
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      _grayscaleEnabled = m['grayscale'] as bool? ?? false;
+      _invertColoursEnabled = m['invert'] as bool? ?? false;
+      _blueLightFilterEnabled = m['blueLight'] as bool? ?? false;
+      _smartContrastEnabled = m['smartContrast'] as bool? ?? false;
+      _adhdFocusAssistEnabled = m['adhd'] as bool? ?? false;
+      _dyslexiaSupportEnabled = m['dyslexia'] as bool? ?? false;
+      _highlightLinksEnabled = m['highlightLinks'] as bool? ?? false;
+      _focusIndicatorEnabled = m['focusIndicator'] as bool? ?? false;
+
+      final toneName = m['themeTone'] as String?;
+      _themeTone = ThemeTone.values.firstWhere(
+        (t) => t.name == toneName,
+        orElse: () => ThemeTone.none,
+      );
+
+      final idx = m['textScaleIndex'];
+      if (idx is int && idx >= 0 && idx < _textScaleSteps.length) {
+        _textScaleIndex = idx;
+      }
+
+      // Re-apply the side effects the setters normally perform. The dyslexia
+      // font globals are read app-wide by the text-style helpers, so they must
+      // be in sync before the first build — not just mirrored on the notifier.
+      _dyslexiaFontActive = _dyslexiaSupportEnabled;
+      _uiFontFamily =
+          _dyslexiaSupportEnabled ? dyslexiaFontFamily : defaultUiFontFamily;
+
+      // Screen reader restore: start the hover reader after the first frame so
+      // ensureSemantics() doesn't mutate the semantics tree mid-build. Silent —
+      // no "Screen reader enabled." announcement, since the user isn't toggling
+      // it now, they're just returning to a session where it was already on.
+      if (m['screenReader'] as bool? ?? false) {
+        _screenReaderEnabled = true;
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          if (!_screenReaderEnabled) return;
+          _semanticsHandle ??= SemanticsBinding.instance.ensureSemantics();
+          _reader.start();
+        });
+      }
+    } catch (_) {
+      // Corrupt or outdated payload — ignore and keep the defaults.
+    }
+  }
+
+  void _persist() {
+    final m = <String, dynamic>{
+      'grayscale': _grayscaleEnabled,
+      'invert': _invertColoursEnabled,
+      'blueLight': _blueLightFilterEnabled,
+      'smartContrast': _smartContrastEnabled,
+      'adhd': _adhdFocusAssistEnabled,
+      'dyslexia': _dyslexiaSupportEnabled,
+      'highlightLinks': _highlightLinksEnabled,
+      'focusIndicator': _focusIndicatorEnabled,
+      'screenReader': _screenReaderEnabled,
+      'themeTone': _themeTone.name,
+      'textScaleIndex': _textScaleIndex,
+    };
+    locator<Preferences>().setAccessibilitySettings(jsonEncode(m));
+  }
+
+  /// Every state change funnels through [notifyListeners], so persisting here
+  /// keeps SharedPreferences in lock-step with the UI without threading a
+  /// save call through all fourteen mutators. [_load] runs before any listener
+  /// exists and never notifies, so this never fires during restore.
+  @override
+  void notifyListeners() {
+    _persist();
+    super.notifyListeners();
+  }
 }
 
-/// Builds the CSS `filter:` value applied to TradingView chart container divs
-/// so the iframe inherits the same colour adjustments as the Flutter layer.
-/// Shared between the market-watch single chart and the scalper charts so
-/// every chart container stays in lock-step with the accessibility panel.
+/// Builds the CSS `filter:` value for the on/off chart adjustments that CSS
+/// reproduces faithfully (grayscale, invert, smart-contrast) so the iframe
+/// inherits the same colour adjustments as the Flutter layer. Shared between
+/// the market-watch single chart and the scalper charts so every chart
+/// container stays in lock-step with the accessibility panel.
+///
+/// Theme Tone and Blue Light Filter are intentionally NOT included here — they
+/// are applied as inline SVG `feColorMatrix` filters in `ChartA11yFilter.apply`
+/// using the EXACT matrices painted on the Flutter canvas, so the chart matches
+/// the app instead of a loose CSS `sepia()/hue-rotate()` approximation (which
+/// barely tinted a white chart).
 String composeChartCssFilter(AccessibilityNotifier a11y) {
   final parts = <String>[];
   if (a11y.grayscaleEnabled) parts.add('grayscale(1)');
   if (a11y.invertColoursEnabled) parts.add('invert(1)');
-  if (a11y.blueLightFilterEnabled) {
-    parts.add('sepia(0.3) saturate(1.1) hue-rotate(-15deg)');
-  }
   if (a11y.smartContrastEnabled) parts.add('contrast(1.3)');
-  switch (a11y.themeTone) {
-    case ThemeTone.none:
-      break;
-    case ThemeTone.blue:
-      parts.add('sepia(0.4) hue-rotate(170deg) saturate(0.9)');
-      break;
-    case ThemeTone.warm:
-      parts.add('sepia(0.35) saturate(1.15) hue-rotate(-10deg)');
-      break;
-    case ThemeTone.cool:
-      parts.add('sepia(0.3) hue-rotate(90deg) saturate(0.85)');
-      break;
-    case ThemeTone.sepia:
-      parts.add('sepia(0.55)');
-      break;
-  }
   return parts.join(' ');
+}
+
+/// The pale tint colour for each Theme Tone. Multiplied over the content so a
+/// white/light background shifts toward the tone while dark text and candles
+/// stay legible. Returns null for [ThemeTone.none].
+///
+/// Single source of truth shared by the Flutter canvas (`ColorFilter.matrix`
+/// in `MyApp.build`) and the chart surfaces (`ChartA11yFilter.apply`), so both
+/// land on the identical colour.
+Color? themeToneTint(ThemeTone tone) {
+  switch (tone) {
+    case ThemeTone.none:
+      return null;
+    case ThemeTone.blue:
+      return const Color(0xFFCCE5FF);
+    case ThemeTone.warm:
+      return const Color(0xFFFFF4CC);
+    case ThemeTone.cool:
+      return const Color(0xFFDEF5E4);
+    case ThemeTone.sepia:
+      return const Color(0xFFFFD6D9);
+  }
 }

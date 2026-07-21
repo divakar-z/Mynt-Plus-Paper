@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -29,10 +31,19 @@ class FocusIndicatorOverlay extends StatefulWidget {
 }
 
 class _FocusIndicatorOverlayState extends State<FocusIndicatorOverlay> {
+  // Cap the hover hit-test (a semantics-tree walk in _recomputeHover) to at
+  // most once per this window. Pointer moves fire up to once per frame
+  // (~60x/sec) during a drag; throttling cuts that ~6x. 100ms keeps the ring
+  // feeling responsive, and a trailing pass lands it exactly when the cursor
+  // stops.
+  static const Duration _hoverThrottle = Duration(milliseconds: 100);
+
   Rect? _focusRect;
   Rect? _hoverRect;
   Offset? _lastPointer;
   bool _hoverScheduled = false;
+  final Stopwatch _sinceLastHover = Stopwatch();
+  Timer? _hoverTrailingTimer;
   SemanticsHandle? _semanticsHandle;
 
   @override
@@ -66,6 +77,11 @@ class _FocusIndicatorOverlayState extends State<FocusIndicatorOverlay> {
   }
 
   void _detach() {
+    _hoverTrailingTimer?.cancel();
+    _hoverTrailingTimer = null;
+    _sinceLastHover
+      ..stop()
+      ..reset();
     FocusManager.instance.removeListener(_scheduleFocus);
     GestureBinding.instance.pointerRouter.removeGlobalRoute(_onPointer);
     _semanticsHandle?.dispose();
@@ -92,12 +108,38 @@ class _FocusIndicatorOverlayState extends State<FocusIndicatorOverlay> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _recomputeFocus());
   }
 
+  // Leading-edge throttle: the first move after an idle gap recomputes right
+  // away; moves inside the window are coalesced into one trailing recompute so
+  // the ring still lands on the element the cursor finally rests on.
   void _scheduleHover() {
+    final elapsed = _sinceLastHover.elapsed;
+    if (!_sinceLastHover.isRunning || elapsed >= _hoverThrottle) {
+      _runHoverRecompute();
+    } else {
+      _scheduleHoverTrailing(_hoverThrottle - elapsed);
+    }
+  }
+
+  void _runHoverRecompute() {
+    _sinceLastHover
+      ..reset()
+      ..start();
+    _hoverTrailingTimer?.cancel();
+    _hoverTrailingTimer = null;
     if (_hoverScheduled) return;
     _hoverScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _hoverScheduled = false;
       _recomputeHover();
+    });
+  }
+
+  void _scheduleHoverTrailing(Duration delay) {
+    if (_hoverTrailingTimer != null) return;
+    _hoverTrailingTimer = Timer(delay, () {
+      _hoverTrailingTimer = null;
+      if (!mounted || !widget.enabled) return;
+      _runHoverRecompute();
     });
   }
 
