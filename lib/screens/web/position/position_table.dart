@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import '../../../utils/rupee_convert_format.dart';
 import 'package:flutter/material.dart'
     show
@@ -630,7 +631,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
   Map<int, double> _calculateMinWidths(
       List<PositionBookModel> positions, BuildContext context) {
     // Use fixed font size for measurement (table text is not responsive, only buttons are)
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 16.0; // Reduced from 24.0 for tighter layout
     const sortIconWidth = 24.0;
 
@@ -685,7 +686,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
 
             // Measure exchange with smaller font (fixed 12px, matches rendering)
             final exchangeStyle =
-                const TextStyle(fontSize: 12, fontFamily: 'Geist');
+                TextStyle(fontSize: 12, fontFamily: dyslexiaFontOr('Geist'));
             final exchangeWidth = exchangeText.isNotEmpty
                 ? _measureTextWidth(exchangeText, exchangeStyle)
                 : 0.0;

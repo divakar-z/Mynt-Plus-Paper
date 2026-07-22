@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 // import 'package:mynt_plus/models/fund_model_testing_copy/fund_direct_payment_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_order_det_model.dart';
 // import 'package:mynt_plus/models/mf_model/mutual_fundmodel.dart';
@@ -141,7 +141,7 @@ class MfCancelAlertWeb extends ConsumerWidget {
   }
 
   TextStyle textStyle(Color color, double fontSize, FontWeight fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
       textStyle: TextStyle(
         fontWeight: fWeight, 
         color: color, 

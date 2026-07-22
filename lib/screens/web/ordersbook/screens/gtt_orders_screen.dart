@@ -63,6 +63,7 @@ import 'package:flutter/material.dart'
         ValueNotifier,
         ValueListenableBuilder;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn
     hide Colors, Tooltip;
@@ -757,7 +758,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
   Map<int, double> _calculateMinWidths(
       List<GttOrderBookModel> gttOrders, BuildContext context) {
     // Use fixed font size for measurement (table text is not responsive, only buttons are)
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 24.0;
     const sortIconWidth = 24.0;
 
@@ -790,7 +791,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             final exchangeText = exchange.isNotEmpty ? ' $exchange' : '';
             final symbolWidth = _measureTextWidth(symbol, textStyle);
             final exchangeStyle =
-                const TextStyle(fontSize: 10, fontFamily: 'Geist');
+                TextStyle(fontSize: 10, fontFamily: dyslexiaFontOr('Geist'));
             final exchangeWidth = exchangeText.isNotEmpty
                 ? _measureTextWidth(exchangeText, exchangeStyle)
                 : 0.0;

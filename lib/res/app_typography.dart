@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 
 /// A comprehensive typography system for consistent text styling across the app.
 ///
@@ -126,7 +126,7 @@ class AppTypography {
     double? letterSpacing,
     TextDecoration? decoration,
   }) {
-    return GoogleFonts.inter(
+    return dysInter(
       fontSize: fontSize,
       fontWeight: fontWeight.value,
       color: color,

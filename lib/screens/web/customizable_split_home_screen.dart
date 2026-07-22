@@ -62,10 +62,12 @@ import 'profile/Reports/ca_events_screen_web.dart';
 import 'profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
 import 'profile/Reports/client_master_screen_web.dart';
 import '../../../res/res.dart';
+import '../../../provider/accessibility_provider.dart';
 import '../../../provider/sidebar_provider.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../res/web_colors.dart';
 
+import '../../../sharedWidget/accessibility/accessibility_panel.dart';
 import '../../../sharedWidget/internet_widget.dart';
 import '../../../sharedWidget/functions.dart';
 import '../../../utils/responsive_snackbar.dart';
@@ -256,6 +258,10 @@ class _CustomizableSplitHomeScreenState
 
   // Scaffold key for drawer control
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // Accessibility dropdown anchor + overlay
+  final GlobalKey _a11yAnchorKey = GlobalKey();
+  OverlayEntry? _a11yOverlay;
 
   /// Breakpoint below which hamburger menu is shown
   static const double _mobileBreakpoint = 1200.0;
@@ -618,6 +624,8 @@ class _CustomizableSplitHomeScreenState
       ConstantName.timer!.cancel();
       ConstantName.timer = null;
     }
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
     socketProvider.closeSocket(false);
     ConstantName.chartwebViewController?.dispose();
     super.dispose();
@@ -1658,18 +1666,31 @@ class _CustomizableSplitHomeScreenState
   Widget _buildRightSideAppBar(bool isDarkMode) {
     final screenWidth = MediaQuery.of(context).size.width;
 
+    // Accessibility widens the app-bar nav: a larger Font Size scale and the
+    // OpenDyslexic dyslexia face both need more horizontal room per item, so
+    // the fixed pixel breakpoints below would overflow the header off-screen.
+    // Inflate the thresholds by roughly the same factor the text grows by, so
+    // nav items collapse into the hamburger drawer a little earlier (they stay
+    // reachable there) instead of spilling past the right edge. Watched so the
+    // breakpoints recompute the moment the user toggles these options.
+    final a11y = ref.watch(accessibilityProvider);
+    // OpenDyslexic renders ~1.3x wider (wider glyphs + added letter spacing).
+    final a11yNavFactor =
+        a11y.textScale * (a11y.dyslexiaSupportEnabled ? 1.3 : 1.0);
+
     // Responsive breakpoints - Option 2 implementation
     final isMobileTablet = screenWidth < 900; // Full mobile/tablet mode
 
     // Left navigation - hide ALL at once when space is not available
-    final showAllLeftNav = screenWidth >= 1650; // Show MF, IPO, Bonds, Options together
+    final showAllLeftNav =
+        screenWidth >= 1650 * a11yNavFactor; // Show MF, IPO, Bonds, Options together
 
     // Right navigation - hide ALL at once (not one by one)
     // When left nav is visible: need more space, so hide right nav items earlier
     // When left nav is hidden: have more space, so can show right nav items longer
     final showAllRightNav = showAllLeftNav
-        ? (screenWidth >= 1550)  // If left nav visible, need 1550px to show all right nav
-        : (screenWidth >= 950);  // If left nav hidden, only need 950px to show all right nav
+        ? (screenWidth >= 1550 * a11yNavFactor)  // If left nav visible, need 1550px to show all right nav
+        : (screenWidth >= 950 * a11yNavFactor);  // If left nav hidden, only need 950px to show all right nav
 
     // Determine which items to show in hamburger drawer
     // Desktop mode: Show only hidden items in drawer
@@ -1712,7 +1733,11 @@ class _CustomizableSplitHomeScreenState
             if (showHamburger)
               Padding(
                 padding: const EdgeInsets.only(right: 12),
-                child: Material(
+                child: Semantics(
+                  button: true,
+                  label: 'Open navigation menu',
+                  excludeSemantics: true,
+                  child: Material(
                   color: Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                   child: InkWell(
@@ -1755,15 +1780,21 @@ class _CustomizableSplitHomeScreenState
                     ),
                   ),
                 ),
+                ),
               ),
 
             // Logo section
-            RepaintBoundary(
-              child: SvgPicture.asset(
-                assets.appLogoIcon,
-                width: context.responsive(mobile: 80.0, tablet: 90.0, desktop: 100.0),
-                height: 38,
-                fit: BoxFit.contain,
+            Semantics(
+              image: true,
+              label: 'Mynt by Zebu',
+              excludeSemantics: true,
+              child: RepaintBoundary(
+                child: SvgPicture.asset(
+                  assets.appLogoIcon,
+                  width: context.responsive(mobile: 80.0, tablet: 90.0, desktop: 100.0),
+                  height: 38,
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
 
@@ -1800,14 +1831,50 @@ class _CustomizableSplitHomeScreenState
               const SizedBox(width: 20),
             ],
 
+            // Accessibility options (always visible)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: A11yIconButton(
+                key: const ValueKey('a11y_icon_btn'),
+                anchorKey: _a11yAnchorKey,
+                isDarkMode: isDarkMode,
+                active: ref.watch(accessibilityProvider).screenReaderEnabled,
+                onTap: () => _toggleAccessibilityDropdown(isDarkMode),
+              ),
+            ),
+
             // Profile section (always visible)
-            RepaintBoundary(
-              child: _buildProfileSection(isDarkMode),
+            Semantics(
+              button: true,
+              label: 'Profile menu',
+              child: RepaintBoundary(
+                child: _buildProfileSection(isDarkMode),
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  void _toggleAccessibilityDropdown(bool isDarkMode) {
+    if (_a11yOverlay != null) {
+      _closeAccessibilityDropdown();
+      return;
+    }
+    if (_a11yAnchorKey.currentContext == null) return;
+    _a11yOverlay = buildAccessibilityOverlay(
+      context: context,
+      anchorKey: _a11yAnchorKey,
+      isDarkMode: isDarkMode,
+      onClose: _closeAccessibilityDropdown,
+    );
+    Overlay.of(context, rootOverlay: true).insert(_a11yOverlay!);
+  }
+
+  void _closeAccessibilityDropdown() {
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
   }
 
   _buildAppBar(bool isDarkMode) {
