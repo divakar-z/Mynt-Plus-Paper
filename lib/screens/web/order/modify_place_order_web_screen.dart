@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/provider/fund_provider.dart';
@@ -2604,7 +2604,7 @@ class _ModifyPlaceOrderScreenState
   }
 
   TextStyle textStyle(Color color, double fontSize, fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle:
             TextStyle(fontWeight: fWeight, color: color, fontSize: fontSize));
   }

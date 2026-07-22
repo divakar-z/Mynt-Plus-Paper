@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
@@ -778,7 +779,7 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
 
   // Calculate minimum column widths based on actual content (matches position_table.dart pattern)
   Map<int, double> _calculateMinWidths(List<PositionBookModel> positions) {
-    const textStyle = TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 16.0;
 
     // Headers for each column index (0=Product,1=Instrument,2=Qty,3=ActAvg,4=LTP,5=SL,6=Target,7=P&L,8=Actions)
@@ -811,7 +812,7 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
                 ? ' ${position.exch}' : '';
             final symWidth = _measureTextWidth(sym, textStyle);
             final exchWidth = exch.isNotEmpty
-                ? _measureTextWidth(exch, const TextStyle(fontSize: 12, fontFamily: 'Geist'))
+                ? _measureTextWidth(exch, TextStyle(fontSize: 12, fontFamily: dyslexiaFontOr('Geist')))
                 : 0.0;
             final total = symWidth + exchWidth + (exch.isNotEmpty ? 4.0 : 0.0) + 8.0;
             if (total > maxWidth) maxWidth = total;
@@ -1054,7 +1055,7 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
 
   // Calculate minimum column widths for orders table from actual content
   Map<int, double> _calculateOrderMinWidths(List<OrderBookModel> orders) {
-    const textStyle = TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 16.0;
     // cols: 0=Time,1=Type,2=Instrument,3=Product,4=Qty,5=LTP,6=Price,7=Status,8=cancel
     final headers = ['Time', 'Type', 'Instrument', 'Product', 'Qty', 'LTP', 'Price', 'Status', ''];
@@ -1086,7 +1087,7 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
             final exch = order.exch ?? '';
             final symW = _measureOrderTextWidth(sym, textStyle);
             final exchW = exch.isNotEmpty
-                ? _measureOrderTextWidth(' $exch', const TextStyle(fontSize: 12, fontFamily: 'Geist'))
+                ? _measureOrderTextWidth(' $exch', TextStyle(fontSize: 12, fontFamily: dyslexiaFontOr('Geist')))
                 : 0.0;
             final total = symW + exchW + 8.0;
             if (total > maxWidth) maxWidth = total;

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 
 import '../../res/res.dart';
 import '../provider/thems.dart';
@@ -28,7 +28,7 @@ class ListWidgets extends ConsumerWidget {
   }
 
   TextStyle textStyle(Color color, double fontSize, fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle:
             TextStyle(fontWeight: fWeight, color: color, fontSize: fontSize));
   }

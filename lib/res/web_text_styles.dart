@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+
+import '../provider/accessibility_provider.dart';
 import 'colors.dart';
 
 class WebTextStyles {
@@ -12,7 +14,9 @@ class WebTextStyles {
   // Fallback to Inter for non-web platforms
   static const String _fallbackFontFamily = 'Inter';
 
-  String get _fontFamily => isWeb ? _tenonFontFamily : _fallbackFontFamily;
+  // Dyslexia Support swaps in OpenDyslexic; otherwise keep the platform font.
+  String get _fontFamily =>
+      dyslexiaFontOr(isWeb ? _tenonFontFamily : _fallbackFontFamily);
 
   TextStyle get appBarTitleTxt => TextStyle(
     fontFamily: _fontFamily,
@@ -22,7 +26,7 @@ class WebTextStyles {
   );
 
   TextStyle get textFieldLabelStyleInterV => TextStyle(
-    fontFamily: isWeb ? _tenonFontFamily : 'InterVariable',
+    fontFamily: dyslexiaFontOr(isWeb ? _tenonFontFamily : 'InterVariable'),
     fontWeight: FontWeight.w600,
     fontSize: 16,
     color: AppColors().colorBlack,

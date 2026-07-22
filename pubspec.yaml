@@ -180,7 +180,7 @@ flutter:
       fonts:
         - asset: fonts/InterVariable.ttf
     - family: Geist
-      fonts:      
+      fonts:
         - asset: fonts/Geist/Geist-Regular.ttf
           weight: 400
         - asset: fonts/Geist/Geist-Medium.ttf
@@ -189,6 +189,36 @@ flutter:
           weight: 600
         - asset: fonts/Geist/Geist-Bold.ttf
           weight: 700
+    - family: OpenDyslexic
+      fonts:
+        # OpenDyslexic only ships Regular + Bold. Without the extra rows below,
+        # Flutter rounds the app's many w500/w600 (medium/semibold) labels UP
+        # to the heavy Bold face, so every screen reads as uniformly bold and
+        # cramped. Registering the Regular face for each non-bold weight
+        # (100-600) gives those requests an exact match at the lighter, more
+        # legible Regular weight; only genuine w700 text stays bold for
+        # emphasis. Affects dyslexia mode only (off-mode uses Geist's own
+        # weight files).
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Regular.otf
+          weight: 100
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Regular.otf
+          weight: 200
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Regular.otf
+          weight: 300
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Regular.otf
+          weight: 400
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Regular.otf
+          weight: 500
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Regular.otf
+          weight: 600
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Italic.otf
+          weight: 400
+          style: italic
+        - asset: fonts/OpenDyslexic/OpenDyslexic-Bold.otf
+          weight: 700
+        - asset: fonts/OpenDyslexic/OpenDyslexic-BoldItalic.otf
+          weight: 700
+          style: italic
   #       - asset: fonts/Schyler-Italic.ttf
   #         style: italic
   #   - family: Trajan Pro

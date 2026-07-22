@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/res/global_state_text.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'window_setting_tabbar_screens/navigationsetting.dart';
@@ -86,13 +86,13 @@ class _WindowSettingsState extends State<WindowSettings>
                   TabBar(
                       indicatorColor: const Color(0xff0037B7),
                       unselectedLabelColor: const Color(0XFF777777),
-                      unselectedLabelStyle: GoogleFonts.inter(
+                      unselectedLabelStyle: dysInter(
                           textStyle: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
                               letterSpacing: -0.28)),
                       labelColor: const Color(0XFF0037B7),
-                      labelStyle: GoogleFonts.inter(
+                      labelStyle: dysInter(
                           textStyle: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,

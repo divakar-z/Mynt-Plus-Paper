@@ -139,7 +139,7 @@ import '../screens/web/market_watch/set_alert_web.dart';
 import '../screens/web/strategy_builder/strategy_builder_screen.dart';
 import '../sharedWidget/internet_widget.dart';
 import 'route_names.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import '../screens/web/mutual_fund/sip_calculator_screen_web.dart';
 import '../screens/Mobile/profile_screen/fund_screen/withdraw/withdraw_screen.dart';
 import '../provider/transcation_provider.dart';
@@ -1109,7 +1109,7 @@ class AppRoutes {
       return Scaffold(
           body: Center(
               child: Text('404 Page Not Found',
-                  style: GoogleFonts.inter(
+                  style: dysInter(
                       textStyle: const TextStyle(
                           fontSize: 20, fontWeight: FontWeight.w600)))));
     });
