@@ -65,6 +65,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import '../../../models/portfolio_model/position_book_model.dart';
 import '../../../res/res.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../res/mynt_web_text_styles.dart';
@@ -1132,7 +1133,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
             context, position, theme, isClosed, isRowHovered, positionBook,
             rowIndex: rowIndex);
       case 'Qty':
-        final formattedQty = _formatPositionQty(position);
+        // Privacy Mode: qty (with its long/short sign and colour) is hidden.
+        final privacy = ref.watch(privacyProvider);
+        final formattedQty = privacy.mask(_formatPositionQty(position));
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1144,12 +1147,15 @@ class _PositionTableState extends ConsumerState<PositionTable> {
               style: _getTextStyle(context,
                   color: isClosed
                       ? textColor
-                      : _getQtyColor(formattedQty, context)),
+                      : (privacy.isPrivate
+                          ? _getCellColor(0.0, context)
+                          : _getQtyColor(formattedQty, context))),
             ),
           ),
         );
       case 'Act Avg':
-        final avgValue = position.avgPrc ?? '0.00';
+        final avgValue =
+            ref.watch(privacyProvider).mask(position.avgPrc ?? '0.00');
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1179,8 +1185,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
         );
       case 'P&L':
         // Just display provider value - positionCal() already calculates correctly
+        final pnlPrivacy = ref.watch(privacyProvider);
         final pnlValue = position.profitNloss ?? '0.00';
-        final displayPnl = pnlValue.toIndianFormat();
+        final displayPnl = pnlPrivacy.mask(pnlValue.toIndianFormat());
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1190,7 +1197,11 @@ class _PositionTableState extends ConsumerState<PositionTable> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: _getTextStyle(context,
-                  color: _getCellColor(double.tryParse(pnlValue) ?? 0.0, context)),
+                  color: _getCellColor(
+                      pnlPrivacy.isPrivate
+                          ? 0.0
+                          : (double.tryParse(pnlValue) ?? 0.0),
+                      context)),
             ),
           ),
         );
@@ -1307,7 +1318,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                 );
               } else if (isLastColumn) {
                 // Show total P&L value
-                final displayTotal = totalPnl.toIndianFormat();
+                final privacy = ref.watch(privacyProvider);
+                final displayTotal = privacy.mask(totalPnl.toIndianFormat());
                 cellContent = Align(
                   alignment: Alignment.centerRight,
                   child: Tooltip(
@@ -1317,7 +1329,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: _getTextStyle(context,
-                          color: _getCellColor(totalPnl, context)).copyWith(
+                          color: _getCellColor(
+                              privacy.isPrivate ? 0.0 : totalPnl,
+                              context)).copyWith(
                         fontWeight: MyntFonts.semiBold,
                       ),
                     ),

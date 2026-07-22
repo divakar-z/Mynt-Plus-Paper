@@ -6,6 +6,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../models/portfolio_model/holdings_model.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../provider/market_watch_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/ledger_provider.dart';
@@ -421,7 +422,8 @@ class _HoldingDetailScreenWebState
   }
 
   Widget _buildPnLSection(ThemesProvider theme) {
-    final displayValue = _exchTsym.profitNloss ?? "0.00";
+    final privacy = ref.watch(privacyProvider);
+    final displayValue = privacy.mask(_exchTsym.profitNloss ?? "0.00");
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -471,8 +473,9 @@ class _HoldingDetailScreenWebState
   }
 
   Widget _buildDetailsSection(ThemesProvider theme) {
-    final pnlValue = _exchTsym.profitNloss ?? "0.00";
-    final pnlPercent = _exchTsym.pNlChng ?? "0.00";
+    final privacy = ref.watch(privacyProvider);
+    final pnlValue = privacy.mask(_exchTsym.profitNloss ?? "0.00");
+    final pnlPercent = privacy.mask(_exchTsym.pNlChng ?? "0.00");
     final pnlColor = _getPnLColor(pnlValue);
 
     return Column(
@@ -501,7 +504,8 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Non POA / Sell",
           Text(
-            "${_holdingData.npoadqty ?? 0} / ${_holdingData.saleableQty ?? 0}",
+            privacy.mask(
+                "${_holdingData.npoadqty ?? 0} / ${_holdingData.saleableQty ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -512,7 +516,8 @@ class _HoldingDetailScreenWebState
           _rowOfInfoData(
             "T1 Qty",
             Text(
-              "${math.max(int.parse(_holdingData.btstqty ?? "0"), int.parse(_holdingData.npoadt1qty ?? "0"))}",
+              privacy.mask(
+                  "${math.max(int.parse(_holdingData.btstqty ?? "0"), int.parse(_holdingData.npoadt1qty ?? "0"))}"),
               style:
                   MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
             ),
@@ -522,7 +527,7 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Avg price",
           Text(
-            "${_holdingData.upldprc ?? 0}",
+            privacy.mask("${_holdingData.upldprc ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -544,7 +549,8 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Invested",
           Text(
-            "${_holdingData.invested == "0.00" ? _exchTsym.close ?? 0.00 : _holdingData.invested ?? 0.00}",
+            privacy.mask(
+                "${_holdingData.invested == "0.00" ? _exchTsym.close ?? 0.00 : _holdingData.invested ?? 0.00}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -553,9 +559,9 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Current",
           Text(
-            (int.parse("${_holdingData.currentQty ?? 0}") *
+            privacy.mask((int.parse("${_holdingData.currentQty ?? 0}") *
                     double.parse(_exchTsym.lp?.toString() ?? "0.0"))
-                .toStringAsFixed(2),
+                .toStringAsFixed(2)),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -565,7 +571,7 @@ class _HoldingDetailScreenWebState
           _rowOfInfoData(
             "Realised P&L",
             Text(
-              "${_holdingData.rpnl ?? 0}",
+              privacy.mask("${_holdingData.rpnl ?? 0}"),
               style:
                   MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
             ),
@@ -575,7 +581,7 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Pledged Qty",
           Text(
-            "${_holdingData.brkcolqty ?? 0}",
+            privacy.mask("${_holdingData.brkcolqty ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -584,7 +590,8 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Buy / Sell Value",
           Text(
-            "${(double.tryParse(_holdingData.invested?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)} / ${(double.tryParse(_holdingData.sellAmt?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)}",
+            privacy.mask(
+                "${(double.tryParse(_holdingData.invested?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)} / ${(double.tryParse(_holdingData.sellAmt?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),

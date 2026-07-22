@@ -65,6 +65,7 @@ import 'package:mynt_plus/screens/web/ordersbook/mf/redeem_bottom_sheet_web.dart
 import 'package:mynt_plus/screens/web/mutual_fund/mf_order_screen_web.dart';
 
 import '../../../provider/mf_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../sharedWidget/mynt_loader.dart';
@@ -729,6 +730,9 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
   @override
   Widget build(BuildContext context) {
     final mfData = ref.watch(mfProvider);
+    // Privacy Mode: units, avg NAV, invested, current and P&L are masked;
+    // the fund's current NAV is market data and stays visible.
+    final privacy = ref.watch(privacyProvider);
 
     // Show loading indicator while fetching data
     if (mfData.dematHoldLoad) {
@@ -1019,10 +1023,10 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(
+                                      final value = privacy.mask((double.tryParse(
                                                   holding.totalUnits ?? '0') ??
                                               0.0)
-                                          .toStringAsFixed(4);
+                                          .toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1042,10 +1046,10 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(
+                                      final value = privacy.mask((double.tryParse(
                                                   holding.avgNav ?? '0') ??
                                               0.0)
-                                          .toStringAsFixed(4);
+                                          .toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1088,11 +1092,11 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(
+                                      final value = privacy.mask((double.tryParse(
                                                   holding.investedValue ??
                                                       '0') ??
                                               0.0)
-                                          .toStringAsFixed(2);
+                                          .toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1112,11 +1116,11 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(
+                                      final value = privacy.mask((double.tryParse(
                                                   holding.currentValue ??
                                                       '0') ??
                                               0.0)
-                                          .toStringAsFixed(2);
+                                          .toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1139,9 +1143,11 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                       final pnlNum = double.tryParse(
                                               holding.profitLoss ?? '0') ??
                                           0.0;
-                                      final value = pnlNum.toStringAsFixed(2);
-                                      final color =
-                                          _getCellColor(pnlNum, context);
+                                      final value =
+                                          privacy.mask(pnlNum.toStringAsFixed(2));
+                                      final color = _getCellColor(
+                                          privacy.isPrivate ? 0.0 : pnlNum,
+                                          context);
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1166,10 +1172,12 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                               holding.changeprofitLoss ??
                                                   '0') ??
                                           0.0;
-                                      final displayValue =
-                                          '${pctNum >= 0 ? "+" : ""}${pctNum.toStringAsFixed(2)}%';
-                                      final color =
-                                          _getCellColor(pctNum, context);
+                                      final displayValue = privacy.isPrivate
+                                          ? '$kPrivacyMask%'
+                                          : '${pctNum >= 0 ? "+" : ""}${pctNum.toStringAsFixed(2)}%';
+                                      final color = _getCellColor(
+                                          privacy.isPrivate ? 0.0 : pctNum,
+                                          context);
                                       return Tooltip(
                                         message: displayValue,
                                         child: Text(displayValue,

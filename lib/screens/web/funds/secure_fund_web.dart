@@ -11,6 +11,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../locator/locator.dart';
 import '../../../locator/preference.dart';
 import '../../../provider/fund_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/transcation_provider.dart';
 import '../../../res/mynt_web_color_styles.dart';
@@ -273,8 +274,26 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                     const SizedBox(height: 1),
                     Builder(
                       builder: (context) {
-                        final marginValue = double.parse(
-                            "${funds.fundDetailModel?.avlMrg ?? 0.00}");
+                        // Privacy Mode: balance masked, colour neutralized.
+                        final privacy = ref.watch(privacyProvider);
+                        final marginValue = privacy.isPrivate
+                            ? 0.0
+                            : double.parse(
+                                "${funds.fundDetailModel?.avlMrg ?? 0.00}");
+                        if (privacy.isPrivate) {
+                          return Text(
+                            kPrivacyMask,
+                            style: MyntWebTextStyles.head(
+                              context,
+                              color: resolveThemeColor(
+                                context,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary,
+                              ),
+                              fontWeight: MyntFonts.medium,
+                            ),
+                          );
+                        }
                         final Color marginColor = marginValue > 0
                             ? resolveThemeColor(
                                 context,
@@ -479,11 +498,11 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
               ),
               const SizedBox(height: 4),
               Text(
-                getFormatter(
-                  value: double.tryParse(value) ?? 0.00,
-                  v4d: false,
-                  noDecimal: false,
-                ),
+                ref.watch(privacyProvider).mask(getFormatter(
+                      value: double.tryParse(value) ?? 0.00,
+                      v4d: false,
+                      noDecimal: false,
+                    )),
                 style: MyntWebTextStyles.title(
                   context,
                   darkColor: MyntColors.textPrimaryDark,
@@ -747,7 +766,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
             ),
           ),
           Text(
-            value,
+            ref.watch(privacyProvider).mask(value),
             style: MyntWebTextStyles.body(
               context,
               darkColor: MyntColors.textPrimaryDark,

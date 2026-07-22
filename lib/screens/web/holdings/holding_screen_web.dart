@@ -12,6 +12,7 @@ import 'package:mynt_plus/screens/web/holdings/mf_demat_hold_table.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/profile_all_details_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
@@ -474,6 +475,18 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     required Color valueColor,
     required ThemesProvider theme,
   }) {
+    // Privacy Mode: hide the amount (and its sign/colour); the ₹ and (%)
+    // shells stay so the layout doesn't shift.
+    final privacy = ref.watch(privacyProvider);
+    if (privacy.isPrivate) {
+      value = value.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask;
+      percentage = percentage == null ? null : kPrivacyMask;
+      valueColor = resolveThemeColor(
+        context,
+        dark: MyntColors.textPrimaryDark,
+        light: MyntColors.textPrimary,
+      );
+    }
     return shadcn.Theme(
         data: shadcn.Theme.of(context).copyWith(radius: () => 0.3),
         child: shadcn.Card(

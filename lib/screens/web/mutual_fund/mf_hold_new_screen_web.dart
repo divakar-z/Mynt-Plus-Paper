@@ -7,6 +7,7 @@ import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../provider/mf_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../res/res.dart';
 import '../../../res/mynt_web_text_styles.dart';
@@ -139,7 +140,10 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
   // Helper method to build colored text for P&L values with percentage (stacked)
   Widget _buildPnLWithPercentage(
       String pnlValue, String percentValue, ThemesProvider theme) {
-    final numValue = double.tryParse(pnlValue) ?? 0.0;
+    // Privacy Mode: P&L and its percent are masked, colour neutralized.
+    final privacy = ref.watch(privacyProvider);
+    final numValue =
+        privacy.isPrivate ? 0.0 : (double.tryParse(pnlValue) ?? 0.0);
     final color = _getCellColor(numValue, context, theme);
     final baseStyle = _getTextStyle(context, color: color);
 
@@ -147,9 +151,9 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        Text(pnlValue, textAlign: TextAlign.end, style: baseStyle),
+        Text(privacy.mask(pnlValue), textAlign: TextAlign.end, style: baseStyle),
         Text(
-          '$percentValue%',
+          privacy.mask(percentValue, suffix: '%'),
           textAlign: TextAlign.end,
           style: baseStyle.copyWith(
             fontSize: 10,
@@ -259,6 +263,14 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
     Color? valueColor,
     String? percentage,
   }) {
+    // Privacy Mode: hide the amount and its profit/loss colour; the (%)
+    // shell stays so the layout doesn't shift.
+    final privacy = ref.watch(privacyProvider);
+    if (privacy.isPrivate) {
+      value = kPrivacyMask;
+      percentage = percentage == null ? null : kPrivacyMask;
+      valueColor = null;
+    }
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -582,11 +594,15 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
                                                     alignment:
                                                         Alignment.centerRight,
                                                     child: Text(
-                                                      (double.tryParse(
-                                                                  item.avgQty ??
-                                                                      '0') ??
-                                                              0.0)
-                                                          .toStringAsFixed(4),
+                                                      ref
+                                                          .watch(
+                                                              privacyProvider)
+                                                          .mask((double.tryParse(
+                                                                      item.avgQty ??
+                                                                          '0') ??
+                                                                  0.0)
+                                                              .toStringAsFixed(
+                                                                  4)),
                                                       style: _getTextStyle(
                                                           context),
                                                     ),
@@ -608,11 +624,15 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
                                                     alignment:
                                                         Alignment.centerRight,
                                                     child: Text(
-                                                      (double.tryParse(
-                                                                  item.avgNav ??
-                                                                      '0') ??
-                                                              0.0)
-                                                          .toStringAsFixed(4),
+                                                      ref
+                                                          .watch(
+                                                              privacyProvider)
+                                                          .mask((double.tryParse(
+                                                                      item.avgNav ??
+                                                                          '0') ??
+                                                                  0.0)
+                                                              .toStringAsFixed(
+                                                                  4)),
                                                       style: _getTextStyle(
                                                           context),
                                                     ),
@@ -660,11 +680,15 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
                                                     alignment:
                                                         Alignment.centerRight,
                                                     child: Text(
-                                                      (double.tryParse(
-                                                                  item.investedValue ??
-                                                                      '0') ??
-                                                              0.0)
-                                                          .toStringAsFixed(2),
+                                                      ref
+                                                          .watch(
+                                                              privacyProvider)
+                                                          .mask((double.tryParse(
+                                                                      item.investedValue ??
+                                                                          '0') ??
+                                                                  0.0)
+                                                              .toStringAsFixed(
+                                                                  2)),
                                                       style: _getTextStyle(
                                                           context),
                                                     ),
@@ -686,11 +710,15 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
                                                     alignment:
                                                         Alignment.centerRight,
                                                     child: Text(
-                                                      (double.tryParse(
-                                                                  item.currentValue ??
-                                                                      '0') ??
-                                                              0.0)
-                                                          .toStringAsFixed(2),
+                                                      ref
+                                                          .watch(
+                                                              privacyProvider)
+                                                          .mask((double.tryParse(
+                                                                      item.currentValue ??
+                                                                          '0') ??
+                                                                  0.0)
+                                                              .toStringAsFixed(
+                                                                  2)),
                                                       style: _getTextStyle(
                                                           context),
                                                     ),

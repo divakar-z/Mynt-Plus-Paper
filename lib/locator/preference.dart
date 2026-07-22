@@ -582,6 +582,15 @@ class Preferences {
   String getScalperPosFilter(String userId) =>
       _prefInstance?.getString('${_scalperPosFilter}_$userId') ?? 'all';
 
+  // Privacy Mode — masks sensitive monetary values (P&L, holdings, funds)
+  // across the app when enabled. Stored per client id so one account's
+  // choice never carries over to the next login on the same browser.
+  // Defaults to false (values visible).
+  Future setPrivacyMode(String userId, bool enabled) async =>
+      await _prefInstance!.setBool('${_privacyMode}_$userId', enabled);
+
+  bool getPrivacyMode(String userId) =>
+      _prefInstance?.getBool('${_privacyMode}_$userId') ?? false;
 }
 
 const String _userTheme = 'userTheme';
@@ -715,3 +724,5 @@ const String _scalperPosFilter = "scalperPosFilter";
 
 //// CHART ENGINE SESSION
 const String _chartEngineSession = 'chartEngineSessionV1';
+
+const String _privacyMode = "privacyMode";

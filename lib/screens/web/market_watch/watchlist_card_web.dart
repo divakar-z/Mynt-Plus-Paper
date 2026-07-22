@@ -20,6 +20,7 @@ import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/order_book_model/order_book_model.dart';
 import 'package:mynt_plus/sharedWidget/functions.dart';
 import '../../../provider/market_watch_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/websocket_provider.dart';
 import '../../../res/res.dart';
@@ -474,7 +475,8 @@ if (_isExpiryToday(wlExpDate)) ...[
                                           )),
                                       const SizedBox(width: 4),
                                       Text(
-                                        "${widget.watchListData['holdingQty']}",
+                                        ref.watch(privacyProvider).mask(
+                                            "${widget.watchListData['holdingQty']}"),
                                         style: MyntWebTextStyles.exch(
                                           context,
                                           fontWeight: FontWeight.w500,

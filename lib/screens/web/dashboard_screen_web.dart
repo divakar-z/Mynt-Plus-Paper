@@ -15,6 +15,7 @@ import '../../../provider/portfolio_provider.dart';
 import '../../../provider/order_provider.dart';
 import '../../../provider/fund_provider.dart';
 import '../../../provider/mf_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/explore_model/stocks_model/toplist_stocks.dart';
 import 'dart:async';
@@ -655,10 +656,13 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final metric = metrics[index];
     final String valueStr = metric['value'] as String;
     final bool isPnl = metric['isPnl'] ?? false;
+    final privacy = ref.watch(privacyProvider);
     // Efficient color determination: check first char for negative, regex for zero
     final bool isNegative = valueStr.startsWith('-');
     final bool isZero = !valueStr.contains(RegExp(r'[1-9]'));
-    final Color valueColor = (isPnl && !isZero)
+    // Privacy Mode: profit/loss colour is neutralized too, so the mask can't
+    // leak direction through green/red.
+    final Color valueColor = (isPnl && !isZero && !privacy.isPrivate)
         ? (isNegative
             ? resolveThemeColor(context,
                 dark: MyntColors.lossDark, light: MyntColors.loss)
@@ -666,6 +670,16 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 dark: MyntColors.profitDark, light: MyntColors.profit))
         : resolveThemeColor(context,
             dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+
+    // Keep the ₹ / (%) shells visible so layout stays stable, but hide the
+    // number and its sign.
+    final String displayValue = privacy.isPrivate
+        ? (valueStr.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask)
+        : valueStr;
+    final String? subValueStr = metric['subValue'] as String?;
+    final String? displaySubValue = subValueStr == null
+        ? null
+        : (privacy.isPrivate ? '($kPrivacyMask%)' : subValueStr);
 
     final bool isLeftAligned = index % 2 == 0;
     final alignment =
@@ -697,15 +711,15 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
-              metric['value'],
+              displayValue,
               style: MyntWebTextStyles.price(
                 context,
                 color: valueColor,
               ),
             ),
-            if (metric['subValue'] != null)
+            if (displaySubValue != null)
               Text(
-                metric['subValue'],
+                displaySubValue,
                 style: MyntWebTextStyles.priceChange(
                   context,
                   color: valueColor,

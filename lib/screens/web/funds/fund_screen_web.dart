@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:mynt_plus/sharedWidget/snack_bar.dart';
 import '../../../sharedWidget/mynt_loader.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/transcation_provider.dart';
 import '../../../provider/fund_provider.dart';
@@ -1686,7 +1687,10 @@ class _FundScreenWebState extends ConsumerState<FundScreenWeb> {
               ),
               const SizedBox(height: 4),
               Text(
-                "₹ ${formatIndianCurrency(funds.fundDetailModel?.cash ?? "0.00")}",
+                ref.watch(privacyProvider).mask(
+                    formatIndianCurrency(
+                        funds.fundDetailModel?.cash ?? "0.00"),
+                    prefix: "₹ "),
                 style: WebTextStyles.title(
                   isDarkTheme: theme.isDarkMode,
                   color: theme.isDarkMode ? WebDarkColors.textPrimary : WebColors.textPrimary,
