@@ -797,6 +797,14 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
         }
         return _sortAscending ? comparison : -comparison;
       });
+    } else {
+      // Default order: alphabetical by fund name, matching the Mutual Fund
+      // tab (its API returns names pre-sorted; the demat API does not).
+      // Sort a copy so the provider's list is never mutated.
+      filteredHoldings = List.of(filteredHoldings)
+        ..sort((a, b) => (a.scripName ?? '')
+            .toLowerCase()
+            .compareTo((b.scripName ?? '').toLowerCase()));
     }
 
     final displayHoldings = filteredHoldings;

@@ -269,7 +269,9 @@ class _ModifyPlaceOrderScreenState
   bool _isMarketOrder = false;
   bool _isStoplossOrder = false;
   bool _isBOCOOrderEnabled = false;
-  bool isAdvancedOptionClicked = false;
+  // The former "Advance" show/hide toggle was removed (same as the place
+  // order screen) — the advanced fields are now always visible.
+  // bool isAdvancedOptionClicked = false;
   bool _hasValidCircuitBreakerValues = false;
   // bool _afterMarketOrder = false;
   bool _addValidityAndDisclosedQty = false;
@@ -450,18 +452,17 @@ class _ModifyPlaceOrderScreenState
       _isBOCOOrderEnabled = widget.modifyOrderArgs.sPrdtAli == "BO" ||
           widget.modifyOrderArgs.sPrdtAli == "CO";
 
-      // Auto-expand advanced section and set states based on order data
-      // Auto-expand advanced section for stop-loss orders
+      // Set states based on order data (the advanced section is always
+      // visible now, so no auto-expand is needed)
       if (["SL-LMT", "SL-MKT"].contains(prcType)) {
         _isStoplossOrder = true;
-        isAdvancedOptionClicked = true;
+        // isAdvancedOptionClicked = true;
       }
 
-      // Auto-expand for IOC validity or disclosed quantity
       if (validity.toUpperCase() == 'IOC' ||
           (widget.modifyOrderArgs.dscqty != null &&
               int.parse(widget.modifyOrderArgs.dscqty.toString()) > 0)) {
-        isAdvancedOptionClicked = true;
+        // isAdvancedOptionClicked = true;
         _addValidityAndDisclosedQty = true;
         addValidity = true;
       }
@@ -1184,7 +1185,34 @@ class _ModifyPlaceOrderScreenState
                                             //   },
                                             // )
                                           )
-                                          )
+                                          ),
+                                          // MCX field is in lots — show the
+                                          // actual quantity underneath, kept
+                                          // live via the controller listener.
+                                          // Same lots × lot size the submit
+                                          // payload and margin request use.
+                                          if (widget.scripInfo.exch == "MCX")
+                                            ValueListenableBuilder<
+                                                TextEditingValue>(
+                                              valueListenable: qtyCtrl,
+                                              builder: (context, value, _) =>
+                                                  Padding(
+                                                padding: const EdgeInsets.only(
+                                                    top: 4),
+                                                child: Text(
+                                                  "Qty : ${(int.tryParse(value.text) ?? 0) * lotSize}",
+                                                  style: WebTextStyles.para(
+                                                    isDarkTheme:
+                                                        theme.isDarkMode,
+                                                    color: theme.isDarkMode
+                                                        ? MyntColors
+                                                            .textPrimaryDark
+                                                        : MyntColors
+                                                            .textSecondary,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
                                         ])),
                                     const SizedBox(width: 16),
                                     Expanded(
@@ -1345,72 +1373,76 @@ class _ModifyPlaceOrderScreenState
                                 ),
                                 // const SizedBox(height: 16),
                               ],
-                              // Advance Option section
+                              // Advanced options — always visible (the former
+                              // "Advance" show/hide toggle was removed by
+                              // design; its code is kept commented below for
+                              // easy rollback).
                               const SizedBox(height: 10),
                               Column(
                                 children: [
-                                  Center(
-                                    child: SizedBox(
-                                      width: 150,
-                                      child: TextButton(
-                                        style: TextButton.styleFrom(
-                                          shape: const RoundedRectangleBorder(),
-                                          padding: const EdgeInsets.all(0),
-                                          backgroundColor: Colors.transparent,
-                                          foregroundColor: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
-                                          overlayColor: Colors.transparent,
-                                          elevation: 0.0,
-                                          minimumSize: const Size(0, 30),
-                                          side: BorderSide.none,
-                                        ),
-                                        onPressed: () {
-                                          setState(() {
-                                            if (!_isStoplossOrder &&
-                                                // !_afterMarketOrder &&
-                                                !_addValidityAndDisclosedQty) {
-                                              isAdvancedOptionClicked =
-                                                  !isAdvancedOptionClicked;
-                                            }
-                                            updatePriceType();
-                                          });
-                                        },
-                                        child: Container(
-                                          color: Colors.transparent,
-                                          height: 40,
-                                          child: Center(
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Text('Advance',
-                                                    style: WebTextStyles.sub(
-                                                      isDarkTheme: theme.isDarkMode,
-                                                      color: resolveThemeColor(context,
-                                                          dark: MyntColors.primaryDark,
-                                                          light: MyntColors.primary),
-                                                      fontWeight: WebFonts.semiBold,
-                                                    )),
-                                                Padding(
-                                                  padding: const EdgeInsets.only(
-                                                      left: 4),
-                                                  child: Icon(
-                                                    isAdvancedOptionClicked
-                                                        ? Icons.keyboard_arrow_up
-                                                        : Icons.keyboard_arrow_down,
-                                                    color: resolveThemeColor(context,
-                                                        dark: MyntColors.primaryDark,
-                                                        light: MyntColors.primary),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  Visibility(
-                                    visible: isAdvancedOptionClicked,
-                                    child: Column(
+                                  // Center(
+                                  //   child: SizedBox(
+                                  //     width: 150,
+                                  //     child: TextButton(
+                                  //       style: TextButton.styleFrom(
+                                  //         shape: const RoundedRectangleBorder(),
+                                  //         padding: const EdgeInsets.all(0),
+                                  //         backgroundColor: Colors.transparent,
+                                  //         foregroundColor: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
+                                  //         overlayColor: Colors.transparent,
+                                  //         elevation: 0.0,
+                                  //         minimumSize: const Size(0, 30),
+                                  //         side: BorderSide.none,
+                                  //       ),
+                                  //       onPressed: () {
+                                  //         setState(() {
+                                  //           if (!_isStoplossOrder &&
+                                  //               // !_afterMarketOrder &&
+                                  //               !_addValidityAndDisclosedQty) {
+                                  //             isAdvancedOptionClicked =
+                                  //                 !isAdvancedOptionClicked;
+                                  //           }
+                                  //           updatePriceType();
+                                  //         });
+                                  //       },
+                                  //       child: Container(
+                                  //         color: Colors.transparent,
+                                  //         height: 40,
+                                  //         child: Center(
+                                  //           child: Row(
+                                  //             mainAxisSize: MainAxisSize.min,
+                                  //             children: [
+                                  //               Text('Advance',
+                                  //                   style: WebTextStyles.sub(
+                                  //                     isDarkTheme: theme.isDarkMode,
+                                  //                     color: resolveThemeColor(context,
+                                  //                         dark: MyntColors.primaryDark,
+                                  //                         light: MyntColors.primary),
+                                  //                     fontWeight: WebFonts.semiBold,
+                                  //                   )),
+                                  //               Padding(
+                                  //                 padding: const EdgeInsets.only(
+                                  //                     left: 4),
+                                  //                 child: Icon(
+                                  //                   isAdvancedOptionClicked
+                                  //                       ? Icons.keyboard_arrow_up
+                                  //                       : Icons.keyboard_arrow_down,
+                                  //                   color: resolveThemeColor(context,
+                                  //                       dark: MyntColors.primaryDark,
+                                  //                       light: MyntColors.primary),
+                                  //                 ),
+                                  //               ),
+                                  //             ],
+                                  //           ),
+                                  //         ),
+                                  //       ),
+                                  //     ),
+                                  //   ),
+                                  // ),
+                                  // Visibility(
+                                  //   visible: isAdvancedOptionClicked,
+                                  //   child:
+                                  Column(
                                       children: [
                                         Divider(
                                           color: resolveThemeColor(context,
@@ -1632,10 +1664,10 @@ class _ModifyPlaceOrderScreenState
                                           // ],
                                       ],
                                     ),
-                                  ),
+                                  // ), // ← closer of the former Visibility
                                 ],
                               ),
-                
+
                               // Trigger option is now handled inside the advanced options section
                               if (_isBOCOOrderEnabled) ...[
                                 const SizedBox(height: 16),

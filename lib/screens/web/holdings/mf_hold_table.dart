@@ -128,8 +128,10 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
   void initState() {
     super.initState();
     // Fetch mutual fund holdings data when screen initializes
+    // (old MF holdings API decommissioned — demat endpoint is the source)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(mfProvider).fetchmfholdingnew();
+      // ref.read(mfProvider).fetchmfholdingnew();
+      ref.read(mfProvider).fetchmfdematholding();
     });
 
     // Listen to hover changes to close popover when row is unhovered

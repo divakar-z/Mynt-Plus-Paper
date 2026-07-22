@@ -40,9 +40,12 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
   @override
   void initState() {
     super.initState();
-    // Auto-load data when screen opens
+    // Auto-load data when screen opens (demat endpoint — the old MF holdings
+    // API is being decommissioned; the provider adapts the response into the
+    // mfholdingnew shape this screen reads)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(mfProvider).fetchmfholdingnew();
+      // ref.read(mfProvider).fetchmfholdingnew();
+      ref.read(mfProvider).fetchmfdematholding();
     });
     // Listen to hover changes for popover management
     _hoveredRowIndex.addListener(_onHoverChanged);
@@ -190,7 +193,8 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
         isLoading: mfData.holdstatload ?? false,
         child: RefreshIndicator(
           onRefresh: () async {
-            await mfData.fetchmfholdingnew();
+            // await mfData.fetchmfholdingnew();
+            await mfData.fetchmfdematholding();
           },
           child: Column(
             children: [
