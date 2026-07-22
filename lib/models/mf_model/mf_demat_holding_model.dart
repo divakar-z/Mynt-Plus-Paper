@@ -47,6 +47,10 @@ class MfDematHoldingData {
   String? planType;
   String? schemeCode;
   String? minimumPurchaseAmount;
+  // Needed by the redeem flow's minimum-units validation (backend added
+  // Scheme_Code for order placement; this parses Minimum_Redemption_Qty
+  // whenever the response carries it).
+  String? minimumRedemptionQty;
   String? totalUnits;
   String? avgNav;
   String? curNav;
@@ -82,6 +86,7 @@ class MfDematHoldingData {
     planType = json['PlanType']?.toString();
     schemeCode = json['Scheme_Code']?.toString();
     minimumPurchaseAmount = json['Minimum_Purchase_Amount']?.toString();
+    minimumRedemptionQty = json['Minimum_Redemption_Qty']?.toString();
     totalUnits = json['total_units']?.toString();
     avgNav = json['avg_nav']?.toString();
     curNav = json['Cur_Nav']?.toString();

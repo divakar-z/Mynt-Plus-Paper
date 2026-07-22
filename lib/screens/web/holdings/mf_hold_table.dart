@@ -62,6 +62,7 @@ import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../provider/mf_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
@@ -127,8 +128,10 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
   void initState() {
     super.initState();
     // Fetch mutual fund holdings data when screen initializes
+    // (old MF holdings API decommissioned — demat endpoint is the source)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(mfProvider).fetchmfholdingnew();
+      // ref.read(mfProvider).fetchmfholdingnew();
+      ref.read(mfProvider).fetchmfdematholding();
     });
 
     // Listen to hover changes to close popover when row is unhovered
@@ -793,6 +796,9 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
   @override
   Widget build(BuildContext context) {
     final mfData = ref.watch(mfProvider);
+    // Privacy Mode: units, avg NAV, invested, current and P&L are masked;
+    // the fund's current NAV is market data and stays visible.
+    final privacy = ref.watch(privacyProvider);
 
     // Show loading indicator while fetching data
     if (mfData.holdstatload ?? false) {
@@ -1090,7 +1096,7 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(holding.avgQty ?? '0') ?? 0.0).toStringAsFixed(4);
+                                      final value = privacy.mask((double.tryParse(holding.avgQty ?? '0') ?? 0.0).toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1107,7 +1113,7 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(holding.avgNav ?? '0') ?? 0.0).toStringAsFixed(4);
+                                      final value = privacy.mask((double.tryParse(holding.avgNav ?? '0') ?? 0.0).toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1141,7 +1147,7 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(holding.investedValue ?? '0') ?? 0.0).toStringAsFixed(2);
+                                      final value = privacy.mask((double.tryParse(holding.investedValue ?? '0') ?? 0.0).toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1158,7 +1164,7 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(holding.currentValue ?? '0') ?? 0.0).toStringAsFixed(2);
+                                      final value = privacy.mask((double.tryParse(holding.currentValue ?? '0') ?? 0.0).toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1176,8 +1182,8 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
                                       final pnlNum = double.tryParse(holding.profitLoss ?? '0') ?? 0.0;
-                                      final value = pnlNum.toStringAsFixed(2);
-                                      final color = _getCellColor(pnlNum, context);
+                                      final value = privacy.mask(pnlNum.toStringAsFixed(2));
+                                      final color = _getCellColor(privacy.isPrivate ? 0.0 : pnlNum, context);
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context, color: color), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1195,8 +1201,10 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
                                       final pctNum = double.tryParse(holding.changeprofitLoss ?? '0') ?? 0.0;
-                                      final displayValue = '${pctNum >= 0 ? "+" : ""}${pctNum.toStringAsFixed(2)}%';
-                                      final color = _getCellColor(pctNum, context);
+                                      final displayValue = privacy.isPrivate
+                                          ? '$kPrivacyMask%'
+                                          : '${pctNum >= 0 ? "+" : ""}${pctNum.toStringAsFixed(2)}%';
+                                      final color = _getCellColor(privacy.isPrivate ? 0.0 : pctNum, context);
                                       return Tooltip(
                                         message: displayValue,
                                         child: Text(displayValue, style: _getTextStyle(context, color: color).copyWith(fontSize: 12, fontWeight: FontWeight.w400), maxLines: 1, overflow: TextOverflow.ellipsis),

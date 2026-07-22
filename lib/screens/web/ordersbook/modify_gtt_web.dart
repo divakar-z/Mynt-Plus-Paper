@@ -763,6 +763,26 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                 ),
               ),
               ),
+              // MCX field is in lots — show the actual quantity underneath,
+              // kept live via the controller listener. Uses the SAME
+              // _lotsToActualQty conversion as the submit payload, so the
+              // shown qty always matches what gets placed.
+              if (widget.scripInfo.exch == "MCX")
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: orderInput.qtyCtrl,
+                  builder: (context, value, _) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      "Qty : ${_lotsToActualQty(value.text)}",
+                      style: WebTextStyles.para(
+                        isDarkTheme: theme.isDarkMode,
+                        color: theme.isDarkMode
+                            ? MyntColors.textSecondaryDark
+                            : MyntColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -1012,6 +1032,25 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                 ),
               ),
               ),
+              // MCX field is in lots — show the actual quantity underneath,
+              // kept live via the controller listener (same conversion as the
+              // submit payload).
+              if (widget.scripInfo.exch == "MCX")
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: orderInput.ocoQtyCtrl,
+                  builder: (context, value, _) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      "Qty : ${_lotsToActualQty(value.text)}",
+                      style: WebTextStyles.para(
+                        isDarkTheme: theme.isDarkMode,
+                        color: theme.isDarkMode
+                            ? MyntColors.textSecondaryDark
+                            : MyntColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

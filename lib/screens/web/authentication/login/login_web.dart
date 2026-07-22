@@ -689,9 +689,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     await Future.delayed(const Duration(milliseconds: 200));
     if (mounted) FocusScope.of(context).unfocus();
 
-    final webAuth = ref.read(webAuthProvider);
+    final webAuth = ref.read(webAuthProvider);  
     final auth = ref.read(authProvider);
-
+ 
     // Ensure loginController has the client ID
     if (webAuth.loginController.text.isEmpty) {
       webAuth.loginController.text = auth.loginMethCtrl.text.trim().toUpperCase();

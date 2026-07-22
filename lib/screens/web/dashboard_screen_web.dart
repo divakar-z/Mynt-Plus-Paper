@@ -15,6 +15,7 @@ import '../../../provider/portfolio_provider.dart';
 import '../../../provider/order_provider.dart';
 import '../../../provider/fund_provider.dart';
 import '../../../provider/mf_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/explore_model/stocks_model/toplist_stocks.dart';
 import 'dart:async';
@@ -67,9 +68,10 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         if (!mounted) return;
       }
 
-      // Fetch MF holdings for the dashboard portfolio tab using the same API as holdings tab
-      // This avoids race condition with the old fetchMFHoldings API which can cause double data
-      await ref.read(mfProvider).fetchmfholdingnew();
+      // Fetch MF holdings for the dashboard portfolio tab from the demat
+      // endpoint (the old MF holdings API is being decommissioned).
+      // await ref.read(mfProvider).fetchmfholdingnew();
+      await ref.read(mfProvider).fetchmfdematholding();
       if (!mounted) return;
 
       // Trade action data is fetched by _handleDashboardTap() before this screen is shown
@@ -655,10 +657,13 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final metric = metrics[index];
     final String valueStr = metric['value'] as String;
     final bool isPnl = metric['isPnl'] ?? false;
+    final privacy = ref.watch(privacyProvider);
     // Efficient color determination: check first char for negative, regex for zero
     final bool isNegative = valueStr.startsWith('-');
     final bool isZero = !valueStr.contains(RegExp(r'[1-9]'));
-    final Color valueColor = (isPnl && !isZero)
+    // Privacy Mode: profit/loss colour is neutralized too, so the mask can't
+    // leak direction through green/red.
+    final Color valueColor = (isPnl && !isZero && !privacy.isPrivate)
         ? (isNegative
             ? resolveThemeColor(context,
                 dark: MyntColors.lossDark, light: MyntColors.loss)
@@ -666,6 +671,16 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 dark: MyntColors.profitDark, light: MyntColors.profit))
         : resolveThemeColor(context,
             dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+
+    // Keep the ₹ / (%) shells visible so layout stays stable, but hide the
+    // number and its sign.
+    final String displayValue = privacy.isPrivate
+        ? (valueStr.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask)
+        : valueStr;
+    final String? subValueStr = metric['subValue'] as String?;
+    final String? displaySubValue = subValueStr == null
+        ? null
+        : (privacy.isPrivate ? '($kPrivacyMask%)' : subValueStr);
 
     final bool isLeftAligned = index % 2 == 0;
     final alignment =
@@ -697,15 +712,15 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
-              metric['value'],
+              displayValue,
               style: MyntWebTextStyles.price(
                 context,
                 color: valueColor,
               ),
             ),
-            if (metric['subValue'] != null)
+            if (displaySubValue != null)
               Text(
-                metric['subValue'],
+                displaySubValue,
                 style: MyntWebTextStyles.priceChange(
                   context,
                   color: valueColor,
@@ -772,13 +787,25 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
 
   List<Map<String, dynamic>> _getMutualFundMetrics(
       BuildContext context, MFProvider mfData) {
-    // Use the same data source as holdings tab (mfholdingnew.summary)
-    // This ensures consistency and avoids race condition with the old API
-    final summary = mfData.mfholdingnew?.summary;
-    final invest = double.tryParse(summary?.invested ?? '0') ?? 0.0;
-    final current = double.tryParse(summary?.currentValue ?? '0') ?? 0.0;
-    final totalPnL = double.tryParse(summary?.absReturnValue ?? '0') ?? 0.0;
-    final totalPnLPer = double.tryParse(summary?.absReturnPercent ?? '0') ?? 0.0;
+    // Data source moved to the demat holdings endpoint (the old MF holdings
+    // API is being decommissioned). Prefer the API summary; fall back to
+    // computing totals from the rows when the summary block is absent —
+    // same approach as the Holdings screen's MF BETA summary cards.
+    // final summary = mfData.mfholdingnew?.summary;
+    final summary = mfData.mfDematHolding?.summary;
+    double invest = double.tryParse(summary?.invested ?? '0') ?? 0.0;
+    double current = double.tryParse(summary?.currentValue ?? '0') ?? 0.0;
+    double totalPnL = double.tryParse(summary?.absReturnValue ?? '0') ?? 0.0;
+    double totalPnLPer =
+        double.tryParse(summary?.absReturnPercent ?? '0') ?? 0.0;
+    if (summary == null) {
+      for (final h in mfData.mfDematHolding?.data ?? []) {
+        invest += double.tryParse(h.investedValue ?? '0') ?? 0.0;
+        current += double.tryParse(h.currentValue ?? '0') ?? 0.0;
+      }
+      totalPnL = current - invest;
+      totalPnLPer = invest != 0 ? (totalPnL / invest) * 100 : 0.0;
+    }
 
     return [
       {'label': 'Invested', 'value': invest.toIndianRupee()},

@@ -23,6 +23,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 // import 'package:remove_emoji_input_formatter/remove_emoji_input_formatter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/transcation_provider.dart';
 // import '../../../../sharedWidget/custom_back_btn.dart';
@@ -886,7 +887,11 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    "₹ ${formatIndianCurrency(funds.fundDetailModel?.avlMrg ?? '0.00')}",
+                                    ref.watch(privacyProvider).mask(
+                                        formatIndianCurrency(
+                                            funds.fundDetailModel?.avlMrg ??
+                                                '0.00'),
+                                        prefix: "₹ "),
                                     style: MyntWebTextStyles.head(
                                       context,
                                       color: resolveThemeColor(

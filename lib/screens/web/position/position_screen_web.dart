@@ -16,6 +16,7 @@ import 'package:mynt_plus/screens/web/position/group/create_group_web.dart';
 
 import '../../../../models/portfolio_model/position_book_model.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/res.dart';
@@ -269,6 +270,18 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     required Color valueColor,
     required ThemesProvider theme,
   }) {
+    // Privacy Mode: hide the amount (and its sign/colour); the (%) shell
+    // stays so the layout doesn't shift.
+    final privacy = ref.watch(privacyProvider);
+    if (privacy.isPrivate) {
+      value = value.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask;
+      percentage = percentage == null ? null : kPrivacyMask;
+      valueColor = resolveThemeColor(
+        context,
+        dark: MyntColors.textPrimaryDark,
+        light: MyntColors.textPrimary,
+      );
+    }
     final horizontalPadding = context.responsive<double>(
       mobile: 8.0,
       tablet: 10.0,

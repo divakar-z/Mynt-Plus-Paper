@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/portfolio_model/holdings_model.dart';
 import 'package:mynt_plus/provider/portfolio_provider.dart';
+import 'package:mynt_plus/provider/privacy_provider.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
@@ -23,6 +24,8 @@ class HoldingsPanel extends ConsumerWidget {
         .toList();
 
     final totals = _computeTotals(rows, ws.socketDatas);
+    // Privacy Mode: P&L/invested/current/qty/avg are masked; LTP stays.
+    final isPrivate = ref.watch(privacyProvider).isPrivate;
 
     final dividerColor = Theme.of(context).dividerColor;
 
@@ -32,7 +35,7 @@ class HoldingsPanel extends ConsumerWidget {
         _Header(count: rows.length),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-          child: _SummaryCard(totals: totals),
+          child: _SummaryCard(totals: totals, isPrivate: isPrivate),
         ),
         Divider(height: 1, color: dividerColor),
         if (rows.isEmpty)
@@ -49,6 +52,7 @@ class HoldingsPanel extends ConsumerWidget {
                 return _HoldingTile(
                   holding: h,
                   socketLtp: _socketLtp(ws.socketDatas, h.exchTsym![0].token),
+                  isPrivate: isPrivate,
                   onTap: () {
                     final ex = h.exchTsym![0];
                     onSymbolPick(ChartScrip(
@@ -170,7 +174,8 @@ class _Header extends StatelessWidget {
 
 class _SummaryCard extends StatelessWidget {
   final _Totals totals;
-  const _SummaryCard({required this.totals});
+  final bool isPrivate;
+  const _SummaryCard({required this.totals, required this.isPrivate});
 
   @override
   Widget build(BuildContext context) {
@@ -200,18 +205,18 @@ class _SummaryCard extends StatelessWidget {
               Expanded(
                 child: _SummaryCell(
                   label: '1D Change',
-                  value: _fmtSigned(totals.oneDayChange),
-                  pct: _fmtPct(totals.oneDayChangePct),
-                  color: _signColor(totals.oneDayChange),
+                  value: isPrivate ? kPrivacyMask : _fmtSigned(totals.oneDayChange),
+                  pct: isPrivate ? '$kPrivacyMask%' : _fmtPct(totals.oneDayChangePct),
+                  color: _signColor(isPrivate ? 0 : totals.oneDayChange),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: _SummaryCell(
                   label: 'Total P&L',
-                  value: _fmtSigned(totals.totalPnl),
-                  pct: _fmtPct(totals.totalPnlPct),
-                  color: _signColor(totals.totalPnl),
+                  value: isPrivate ? kPrivacyMask : _fmtSigned(totals.totalPnl),
+                  pct: isPrivate ? '$kPrivacyMask%' : _fmtPct(totals.totalPnlPct),
+                  color: _signColor(isPrivate ? 0 : totals.totalPnl),
                 ),
               ),
             ],
@@ -223,7 +228,7 @@ class _SummaryCard extends StatelessWidget {
               Expanded(
                 child: _SummaryCell(
                   label: 'Invested',
-                  value: _fmt(totals.invested),
+                  value: isPrivate ? kPrivacyMask : _fmt(totals.invested),
                   color: resolveThemeColor(
                     context,
                     dark: MyntColors.textPrimaryDark,
@@ -235,7 +240,7 @@ class _SummaryCard extends StatelessWidget {
               Expanded(
                 child: _SummaryCell(
                   label: 'Current',
-                  value: _fmt(totals.current),
+                  value: isPrivate ? kPrivacyMask : _fmt(totals.current),
                   color: resolveThemeColor(
                     context,
                     dark: MyntColors.textPrimaryDark,
@@ -310,11 +315,13 @@ class _SummaryCell extends StatelessWidget {
 class _HoldingTile extends StatefulWidget {
   final HoldingsModel holding;
   final double? socketLtp;
+  final bool isPrivate;
   final VoidCallback onTap;
 
   const _HoldingTile({
     required this.holding,
     required this.socketLtp,
+    required this.isPrivate,
     required this.onTap,
   });
 
@@ -345,8 +352,11 @@ class _HoldingTileState extends State<_HoldingTile> {
     final pctRaw = double.tryParse(ex.perChange ?? '');
     final pct = pctRaw ?? (avg > 0 ? ((lp - avg) / avg) * 100 : 0);
 
-    final pnlColor =
-        pnl > 0 ? MyntColors.profit : (pnl < 0 ? MyntColors.loss : MyntColors.textSecondary);
+    // Privacy Mode: values masked below; colour neutralized here.
+    final isPrivate = widget.isPrivate;
+    final pnlColor = (isPrivate || pnl == 0)
+        ? MyntColors.textSecondary
+        : (pnl > 0 ? MyntColors.profit : MyntColors.loss);
 
     final pledged = _isPledged(h);
 
@@ -401,14 +411,18 @@ class _HoldingTileState extends State<_HoldingTile> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'QTY ${_intStr(qty)}  AVG ${avg.toStringAsFixed(2)}',
+                      isPrivate
+                          ? 'QTY $kPrivacyMask  AVG $kPrivacyMask'
+                          : 'QTY ${_intStr(qty)}  AVG ${avg.toStringAsFixed(2)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: MyntWebTextStyles.caption(context),
                     ),
                     const SizedBox(height: 1),
                     Text(
-                      'INV ${invested.toStringAsFixed(2)}',
+                      isPrivate
+                          ? 'INV $kPrivacyMask'
+                          : 'INV ${invested.toStringAsFixed(2)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: MyntWebTextStyles.caption(context,
@@ -428,7 +442,7 @@ class _HoldingTileState extends State<_HoldingTile> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    _fmtSigned(pnl),
+                    isPrivate ? kPrivacyMask : _fmtSigned(pnl),
                     style: MyntWebTextStyles.body(context,
                         fontWeight: MyntFonts.semiBold,
                         darkColor: pnlColor,
@@ -436,7 +450,7 @@ class _HoldingTileState extends State<_HoldingTile> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    _fmtPct(pct.toDouble()),
+                    isPrivate ? '$kPrivacyMask%' : _fmtPct(pct.toDouble()),
                     style: MyntWebTextStyles.caption(context,
                         darkColor: pnlColor, lightColor: pnlColor),
                   ),

@@ -7,6 +7,7 @@ import 'package:mynt_plus/models/order_book_model/place_order_model.dart';
 import 'package:mynt_plus/models/portfolio_model/position_book_model.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/portfolio_provider.dart';
+import 'package:mynt_plus/provider/privacy_provider.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
@@ -221,12 +222,16 @@ class _TotalPnlCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(websocketProvider);
+    // Privacy Mode: total masked, colour neutralized.
+    final privacy = ref.watch(privacyProvider);
     double total = 0;
     for (final p in positions) {
       if (p.stat == 'Not_Ok') continue;
       total += double.tryParse(p.profitNloss ?? '') ?? 0;
     }
-    final color = total >= 0 ? MyntColors.profit : MyntColors.loss;
+    final color = privacy.isPrivate
+        ? MyntColors.textSecondary
+        : (total >= 0 ? MyntColors.profit : MyntColors.loss);
 
     return SizedBox(
       height: 70,
@@ -235,7 +240,7 @@ class _TotalPnlCard extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              total.toStringAsFixed(2),
+              privacy.mask(total.toStringAsFixed(2)),
               style: MyntWebTextStyles.head(
                 context,
                 fontWeight: MyntFonts.bold,
@@ -341,7 +346,11 @@ class _PositionTileState extends ConsumerState<_PositionTile> {
     final sideLabel = isLong ? 'LONG' : 'SHORT';
 
     final pnl = double.tryParse(p.profitNloss ?? '') ?? 0;
-    final pnlColor = pnl >= 0 ? MyntColors.profit : MyntColors.loss;
+    // Privacy Mode: qty/avg/P&L masked below; colour neutralized here.
+    final isPrivate = ref.watch(privacyProvider).isPrivate;
+    final pnlColor = isPrivate
+        ? MyntColors.textSecondary
+        : (pnl >= 0 ? MyntColors.profit : MyntColors.loss);
 
     final hoverBg = resolveThemeColor(
       context,
@@ -382,7 +391,9 @@ class _PositionTileState extends ConsumerState<_PositionTile> {
                 _SidePill(label: sideLabel, color: sideColor),
               ]),
               Text(
-                'Qty ${netqty.abs()} · Avg ${p.avgPrc ?? '-'} · LP $lp',
+                isPrivate
+                    ? 'Qty $kPrivacyMask · Avg $kPrivacyMask · LP $lp'
+                    : 'Qty ${netqty.abs()} · Avg ${p.avgPrc ?? '-'} · LP $lp',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: MyntWebTextStyles.caption(context),
@@ -390,7 +401,7 @@ class _PositionTileState extends ConsumerState<_PositionTile> {
               Row(children: [
                 Expanded(
                   child: Text(
-                    pnl.toStringAsFixed(2),
+                    isPrivate ? kPrivacyMask : pnl.toStringAsFixed(2),
                     style: MyntWebTextStyles.body(
                       context,
                       fontWeight: MyntFonts.semiBold,

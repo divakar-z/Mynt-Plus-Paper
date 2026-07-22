@@ -7,6 +7,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../../../models/marketwatch_model/get_quotes.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/res.dart';
@@ -332,7 +333,9 @@ class _HoldingsCardWebState extends ConsumerState<_HoldingsCardWeb> {
                                     ),
                                     const SizedBox(width: 4),
                                     Text(
-                                      _currentQty,
+                                      ref
+                                          .watch(privacyProvider)
+                                          .mask(_currentQty),
                                       style: MyntWebTextStyles.exch(
                                         context,
                                         fontWeight: FontWeight.w500,

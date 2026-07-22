@@ -7,11 +7,11 @@ import 'package:mynt_plus/provider/fund_provider.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/screens/web/holdings/hold_table.dart';
-import 'package:mynt_plus/screens/web/holdings/mf_hold_table.dart';
 import 'package:mynt_plus/screens/web/holdings/mf_demat_hold_table.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/profile_all_details_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
@@ -210,7 +210,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     } else if (_selectedTabIndex == 1) {
       await portfolioData.fetchMtfHoldings(context, "Refresh", isRefresh: true);
     } else if (_selectedTabIndex == 2) {
-      await ref.read(mfProvider).fetchmfholdingnew();
+      // Unreachable (old MF tab retired) — and the old MF holdings API is
+      // decommissioned; demat is the only MF holdings source now.
+      // await ref.read(mfProvider).fetchmfholdingnew();
+      await ref.read(mfProvider).fetchmfdematholding();
     } else {
       await ref.read(mfProvider).fetchmfdematholding();
     }
@@ -474,6 +477,18 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     required Color valueColor,
     required ThemesProvider theme,
   }) {
+    // Privacy Mode: hide the amount (and its sign/colour); the ₹ and (%)
+    // shells stay so the layout doesn't shift.
+    final privacy = ref.watch(privacyProvider);
+    if (privacy.isPrivate) {
+      value = value.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask;
+      percentage = percentage == null ? null : kPrivacyMask;
+      valueColor = resolveThemeColor(
+        context,
+        dark: MyntColors.textPrimaryDark,
+        light: MyntColors.textPrimary,
+      );
+    }
     return shadcn.Theme(
         data: shadcn.Theme.of(context).copyWith(radius: () => 0.3),
         child: shadcn.Card(
@@ -814,13 +829,13 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                         );
                       },
                     ),
-                    // Mutual Funds tab - Using MfTableExample from mf_hold_table.dart with search
-                    ValueListenableBuilder<String>(
-                      valueListenable: _mfSearchQuery,
-                      builder: (context, searchQuery, child) {
-                        return MfTableExample(searchQuery: searchQuery);
-                      },
-                    ),
+                    // Old Mutual Funds tab (retired) — stubbed with an empty
+                    // placeholder instead of removing the entry so the other
+                    // tab indices (0/1/3) stay stable. IMPORTANT: this must
+                    // NOT build MfTableExample: the IndexedStack builds all
+                    // children, and that table fires fetchmfholdingnew() from
+                    // its initState even when the tab is hidden.
+                    const SizedBox.shrink(),
                     // Mutual Fund Beta tab - Using MfDematTableExample from mf_demat_hold_table.dart with search
                     ValueListenableBuilder<String>(
                       valueListenable: _mfDematSearchQuery,
@@ -840,8 +855,6 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     // Calculate counts for tabs
     final stocksCount = widget.listofHolding.length;
     final mtfCount = portfolioData.mtfHoldingsModel?.length ?? 0;
-    final mutualFundsCount =
-        ref.read(mfProvider).mfholdingnew?.data?.length ?? 0;
     final mfDematCount =
         ref.read(mfProvider).mfDematHolding?.data?.length ?? 0;
 
@@ -944,7 +957,8 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
         }
 
         Widget buildTabs() {
-          final betaSelected = _selectedTabIndex == 3;
+          // Was used by the BETA-suffixed rich label (commented below).
+          // final betaSelected = _selectedTabIndex == 3;
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -962,48 +976,46 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 label: tabTextLabel('MTF', 1),
               ),
               const SizedBox(width: 8),
-              // Mutual Fund tab
-              tabChip(
-                index: 2,
-                count: mutualFundsCount,
-                label: tabTextLabel('Mutual Fund', 2),
-              ),
-              const SizedBox(width: 8),
-              // Mutual Fund Beta tab
+              // Old Mutual Fund tab (index 2) is retired — only the demat
+              // based tab is offered now (BETA suffix dropped from its
+              // label). Its table is stubbed in the IndexedStack below so
+              // its API never fires.
+              // Mutual Fund tab (demat)
               tabChip(
                 index: 3,
                 count: mfDematCount,
-                label: Text.rich(
-                  TextSpan(
-                    style: MyntWebTextStyles.body(
-                      context,
-                      fontWeight: betaSelected
-                          ? MyntFonts.semiBold
-                          : MyntFonts.medium,
-                    ).copyWith(
-                      color: betaSelected
-                          ? shadcn.Theme.of(context).colorScheme.foreground
-                          : shadcn.Theme.of(context)
-                              .colorScheme
-                              .mutedForeground,
-                    ),
-                    children: [
-                      const TextSpan(text: 'Mutual Fund '),
-                      TextSpan(
-                        text: 'BETA',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: MyntFonts.bold,
-                          color: resolveThemeColor(
-                            context,
-                            dark: MyntColors.primaryDark,
-                            light: MyntColors.primary,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                label: tabTextLabel('Mutual Fund', 3),
+                // label: Text.rich(
+                //   TextSpan(
+                //     style: MyntWebTextStyles.body(
+                //       context,
+                //       fontWeight: betaSelected
+                //           ? MyntFonts.semiBold
+                //           : MyntFonts.medium,
+                //     ).copyWith(
+                //       color: betaSelected
+                //           ? shadcn.Theme.of(context).colorScheme.foreground
+                //           : shadcn.Theme.of(context)
+                //               .colorScheme
+                //               .mutedForeground,
+                //     ),
+                //     children: [
+                //       const TextSpan(text: 'Mutual Fund '),
+                //       TextSpan(
+                //         text: 'BETA',
+                //         style: TextStyle(
+                //           fontSize: 12,
+                //           fontWeight: MyntFonts.bold,
+                //           color: resolveThemeColor(
+                //             context,
+                //             dark: MyntColors.primaryDark,
+                //             light: MyntColors.primary,
+                //           ),
+                //         ),
+                //       ),
+                //     ],
+                //   ),
+                // ),
               ),
             ],
           );
@@ -1082,8 +1094,9 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 _buildEdisButton(theme, portfolioData),
                 const SizedBox(width: 12),
               ],
-              // MF E-DIS button (only show on Mutual Fund tab when POA is not active)
-              if (_selectedTabIndex == 2 &&
+              // MF E-DIS button (only show on Mutual Fund BETA tab when POA
+              // is not active — moved here from the retired old MF tab)
+              if (_selectedTabIndex == 3 &&
                   ref.read(profileAllDetailsProvider).clientAllDetailsSafe?.clientData?.pOA != 'Y') ...[
                 _buildMfEdisButton(theme),
                 const SizedBox(width: 12),

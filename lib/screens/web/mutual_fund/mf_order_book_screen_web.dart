@@ -285,8 +285,10 @@ class _MfOrderBookScreenWeb extends ConsumerState<MfOrderBookScreenWeb>
                           ),
                           onPressed: () async {
                             if (_tabController.index == 0) {
-                              // Refresh Holdings
-                              await mforderbook.fetchmfholdingnew();
+                              // Refresh Holdings (demat endpoint — the old MF
+                              // holdings API is being decommissioned)
+                              // await mforderbook.fetchmfholdingnew();
+                              await mforderbook.fetchmfdematholding();
                             } else {
                               // Refresh Orders
                               _ordersDisplayCount = 15; // Reset pagination

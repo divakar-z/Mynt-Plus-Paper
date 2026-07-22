@@ -45,6 +45,7 @@ import '../../../provider/market_watch_provider.dart';
 import '../../../provider/network_state_provider.dart';
 import '../../../provider/order_provider.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/user_profile_provider.dart';
 import '../../../provider/version_provider.dart';
@@ -6627,6 +6628,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
   Widget _buildTickerContent(BuildContext context) {
     final theme = ref.watch(themeProvider);
     final portfolio = ref.watch(portfolioProvider);
+    final privacy = ref.watch(privacyProvider);
     // Commented out for future use - Holdings and Fund data
     // final fund = ref.watch(fundProvider);
     final isDarkMode = theme.isDarkMode;
@@ -6672,6 +6674,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
               groupPositionSym: groupPositionSym,
               totalPnL: totalPnL,
               isDarkMode: isDarkMode,
+              isPrivate: privacy.isPrivate,
             );
 
             // If no positions, show empty state message
@@ -6735,6 +6738,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
     required List<String> groupPositionSym,
     required double totalPnL,
     required bool isDarkMode,
+    required bool isPrivate,
   }) {
     final List<Widget> items = [];
 
@@ -6745,6 +6749,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
         value: totalPnL,
         isDarkMode: isDarkMode,
         showAsAmount: true,
+        isMasked: isPrivate,
         onTap: () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo(Routes.positionscreen);
@@ -6780,6 +6785,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
           value: pnl,
           isDarkMode: isDarkMode,
           showAsAmount: true,
+          isMasked: isPrivate,
           onTap: () {
             if (WebNavigationHelper.isAvailable) {
               WebNavigationHelper.navigateTo(Routes.positionscreen);
@@ -6882,6 +6888,8 @@ class _TickerItem extends StatefulWidget {
   final bool isDarkMode;
   final bool showAsAmount;
   final bool isNeutral;
+  // Privacy Mode: hides the amount (and its sign/colour) behind a mask.
+  final bool isMasked;
   final VoidCallback? onTap;
 
   const _TickerItem({
@@ -6890,6 +6898,7 @@ class _TickerItem extends StatefulWidget {
     required this.isDarkMode,
     this.showAsAmount = false,
     this.isNeutral = false,
+    this.isMasked = false,
     this.onTap,
   });
 
@@ -6908,7 +6917,7 @@ class _TickerItemState extends State<_TickerItem> {
         : widget.value.toStringAsFixed(2);
 
     Color valueColor;
-    if (widget.isNeutral || widget.value == 0) {
+    if (widget.isMasked || widget.isNeutral || widget.value == 0) {
       valueColor = widget.isDarkMode
           ? MyntColors.textPrimaryDark
           : MyntColors.textPrimary;
@@ -6949,9 +6958,11 @@ class _TickerItemState extends State<_TickerItem> {
               ),
               const SizedBox(width: 8),
               Text(
-                widget.showAsAmount
-                    ? (isPositive ? displayValue : "-$displayValue")
-                    : displayValue,
+                widget.isMasked
+                    ? (widget.showAsAmount ? "₹$kPrivacyMask" : kPrivacyMask)
+                    : (widget.showAsAmount
+                        ? (isPositive ? displayValue : "-$displayValue")
+                        : displayValue),
                 style: MyntWebTextStyles.body(
                   context,
                   fontWeight: MyntFonts.semiBold,

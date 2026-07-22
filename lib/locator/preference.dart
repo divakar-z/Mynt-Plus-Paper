@@ -593,6 +593,15 @@ class Preferences {
   String? get accessibilitySettings =>
       _prefInstance?.getString(_accessibilitySettings);
 
+  // Privacy Mode — masks sensitive monetary values (P&L, holdings, funds)
+  // across the app when enabled. Stored per client id so one account's
+  // choice never carries over to the next login on the same browser.
+  // Defaults to false (values visible).
+  Future setPrivacyMode(String userId, bool enabled) async =>
+      await _prefInstance!.setBool('${_privacyMode}_$userId', enabled);
+
+  bool getPrivacyMode(String userId) =>
+      _prefInstance?.getBool('${_privacyMode}_$userId') ?? false;
 }
 
 const String _userTheme = 'userTheme';
@@ -729,3 +738,5 @@ const String _chartEngineSession = 'chartEngineSessionV1';
 
 //// ACCESSIBILITY PANEL
 const String _accessibilitySettings = 'accessibilitySettingsV1';
+
+const String _privacyMode = "privacyMode";
