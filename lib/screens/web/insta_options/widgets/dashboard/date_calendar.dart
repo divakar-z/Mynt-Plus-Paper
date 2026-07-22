@@ -17,12 +17,23 @@ class DashDateButton extends StatefulWidget {
   final List<DateTime> availableDates;
   final void Function(DateTime) onSelected;
 
+  /// Greyed-out (disabled-looking) trigger — used while LIVE mode drives the
+  /// data and no specific date is selected. Still tappable to pick a day.
+  final bool muted;
+
+  /// Whether the calendar marks today with the green LIVE circle. The caller
+  /// passes the backend's live-channel signal, so non-trading days (weekends
+  /// / holidays) show no marker — no client-side holiday logic.
+  final bool markToday;
+
   const DashDateButton({
     super.key,
     required this.tradeDate,
     required this.selectedDate,
     required this.availableDates,
     required this.onSelected,
+    this.muted = false,
+    this.markToday = false,
   });
 
   @override
@@ -43,8 +54,13 @@ class _DashDateButtonState extends State<DashDateButton> {
   @override
   Widget build(BuildContext context) {
     final enabled = widget.availableDates.isNotEmpty;
-    final fg = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final tertiary = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    // Muted = proper disabled look: grey border, grey text/icons, faint fill.
+    final fg = widget.muted
+        ? tertiary
+        : resolveThemeColor(context,
+            dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
 
     return OverlayPortal(
       controller: _ctrl,
@@ -66,6 +82,7 @@ class _DashDateButtonState extends State<DashDateButton> {
             child: _CalendarCard(
               selected: widget.selectedDate,
               available: widget.availableDates,
+              markToday: widget.markToday,
               onPick: _pick,
             ),
           ),
@@ -84,13 +101,21 @@ class _DashDateButtonState extends State<DashDateButton> {
               alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: resolveThemeColor(context,
-                    dark: MyntColors.transparent,
-                    light: const Color(0xffF1F3F8)),
+                color: widget.muted
+                    ? resolveThemeColor(context,
+                        dark: MyntColors.transparent,
+                        light: MyntColors.cardHover)
+                    : resolveThemeColor(context,
+                        dark: MyntColors.transparent,
+                        light: const Color(0xffF1F3F8)),
                 border: Border.all(
-                  color: resolveThemeColor(context,
-                      dark: MyntColors.textSecondaryDark,
-                      light: MyntColors.primary),
+                  color: widget.muted
+                      ? resolveThemeColor(context,
+                          dark: MyntColors.cardBorderDark,
+                          light: MyntColors.cardBorder)
+                      : resolveThemeColor(context,
+                          dark: MyntColors.textSecondaryDark,
+                          light: MyntColors.primary),
                 ),
                 borderRadius: BorderRadius.circular(6),
               ),
@@ -101,18 +126,23 @@ class _DashDateButtonState extends State<DashDateButton> {
                   const SizedBox(width: 8),
                   Text(
                     InstaOptionsFormat.dateLabel(widget.tradeDate),
-                    style: MyntWebTextStyles.body(context,
-                        darkColor: MyntColors.textWhite,
-                        lightColor: MyntColors.textBlack,
-                        fontWeight: MyntFonts.medium),
+                    style: widget.muted
+                        ? MyntWebTextStyles.body(context,
+                            color: fg, fontWeight: MyntFonts.medium)
+                        : MyntWebTextStyles.body(context,
+                            darkColor: MyntColors.textWhite,
+                            lightColor: MyntColors.textBlack,
+                            fontWeight: MyntFonts.medium),
                   ),
                   const SizedBox(width: 6),
                   Icon(
                     Icons.keyboard_arrow_down,
                     size: 20,
-                    color: resolveThemeColor(context,
-                        dark: MyntColors.textSecondaryDark,
-                        light: MyntColors.textSecondary),
+                    color: widget.muted
+                        ? fg
+                        : resolveThemeColor(context,
+                            dark: MyntColors.textSecondaryDark,
+                            light: MyntColors.textSecondary),
                   ),
                 ],
               ),
@@ -127,11 +157,13 @@ class _DashDateButtonState extends State<DashDateButton> {
 class _CalendarCard extends StatefulWidget {
   final DateTime? selected;
   final List<DateTime> available;
+  final bool markToday;
   final void Function(DateTime) onPick;
 
   const _CalendarCard({
     required this.selected,
     required this.available,
+    required this.markToday,
     required this.onPick,
   });
 
@@ -255,6 +287,12 @@ class _CalendarCardState extends State<_CalendarCard> {
     for (var i = 0; i < offset; i++) {
       cells.add(const SizedBox(height: 34));
     }
+    // Today's marker uses the device date, re-read on every build — the
+    // popover is rebuilt each time it opens, so it rolls over automatically.
+    // (Trading-day availability itself still comes only from the backend
+    // `/dates` calendar; this is purely the visual "today" ring.)
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     for (var d = 1; d <= daysInMonth; d++) {
       final date = DateTime(_month.year, _month.month, d);
       final available = _availSet.contains(date);
@@ -266,6 +304,7 @@ class _CalendarCardState extends State<_CalendarCard> {
         day: d,
         available: available,
         selected: selected,
+        isToday: widget.markToday && date == today,
         onTap: available ? () => widget.onPick(date) : null,
       ));
     }
@@ -286,12 +325,14 @@ class _DayCell extends StatelessWidget {
   final int day;
   final bool available;
   final bool selected;
+  final bool isToday;
   final VoidCallback? onTap;
 
   const _DayCell({
     required this.day,
     required this.available,
     required this.selected,
+    this.isToday = false,
     required this.onTap,
   });
 
@@ -299,6 +340,8 @@ class _DayCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final live = resolveThemeColor(context,
+        dark: MyntColors.profitDark, light: MyntColors.profit);
     final fg = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final muted = resolveThemeColor(context,
@@ -309,6 +352,11 @@ class _DayCell extends StatelessWidget {
     if (selected) {
       bg = accent;
       textColor = Colors.white;
+    } else if (isToday) {
+      // Today = light green circle (the LIVE colour), same weight as the
+      // light-blue available tint; the day number carries the green.
+      bg = live.withValues(alpha: 0.15);
+      textColor = live;
     } else if (available) {
       bg = accent.withValues(alpha: 0.12);
       textColor = fg;
@@ -333,7 +381,8 @@ class _DayCell extends StatelessWidget {
               style: MyntWebTextStyles.caption(
                 context,
                 color: textColor,
-                fontWeight: selected ? MyntFonts.bold : MyntFonts.medium,
+                fontWeight:
+                    selected || isToday ? MyntFonts.bold : MyntFonts.medium,
               ),
             ),
           ),

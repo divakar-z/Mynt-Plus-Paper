@@ -43,9 +43,11 @@ class LiveDateSelector extends StatelessWidget {
           '${d.month.toString().padLeft(2, '0')}-'
           '${d.day.toString().padLeft(2, '0')}';
 
-  DateTime? get _latestFinalized => availableDates.isEmpty
-      ? null
-      : availableDates.reduce((a, b) => a.isAfter(b) ? a : b);
+  // Retired with the live-label fix — the pill now shows the live day itself
+  // instead of the latest finalized day.
+  // DateTime? get _latestFinalized => availableDates.isEmpty
+  //     ? null
+  //     : availableDates.reduce((a, b) => a.isAfter(b) ? a : b);
 
   @override
   Widget build(BuildContext context) {
@@ -61,16 +63,24 @@ class LiveDateSelector extends StatelessWidget {
           ),
           const SizedBox(width: 8),
         ],
-        Opacity(
-          opacity: hasLive && liveMode ? 0.6 : 1.0,
-          child: DashDateButton(
-            // In live mode the calendar invites "pick a past day" — label it
-            // with the latest finalized day and highlight nothing.
-            tradeDate: liveMode ? _iso(_latestFinalized) : tradeDate,
-            selectedDate: liveMode ? null : selectedDate,
-            availableDates: availableDates,
-            onSelected: onSelectDate,
-          ),
+        DashDateButton(
+          // Live mode labels the pill with the LIVE day itself (today) —
+          // the payload's trade date, or the device date before the first
+          // payload lands. Historical mode prefers the date the user just
+          // picked, so the pill never flashes the previous payload's date
+          // while the new day is still loading.
+          tradeDate: liveMode
+              ? (tradeDate ?? _iso(DateTime.now()))
+              : (_iso(selectedDate) ?? tradeDate),
+          selectedDate: liveMode ? null : selectedDate,
+          availableDates: availableDates,
+          onSelected: onSelectDate,
+          // Proper greyed-out look while LIVE drives the data (the old 0.6
+          // opacity barely read as disabled). Still tappable to pick a day.
+          muted: hasLive && liveMode,
+          // Green "today" ring only when the backend holds a live channel for
+          // today — weekends / holidays get no marker.
+          markToday: hasLive,
         ),
       ],
     );
