@@ -22,6 +22,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import 'package:mynt_plus/notification/notification_service.dart';
@@ -454,12 +455,15 @@ class MyApp extends ConsumerWidget {
               // colour modes (Grayscale / Invert / Blue-Light / Smart-Contrast /
               // Theme-Tone — exclusivity is enforced in AccessibilityNotifier).
               // At most one matrix is ever active; when none is,
-              // [_activeColorMatrix] returns the identity matrix (a no-op). One
-              // ColorFiltered stays mounted at all times so the subtree below
-              // never reparents. This also collapses the five separate filters
-              // into one shared source (resolves the former a11y Fix 7 TODO).
-              content = ColorFiltered(
-                colorFilter: ColorFilter.matrix(_activeColorMatrix(a11y)),
+              // [_activeColorFilter] returns null and the wrapper paints the
+              // child directly — NO offscreen color-filter layer and NO
+              // per-frame full-screen composite in the (common) all-off case.
+              // The wrapper stays mounted at all times so the subtree below
+              // never reparents; only its internal paint branch changes. This
+              // also collapses the five separate filters into one shared source
+              // (resolves the former a11y Fix 7 TODO).
+              content = _ConditionalColorFilter(
+                colorFilter: _activeColorFilter(a11y),
                 child: content,
               );
 
@@ -528,22 +532,21 @@ class MyApp extends ConsumerWidget {
   }
 }
 
-/// Identity colour matrix — leaves every pixel untouched. Used when no colour
-/// mode is active so the single always-mounted [ColorFiltered] is a no-op.
-const List<double> _identityColorMatrix = <double>[
-  1, 0, 0, 0, 0,
-  0, 1, 0, 0, 0,
-  0, 0, 1, 0, 0,
-  0, 0, 0, 1, 0,
-];
+/// Wraps [_activeColorMatrix] as a [ColorFilter], returning null when no colour
+/// mode is active so [_ConditionalColorFilter] can skip the offscreen layer
+/// entirely (see its paint()).
+ColorFilter? _activeColorFilter(AccessibilityNotifier a11y) {
+  final List<double>? matrix = _activeColorMatrix(a11y);
+  return matrix == null ? null : ColorFilter.matrix(matrix);
+}
 
 /// Returns the colour matrix for whichever mutually-exclusive colour mode is
 /// active — Grayscale, Invert, Blue-Light, Smart-Contrast or Theme-Tone — or
-/// [_identityColorMatrix] when none is. Exclusivity is enforced in
-/// [AccessibilityNotifier] (enabling one clears the rest), so this can select
-/// the first match rather than compose several. Single source of truth for the
-/// on-canvas matrices; the chart surfaces mirror these via [ChartA11yFilter].
-List<double> _activeColorMatrix(AccessibilityNotifier a11y) {
+/// null when none is. Exclusivity is enforced in [AccessibilityNotifier]
+/// (enabling one clears the rest), so this can select the first match rather
+/// than compose several. Single source of truth for the on-canvas matrices;
+/// the chart surfaces mirror these via [ChartA11yFilter].
+List<double>? _activeColorMatrix(AccessibilityNotifier a11y) {
   if (a11y.grayscaleEnabled) {
     return const <double>[
       0.2126, 0.7152, 0.0722, 0, 0,
@@ -592,7 +595,77 @@ List<double> _activeColorMatrix(AccessibilityNotifier a11y) {
       0, 0, 0, 1, 0,
     ];
   }
-  return _identityColorMatrix;
+  return null;
+}
+
+/// Always-mounted colour-filter wrapper that only pays the compositing cost
+/// when a colour mode is actually active.
+///
+/// [ColorFiltered] always pushes a [ColorFilterLayer] and composites its whole
+/// subtree through it every frame — even with an identity matrix. Because this
+/// wrapper is kept permanently mounted (to avoid a GlobalKey reparent crash),
+/// that meant the entire app paid a per-frame full-screen offscreen composite
+/// even when every colour mode was off — the common case.
+///
+/// This wrapper stays mounted identically, but when [colorFilter] is null it
+/// paints the child directly with no layer at all; it only pushes the
+/// color-filter layer when a mode is on. The child's element position never
+/// changes, so the reparent-crash protection is preserved.
+class _ConditionalColorFilter extends SingleChildRenderObjectWidget {
+  const _ConditionalColorFilter({
+    required this.colorFilter,
+    required Widget super.child,
+  });
+
+  final ColorFilter? colorFilter;
+
+  @override
+  _RenderConditionalColorFilter createRenderObject(BuildContext context) =>
+      _RenderConditionalColorFilter(colorFilter);
+
+  @override
+  void updateRenderObject(
+      BuildContext context, _RenderConditionalColorFilter renderObject) {
+    renderObject.colorFilter = colorFilter;
+  }
+}
+
+class _RenderConditionalColorFilter extends RenderProxyBox {
+  _RenderConditionalColorFilter(this._colorFilter);
+
+  ColorFilter? _colorFilter;
+  ColorFilter? get colorFilter => _colorFilter;
+  set colorFilter(ColorFilter? value) {
+    if (value == _colorFilter) return;
+    // Switching between "no layer" and "color-filter layer" flips whether this
+    // box needs compositing, so refresh the compositing bits on that boundary.
+    final bool toggledPresence = (value == null) != (_colorFilter == null);
+    _colorFilter = value;
+    if (toggledPresence) markNeedsCompositingBitsUpdate();
+    markNeedsPaint();
+  }
+
+  // Only forces a compositing layer while a filter is actually active.
+  @override
+  bool get alwaysNeedsCompositing => child != null && _colorFilter != null;
+
+  @override
+  ColorFilterLayer? get layer => super.layer as ColorFilterLayer?;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+    final ColorFilter? filter = _colorFilter;
+    if (filter == null) {
+      // No colour mode active: draw the child straight through — no offscreen
+      // full-screen composite, no ColorFilterLayer allocation.
+      layer = null;
+      super.paint(context, offset);
+      return;
+    }
+    layer =
+        context.pushColorFilter(offset, filter, super.paint, oldLayer: layer);
+  }
 }
 
 /// Spotlight overlay for the ADHD Focus Assist toggle. Tracks the cursor via
