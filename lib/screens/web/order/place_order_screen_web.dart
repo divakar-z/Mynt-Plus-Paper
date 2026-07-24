@@ -39,6 +39,8 @@ import 'package:mynt_plus/screens/web/funds/fund_screen_web.dart';
 import 'orderscreen_header_web.dart';
 import 'slice_order_sheet_web.dart';
 import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import 'package:mynt_plus/sharedWidget/custom_widget_button.dart';
 import 'package:mynt_plus/sharedWidget/enums.dart';
 import 'package:mynt_plus/sharedWidget/functions.dart';
@@ -72,6 +74,16 @@ TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
         (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
             ? newValue
             : oldValue);
+
+/// Caps a digits-only quantity field at 1 crore (10,000,000). Rejects any
+/// keystroke or paste that would push the value above the limit, keeping the
+/// last valid value. Empty is always allowed so the field can still be cleared.
+TextInputFormatter _maxQtyLimit() =>
+    TextInputFormatter.withFunction((oldValue, newValue) {
+      if (newValue.text.isEmpty) return newValue;
+      final v = int.tryParse(newValue.text);
+      return (v != null && v <= 10000000) ? newValue : oldValue;
+    });
 
 
 // InheritedWidget to pass close callback to child widgets
@@ -2558,7 +2570,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   light: MyntColors.textSecondary)
                                                                   .withValues(alpha: 0.5),
                                                             ),
-                                                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                                            inputFormatters: [FilteringTextInputFormatter.digitsOnly, _maxQtyLimit()],
                                                             keyboardType: TextInputType.number,
                                                             textStyle: WebTextStyles.formInput(
                                                               isDarkTheme: theme.isDarkMode,
@@ -3393,7 +3405,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     : MyntColors
                                                                         .textSecondary).withValues(alpha: 0.5),
                                                               ),
-                                                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                                              inputFormatters: [FilteringTextInputFormatter.digitsOnly, _maxQtyLimit()],
                                                               keyboardType: TextInputType.number,
                                                               textStyle: WebTextStyles.formInput(
                                                                 isDarkTheme: theme
@@ -4602,7 +4614,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         ),
                                                         inputFormatters: [
                                                           FilteringTextInputFormatter
-                                                              .digitsOnly
+                                                              .digitsOnly,
+                                                          _maxQtyLimit(),
                                                         ],
                                                         keyboardType:
                                                             TextInputType
@@ -6962,7 +6975,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 SafeParse.toDouble(widget.scripInfo.lc)) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
-                                                                              "Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
+                                                                              "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
                                                                         } else {
                                                                           if ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) > frezQty &&
                                                                               widget.scripInfo.frzqty != null)) {
@@ -6983,7 +6996,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 SafeParse.toDouble(widget.scripInfo.uc)) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
-                                                                              "Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                                              "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
                                                                         } else {
                                                                           if ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) > frezQty &&
                                                                               widget.scripInfo.frzqty != null)) {
@@ -7035,14 +7048,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             lc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
                                                                     } else if (!isBuy! &&
                                                                         (userOrderPrice +
                                                                                 userStopLoss) >
                                                                             uc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
                                                                     } else if ((triggerPriceCtrl.text.isEmpty ||
                                                                             triggerPriceCtrl.text ==
                                                                                 "0") &&
@@ -7168,7 +7181,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 .scripInfo.lc)) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
+                                                                          "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
                                                                     } else if (!isBuy! &&
                                                                         _hasValidCircuitBreakerValues &&
                                                                         (SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)) >
@@ -7176,7 +7189,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 .scripInfo.uc)) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                                          "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
                                                                     } else if (trailingTicksCtrl
                                                                             .text
                                                                             .isNotEmpty &&
@@ -7251,14 +7264,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             lc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
                                                                     } else if (!isBuy! &&
                                                                         (userOrderPrice +
                                                                                 userStopLoss) >
                                                                             uc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
                                                                     } else if (triggerPriceCtrl
                                                                             .text
                                                                             .isEmpty &&
@@ -7926,10 +7939,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                               "Trailing SL should be in multiples of tick size: $tickSize");
                         }
                       }
-                      if (value.isEmpty) {
-                        ResponsiveSnackBar.showWarning(
-                            context, "Trailing SL cannot be empty");
-                      }
+                      // Trailing SL is optional — clearing it must not warn "cannot be empty".
+                      // if (value.isEmpty) {
+                      //   ResponsiveSnackBar.showWarning(
+                      //       context, "Trailing SL cannot be empty");
+                      // }
                     },
                     placeholderStyle: WebTextStyles.formInput(
                       isDarkTheme: theme.isDarkMode,
@@ -7984,224 +7998,201 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                         return StatefulBuilder(
                           builder: (BuildContext context,
                               StateSetter dialogSetState) {
-                            return AlertDialog(
-                              backgroundColor: resolveThemeColor(context,
-                                  dark: MyntColors.cardDark,
-                                  light: const Color(0xFFF1F3F8)),
-                              titlePadding: const EdgeInsets.only(
-                                  left: 4, right: 4, top: 0, bottom: 0),
-                              shape: const RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.all(Radius.circular(8))),
-                              scrollable: true,
-                              contentPadding: const EdgeInsets.only(
-                                left: 16, right: 16, bottom: 10, top: 0,
-                              ),
-                              actionsPadding: const EdgeInsets.only(
-                                  bottom: 16, right: 16, left: 16, top: 8),
-                              insetPadding: const EdgeInsets.symmetric(
-                                  horizontal: 30, vertical: 12),
-                              title: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  Material(
-                                    color: Colors.transparent,
-                                    shape: const CircleBorder(),
-                                    child: InkWell(
-                                      onTap: () async {
-                                        await Future.delayed(
-                                            const Duration(milliseconds: 150));
-                                        closeDialog();
-                                      },
-                                      borderRadius: BorderRadius.circular(20),
-                                      splashColor: theme.isDarkMode ? colors.splashColorDark : colors.splashColorLight,
-                                      highlightColor: theme.isDarkMode ? colors.splashColorDark : colors.splashColorLight,
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(6.0),
-                                        child: Icon(
-                                          Icons.close_rounded,
-                                          size: 22,
-                                          color: resolveThemeColor(context,
-                                              dark: MyntColors.textSecondaryDark,
-                                              light: MyntColors.textSecondary),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              content: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Enter Market Protection',
-                                      textAlign: TextAlign.start,
-                                      style: WebTextStyles.formLabel(
-                                        isDarkTheme: theme.isDarkMode,
-                                        color: resolveThemeColor(context,
-                                            dark: MyntColors.textPrimaryDark,
-                                            light: MyntColors.textPrimary),
-                                      )),
-                                  const SizedBox(height: 10),
-                                  Semantics(
-                                    identifier: "Market Protection % Input",
-                                    child: MyntTextField(
-                                      backgroundColor: theme.isDarkMode
-                                          ? colors.darkGrey
-                                          : const Color(0xffF1F3F8),
-                                      inputFormatters: [
-                                        _rejectIfNoMatch(
-                                          RegExp(r'^(0|[1-9][0-9]{0,19})$'),
-                                        ),
-                                      ],
-                                      onChanged: (value) {
-                                        dialogSetState(() {
-                                          if (value.isEmpty) {
-                                            mktProtErrorText =
-                                                "Market Protection cannot be empty";
-                                          } else {
-                                            int intValue =
-                                                int.tryParse(value) ?? 0;
-
-                                            if (intValue > 20) {
-                                              // force value back to 20
-                                              mktProtDialogCtrl.text = "20";
-                                              mktProtDialogCtrl.selection =
-                                                  TextSelection.fromPosition(
-                                                TextPosition(
-                                                    offset: mktProtDialogCtrl
-                                                        .text.length),
-                                              );
-                                              mktProtErrorText =
-                                                  "Cannot enter greater than 20%";
-                                            } else if (intValue < 1) {
-                                              mktProtErrorText =
-                                                  "Cannot enter less than 1%";
-                                            } else {
-                                              mktProtErrorText = "";
-                                            }
-                                          }
-                                        });
-                                      },
-                                      keyboardType: TextInputType.number,
-                                      textStyle: WebTextStyles.title(
-                                        isDarkTheme: theme.isDarkMode,
-                                        color: theme.isDarkMode
-                                            ? MyntColors.textPrimaryDark
-                                            : MyntColors.textPrimary,
-                                      ),
-                                      controller: mktProtDialogCtrl,
-                                      leadingWidget: Container(
-                                        margin: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                            borderRadius:
-                                                BorderRadius.circular(20),
-                                            color: theme.isDarkMode
-                                                ? const Color(0xff555555)
-                                                : MyntColors.backgroundColor),
-                                        child: SvgPicture.asset(
-                                            color: theme.isDarkMode
-                                                ? MyntColors.textPrimaryDark
-                                                : MyntColors.icon,
-                                            assets.precentIcon,
-                                            fit: BoxFit.scaleDown),
-                                      ),
-                                      textAlign: TextAlign.start,
-                                      placeholder: "Add Market Protection %",
-                                      placeholderStyle: WebTextStyles.formLabel(
-                                        isDarkTheme: theme.isDarkMode,
-                                        color: (theme.isDarkMode
-                                                ? MyntColors.textSecondaryDark
-                                                : MyntColors.textSecondary)
-                                            .withValues(alpha: 0.5),
-                                      ),
-                                    ),
-                                  ),
-                                  if (mktProtErrorText.isNotEmpty)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 8.0),
-                                      child: Semantics(
-                                        identifier:
-                                            "Market Protection % Error Text",
-                                        child: Text(
-                                          mktProtErrorText,
-                                          style: WebTextStyles.para(
-                                            isDarkTheme: theme.isDarkMode,
-                                            color: theme.isDarkMode
-                                                ? MyntColors.errorDark
-                                                : MyntColors.loss,
+                            return shadcn.Card(
+                              borderRadius: BorderRadius.circular(8),
+                              padding: EdgeInsets.zero,
+                              child: SizedBox(
+                                width: 420,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Header
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        border: Border(
+                                          bottom: BorderSide(
+                                            color: shadcn.Theme.of(context)
+                                                .colorScheme
+                                                .border,
                                           ),
                                         ),
                                       ),
-                                      //  Text(
-                                      //   mktProtErrorText,
-                                      //   style: TextStyle(
-                                      //     color: Colors.red,
-                                      //     fontSize: 12,
-                                      //   ),
-                                      // ),
-                                    ),
-                                ],
-                              ),
-                              actions: [
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton(
-                                    onPressed: () {
-                                      if (mktProtDialogCtrl.text.isEmpty) {
-                                        dialogSetState(() {
-                                          mktProtErrorText =
-                                              "Market Protection cannot be empty";
-                                        });
-                                        return;
-                                      }
-
-                                      double intValue = double.tryParse(
-                                              mktProtDialogCtrl.text) ??
-                                          0;
-                                      if (intValue > 20 || intValue < 1) {
-                                        return;
-                                      }
-
-                                      updatePriceType();
-                                      setState(() {
-                                        mktProtCtrl.text =
-                                            mktProtDialogCtrl.text;
-                                        mktProtErrorText = "";
-                                      });
-                                      closeDialog();
-                                    },
-                                    style: OutlinedButton.styleFrom(
-                                      minimumSize:
-                                          const Size(0, 45), // width, height
-                                      side: BorderSide(
-                                          color: resolveThemeColor(context,
-                                              dark: MyntColors.cardBorderDark,
-                                              light: colors.btnOutlinedBorder)),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(5),
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text('Enter Market Protection',
+                                              style: MyntWebTextStyles.title(
+                                                context,
+                                                color: resolveThemeColor(context,
+                                                    dark: MyntColors
+                                                        .textPrimaryDark,
+                                                    light:
+                                                        MyntColors.textPrimary),
+                                                fontWeight: MyntFonts.medium,
+                                              )),
+                                          MyntCloseButton(
+                                            onPressed: () async {
+                                              await Future.delayed(
+                                                  const Duration(
+                                                      milliseconds: 150));
+                                              closeDialog();
+                                            },
+                                          ),
+                                        ],
                                       ),
-                                      backgroundColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
                                     ),
-                                    child: Text("Ok",
-                                        style: WebTextStyles.buttonMd(
-                                          isDarkTheme: theme.isDarkMode,
-                                          color: Colors.white,
-                                          fontWeight: WebFonts.semiBold,
-                                        )),
-                                  ),
-                                ),
+                                    // Content
+                                    Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text('Market Protection %',
+                                              style: MyntWebTextStyles.body(
+                                                context,
+                                                fontWeight: MyntFonts.semiBold,
+                                                darkColor:
+                                                    MyntColors.textPrimaryDark,
+                                                lightColor:
+                                                    MyntColors.textPrimary,
+                                              )),
+                                          const SizedBox(height: 10),
+                                          Semantics(
+                                            identifier:
+                                                "Market Protection % Input",
+                                            child: MyntFormTextField(
+                                              controller: mktProtDialogCtrl,
+                                              height: 40,
+                                              placeholder:
+                                                  "Add Market Protection %",
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              inputFormatters: [
+                                                _rejectIfNoMatch(
+                                                  RegExp(
+                                                      r'^(0|[1-9][0-9]{0,19})$'),
+                                                ),
+                                              ],
+                                              leadingWidget: Container(
+                                                margin:
+                                                    const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            20),
+                                                    color: theme.isDarkMode
+                                                        ? const Color(
+                                                            0xff555555)
+                                                        : MyntColors
+                                                            .backgroundColor),
+                                                child: SvgPicture.asset(
+                                                    color: theme.isDarkMode
+                                                        ? MyntColors
+                                                            .textPrimaryDark
+                                                        : MyntColors.icon,
+                                                    assets.precentIcon,
+                                                    fit: BoxFit.scaleDown),
+                                              ),
+                                              onChanged: (value) {
+                                                dialogSetState(() {
+                                                  if (value.isEmpty) {
+                                                    mktProtErrorText =
+                                                        "Market Protection cannot be empty";
+                                                  } else {
+                                                    int intValue =
+                                                        int.tryParse(value) ??
+                                                            0;
 
-                                // TextButton(
-                                //   onPressed: () => Navigator.of(context).pop(),
-                                //   child: const Text('Cancel'),
-                                // ),
-                                // TextButton(
-                                //   onPressed: () {
-                                //     Navigator.of(context).pop();
-                                //   },
-                                //   child: const Text('OK'),
-                                // ),
-                              ],
+                                                    if (intValue > 20) {
+                                                      // force value back to 20
+                                                      mktProtDialogCtrl.text =
+                                                          "20";
+                                                      mktProtDialogCtrl
+                                                              .selection =
+                                                          TextSelection
+                                                              .fromPosition(
+                                                        TextPosition(
+                                                            offset:
+                                                                mktProtDialogCtrl
+                                                                    .text
+                                                                    .length),
+                                                      );
+                                                      mktProtErrorText =
+                                                          "Market Protection must be between 1% and 20%";
+                                                    } else if (intValue < 1) {
+                                                      mktProtErrorText =
+                                                          "Market Protection must be between 1% and 20%";
+                                                    } else {
+                                                      mktProtErrorText = "";
+                                                    }
+                                                  }
+                                                });
+                                              },
+                                            ),
+                                          ),
+                                          if (mktProtErrorText.isNotEmpty) ...[
+                                            const SizedBox(height: 8),
+                                            Semantics(
+                                              identifier:
+                                                  "Market Protection % Error Text",
+                                              child: Text(
+                                                mktProtErrorText,
+                                                style:
+                                                    MyntWebTextStyles.caption(
+                                                  context,
+                                                  fontWeight: MyntFonts.medium,
+                                                  color: resolveThemeColor(
+                                                      context,
+                                                      dark:
+                                                          MyntColors.errorDark,
+                                                      light: MyntColors.loss),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                          const SizedBox(height: 20),
+                                          MyntPrimaryButton(
+                                            label: 'Ok',
+                                            isFullWidth: true,
+                                            onPressed: () {
+                                              if (mktProtDialogCtrl
+                                                  .text.isEmpty) {
+                                                dialogSetState(() {
+                                                  mktProtErrorText =
+                                                      "Market Protection cannot be empty";
+                                                });
+                                                return;
+                                              }
+
+                                              double intValue =
+                                                  double.tryParse(
+                                                          mktProtDialogCtrl
+                                                              .text) ??
+                                                      0;
+                                              if (intValue > 20 ||
+                                                  intValue < 1) {
+                                                return;
+                                              }
+
+                                              updatePriceType();
+                                              setState(() {
+                                                mktProtCtrl.text =
+                                                    mktProtDialogCtrl.text;
+                                                mktProtErrorText = "";
+                                              });
+                                              closeDialog();
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             );
                           },
                         );
@@ -8353,7 +8344,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 SafeParse.toDouble(mktProtCtrl.text.toString()) < 1)) {
           placeorder = false;
           ResponsiveSnackBar.showWarning(
-              context, "Market Protection between 1% to 20%");
+              context, "Market Protection must be between 1% and 20%");
         }
         if (!isSecu) {
           placeorder = false;
