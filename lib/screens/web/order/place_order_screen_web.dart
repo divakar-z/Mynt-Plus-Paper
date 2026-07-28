@@ -75,15 +75,18 @@ TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
             ? newValue
             : oldValue);
 
-/// Caps a digits-only quantity field at 1 crore (10,000,000). Rejects any
-/// keystroke or paste that would push the value above the limit, keeping the
-/// last valid value. Empty is always allowed so the field can still be cleared.
-TextInputFormatter _maxQtyLimit() =>
-    TextInputFormatter.withFunction((oldValue, newValue) {
-      if (newValue.text.isEmpty) return newValue;
-      final v = int.tryParse(newValue.text);
-      return (v != null && v <= 10000000) ? newValue : oldValue;
-    });
+// (former doc) Capped a digits-only quantity field at 1 crore (10,000,000) by
+// rejecting any keystroke/paste above the limit and keeping the last valid value.
+// _maxQtyLimit() reverted 2026-07-27 — typed-value cap was incomplete: in Amount
+// and Lot modes it guards the wrong unit, and mode toggles set the field
+// programmatically so the formatter never runs. To be replaced by a guard on the
+// final computed quantity at each submit path. Kept commented for reference.
+// TextInputFormatter _maxQtyLimit() =>
+//     TextInputFormatter.withFunction((oldValue, newValue) {
+//       if (newValue.text.isEmpty) return newValue;
+//       final v = int.tryParse(newValue.text);
+//       return (v != null && v <= 10000000) ? newValue : oldValue;
+//     });
 
 
 // InheritedWidget to pass close callback to child widgets
@@ -1076,7 +1079,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   void openFunds(String pageis, BuildContext context) {
     if (WebNavigationHelper.isAvailable) {
+      // TC_471: close the Place Order overlay when navigating to the Funds screen.
+      final closeNotifier = _PlaceOrderDialogCloseNotifier.of(context);
       WebNavigationHelper.navigateTo(Routes.fundscreen);
+      closeNotifier?.onClose();
     }
   }
 
@@ -2570,7 +2576,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   light: MyntColors.textSecondary)
                                                                   .withValues(alpha: 0.5),
                                                             ),
-                                                            inputFormatters: [FilteringTextInputFormatter.digitsOnly, _maxQtyLimit()],
+                                                            inputFormatters: [FilteringTextInputFormatter.digitsOnly /*, _maxQtyLimit() reverted 2026-07-27 */],
                                                             keyboardType: TextInputType.number,
                                                             textStyle: WebTextStyles.formInput(
                                                               isDarkTheme: theme.isDarkMode,
@@ -3405,7 +3411,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     : MyntColors
                                                                         .textSecondary).withValues(alpha: 0.5),
                                                               ),
-                                                              inputFormatters: [FilteringTextInputFormatter.digitsOnly, _maxQtyLimit()],
+                                                              inputFormatters: [FilteringTextInputFormatter.digitsOnly /*, _maxQtyLimit() reverted 2026-07-27 */],
                                                               keyboardType: TextInputType.number,
                                                               textStyle: WebTextStyles.formInput(
                                                                 isDarkTheme: theme
@@ -4615,7 +4621,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         inputFormatters: [
                                                           FilteringTextInputFormatter
                                                               .digitsOnly,
-                                                          _maxQtyLimit(),
+                                                          // _maxQtyLimit(), // reverted 2026-07-27
                                                         ],
                                                         keyboardType:
                                                             TextInputType
@@ -6720,8 +6726,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "Price cannot be empty");
-                                                                      } else if (SafeParse.toDouble(orderInput.priceCtrl.text) <=
-                                                                          0) {
+                                                                      } else if (orderInput.priceCtrl.text != "Market" &&
+                                                                          double.tryParse(orderInput.priceCtrl.text) !=
+                                                                              null &&
+                                                                          SafeParse.toDouble(orderInput.priceCtrl.text) <=
+                                                                              0) {
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "Price cannot be 0");
@@ -6729,7 +6738,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .val2Ctrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        ResponsiveSnackBar.showWarning(
+                                                                        ResponsiveSnackBar.showWarning( 
                                                                             context,
                                                                             "Stoploss trigger price cannot be empty");
                                                                       } else if (SafeParse.toDouble(orderInput
@@ -6818,8 +6827,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             ? "$fieldName cannot be empty"
                                                                             : "Price cannot be empty");
                                                                   } else if ((getFinalQuantity(qtyCtrl.text).trim()) == "0" ||
-                                                                      priceCtrl.text.trim() ==
-                                                                          "0") {
+                                                                      // Limit orders only: a 0/0.00 limit price must be blocked
+                                                                      // (Market/SL-MKT carry "Market" here, so leave them out).
+                                                                      ((priceType == "Limit" || priceType == "SL Limit") &&
+                                                                          SafeParse.toDouble(priceCtrl.text) <= 0)) {
                                                                     String fieldName = (_isStock)
                                                                         ? (_isQtyToAmount
                                                                             ? "Amount"
@@ -6862,8 +6873,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     if (triggerPriceCtrl
                                                                             .text
                                                                             .isEmpty ||
-                                                                        triggerPriceCtrl.text ==
-                                                                            "0") {
+                                                                        SafeParse.toDouble(triggerPriceCtrl.text) <=
+                                                                            0) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           triggerPriceCtrl.text.isEmpty
@@ -7057,8 +7068,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           context,
                                                                           "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
                                                                     } else if ((triggerPriceCtrl.text.isEmpty ||
-                                                                            triggerPriceCtrl.text ==
-                                                                                "0") &&
+                                                                            SafeParse.toDouble(triggerPriceCtrl.text) <=
+                                                                                0) &&
                                                                         priceType ==
                                                                             "SL Limit") {
                                                                       ResponsiveSnackBar.showWarning(
@@ -7190,6 +7201,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                                    } else if (isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (SafeParse.toDouble(ordPrice) + SafeParse.toDouble(targetCtrl.text)) >
+                                                                            SafeParse.toDouble(widget.scripInfo.uc)) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price + Target = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                                    } else if (!isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (SafeParse.toDouble(ordPrice) - SafeParse.toDouble(targetCtrl.text)) <
+                                                                            SafeParse.toDouble(widget.scripInfo.lc)) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price - Target = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
                                                                     } else if (trailingTicksCtrl
                                                                             .text
                                                                             .isNotEmpty &&
@@ -7272,6 +7297,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
+                                                                    } else if (isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (userOrderPrice + SafeParse.toDouble(targetCtrl.text)) >
+                                                                            uc) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price + Target = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
+                                                                    } else if (!isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (userOrderPrice - SafeParse.toDouble(targetCtrl.text)) <
+                                                                            lc) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price - Target = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
                                                                     } else if (triggerPriceCtrl
                                                                             .text
                                                                             .isEmpty &&
