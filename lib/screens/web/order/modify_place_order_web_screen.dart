@@ -1222,6 +1222,15 @@ class _ModifyPlaceOrderScreenState
                                         children: [
                                           GestureDetector(
                                             onTap: () {
+                                              // CO/BO stop-loss leg cannot be SL Market — block the
+                                              // switch to Market (mirrors Place Order + vendor behaviour).
+                                              if (_isBOCOOrderEnabled &&
+                                                  _isStoplossOrder &&
+                                                  !_isMarketOrder) {
+                                                ResponsiveSnackBar.showWarning(context,
+                                                    "SL Market order is not allowed for CO-BO orders");
+                                                return;
+                                              }
                                               setState(() {
                                                 _isMarketOrder = !_isMarketOrder;
                                                 updatePriceType();
@@ -1290,15 +1299,18 @@ class _ModifyPlaceOrderScreenState
                                                         .showWarning(context,
                                                             "Limit Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}");
                                                   } else {
-                                                    if (_hasValidCircuitBreakerValues &&
-                                                        ((double.parse(value) < double.parse("${widget.scripInfo.lc}")) ||
-                                                          (double.parse(value) > double.parse("${widget.scripInfo.uc}")))) {
-                                                          ResponsiveSnackBar.showWarning(
-                                                              context,
-                                                              double.parse(value) < double.parse("${widget.scripInfo.lc}")
-                                                                  ? "Limit Price can not be lesser than Lower Circuit Limit ${widget.scripInfo.lc}"
-                                                                  : "Limit Price can not be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
-                                                      }
+                                                    // Circuit (LC/UC) check removed from onChange — it fired a toast
+                                                    // on every keystroke while typing. Still enforced on the Modify
+                                                    // Order click (matches Place Order).
+                                                    // if (_hasValidCircuitBreakerValues &&
+                                                    //     ((double.parse(value) < double.parse("${widget.scripInfo.lc}")) ||
+                                                    //       (double.parse(value) > double.parse("${widget.scripInfo.uc}")))) {
+                                                    //       ResponsiveSnackBar.showWarning(
+                                                    //           context,
+                                                    //           double.parse(value) < double.parse("${widget.scripInfo.lc}")
+                                                    //               ? "Limit Price can not be lesser than Lower Circuit Limit ${widget.scripInfo.lc}"
+                                                    //               : "Limit Price can not be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                    //   }
                                                     setState(() {
                                                       price = value;
                                                       marginUpdate();
@@ -2408,8 +2420,10 @@ class _ModifyPlaceOrderScreenState
                                                                           : "Price cannot be empty");
                                                                 } else if (qtyCtrl.text ==
                                                                         "0" ||
-                                                                    priceCtrl.text ==
-                                                                        "0") {
+                                                                    // Limit orders only: block a 0/0.00 limit price.
+                                                                    // Market/SL-MKT carry "Market" here, so skip them.
+                                                                    ((prcType == "LMT" || prcType == "SL-LMT") &&
+                                                                        SafeParse.toDouble(priceCtrl.text) <= 0)) {
                                                                   ResponsiveSnackBar.showWarning(
                                                                       context,
                                                                       qtyCtrl.text ==
@@ -2439,9 +2453,8 @@ class _ModifyPlaceOrderScreenState
                                                                   if (triggerPriceCtrl
                                                                           .text
                                                                           .isEmpty ||
-                                                                      triggerPriceCtrl
-                                                                              .text ==
-                                                                          "0") {
+                                                                      SafeParse.toDouble(triggerPriceCtrl.text) <=
+                                                                          0) {
                                                                     showResponsiveWarningMessage(
                                                                         context,
                                                                         triggerPriceCtrl.text.isEmpty
@@ -2468,8 +2481,14 @@ class _ModifyPlaceOrderScreenState
                                                                           modifyOrder();
                                                                         }
                                                                       } else {
-                                                                        // BUY + SL-LMT: Trigger should be less than or equal to limit price
-                                                                        if (_hasValidCircuitBreakerValues &&
+                                                                        // BUY + SL-LMT: trigger must be greater than LTP and less
+                                                                        // than or equal to the limit price.
+                                                                        if (SafeParse.toDouble(triggerPriceCtrl.text) <
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be greater than LTP");
+                                                                        } else if (_hasValidCircuitBreakerValues &&
                                                                             SafeParse.toDouble(triggerPriceCtrl.text) < SafeParse.toDouble(widget.scripInfo.lc)) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -2504,8 +2523,14 @@ class _ModifyPlaceOrderScreenState
                                                                           modifyOrder();
                                                                         }
                                                                       } else {
-                                                                        // SELL + SL-LMT: Trigger should be greater than or equal to limit price
-                                                                        if (_hasValidCircuitBreakerValues &&
+                                                                        // SELL + SL-LMT: trigger must be lesser than LTP and greater
+                                                                        // than or equal to the limit price.
+                                                                        if (SafeParse.toDouble(triggerPriceCtrl.text) >
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be lesser than LTP");
+                                                                        } else if (_hasValidCircuitBreakerValues &&
                                                                             SafeParse.toDouble(triggerPriceCtrl.text) > SafeParse.toDouble(widget.scripInfo.uc)) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -3199,9 +3224,14 @@ class _ModifyPlaceOrderScreenState
   }
 
   void updatePriceType() {
-    if (_isStoplossOrder && _isMarketOrder) {
+    // CO/BO stoploss must always be SL-Limit — never SL-Market (mirrors Place
+    // Order's updatePriceType). This also closes the "Stoploss order" checkbox
+    // bypass: uncheck SL -> switch to Market -> re-check SL would otherwise land
+    // on SL-MKT for a CO/BO order.
+    if (!_isBOCOOrderEnabled && _isStoplossOrder && _isMarketOrder) {
       prcType = "SL-MKT";
-    } else if (_isStoplossOrder && !_isMarketOrder) {
+    } else if ((_isStoplossOrder && !_isMarketOrder) ||
+        (_isBOCOOrderEnabled && _isStoplossOrder && _isMarketOrder)) {
       prcType = "SL-LMT";
     } else if (_isMarketOrder) {
       prcType = "MKT";
