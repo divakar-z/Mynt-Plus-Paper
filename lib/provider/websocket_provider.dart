@@ -1171,6 +1171,25 @@ class WebSocketProvider extends ChangeNotifier {
 
     if (status.isEmpty || symbol.isEmpty) return;
 
+    // A rejected place/modify/cancel keeps the order's PRIOR status (OPEN /
+    // TRIGGER_PENDING), so keying off `status` alone would fall through to a
+    // green "success" branch below. The websocket flags a rejection only in
+    // `reporttype` ("Rejected" / "ReplaceRejected" / "CancelRejected") — a
+    // successful and a rejected modify can even share status TRIGGER_PENDING.
+    // So detect the rejection by report type and show it in red.
+    final reportType = res['reporttype']?.toString().toLowerCase() ?? '';
+    if (reportType.contains('reject')) {
+      final rejMsg = reportType.contains('replace')
+          ? 'Modify rejected for $symbol ($exchange)'
+          : '$tranType order for $symbol ($exchange) rejected';
+      if (kIsWeb) {
+        ResponsiveSnackBar.showError(_context!, rejMsg);
+      } else {
+        warningMessage(_context!, rejMsg);
+      }
+      return;
+    }
+
     String message;
 
     switch (status) {

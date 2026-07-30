@@ -1468,7 +1468,12 @@ class _ModifyPlaceOrderScreenState
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
-                                            // Stoploss order
+                                            // Stoploss order — checkbox HIDDEN in Modify (2026-07-29):
+                                            // a new stoploss cannot be ADDED via modify. An order that
+                                            // is already SL edits its trigger via the field below; a
+                                            // plain / CO / BO order has nothing to add here. Block-
+                                            // commented (not deleted) so it can be re-enabled if needed.
+                                            /*
                                             Theme(
                                               data: ThemeData(
                                                 unselectedWidgetColor: theme
@@ -1526,14 +1531,19 @@ class _ModifyPlaceOrderScreenState
                                                 ),
                                               ),
                                             ),
+                                            */
                                             // Trigger option (only if stoploss is on)
                                             if (prcType == "SL-LMT" ||
                                                 prcType == "SL-MKT") ...[
                                               triggerOption(theme, context,
                                                   widget.scripInfo),
                                             ],
-                                            // Divider after Stoploss order
-                                            Divider(
+                                            // Divider after the trigger — only when the trigger shows
+                                            // (SL order). Avoids a double divider on plain orders now
+                                            // that the Stoploss checkbox is hidden.
+                                            if (prcType == "SL-LMT" ||
+                                                prcType == "SL-MKT")
+                                              Divider(
                                                       color: resolveThemeColor(
                                                           context,
                                                           dark: colors
