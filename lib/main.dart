@@ -14,6 +14,7 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:mynt_plus/firebase_options.dart';
 import 'package:mynt_plus/locator/constant.dart';
 import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/sharedWidget/accessibility/accessibility_panel.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/chart_a11y_filter.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/focus_indicator_overlay.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/highlight_links_overlay.dart';
@@ -333,6 +334,14 @@ void main() async {
   }
 
   runApp(const ProviderScope(child: MyApp()));
+
+  // Warm the accessibility-panel SVG icons into flutter_svg's cache so they
+  // paint on the first frame the panel opens (no blank-frame gap, no per-icon
+  // loader needed). Web-only — the panel is a web feature. Fire-and-forget so
+  // it never delays the first frame.
+  if (kIsWeb) {
+    precacheAccessibilityIcons();
+  }
 
   // Initialize Firebase after the app has started (non-blocking).
   // Skip on public routes to avoid messaging permission prompts for visitors.
