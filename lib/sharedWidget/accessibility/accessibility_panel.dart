@@ -1,10 +1,82 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 
 import '../../provider/accessibility_provider.dart';
 import '../../res/mynt_web_color_styles.dart';
 import '../../res/mynt_web_text_styles.dart';
+
+/// Accessibility-panel icons are shipped as individual SVG vector assets
+/// instead of Material font glyphs. Under the CanvasKit web renderer a font
+/// glyph cannot paint until the whole MaterialIcons font has downloaded and
+/// parsed, so on slow networks / low-end devices these tiles rendered blank.
+/// SVGs are drawn as vector paths with no shared-font dependency, so each icon
+/// appears independently and reliably. Tinted per-use via [ColorFilter] to
+/// preserve the active / hover / disabled colouring. See assets/icon/a11y/.
+class _A11yIcons {
+  static const String base = 'assets/icon/a11y';
+  static const String accessibility = '$base/accessibility.svg';
+  static const String close = '$base/close.svg';
+  static const String screenReader = '$base/screen_reader.svg';
+  static const String contrast = '$base/contrast.svg';
+  static const String fontSize = '$base/font_size.svg';
+  static const String palette = '$base/palette.svg';
+  static const String focusAssist = '$base/focus_assist.svg';
+  static const String dyslexia = '$base/dyslexia.svg';
+  static const String link = '$base/link.svg';
+  static const String focusIndicator = '$base/focus_indicator.svg';
+  static const String invertColors = '$base/invert_colors.svg';
+  static const String grayscale = '$base/grayscale.svg';
+  static const String blueLight = '$base/blue_light.svg';
+
+  /// Every panel icon, used to warm the SVG cache at startup.
+  static const List<String> all = [
+    accessibility,
+    close,
+    screenReader,
+    contrast,
+    fontSize,
+    palette,
+    focusAssist,
+    dyslexia,
+    link,
+    focusIndicator,
+    invertColors,
+    grayscale,
+    blueLight,
+  ];
+}
+
+/// Renders one of the [_A11yIcons] SVGs tinted to [color] at [size]px square.
+Widget _a11ySvg(String asset, {required Color color, required double size}) {
+  return SvgPicture.asset(
+    asset,
+    width: size,
+    height: size,
+    colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+  );
+}
+
+/// Warms flutter_svg's cache with every accessibility-panel icon so they paint
+/// on the first frame the panel opens — no blank-frame gap while the SVG is
+/// parsed, and no per-icon loader/spinner needed. Fire-and-forget: call once at
+/// app startup (see main.dart). Safe to call more than once; already-cached
+/// entries are skipped. Failures are swallowed — a cold parse on first open is
+/// the harmless fallback.
+Future<void> precacheAccessibilityIcons() async {
+  for (final asset in _A11yIcons.all) {
+    try {
+      final loader = SvgAssetLoader(asset);
+      await svg.cache.putIfAbsent(
+        loader.cacheKey(null),
+        () => loader.loadBytes(null),
+      );
+    } catch (_) {
+      // Ignore: the icon will simply parse on first render instead.
+    }
+  }
+}
 
 /// Circular toggle button that anchors the accessibility dropdown.
 class A11yIconButton extends StatefulWidget {
@@ -86,8 +158,8 @@ class _A11yIconButtonState extends State<A11yIconButton> {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                Icon(
-                  Icons.accessibility_new_rounded,
+                _a11ySvg(
+                  _A11yIcons.accessibility,
                   color: iconColor,
                   size: 20,
                 ),
@@ -225,9 +297,11 @@ OverlayEntry buildAccessibilityOverlay({
                                     onTap: onClose,
                                     child: Padding(
                                       padding: const EdgeInsets.all(4),
-                                      child: Icon(Icons.close,
-                                          size: 18,
-                                          color: textSecondary),
+                                      child: _a11ySvg(
+                                        _A11yIcons.close,
+                                        size: 18,
+                                        color: textSecondary,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -244,7 +318,7 @@ OverlayEntry buildAccessibilityOverlay({
                               childAspectRatio: 0.92,
                               children: [
                                 _AccessibilityTile(
-                                  icon: Icons.record_voice_over_outlined,
+                                  iconAsset: _A11yIcons.screenReader,
                                   label: 'Screen\nReader',
                                   active: a11y.screenReaderEnabled,
                                   primaryColor: primaryColor,
@@ -255,7 +329,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleScreenReader(context),
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.contrast_outlined,
+                                  iconAsset: _A11yIcons.contrast,
                                   label: 'Smart\nContrast',
                                   active: a11y.smartContrastEnabled,
                                   primaryColor: primaryColor,
@@ -266,7 +340,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleSmartContrast(),
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.format_size,
+                                  iconAsset: _A11yIcons.fontSize,
                                   label: 'A-   A+',
                                   sublabel: 'Font Size',
                                   active: a11y.textScaleEnabled,
@@ -297,7 +371,7 @@ OverlayEntry buildAccessibilityOverlay({
                                   ],
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.palette_outlined,
+                                  iconAsset: _A11yIcons.palette,
                                   label: 'Theme\nTone',
                                   active: a11y.themeToneEnabled,
                                   primaryColor: primaryColor,
@@ -343,8 +417,7 @@ OverlayEntry buildAccessibilityOverlay({
                                   ],
                                 ),
                                 _AccessibilityTile(
-                                  icon:
-                                      Icons.center_focus_strong_outlined,
+                                  iconAsset: _A11yIcons.focusAssist,
                                   label: 'ADHD Focus\nAssist',
                                   active: a11y.adhdFocusAssistEnabled,
                                   primaryColor: primaryColor,
@@ -355,7 +428,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleAdhdFocusAssist(),
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.text_fields_outlined,
+                                  iconAsset: _A11yIcons.dyslexia,
                                   label: 'Dyslexia\nSupport',
                                   active: a11y.dyslexiaSupportEnabled,
                                   primaryColor: primaryColor,
@@ -366,7 +439,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleDyslexiaSupport(),
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.link_outlined,
+                                  iconAsset: _A11yIcons.link,
                                   label: 'Highlight\nLinks',
                                   active: a11y.highlightLinksEnabled,
                                   primaryColor: primaryColor,
@@ -377,7 +450,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleHighlightLinks(),
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.crop_free_outlined,
+                                  iconAsset: _A11yIcons.focusIndicator,
                                   label: 'Focus\nIndicator',
                                   active: a11y.focusIndicatorEnabled,
                                   primaryColor: primaryColor,
@@ -388,8 +461,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleFocusIndicator(),
                                 ),
                                 _AccessibilityTile(
-                                  icon:
-                                      Icons.invert_colors_on_outlined,
+                                  iconAsset: _A11yIcons.invertColors,
                                   label: 'Invert\nColours',
                                   active: a11y.invertColoursEnabled,
                                   primaryColor: primaryColor,
@@ -400,7 +472,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleInvertColours(),
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.filter_b_and_w,
+                                  iconAsset: _A11yIcons.grayscale,
                                   label: 'Grayscale',
                                   active: a11y.grayscaleEnabled,
                                   primaryColor: primaryColor,
@@ -411,7 +483,7 @@ OverlayEntry buildAccessibilityOverlay({
                                       .toggleGrayscale(),
                                 ),
                                 _AccessibilityTile(
-                                  icon: Icons.nightlight_outlined,
+                                  iconAsset: _A11yIcons.blueLight,
                                   label: 'Blue Light\nFilter',
                                   active: a11y.blueLightFilterEnabled,
                                   primaryColor: primaryColor,
@@ -501,7 +573,7 @@ OverlayEntry buildAccessibilityOverlay({
 
 class _AccessibilityTile extends StatefulWidget {
   const _AccessibilityTile({
-    required this.icon,
+    required this.iconAsset,
     required this.label,
     required this.active,
     required this.primaryColor,
@@ -514,7 +586,7 @@ class _AccessibilityTile extends StatefulWidget {
     this.toneSelectors,
   });
 
-  final IconData icon;
+  final String iconAsset;
   final String label;
   final String? sublabel;
   final bool active;
@@ -562,8 +634,8 @@ class _AccessibilityTileState extends State<_AccessibilityTile> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            widget.icon,
+          _a11ySvg(
+            widget.iconAsset,
             size: hasToneSelectors ? 22 : 26,
             color: iconColor,
           ),
