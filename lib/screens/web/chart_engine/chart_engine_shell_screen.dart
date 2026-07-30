@@ -388,7 +388,10 @@ class _ChartEngineShellScreenState
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%'
-        ..style.backgroundColor = '#0B0F14'
+        // Theme-aware base so the pre-paint iframe surface doesn't flash a
+        // near-black panel behind the light-mode chart.
+        ..style.backgroundColor =
+            ref.read(themeProvider).isDarkMode ? '#0B0F14' : '#FFFFFF'
         ..allow = 'autoplay'
         ..src = '/chart-engine/index.html?theme=${_currentThemeName()}';
       el.style.setProperty('pointer-events', 'auto', 'important');
@@ -3289,11 +3292,20 @@ class _ChartEngineShellScreenState
                                     height: 72,
                                   ),
                                 ),
-                                const SizedBox(
+                                SizedBox(
                                   width: 90,
                                   height: 90,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 5),
+                                    strokeWidth: 5,
+                                    // Follow the theme accent instead of the
+                                    // default dark indicator color, which reads
+                                    // as a black ring on the white light-mode bg.
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      resolveThemeColor(context,
+                                          dark: MyntColors.primaryDark,
+                                          light: MyntColors.primaryDark),
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),

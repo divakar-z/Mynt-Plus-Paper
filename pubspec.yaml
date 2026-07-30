@@ -134,6 +134,7 @@ flutter:
     - assets/commodites/
     - assets/futureoptions/
     - assets/icon/
+    - assets/icon/a11y/
     - assets/profile/
     - assets/tvchart/
     - assets/tradeactionimg/

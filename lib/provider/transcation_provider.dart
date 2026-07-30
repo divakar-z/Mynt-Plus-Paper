@@ -1021,7 +1021,8 @@ class TranctionProvider extends DefaultChangeNotifier {
     final payin = double.tryParse(_mtfLimits!.payin ?? '0') ?? 0;
     final payout = double.tryParse(_mtfLimits!.payout ?? '0') ?? 0;
     final marginused = double.tryParse(_mtfLimits!.marginused ?? '0') ?? 0;
-    return cash + payin - (payout - marginused);
+    final total = (cash + payin - payout.abs()) - marginused.abs();
+    return total;
   }
 
   double get mtfAmount {
