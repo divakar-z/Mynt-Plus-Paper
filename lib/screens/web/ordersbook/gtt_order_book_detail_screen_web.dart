@@ -783,7 +783,7 @@ class _GttOrderBookDetailScreenWebState
 
   Future<bool?> _showCancelGttOrderDialog(
       ThemesProvider theme, BuildContext targetContext) async {
-    final symbol = _gttOrder.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = _gttOrder.displayName.trim();
 
     return showDialog<bool>(
       context: targetContext,

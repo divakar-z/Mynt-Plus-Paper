@@ -1198,7 +1198,7 @@ class _PositionHoldingsCardWebState
 
   /// Cancel an open order
   Future<void> _cancelOrder(OrderBookModel order) async {
-    final symbol = order.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = order.displayName.trim();
 
     // Show confirmation dialog with iframe handling (same style as orders screen)
     final shouldCancel = await showDialog<bool>(

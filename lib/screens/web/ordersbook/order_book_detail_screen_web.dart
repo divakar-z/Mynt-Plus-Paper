@@ -1138,7 +1138,7 @@ class _OrderBookDetailScreenWebState
 
   Future<bool?> _showCancelOrderDialog(
       ThemesProvider theme, BuildContext targetContext) async {
-    final symbol = _orderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = _orderData.displayName.trim();
 
     return showDialog<bool>(
       context: targetContext,
@@ -1265,7 +1265,7 @@ class _OrderBookDetailScreenWebState
 
   Future<bool?> _showExitPositionDialog(
       ThemesProvider theme, BuildContext targetContext) async {
-    final symbol = _orderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = _orderData.displayName.trim();
 
     return showDialog<bool>(
       context: targetContext,
