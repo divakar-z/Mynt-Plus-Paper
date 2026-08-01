@@ -1506,7 +1506,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
 
   Future<bool?> _showCancelGttOrderDialog(
       GttOrderBookModel gttOrderData) async {
-    final symbol = gttOrderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = gttOrderData.displayName.trim();
 
     return showDialog<bool>(
       context: context,

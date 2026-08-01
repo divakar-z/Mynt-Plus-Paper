@@ -392,7 +392,7 @@ class OrderActionHandler {
   // Private helper methods
 
   Future<bool?> _showCancelOrderDialog(OrderBookModel orderData) async {
-    final symbol = orderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = orderData.displayName.trim();
 
     return showDialog<bool>(
       context: context,
@@ -511,7 +511,7 @@ class OrderActionHandler {
   }
 
   Future<bool?> _showExitPositionDialog(OrderBookModel orderData) async {
-    final symbol = orderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = orderData.displayName.trim();
 
     return showDialog<bool>(
       context: context,
@@ -633,7 +633,7 @@ class OrderActionHandler {
 
   Future<bool?> _showCancelGttOrderDialog(
       GttOrderBookModel gttOrderData) async {
-    final symbol = gttOrderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = gttOrderData.displayName.trim();
 
     return showDialog<bool>(
       context: context,

@@ -938,6 +938,19 @@ class _ModifyPlaceOrderScreenState
                                                     int adjustedQty = currentValue >= multiplayer
                                                         ? ((currentValue / multiplayer).floor()) * multiplayer
                                                         : multiplayer;
+                                                    // − button: snap an over-max value down to the max in
+                                                    // one click (matches the + button and Place Order),
+                                                    // instead of stepping down one lot from the over-max value.
+                                                    final bool hasNoFreezeLimit = frezQty <= lotSize;
+                                                    final bool isMcx = widget.scripInfo.exch == "MCX";
+                                                    final int capInFieldUnits = hasNoFreezeLimit
+                                                        ? 999999999
+                                                        : (isMcx
+                                                            ? frezQty ~/ lotSize
+                                                            : frezQty);
+                                                    if (adjustedQty > capInFieldUnits) {
+                                                      adjustedQty = capInFieldUnits;
+                                                    }
                                                     if (currentValue != adjustedQty) {
                                                       qtyCtrl.text = adjustedQty.toString();
                                                     } else if (input.isNotEmpty && currentValue > multiplayer) {
@@ -960,8 +973,11 @@ class _ModifyPlaceOrderScreenState
                                                   setState(() {
                                                     String input = qtyCtrl.text;
                                                     int currentValue = int.tryParse(input) ?? 0;
+                                                    // + button: snap a non-lot-multiple UP to the next
+                                                    // valid multiple (35 -> 40), matching Place Order
+                                                    // (the - button floors down).
                                                     int adjustedQty = currentValue >= multiplayer
-                                                        ? ((currentValue / multiplayer).floor()) * multiplayer
+                                                        ? ((currentValue / multiplayer).ceil()) * multiplayer
                                                         : multiplayer;
                                                     final bool hasNoFreezeLimit = frezQty <= lotSize;
                                                     final bool isMcx = widget.scripInfo.exch == "MCX";
@@ -970,6 +986,10 @@ class _ModifyPlaceOrderScreenState
                                                         : (isMcx
                                                             ? frezQty ~/ lotSize
                                                             : frezQty);
+                                                    // Don't let the snapped-up value exceed the max.
+                                                    if (adjustedQty > capInFieldUnits) {
+                                                      adjustedQty = capInFieldUnits;
+                                                    }
                                                     if (currentValue != adjustedQty) {
                                                       qtyCtrl.text = adjustedQty.toString();
                                                     } else if (input.isEmpty) {
@@ -2456,6 +2476,15 @@ class _ModifyPlaceOrderScreenState
                                                                               double.parse("${widget.scripInfo.lc}")
                                                                           ? "Price can not be lesser than Lower Circuit Limit ${widget.scripInfo.lc}"
                                                                           : "Price can not be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                                } else if (_isBOCOOrderEnabled &&
+                                                                    _coBoStoplossTargetError() !=
+                                                                        null) {
+                                                                  // CO/BO Stoploss (in Rs) + BO Target (in Rs) vs zero and
+                                                                  // circuit — mirrors Place Order. Sits before the trigger
+                                                                  // branch so a CO SL-LMT order can't bypass the stoploss check.
+                                                                  ResponsiveSnackBar.showWarning(
+                                                                      context,
+                                                                      _coBoStoplossTargetError()!);
                                                                 } else if ((prcType ==
                                                                         "SL-LMT" ||
                                                                     prcType ==
@@ -3139,6 +3168,60 @@ class _ModifyPlaceOrderScreenState
         trantype: widget.modifyOrderArgs.trantype!,
         tsym: "${widget.scripInfo.tsym}");
     ref.read(orderProvider).fetchGetBrokerage(brokerageInput, context);
+  }
+
+  /// Validates the CO/BO Stoploss (in Rs) and BO Target (in Rs) against zero and
+  /// the circuit limits — the same checks Place Order runs (TC_41 stoploss + the
+  /// target check). Returns the warning message, or null when valid. Used on the
+  /// Modify submit so a CO SL-LMT order (which routes through the trigger branch)
+  /// still gets its stoploss/target validated.
+  String? _coBoStoplossTargetError() {
+    final double ordPrice = SafeParse.toDouble(
+        prcType == "MKT" || prcType == "SL-MKT" ? price : priceCtrl.text);
+
+    // Stoploss — present on both CO and BO.
+    if (widget.modifyOrderArgs.blprc != null) {
+      if (stopLossCtrl.text.isEmpty ||
+          SafeParse.toDouble(stopLossCtrl.text) <= 0) {
+        return stopLossCtrl.text.isEmpty
+            ? "Stoploss cannot be empty"
+            : "Stoploss cannot be 0";
+      }
+      final double sl = SafeParse.toDouble(stopLossCtrl.text);
+      if (_hasValidCircuitBreakerValues) {
+        if (isBuy &&
+            (ordPrice - sl) < SafeParse.toDouble(widget.scripInfo.lc)) {
+          return "Invalid Stoploss: Price (Order price - Stoploss = ${(ordPrice - sl).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}";
+        }
+        if (!isBuy &&
+            (ordPrice + sl) > SafeParse.toDouble(widget.scripInfo.uc)) {
+          return "Invalid Stoploss: Price (Order price + Stoploss = ${(ordPrice + sl).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}";
+        }
+      }
+    }
+
+    // Target — BO only.
+    if (widget.modifyOrderArgs.bpprc != null) {
+      if (targetCtrl.text.isEmpty ||
+          SafeParse.toDouble(targetCtrl.text) <= 0) {
+        return targetCtrl.text.isEmpty
+            ? "Target cannot be empty"
+            : "Target cannot be 0";
+      }
+      final double tgt = SafeParse.toDouble(targetCtrl.text);
+      if (_hasValidCircuitBreakerValues) {
+        if (isBuy &&
+            (ordPrice + tgt) > SafeParse.toDouble(widget.scripInfo.uc)) {
+          return "Invalid Target: Price (Order price + Target = ${(ordPrice + tgt).toStringAsFixed(2)}). Target cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}";
+        }
+        if (!isBuy &&
+            (ordPrice - tgt) < SafeParse.toDouble(widget.scripInfo.lc)) {
+          return "Invalid Target: Price (Order price - Target = ${(ordPrice - tgt).toStringAsFixed(2)}). Target cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}";
+        }
+      }
+    }
+
+    return null;
   }
 
   modifyOrder() async {
