@@ -23,6 +23,10 @@ class NoDataFoundWeb extends ConsumerWidget {
   final VoidCallback? onSecondary;
   final bool secondaryEnabled;
   final String? assetIcon;
+
+  /// Overrides the SVG icon with any widget (e.g. a Material [Icon]) —
+  /// for callers whose icon has no SVG asset. Wins over [assetIcon].
+  final Widget? iconWidget;
   final double iconSize;
   final bool showTip;
   final String tipText;
@@ -39,6 +43,7 @@ class NoDataFoundWeb extends ConsumerWidget {
     this.onSecondary,
     this.secondaryEnabled = true,
     this.assetIcon,
+    this.iconWidget,
     this.iconSize = 100,
     this.showTip = false,
     this.tipText = "",
@@ -61,16 +66,17 @@ class NoDataFoundWeb extends ConsumerWidget {
               width: 80,
               height: 80,
               padding: const EdgeInsets.all(0),
-              child: SvgPicture.asset(
-                iconAsset,
-                width: 100,
-                height: 100,
-                color: resolveThemeColor(
-                  context,
-                  dark: MyntColors.textSecondaryDark,
-                  light: MyntColors.textSecondary,
-                ),
-              ),
+              child: iconWidget ??
+                  SvgPicture.asset(
+                    iconAsset,
+                    width: 100,
+                    height: 100,
+                    color: resolveThemeColor(
+                      context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary,
+                    ),
+                  ),
             ),
 
             const SizedBox(height: 24),

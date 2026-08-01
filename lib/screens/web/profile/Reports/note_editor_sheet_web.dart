@@ -26,6 +26,7 @@ import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_text_fields_web.dart';
 import '../../../../sharedWidget/no_data_found_web.dart';
 import '../../../../sharedWidget/snack_bar.dart';
+import '../../../../utils/overlay_manager.dart';
 
 /// Guards against a double-click opening two sheets — the same pattern the
 /// order-book screens use.
@@ -59,7 +60,13 @@ Future<void> openNoteEditorSheet(
   if (_isSheetOpening) return;
   _isSheetOpening = true;
 
-  await shadcn.openSheet(
+  // openSheetOverlay rather than openSheet: the completer allows the sheet
+  // to be force-closed from outside. Session expiry / logout / account
+  // switch run OverlayManager.closeAll() — without registering there, this
+  // sheet survives the navigation to /login (the drawer overlay is mounted
+  // ABOVE the router in main.dart) and floats over the login screen as an
+  // editable dead form whose Save can only return AUTH_INVALID.
+  final completer = shadcn.openSheetOverlay<void>(
     context: context,
     position: shadcn.OverlayPosition.end,
     barrierColor: Colors.transparent,
@@ -88,19 +95,43 @@ Future<void> openNoteEditorSheet(
         // of its own; openSheet does not provide one.
         child: Material(
           color: Colors.transparent,
-          child: _NoteEditorContent(
-            noteDate: noteDate,
-            group: group,
-            existing: existing,
-            snapshot: snapshot,
-            rangeKey: rangeKey,
-            // A new note has nothing to view, so it always starts in the form.
-            startInEdit: startInEdit || existing == null,
+          // The sheet-local Overlay is load-bearing, not decoration:
+          // EditableText's selection machinery (caret taps, handles, context
+          // menu) requires an Overlay ancestor, and the shadcn drawer subtree
+          // has none — the app Navigator's overlay sits BELOW the drawer
+          // layer. Without it, every tap in a text field threw "No Overlay
+          // widget found" mid-pipeline, which left the browser's hidden input
+          // out of sync with the (cleared) controller — the resurrecting
+          // stale-text bug in the tag field. The entry builds from the
+          // sheet's fixed parameters, so the once-only initialEntries
+          // construction cannot go stale.
+          child: Overlay(
+            initialEntries: [
+              OverlayEntry(
+                builder: (overlayContext) => _NoteEditorContent(
+                  noteDate: noteDate,
+                  group: group,
+                  existing: existing,
+                  snapshot: snapshot,
+                  rangeKey: rangeKey,
+                  // A new note has nothing to view, so it always starts in
+                  // the form.
+                  startInEdit: startInEdit || existing == null,
+                ),
+              ),
+            ],
           ),
         ),
       );
     },
   );
+
+  // Registered for the lifetime of the sheet; force-closing completes the
+  // entry, which resumes the await below and unregisters again.
+  void forceClose() => completer.remove();
+  OverlayManager.registerSheetCloser(forceClose);
+  await completer.future;
+  OverlayManager.unregisterSheetCloser(forceClose);
 
   _isSheetOpening = false;
 
@@ -476,8 +507,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
       duration: Duration.zero,
       value: 1,
     );
-    shadcn
-        .openRawDrawer<void>(
+    final confirmCompleter = shadcn.openRawDrawer<void>(
       context: context,
       position: shadcn.OverlayPosition.top,
       transformBackdrop: false,
@@ -584,10 +614,16 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
           ),
         );
       },
-    )
-        // The package only disposes controllers it created; this one is ours.
-        .future
-        .whenComplete(animation.dispose);
+    );
+    // The confirm is its own drawer entry — a session-expiry sweep must
+    // remove it just like the sheet beneath it.
+    void forceClose() => confirmCompleter.remove();
+    OverlayManager.registerSheetCloser(forceClose);
+    confirmCompleter.future.whenComplete(() {
+      OverlayManager.unregisterSheetCloser(forceClose);
+      // The package only disposes controllers it created; this one is ours.
+      animation.dispose();
+    });
   }
 
   void _requestDelete() {
@@ -1078,81 +1114,63 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
     final note = widget.existing;
     final title = note?.title.trim() ?? '';
     final comment = note?.comment.trim() ?? '';
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-    final meta = _viewMetaLine();
+    // Empty-state styling no longer needed — empty sections are hidden.
+    // final muted = resolveThemeColor(context,
+    //     dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    // final meta = _viewMetaLine(); // fed the hidden created/edited line
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSnapshotSummary(context),
         const SizedBox(height: 20),
-        // Title gets the same icon-led section header as Notes/Tags/
-        // Attachments (it used to render as a bare headline). The meta line
-        // (created date, plus "edited" when changed later) stays inside the
-        // section, under the title text.
-        _viewSection(
-          context,
-          Icons.title_rounded,
-          'Title',
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title.isEmpty ? 'Untitled note' : title,
-                style: MyntWebTextStyles.title(context,
-                    color: title.isEmpty ? muted : null,
-                    darkColor: MyntColors.textPrimaryDark,
-                    lightColor: MyntColors.textPrimary,
-                    fontWeight: MyntFonts.semiBold),
-              ),
-              if (meta.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Icon(Icons.schedule_rounded, size: 12, color: muted),
-                    const SizedBox(width: 5),
-                    Text(meta,
-                        style:
-                            MyntWebTextStyles.caption(context, color: muted)),
-                  ],
-                ),
-              ],
-            ],
+        // Empty sections are hidden entirely — a section renders only when
+        // it has content, so the view is exactly as long as the note.
+        if (title.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.title_rounded,
+            'Title',
+            Text(
+              title,
+              style: MyntWebTextStyles.title(context,
+                  darkColor: MyntColors.textPrimaryDark,
+                  lightColor: MyntColors.textPrimary,
+                  fontWeight: MyntFonts.semiBold),
+            ),
           ),
-        ),
-        _viewSection(
-          context,
-          Icons.notes_rounded,
-          'Notes',
-          Text(
-            comment.isEmpty ? 'No notes written for this day.' : comment,
-            style: MyntWebTextStyles.body(context,
-                    color: comment.isEmpty ? muted : null,
-                    darkColor: MyntColors.textPrimaryDark,
-                    lightColor: MyntColors.textPrimary)
-                .copyWith(height: 1.55),
+        if (comment.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.notes_rounded,
+            'Notes',
+            Text(
+              comment,
+              style: MyntWebTextStyles.body(context,
+                      darkColor: MyntColors.textPrimaryDark,
+                      lightColor: MyntColors.textPrimary)
+                  .copyWith(height: 1.55),
+            ),
           ),
-        ),
-        _viewSection(
-          context,
-          Icons.sell_outlined,
-          'Tags',
-          _tags.isEmpty
-              ? _viewNone(context)
-              : Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [for (final tag in _tags) _tagChip(context, tag)],
-                ),
-        ),
-        _viewSection(
-          context,
-          Icons.attach_file_rounded,
-          'Attachments',
-          _attachments.isEmpty
-              ? _viewNone(context)
-              : Wrap(
+        if (_tags.isNotEmpty)
+          _viewSection(
+            context,
+            // Lucide's tag glyph (with the hole) — used for all tag
+            // iconography.
+            shadcn.LucideIcons.tag,
+            'Tags',
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [for (final tag in _tags) _tagChip(context, tag)],
+            ),
+          ),
+        if (_attachments.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.attach_file_rounded,
+            'Attachments',
+            Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   // Read-only: the tile still previews / downloads, but readOnly
@@ -1184,13 +1202,18 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
               dark: MyntColors.dividerDark, light: MyntColors.divider),
         ),
         const SizedBox(height: 14),
+        // Header sized like the edit form's field labels (body, medium) so
+        // both modes read at the same weight; icon scaled up to match.
         Row(
           children: [
-            Icon(icon, size: 14, color: muted),
+            Icon(icon, size: 18, color: muted),
             const SizedBox(width: 7),
             Text(
               label.toUpperCase(),
-              style: MyntWebTextStyles.caption(context,
+              // style: MyntWebTextStyles.caption(context,
+              //         color: muted, fontWeight: MyntFonts.medium)
+              //     .copyWith(letterSpacing: 0.6),
+              style: MyntWebTextStyles.body(context,
                       color: muted, fontWeight: MyntFonts.medium)
                   .copyWith(letterSpacing: 0.6),
             ),
@@ -1203,24 +1226,26 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
     );
   }
 
-  Widget _viewNone(BuildContext context) => Text(
-        'None',
-        style: MyntWebTextStyles.caption(context,
-            darkColor: MyntColors.textTertiaryDark,
-            lightColor: MyntColors.textTertiary),
-      );
+  /// Retired: empty sections are hidden now instead of showing "None".
+  // Widget _viewNone(BuildContext context) => Text(
+  //       'None',
+  //       style: MyntWebTextStyles.caption(context,
+  //           darkColor: MyntColors.textTertiaryDark,
+  //           lightColor: MyntColors.textTertiary),
+  //     );
 
   /// "Added 12 May 2026" (+ "· edited 13 May" when it was changed later).
-  String _viewMetaLine() {
-    final c = widget.existing?.createdAt;
-    if (c == null) return '';
-    final added = 'Added ${DateFormat('d MMM yyyy').format(c)}';
-    final u = widget.existing?.updatedAt;
-    if (u != null && u.difference(c).inMinutes.abs() > 1) {
-      return '$added · edited ${DateFormat('d MMM').format(u)}';
-    }
-    return added;
-  }
+  /// Hidden from the view per design review; kept for cheap re-enable.
+  // String _viewMetaLine() {
+  //   final c = widget.existing?.createdAt;
+  //   if (c == null) return '';
+  //   final added = 'Added ${DateFormat('d MMM yyyy').format(c)}';
+  //   final u = widget.existing?.updatedAt;
+  //   if (u != null && u.difference(c).inMinutes.abs() > 1) {
+  //     return '$added · edited ${DateFormat('d MMM').format(u)}';
+  //   }
+  //   return added;
+  // }
 
   // --- Attachments UI --------------------------------------------------------
 
@@ -1249,7 +1274,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final a in _attachments) _buildServerAttachmentTile(context, a),
+            for (final a in _attachments)
+              _buildServerAttachmentTile(context, a),
             for (var i = 0; i < _queuedFiles.length; i++)
               _buildQueuedFileTile(context, i),
             if (count < _kMaxAttachments) _buildAddTile(context),
@@ -1445,7 +1471,13 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
     );
   }
 
+  /// The Add tile in the cloud-upload style: blue dashed border on a light
+  /// primary wash (static — no hover state by design), accent cloud icon,
+  /// semibold "Add image", size limit underneath. Clicking opens the picker;
+  /// the spinner shows while a file round-trip is in flight.
   Widget _buildAddTile(BuildContext context) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Semantics(
@@ -1453,39 +1485,49 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
       button: true,
       child: InkWell(
         onTap: _attachmentBusy ? null : _pickAttachments,
+        // The tile's own tint is the affordance; the default grey ink hover
+        // would muddy it.
+        hoverColor: Colors.transparent,
         borderRadius: BorderRadius.circular(8),
-        child: Container(
-          width: 84,
-          height: 84,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: resolveThemeColor(context,
-                  dark: MyntColors.borderMutedDark,
-                  light: MyntColors.borderMuted),
+        child: CustomPaint(
+          painter: _DashedBorderPainter(accent.withValues(alpha: 0.7)),
+          child: Container(
+            width: 120,
+            height: 84,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(8),
             ),
-          ),
-          child: _attachmentBusy
-              ? const Center(
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                )
-              : Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.add_photo_alternate_outlined,
-                        size: 22, color: secondary),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Add',
-                      style: MyntWebTextStyles.caption(context,
-                          color: secondary, fontWeight: MyntFonts.medium),
+            child: _attachmentBusy
+                ? const Center(
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                  ],
-                ),
+                  )
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(shadcn.LucideIcons.cloudUpload,
+                          size: 24, color: accent),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Add image',
+                        style: MyntWebTextStyles.bodySmall(context,
+                            darkColor: MyntColors.textPrimaryDark,
+                            lightColor: MyntColors.textPrimary,
+                            fontWeight: MyntFonts.semiBold),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'up to 5 MB',
+                        style: MyntWebTextStyles.caption(context,
+                            color: secondary),
+                      ),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -1870,10 +1912,16 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
       // secondaryEnabled: false — the default shows an "Explore" button that
       // navigates to the watchlist, which makes no sense inside this panel.
       body = allTags.isEmpty
-          ? const NoDataFoundWeb(
+          ? NoDataFoundWeb(
               title: 'No tags yet',
               subtitle: 'Type a name and press Enter to create one.',
               secondaryEnabled: false,
+              // Same tag glyph as the Manage tags empty state.
+              iconWidget: Icon(shadcn.LucideIcons.tag,
+                  size: 64,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary)),
             )
           : _panelMessage(
               context, 'No matching tags — keep typing to create one.');
@@ -2117,14 +2165,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Dot dropped — the chip's tinted fill and border already carry
-            // the tag's colour.
-            // Container(
-            //   width: 8,
-            //   height: 8,
-            //   decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            // ),
-            // const SizedBox(width: 6),
+            // Tag glyph in the tag's own colour (replaced the old dot) —
+            // same icon the TAGS section header and empty states use.
+            Icon(shadcn.LucideIcons.tag, size: 12, color: color),
+            const SizedBox(width: 4),
             Flexible(
               child: Text(
                 tag.name,
@@ -2276,26 +2320,35 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
   Widget _buildManageEmptyState(BuildContext context) {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.sell_outlined, size: 30, color: secondary),
-          const SizedBox(height: 10),
-          Text('No tags yet',
-              style: MyntWebTextStyles.body(context,
-                  darkColor: MyntColors.textPrimaryDark,
-                  lightColor: MyntColors.textPrimary,
-                  fontWeight: MyntFonts.medium)),
-          const SizedBox(height: 4),
-          Text(
-            'Create tags from the note editor\'s tag field —\n'
-            'label your setups, mistakes and emotions.',
-            textAlign: TextAlign.center,
-            style: MyntWebTextStyles.caption(context, color: secondary),
-          ),
-        ],
-      ),
+    // App-wide empty-state widget, keeping the tag glyph (no SVG asset for it
+    // exists, hence iconWidget).
+    // return Center(
+    //   child: Column(
+    //     mainAxisSize: MainAxisSize.min,
+    //     children: [
+    //       Icon(Icons.sell_outlined, size: 30, color: secondary),
+    //       const SizedBox(height: 10),
+    //       Text('No tags yet',
+    //           style: MyntWebTextStyles.body(context,
+    //               darkColor: MyntColors.textPrimaryDark,
+    //               lightColor: MyntColors.textPrimary,
+    //               fontWeight: MyntFonts.medium)),
+    //       const SizedBox(height: 4),
+    //       Text(
+    //         'Create tags from the note editor\'s tag field —\n'
+    //         'label your setups, mistakes and emotions.',
+    //         textAlign: TextAlign.center,
+    //         style: MyntWebTextStyles.caption(context, color: secondary),
+    //       ),
+    //     ],
+    //   ),
+    // );
+    return NoDataFoundWeb(
+      title: 'No tags yet',
+      subtitle: "Create tags from the note editor's tag field — "
+          'label your setups, mistakes and emotions.',
+      secondaryEnabled: false,
+      iconWidget: Icon(shadcn.LucideIcons.tag, size: 64, color: secondary),
     );
   }
 
@@ -2521,19 +2574,19 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
                 ),
                 const SizedBox(width: 6),
                 // Segment badge inline with the title keeps the header a
-                // single line — same look as the Status column chips on the
-                // Open Orders screen (12% tint, radius 4, no border).
+                // single line — count-badge recipe (10% tint, radius 5,
+                // para semiBold).
                 Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: segColor.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(4),
+                    color: segColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(5),
                   ),
                   child: Text(
                     widget.group.tabLabel.toUpperCase(),
                     style: MyntWebTextStyles.para(context,
-                        color: segColor, fontWeight: MyntFonts.medium),
+                        fontWeight: MyntFonts.semiBold, color: segColor),
                   ),
                 ),
                 // The calendar tile is hidden when the date cannot be parsed —
@@ -2580,7 +2633,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
     final accent = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
     return Container(
-      width: 56,
+      // width: 56,
+      width: 64,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         // Solid sheet background so the tile stays readable on the banner's
@@ -2588,7 +2642,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
         color: resolveThemeColor(context,
             dark: MyntColors.backgroundColorDark,
             light: MyntColors.backgroundColor),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(5),
         border: Border.all(color: accent.withValues(alpha: 0.25)),
       ),
       child: Column(
@@ -2597,7 +2651,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
           Container(
             width: double.infinity,
             color: accent,
-            padding: const EdgeInsets.symmetric(vertical: 3),
+            padding: const EdgeInsets.symmetric(vertical: 4),
             child: Text(
               DateFormat('EEE').format(d).toUpperCase(),
               textAlign: TextAlign.center,
@@ -2605,16 +2659,17 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
                   .copyWith(height: 1.0, letterSpacing: 1.0),
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 5),
           Text(
             DateFormat('dd').format(d),
-            style: MyntWebTextStyles.title(context,
+            // Day number leads the tile: head (18) instead of title (16).
+            style: MyntWebTextStyles.head(context,
                     darkColor: MyntColors.textPrimaryDark,
                     lightColor: MyntColors.textPrimary,
                     fontWeight: MyntFonts.bold)
                 .copyWith(height: 1.0),
           ),
-          const SizedBox(height: 2),
+          const SizedBox(height: 3),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: FittedBox(
@@ -2849,4 +2904,36 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
 
   bool get _hasContent =>
       _title.text.trim().isNotEmpty || _comment.text.trim().isNotEmpty;
+}
+
+/// Dashed rounded-rect outline for the attachment Add tile. Flutter's
+/// [Border] has no dashed style and the app carries no dashed-border package,
+/// so the outline is painted: the rounded-rect path is walked and stroked in
+/// 5px dashes with 4px gaps.
+class _DashedBorderPainter extends CustomPainter {
+  final Color color;
+  const _DashedBorderPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+          Offset.zero & size, const Radius.circular(8)));
+    const dash = 5.0, gap = 4.0;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        canvas.drawPath(metric.extractPath(distance, distance + dash), paint);
+        distance += dash + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedBorderPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

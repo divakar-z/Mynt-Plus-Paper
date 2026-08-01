@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../models/desk_reports_model/calender_pnl_model.dart';
@@ -12,11 +13,14 @@ import '../../../../models/journal_notes_model/journal_note.dart';
 import '../../../../models/journal_notes_model/journal_tag.dart';
 import '../../../../models/journal_notes_model/segment_group.dart';
 import '../../../../models/journal_notes_model/tag_pnl_analytics.dart';
+import '../../../../locator/locator.dart';
+import '../../../../locator/preference.dart';
 import '../../../../provider/journal_notes/journal_notes_provider.dart';
 import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
+import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/custom_back_btn.dart';
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../sharedWidget/no_data_found.dart';
@@ -42,6 +46,19 @@ class CalenderpnlScreen extends ConsumerStatefulWidget {
 class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     with ScrollToLoadMixin {
   final ScrollController _tableScrollController = ScrollController();
+
+  /// First-visit coach mark for the trading journal (dim + centred card).
+  /// Shown once, and only while the client has no notes — once a note
+  /// exists the feature has introduced itself. Any dismissal counts as seen.
+  ///
+  /// The seen-flag is scoped PER CLIENT ID: two accounts sharing a browser
+  /// are introduced independently (the browser flag is the only local state;
+  /// the has-notes check is already per-account on the server).
+  static const _kJournalCoachSeenBase = 'journal_coach_mark_seen';
+  String get _journalCoachKey =>
+      '${_kJournalCoachSeenBase}_${locator<Preferences>().clientId ?? ''}';
+  bool _journalCoachSeen = true; // safe default until the prefs read lands
+  bool _journalCoachShowing = false;
 
   @override
   ScrollController get tableScrollController => _tableScrollController;
@@ -89,6 +106,14 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
   void initState() {
     super.initState();
     initScrollToLoad();
+    // First-visit coach mark for the trading journal: read whether this
+    // client has already been shown it. Defaults to "seen" until the prefs
+    // read lands, so it can never flash while loading.
+    SharedPreferences.getInstance().then((prefs) {
+      if (!mounted) return;
+      setState(() =>
+          _journalCoachSeen = prefs.getBool(_journalCoachKey) ?? false);
+    });
     // Initialize dates from provider
     final lp = ref.read(ledgerProvider);
     final now = DateTime.now();
@@ -463,11 +488,31 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     // analytics *inside* it are still scoped to the visible range and segment.
     final fyStart = _getFinancialYearStart(ledgerprovider.startTaxDate);
     final fyEnd = _getFinancialYearEnd(ledgerprovider.startTaxDate);
-    final hasAnyNotes = ref
-            .watch(hasAnyNotesProvider(NotesRangeKey(
-                from: _isoDate(fyStart), to: _isoDate(fyEnd))))
-            .value ??
-        false;
+    final hasAnyNotesAsync = ref.watch(hasAnyNotesProvider(
+        NotesRangeKey(from: _isoDate(fyStart), to: _isoDate(fyEnd))));
+    final hasAnyNotes = hasAnyNotesAsync.value ?? false;
+    // The heat map the active tab renders — computed here so the coach-mark
+    // gate below can read it too.
+    final heatmapForTab = isCommodity
+        ? _buildHeatmapForCommodity(ledgerprovider)
+        : ledgerprovider.heatmapData;
+    // First-visit coach mark: the Journal tab cannot advertise itself (it is
+    // hidden until a note exists), so the feature is introduced once, over
+    // this screen, to a client with no notes yet. Shown even when the
+    // calendar has no traded days — it is an announcement, not a tutorial —
+    // but only after BOTH the notes check and the P&L load have settled, so
+    // the one-time flag can never be burnt over a loading screen.
+    if (hasAnyNotesAsync.hasValue &&
+        !hasAnyNotes &&
+        !_journalCoachSeen &&
+        !_journalCoachShowing &&
+        !ledgerprovider.calendarpnlloading &&
+        noteGroup != null) {
+      _journalCoachShowing = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showJournalCoachMark();
+      });
+    }
     // If the tab vanishes (e.g. the last note was deleted) while it is
     // selected, fall back rather than render an orphaned view.
     final showJournal = hasAnyNotes && noteGroup != null;
@@ -487,9 +532,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: _WebCalendarTabs(
-              heatmapData: isCommodity
-                  ? _buildHeatmapForCommodity(ledgerprovider)
-                  : ledgerprovider.heatmapData,
+              heatmapData: heatmapForTab,
               monthlyPnL: isCommodity
                   ? _buildMonthlyPnLForCommodity(ledgerprovider)
                   : ledgerprovider.monthlyPnL,
@@ -2306,6 +2349,141 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
       '${d.month.toString().padLeft(2, '0')}-'
       '${d.day.toString().padLeft(2, '0')}';
 
+  /// One-time introduction to the trading journal: dim the page, a centred
+  /// card with a mini heat-map illustration, one line of copy, "Got it".
+  /// Any dismissal (button, X-less barrier click, Esc) counts as seen — the
+  /// card has said its piece and never shows again.
+  Future<void> _showJournalCoachMark() async {
+    await showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Center(
+          child: shadcn.Card(
+            borderRadius: BorderRadius.circular(8),
+            padding: EdgeInsets.zero,
+            child: Container(
+              width: 400,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: resolveThemeColor(dialogContext,
+                    dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Mini heat-map strip: quiet days around a profit day and a
+                  // loss day carrying the note marker.
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 14),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: resolveThemeColor(dialogContext,
+                              dark: MyntColors.borderMutedDark,
+                              light: MyntColors.borderMuted)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'profit'),
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'loss', marked: true),
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'empty'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Add trading notes!',
+                    textAlign: TextAlign.center,
+                    style: MyntWebTextStyles.title(dialogContext,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.semiBold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Click any traded day on the calendar to save your '
+                    'thoughts, mistakes or strategy to review later.',
+                    textAlign: TextAlign.center,
+                    style: MyntWebTextStyles.body(dialogContext,
+                        fontWeight: FontWeight.w500,
+                        darkColor: MyntColors.textSecondaryDark,
+                        lightColor: MyntColors.textSecondary),
+                  ),
+                  const SizedBox(height: 20),
+                  MyntPrimaryButton(
+                    label: 'Got it',
+                    size: MyntButtonSize.large,
+                    isFullWidth: true,
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    // Persist however it was dismissed.
+    _journalCoachSeen = true;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_journalCoachKey, true);
+  }
+
+  /// One cell of the coach-mark illustration strip.
+  Widget _coachCell(BuildContext context,
+      {required String kind, bool marked = false}) {
+    final Color fill = switch (kind) {
+      'profit' => resolveThemeColor(context,
+          dark: MyntColors.profitDark, light: MyntColors.profit),
+      'loss' => resolveThemeColor(context,
+          dark: MyntColors.lossDark, light: MyntColors.loss),
+      _ => resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary)
+          .withValues(alpha: 0.15),
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+                color: fill, borderRadius: BorderRadius.circular(3)),
+          ),
+          if (marked)
+            Positioned(
+              top: -2,
+              right: -2,
+              child: Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.primaryDark,
+                      light: MyntColors.primary),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// Null when the active tab is not one of the four known asset classes — in
   /// which case notes are simply not offered, rather than guessed at.
   NotesRangeKey? _notesRangeKey(LDProvider lp) {
@@ -4116,10 +4294,13 @@ class _WebDailyCalendar extends StatelessWidget {
             isToday: isToday,
             todayBorderColor: todayBorderColor,
             hasNote: hasNote,
-            // Vivid orange with a lighter same-hue glow — specified explicitly
-            // to stay visible on both the green and the red fills. Same in both
-            // themes; the glow supplies the edge separation.
-            noteMarkerColor: MyntColors.noteMarker,
+            // The app's primary blue, theme-resolved: deep blue on the light
+            // theme, the lighter primaryDark on the dark theme so the dot
+            // stays visible on dark cells. The glow supplies edge separation
+            // on the green/red fills.
+            // noteMarkerColor: MyntColors.noteMarker,
+            noteMarkerColor: resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary),
             onTap: canNote ? () => onNoteTap!(date) : null,
           );
         }
@@ -4323,7 +4504,8 @@ class _HoverableHeatmapCellState extends State<_HoverableHeatmapCell> {
                 ? Align(
                     alignment: Alignment.topRight,
                     child: Padding(
-                      padding: const EdgeInsets.only(top: 2, right: 2),
+                      // Flush into the corner (was inset 2/2).
+                      padding: EdgeInsets.zero,
                       child: Container(
                         width: markerSize,
                         height: markerSize,
