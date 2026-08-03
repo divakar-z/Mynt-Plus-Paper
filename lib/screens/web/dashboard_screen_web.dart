@@ -16,11 +16,13 @@ import '../../../provider/order_provider.dart';
 import '../../../provider/fund_provider.dart';
 import '../../../provider/mf_provider.dart';
 import '../../../provider/privacy_provider.dart';
+import '../../../provider/rupeecase_provider.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/explore_model/stocks_model/toplist_stocks.dart';
 import 'dart:async';
 import 'market_watch/index/index_bottom_sheet_web.dart';
 import 'trade_action_screen_web.dart';
+import 'rupeecase_strategies_section.dart';
 import '../../../routes/route_names.dart';
 import '../../../utils/custom_navigator.dart';
 import '../../../utils/rupee_convert_format.dart';
@@ -59,6 +61,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       if (!mounted) return;
 
       final indexProvider = ref.read(indexListProvider);
+      ref.read(rupeeCaseProvider).fetchStrategies();
+      // Algo strategies commented out for now — curated (RupeeCase) only.
+      // ref.read(rupeeCaseProvider).fetchAlgoStrategies();
 
       // Get top indices for dashboard (8 specific indices) if not already fetched
       // This ensures tokens are available for WebbodyscriptionManager
@@ -204,6 +209,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               // Dashboard cards section (Holdings, Position, Orders, Margins)
               _buildDashboardCardsSection(context),
               const SizedBox(height: 32),
+              // RupeeCase Strategies section — shown below Portfolio.
+              // Self-hides (renders nothing) until data loads.
+              const RupeeCaseStrategiesSection(),
               // Tools section (Scalper, Strategy Builder, OptionZ)
               _buildToolsSection(context),
               const SizedBox(height: 32),
@@ -1862,13 +1870,13 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
                                 color: darkMode
-                                    ? accent.withValues(alpha: 0.06)
-                                    : Colors.white,
+                                    ? MyntColors.cardDark
+                                    : MyntColors.card,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
                                   color: darkMode
-                                      ? accent.withValues(alpha: 0.20)
-                                      : accent.withValues(alpha: 0.15),
+                                      ? MyntColors.cardBorderDark
+                                      : MyntColors.cardBorder,
                                   width: 1,
                                 ),
                               ),

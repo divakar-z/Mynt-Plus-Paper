@@ -210,6 +210,7 @@ class Assets {
   final String gttdashboard = "assets/icon/dashboard/gtt_dash.svg";
   final String sipdashboard = "assets/icon/dashboard/sip_dash.svg";
   final String basketdashboard = "assets/icon/dashboard/basket_dash.svg";
+  final String rebalanceIcon = "assets/icon/repeat 1 (1).svg";
   final String alertdashboard = "assets/icon/dashboard/alert_dash.svg";
   final String referandearn = "assets/icon/dashboard/refer_and_earn.svg";
   final String plsummary = "assets/icon/dashboard/p&l_summary.svg";

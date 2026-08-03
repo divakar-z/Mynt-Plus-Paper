@@ -253,14 +253,33 @@ class FundProvider extends DefaultChangeNotifier {
     await fetchOptionZ(base64Pass, context);
   }
 
-  Future<void> openOptionZInNewTab() async {
-    var enCodePass = utf8.encode(
-        'sLoginId=${pref.clientId}&sAccountId=${pref.clientId}&token=${fundHstoken!.hstk}&sBrokerId=ZEBU');
-    var base64Pass = base64Url.encode(enCodePass);
-    String url = "https://be.mynt.in/SSONew/OAuthNew?vc=instaoptions&key=$base64Pass";
-    
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  Future<void> openOptionZInNewTab() => openSsoInNewTab('instaoptions');
+
+  Future<void> openSsoInNewTab(String vc) async {
+    final String? hstk = fundHstoken?.hstk;
+    if (hstk == null || hstk.isEmpty) {
+      debugPrint("[SSO:$vc] ⛔ skipped — HS token unavailable "
+          "(fundHstoken=${fundHstoken == null ? 'null' : 'present'})");
+      return;
+    }
+    final String rawKey =
+        'sLoginId=${pref.clientId}&sAccountId=${pref.clientId}&token=$hstk&sBrokerId=ZEBU';
+    final String key = base64Url.encode(utf8.encode(rawKey));
+    final String url = "https://be.mynt.in/SSONew/OAuthNew?vc=$vc&key=$key";
+
+    // ---- Verification logs (browser console) ----
+    // debugPrint("[SSO:$vc] clientId   = ${pref.clientId}");
+    // debugPrint("[SSO:$vc] token/hstk = $hstk");
+    // debugPrint("[SSO:$vc] rawKey     = $rawKey");
+    // debugPrint("[SSO:$vc] base64 key = $key");
+    // debugPrint("[SSO:$vc] url        = $url");
+
+    final Uri uri = Uri.parse(url);
+    final bool can = await canLaunchUrl(uri);
+    if (can) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      debugPrint("[SSO:$vc] ❌ could not launch url");
     }
   }
 

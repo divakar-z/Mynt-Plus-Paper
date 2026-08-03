@@ -66,6 +66,8 @@ import 'portfolio_analysis_web.dart';
 import 'market_watch/options/option_chain_ss_web.dart';
 import '../Mobile/desk_reports/pledge_unpledge_screen.dart';
 import 'mutual_fund/mf_main_screen_web.dart';
+import 'all_strategies_screen_web.dart';
+import 'all_algo_strategies_screen_web.dart';
 import 'mutual_fund/mf_all_best_funds_web.dart';
 import 'mutual_fund/mf_top_category_list_web.dart';
 import 'mutual_fund/mf_nfo_screen_web.dart';
@@ -525,6 +527,10 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return const ScannerShellScreen();
       case ScreenType.orderflow:
         return const OrderflowShellScreen();
+      case ScreenType.curatedStrategies:
+        return const AllStrategiesScreenWeb();
+      case ScreenType.allAlgoStrategies:
+        return const AllAlgoStrategiesScreenWeb();
     }
   }
 
@@ -640,6 +646,10 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Scanner';
       case ScreenType.orderflow:
         return 'Orderflow';
+      case ScreenType.curatedStrategies:
+        return 'Strategies';
+      case ScreenType.allAlgoStrategies:
+        return 'Algo Strategies';
     }
   }
 

@@ -137,6 +137,14 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get selectSymbols => '$optionStrategyBaseURL/select-symbols';
   String get strategies => '$optionStrategyBaseURL/strategies';
 
+// RupeeCase curated-strategies marketplace (dashboard "Curated Strategies" cards)
+  String get rupeeCaseBaseURL => 'https://agg.zebuetrade.com/rupeecase/api/v1';
+  String get rupeeCaseStrategies => '$rupeeCaseBaseURL/strategies';
+
+  /// Algo (automated) strategy baskets — powers the "Algo" tab in the dashboard
+  /// Strategies section.
+  String get rupeeCaseAlgoStrategies => '$rupeeCaseBaseURL/algo-strategies';
+
 // Order
 
   String get orderMargin => '$goMyntURL/GetOrderMargin';
