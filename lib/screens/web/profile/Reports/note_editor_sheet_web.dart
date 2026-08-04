@@ -14,6 +14,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../../api/core/api_export.dart';
 import '../../../../locator/locator.dart';
+import '../../../../models/desk_reports_model/calender_pnl_model.dart';
 import '../../../../models/journal_notes_model/journal_note.dart';
 import '../../../../models/journal_notes_model/journal_notes_exception.dart';
 import '../../../../models/journal_notes_model/journal_tag.dart';
@@ -24,7 +25,9 @@ import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_text_fields_web.dart';
+import '../../../../sharedWidget/no_data_found_web.dart';
 import '../../../../sharedWidget/snack_bar.dart';
+import '../../../../utils/overlay_manager.dart';
 
 /// Guards against a double-click opening two sheets — the same pattern the
 /// order-book screens use.
@@ -54,11 +57,18 @@ Future<void> openNoteEditorSheet(
   required NotePnlSnapshot? snapshot,
   required NotesRangeKey rangeKey,
   bool startInEdit = false,
+  List<TradeData> trades = const [],
 }) async {
   if (_isSheetOpening) return;
   _isSheetOpening = true;
 
-  await shadcn.openSheet(
+  // openSheetOverlay rather than openSheet: the completer allows the sheet
+  // to be force-closed from outside. Session expiry / logout / account
+  // switch run OverlayManager.closeAll() — without registering there, this
+  // sheet survives the navigation to /login (the drawer overlay is mounted
+  // ABOVE the router in main.dart) and floats over the login screen as an
+  // editable dead form whose Save can only return AUTH_INVALID.
+  final completer = shadcn.openSheetOverlay<void>(
     context: context,
     position: shadcn.OverlayPosition.end,
     barrierColor: Colors.transparent,
@@ -87,19 +97,44 @@ Future<void> openNoteEditorSheet(
         // of its own; openSheet does not provide one.
         child: Material(
           color: Colors.transparent,
-          child: _NoteEditorContent(
-            noteDate: noteDate,
-            group: group,
-            existing: existing,
-            snapshot: snapshot,
-            rangeKey: rangeKey,
-            // A new note has nothing to view, so it always starts in the form.
-            startInEdit: startInEdit || existing == null,
+          // The sheet-local Overlay is load-bearing, not decoration:
+          // EditableText's selection machinery (caret taps, handles, context
+          // menu) requires an Overlay ancestor, and the shadcn drawer subtree
+          // has none — the app Navigator's overlay sits BELOW the drawer
+          // layer. Without it, every tap in a text field threw "No Overlay
+          // widget found" mid-pipeline, which left the browser's hidden input
+          // out of sync with the (cleared) controller — the resurrecting
+          // stale-text bug in the tag field. The entry builds from the
+          // sheet's fixed parameters, so the once-only initialEntries
+          // construction cannot go stale.
+          child: Overlay(
+            initialEntries: [
+              OverlayEntry(
+                builder: (overlayContext) => _NoteEditorContent(
+                  noteDate: noteDate,
+                  group: group,
+                  existing: existing,
+                  snapshot: snapshot,
+                  rangeKey: rangeKey,
+                  trades: trades,
+                  // A new note has nothing to view, so it always starts in
+                  // the form.
+                  startInEdit: startInEdit || existing == null,
+                ),
+              ),
+            ],
           ),
         ),
       );
     },
   );
+
+  // Registered for the lifetime of the sheet; force-closing completes the
+  // entry, which resumes the await below and unregisters again.
+  void forceClose() => completer.remove();
+  OverlayManager.registerSheetCloser(forceClose);
+  await completer.future;
+  OverlayManager.unregisterSheetCloser(forceClose);
 
   _isSheetOpening = false;
 
@@ -107,6 +142,10 @@ Future<void> openNoteEditorSheet(
   // through Save — so the grid's cached copy of the note can be stale by the
   // time the sheet closes. One refresh here covers every exit path.
   ref.invalidate(notesForRangeProvider(rangeKey));
+  // The Journal tab's per-tag analytics go stale on the same mutations
+  // (attached tags feed day counts and totals) — drop the whole family, the
+  // tab refetches when it renders.
+  ref.invalidate(tagPnlProvider);
 
   // Attachment bytes are held in the provider so thumbnails don't refetch on
   // every rebuild; the cost is they stay resident. Drop them all when the
@@ -129,6 +168,29 @@ const List<String> _kTagPalette = [
   '#8E4EC6', // purple
 ];
 
+/// Forces the first character of a field to upper case as the user types, so
+/// titles, notes and tag names always start capitalised without the user
+/// having to reach for shift.
+///
+/// Deliberately only the first character: the rest is the user's own text.
+/// The replacement never changes the string's length — a case fold that would
+/// (German ß → SS, for one) is skipped — so the caret and any selection stay
+/// exactly where the framework put them.
+class _CapitaliseFirstLetterFormatter extends TextInputFormatter {
+  const _CapitaliseFirstLetterFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final text = newValue.text;
+    if (text.isEmpty) return newValue;
+    final first = text[0];
+    final upper = first.toUpperCase();
+    if (upper == first || upper.length != first.length) return newValue;
+    return newValue.copyWith(text: upper + text.substring(1));
+  }
+}
+
 /// Matches the P&L Summary screen's own formatting: the sign sits outside the
 /// symbol (`-₹1,234.00`), so the number in the editor reads the same as the
 /// number in the row it was opened from.
@@ -145,6 +207,10 @@ class _NoteEditorContent extends ConsumerStatefulWidget {
   final NotesRangeKey rangeKey;
   final bool startInEdit;
 
+  /// This day's trade rows, read from the calendar P&L response already on
+  /// screen — no extra call. Empty when the day has none.
+  final List<TradeData> trades;
+
   const _NoteEditorContent({
     required this.noteDate,
     required this.group,
@@ -152,12 +218,19 @@ class _NoteEditorContent extends ConsumerStatefulWidget {
     required this.snapshot,
     required this.rangeKey,
     required this.startInEdit,
+    this.trades = const [],
   });
 
   @override
   ConsumerState<_NoteEditorContent> createState() => _NoteEditorContentState();
 }
 
+/// RETIRED (2026-07-24): every confirmation now goes through
+/// [_NoteEditorContentState._showConfirmDialog], the full-screen watchlist-style
+/// dialog stacked as a drawer-overlay entry. This in-sheet prompt and its
+/// overlay builder are kept dormant for cheap rollback — nothing sets
+/// [_NoteEditorContentState._confirm] any more.
+///
 /// An in-sheet confirmation prompt. Rendered inside the sheet's own Stack rather
 /// than a Material `showDialog`, which layers *below* the shadcn drawer overlay
 /// and so would be invisible and unreachable.
@@ -175,13 +248,19 @@ class _ConfirmPrompt {
   });
 }
 
-class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
+class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
+    with SingleTickerProviderStateMixin {
   late final TextEditingController _title;
   late final TextEditingController _comment;
   late final String _originalTitle;
   late final String _originalComment;
   bool _saving = false;
   bool _deleting = false;
+
+  /// Inline validation message under the footer, set when Save is clicked
+  /// with nothing to save. Rendered only while [_canSave] is still false, so
+  /// it disappears on its own the moment the note becomes saveable.
+  String? _saveError;
 
   /// Non-null while an inline confirm prompt (discard / delete) is showing.
   _ConfirmPrompt? _confirm;
@@ -276,10 +355,14 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
 
   bool get _isNew => widget.existing == null;
 
-  /// `2026-05-15` → `15 May 2026` for display. The stored key stays ISO.
+  /// `2026-05-15` → `Fri, 15 May 2026` for the header caption. The stored key
+  /// stays ISO.
   String get _prettyDate {
     final d = DateTime.tryParse(widget.noteDate);
-    return d != null ? DateFormat('dd MMM yyyy').format(d) : widget.noteDate;
+    // return d != null ? DateFormat('dd MMM yyyy').format(d) : widget.noteDate;
+    return d != null
+        ? DateFormat('EEE, dd MMM yyyy').format(d)
+        : widget.noteDate;
   }
 
   /// Whether the current text differs from what the note was opened with. Read
@@ -313,6 +396,26 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
 
   Future<void> _save() async {
     if (_saving) return;
+    // The button is always enabled (app convention: submit buttons never
+    // disable for validation) — the click validates instead. The message is
+    // inline, not a toast: web toasts render top-right inside the Navigator's
+    // overlay, which sits BELOW this drawer sheet — a toast here would be
+    // invisible behind the sheet.
+    if (!_canSave) {
+      // An existing note with no pending TEXT changes is not an error: tag
+      // and attachment edits were persisted the moment they were made, so
+      // Save simply confirms and closes. Only an empty new note has truly
+      // nothing to save.
+      if (!_isNew) {
+        shadcn.closeSheet(context);
+        return;
+      }
+      setState(() {
+        _saveError = 'Add a title, note, tag or attachment before saving.';
+      });
+      return;
+    }
+    _saveError = null;
     setState(() => _saving = true);
     try {
       final saved = await locator<ApiExporter>().saveNote(
@@ -361,6 +464,9 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
 
       ref.invalidate(notesForRangeProvider(widget.rangeKey));
       ref.invalidate(hasAnyNotesProvider);
+      // A saved note changes the analytics too (snapshot resend, and a new
+      // note's queued tags were just attached).
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       // openSheet is a shadcn drawer, not a route — Navigator.pop would not
       // close it and would leave the save spinner hung.
@@ -391,33 +497,188 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
             ? (_hasContent || _tags.isNotEmpty || _queuedFiles.isNotEmpty)
             : _dirty);
     if (hasUnsavedWork) {
-      setState(() {
-        _confirm = _ConfirmPrompt(
-          title: 'Discard changes?',
-          message: 'You have unsaved changes to this note. Closing now will '
-              'discard them.',
-          confirmLabel: 'Discard',
-          onConfirm: () async {
-            if (mounted) shadcn.closeSheet(context);
-          },
-        );
-      });
+      // Full-screen dialog (Delete Watchlist style), no longer the in-sheet
+      // _ConfirmPrompt overlay — confirmations match the rest of the app.
+      // setState(() {
+      //   _confirm = _ConfirmPrompt(
+      //     title: 'Discard changes?',
+      //     message: 'You have unsaved changes to this note. Closing now will '
+      //         'discard them.',
+      //     confirmLabel: 'Discard',
+      //     onConfirm: () async {
+      //       if (mounted) shadcn.closeSheet(context);
+      //     },
+      //   );
+      // });
+      _showConfirmDialog(
+        title: 'Discard changes?',
+        message: 'You have unsaved changes to this note. Closing now will '
+            'discard them.',
+        confirmLabel: 'Discard',
+        onConfirm: () {
+          if (mounted) shadcn.closeSheet(context);
+        },
+      );
       return;
     }
     shadcn.closeSheet(context);
   }
 
+  /// Full-screen confirmation in the Delete Watchlist style: centred 400px
+  /// card over a dimmed screen, title + close in a bordered header, centred
+  /// message, one full-width red action (the header X is the cancel).
+  /// Every confirmation in this sheet goes through here — discard changes,
+  /// delete note, delete tag, remove attachment.
+  ///
+  /// NOT a Navigator dialog: main.dart mounts the app's shadcn DrawerOverlay
+  /// ABOVE the router, so showDialog/showGeneralDialog render behind this
+  /// sheet, unreachable inside its inert backdrop. The confirm is instead
+  /// stacked as a second entry in the same drawer overlay — later entries
+  /// paint above the sheet, and while this one is open the sheet itself
+  /// becomes part of the backdrop, so it is properly modal.
+  void _showConfirmDialog({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    required VoidCallback onConfirm,
+  }) {
+    // Zero-duration controller pinned at 1: drawer entries slide in from
+    // their edge, and a full-screen dim sliding out reads as a shutter
+    // effect. Pinning the animation makes the dialog pop in/out like a
+    // normal confirm instead.
+    final animation = AnimationController(
+      vsync: this,
+      duration: Duration.zero,
+      value: 1,
+    );
+    final confirmCompleter = shadcn.openRawDrawer<void>(
+      context: context,
+      position: shadcn.OverlayPosition.top,
+      transformBackdrop: false,
+      useSafeArea: false,
+      animationController: animation,
+      // Dismissal is handled by our own dim layer + the header X below.
+      barrierDismissible: false,
+      builder: (drawerContext, extraSize, size, padding, stackIndex) {
+        return GestureDetector(
+          // Clicking the dim behaves like a dialog barrier: cancel.
+          onTap: () => shadcn.closeDrawer(drawerContext),
+          child: Container(
+            color: Colors.black.withValues(alpha: 0.3),
+            alignment: Alignment.center,
+            child: GestureDetector(
+              onTap: () {}, // absorb taps on the card itself
+              // The drawer entry is outside the sheet's Material; the ink
+              // widgets inside (MyntCloseButton, MyntButton) need one.
+              child: Material(
+                color: Colors.transparent,
+                child: shadcn.Card(
+                  borderRadius: BorderRadius.circular(8),
+                  padding: EdgeInsets.zero,
+                  child: Container(
+                    width: 400,
+                    constraints: const BoxConstraints(maxHeight: 250),
+                    decoration: BoxDecoration(
+                      color: resolveThemeColor(drawerContext,
+                          dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(
+                                color: shadcn.Theme.of(drawerContext)
+                                    .colorScheme
+                                    .border,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                title,
+                                style: MyntWebTextStyles.title(drawerContext,
+                                    darkColor: MyntColors.textPrimaryDark,
+                                    lightColor: MyntColors.textPrimary),
+                              ),
+                              MyntCloseButton(
+                                onPressed: () =>
+                                    shadcn.closeDrawer(drawerContext),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Flexible(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  message,
+                                  textAlign: TextAlign.center,
+                                  style: MyntWebTextStyles.body(drawerContext,
+                                      fontWeight: FontWeight.w500,
+                                      darkColor: MyntColors.textPrimaryDark,
+                                      lightColor: MyntColors.textPrimary),
+                                ),
+                                const SizedBox(height: 24),
+                                MyntButton(
+                                  type: MyntButtonType.primary,
+                                  size: MyntButtonSize.large,
+                                  label: confirmLabel,
+                                  isFullWidth: true,
+                                  backgroundColor: resolveThemeColor(
+                                      drawerContext,
+                                      dark: MyntColors.errorDark,
+                                      light: MyntColors.tertiary),
+                                  onPressed: () {
+                                    // Close the confirm entry first, then run
+                                    // the action — each has its own context.
+                                    shadcn.closeDrawer(drawerContext);
+                                    onConfirm();
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    // The confirm is its own drawer entry — a session-expiry sweep must
+    // remove it just like the sheet beneath it.
+    void forceClose() => confirmCompleter.remove();
+    OverlayManager.registerSheetCloser(forceClose);
+    confirmCompleter.future.whenComplete(() {
+      OverlayManager.unregisterSheetCloser(forceClose);
+      // The package only disposes controllers it created; this one is ours.
+      animation.dispose();
+    });
+  }
+
   void _requestDelete() {
     if (widget.existing == null || _deleting) return;
-    setState(() {
-      _confirm = _ConfirmPrompt(
-        title: 'Delete this note?',
-        message: 'Your note for ${widget.noteDate} will be removed, along with '
-            'its tags and attachments. This cannot be undone.',
-        confirmLabel: 'Delete',
-        onConfirm: _performDelete,
-      );
-    });
+    _showConfirmDialog(
+      title: 'Delete this note?',
+      message: 'Your note for ${widget.noteDate} will be removed, along with '
+          'its tags and attachments. This cannot be undone.',
+      confirmLabel: 'Delete',
+      onConfirm: _performDelete,
+    );
   }
 
   Future<void> _performDelete() async {
@@ -431,6 +692,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       await locator<ApiExporter>().deleteNote(note.noteId);
       ref.invalidate(notesForRangeProvider(widget.rangeKey));
       ref.invalidate(hasAnyNotesProvider);
+      // The deleted note's tags leave the analytics — the "Trump ghost"
+      // bug: without this, a tag from a deleted note kept showing in the
+      // Journal ranking until a full reload.
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       shadcn.closeSheet(context);
       successMessage(context, 'Note deleted');
@@ -448,23 +713,42 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   /// so what comes back is simply the new truth. A new note has no note_id
   /// yet; its selection stays local until the first save.
   ///
-  /// The query filter deliberately survives a toggle: the panel stays open
-  /// across selections, and clearing the filter under the user's caret would
-  /// make attaching several matching tags in a row needlessly fiddly.
+  /// Attaching consumes the query on every path (Enter, highlighted row,
+  /// row click): the typed text belongs to the tag just attached, and leaving
+  /// it behind meant the next keystroke appended to it ("hjt" + "f" showed
+  /// "hjtf"). Originally the filter survived toggles to ease multi-attach
+  /// under one filter, but stale text proved worse than retyping a filter.
+  /// Post-frame refocus + optional clear. Doing either synchronously is not
+  /// enough: attach/create rebuilds (setState, provider invalidation) drop
+  /// the field's focus mid-flow, and on web a clear issued while the input
+  /// connection is down never reaches the browser's hidden input — when the
+  /// connection reopens, the browser pushes the stale text back into the
+  /// controller. After the frame settles, the clear lands on a live input.
+  void _refocusTagField({bool clearQuery = false}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _tagFocus.requestFocus();
+      if (clearQuery) _tagQuery.clear();
+    });
+  }
+
   Future<void> _attachTag(JournalTag tag) async {
     if (_tagBusy) return;
     if (_tags.length >= 20) {
       error(context, 'A note can carry at most 20 tags.');
       return;
     }
+    // Immediate clear for the panel filter; the post-frame clear below is the
+    // one that survives the web input-connection churn.
+    _tagQuery.clear();
     final noteId = widget.existing?.noteId;
     if (noteId == null) {
       setState(() => _tags.add(tag));
+      _refocusTagField(clearQuery: true);
       return;
     }
     // The round-trip's rebuilds can drop the field's focus and close the
     // panel mid-flow; restore it so multi-attach keeps working.
-    final hadFocus = _tagFocus.hasFocus;
     setState(() => _tagBusy = true);
     try {
       final result = await locator<ApiExporter>()
@@ -474,7 +758,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         _tags = result;
         _tagBusy = false;
       });
-      if (hadFocus) _tagFocus.requestFocus();
+      _refocusTagField(clearQuery: true);
     } on JournalNotesException catch (e) {
       if (!mounted) return;
       setState(() => _tagBusy = false);
@@ -499,7 +783,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         _tags = result;
         _tagBusy = false;
       });
-      if (hadFocus) _tagFocus.requestFocus();
+      // Post-frame, not synchronous: the rebuild above can drop focus after
+      // an early requestFocus, leaving the caret dead. Never grabs focus the
+      // user did not have (chip × with the panel closed stays closed).
+      if (hadFocus) _refocusTagField();
     } on JournalNotesException catch (e) {
       if (!mounted) return;
       setState(() => _tagBusy = false);
@@ -516,10 +803,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       error(context, 'Tag names are limited to 40 characters.');
       return;
     }
-    final hadFocus = _tagFocus.hasFocus;
     setState(() => _tagBusy = true);
     try {
-      final allTags = ref.read(journalTagsProvider).value ?? const [];
+      final allTags =
+          ref.read(journalTagsProvider(journalTagsKey())).value ?? const [];
       final result = await locator<ApiExporter>().createTag(
         name: trimmed,
         // Rotate through the palette so consecutive tags differ; recolour
@@ -528,12 +815,11 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       );
       ref.invalidate(journalTagsProvider);
       if (!mounted) return;
-      // Unlike a toggle, creating consumes the query — the filter text has
-      // become a tag and leaving it would filter the panel by its own name.
       _tagQuery.clear();
       setState(() => _tagBusy = false);
+      // _attachTag schedules the post-frame refocus + clear that survives
+      // this flow's rebuild churn (provider invalidation + setState).
       await _attachTag(result.tag);
-      if (mounted && hadFocus) _tagFocus.requestFocus();
     } on JournalNotesException catch (e) {
       if (!mounted) return;
       setState(() => _tagBusy = false);
@@ -564,6 +850,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         color: _editTagColor == original.color ? null : _editTagColor,
       );
       ref.invalidate(journalTagsProvider);
+      // Analytics rows carry the tag's name and colour.
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       setState(() {
         // Reflect the rename/recolour on this note's chips too.
@@ -585,17 +873,15 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
 
   void _requestDeleteTag(JournalTag tag) {
     final count = tag.noteCount ?? 0;
-    setState(() {
-      _confirm = _ConfirmPrompt(
-        title: 'Delete tag "${tag.name}"?',
-        message: count > 0
-            ? 'It is attached to $count note(s) and will be removed from all '
-                'of them. This cannot be undone.'
-            : 'This cannot be undone.',
-        confirmLabel: 'Delete',
-        onConfirm: () => _performDeleteTag(tag),
-      );
-    });
+    _showConfirmDialog(
+      title: 'Delete tag "${tag.name}"?',
+      message: count > 0
+          ? 'It is attached to $count note(s) and will be removed from all '
+              'of them. This cannot be undone.'
+          : 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      onConfirm: () => _performDeleteTag(tag),
+    );
   }
 
   Future<void> _performDeleteTag(JournalTag tag) async {
@@ -608,6 +894,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       // backend's TAG_IN_USE refusal exists to prompt.
       await locator<ApiExporter>().deleteTag(tagId: tag.tagId, force: true);
       ref.invalidate(journalTagsProvider);
+      // The tag disappears from every note it was on — analytics included.
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       setState(() {
         _tags.removeWhere((t) => t.tagId == tag.tagId);
@@ -702,15 +990,13 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   }
 
   void _requestDeleteAttachment(NoteAttachment attachment) {
-    setState(() {
-      _confirm = _ConfirmPrompt(
-        title: 'Remove this attachment?',
-        message: '"${attachment.filename}" will be removed from this note. '
-            'This cannot be undone.',
-        confirmLabel: 'Remove',
-        onConfirm: () => _performDeleteAttachment(attachment),
-      );
-    });
+    _showConfirmDialog(
+      title: 'Remove this attachment?',
+      message: '"${attachment.filename}" will be removed from this note. '
+          'This cannot be undone.',
+      confirmLabel: 'Remove',
+      onConfirm: () => _performDeleteAttachment(attachment),
+    );
   }
 
   Future<void> _performDeleteAttachment(NoteAttachment attachment) async {
@@ -787,6 +1073,19 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   }
 
   Widget _buildEditor(BuildContext context) {
+    // Dead-space clicks anywhere in the sheet close the tag panel. Deeper
+    // interactive widgets (fields, chips, panel rows, buttons) win the
+    // gesture arena, so this fires only on blank areas.
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () {
+        if (_tagFocus.hasFocus) _tagFocus.unfocus();
+      },
+      child: _buildEditorColumn(context),
+    );
+  }
+
+  Widget _buildEditorColumn(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -816,34 +1115,49 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         _buildSnapshotSummary(context),
         const SizedBox(height: 20),
         _label(context, 'Title'),
-        const SizedBox(height: 6),
-        MyntTextField(
+        // Field widget, height and spacing mirror the Create SIP dialog.
+        const SizedBox(height: 10),
+        // MyntTextField(
+        //   controller: _title,
+        //   placeholder: 'What happened today?',
+        //   maxLength: 200,
+        //   size: MyntTextFieldSize.medium,
+        //   textStyle: MyntWebTextStyles.body(context,
+        //       darkColor: MyntColors.textPrimaryDark,
+        //       lightColor: MyntColors.textPrimary),
+        // ),
+        // The limits are enforced by formatters, not `maxLength` — the
+        // built-in counter renders inside the field's fixed height and
+        // squeezes the input box. The visible counter is drawn separately
+        // below, so the box keeps its full height like the Create SIP fields.
+        MyntFormTextField(
           controller: _title,
           placeholder: 'What happened today?',
-          maxLength: 200,
-          size: MyntTextFieldSize.medium,
-          textStyle: MyntWebTextStyles.body(context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textPrimary),
+          height: 40,
+          inputFormatters: [
+            LengthLimitingTextInputFormatter(200),
+            const _CapitaliseFirstLetterFormatter(),
+          ],
         ),
+        _charCounter(context, _title, 200),
         const SizedBox(height: 16),
         _label(context, 'Notes'),
-        const SizedBox(height: 6),
+        const SizedBox(height: 10),
         SizedBox(
           height: 180,
-          child: MyntTextField(
+          child: MyntFormTextField(
             controller: _comment,
             placeholder: 'Why did you take these trades? What would you do '
                 'differently?',
             height: 180,
             maxLines: 8,
-            maxLength: 20000,
-            size: MyntTextFieldSize.medium,
-            textStyle: MyntWebTextStyles.body(context,
-                darkColor: MyntColors.textPrimaryDark,
-                lightColor: MyntColors.textPrimary),
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(20000),
+              const _CapitaliseFirstLetterFormatter(),
+            ],
           ),
         ),
+        _charCounter(context, _comment, 20000),
         const SizedBox(height: 16),
         _buildTagsSection(context),
         const SizedBox(height: 16),
@@ -859,80 +1173,208 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     final note = widget.existing;
     final title = note?.title.trim() ?? '';
     final comment = note?.comment.trim() ?? '';
-    final muted = resolveThemeColor(context,
-        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
-    final meta = _viewMetaLine();
+    // Empty-state styling no longer needed — empty sections are hidden.
+    // final muted = resolveThemeColor(context,
+    //     dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    // final meta = _viewMetaLine(); // fed the hidden created/edited line
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSnapshotSummary(context),
         const SizedBox(height: 20),
-        // The title is the note's headline, not a labelled field.
-        Text(
-          title.isEmpty ? 'Untitled note' : title,
-          style: MyntWebTextStyles.title(context,
-              color: title.isEmpty ? muted : null,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textPrimary,
-              fontWeight: MyntFonts.semiBold),
-        ),
-        if (meta.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Icon(Icons.schedule_rounded, size: 12, color: muted),
-              const SizedBox(width: 5),
-              Text(meta,
-                  style: MyntWebTextStyles.caption(context, color: muted)),
-            ],
+        // Empty sections are hidden entirely — a section renders only when
+        // it has content, so the view is exactly as long as the note.
+        if (title.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.title_rounded,
+            'Title',
+            Text(
+              title,
+              style: MyntWebTextStyles.title(context,
+                  darkColor: MyntColors.textPrimaryDark,
+                  lightColor: MyntColors.textPrimary,
+                  fontWeight: MyntFonts.semiBold),
+            ),
           ),
-        ],
-        const SizedBox(height: 18),
-        _viewSection(
-          context,
-          Icons.notes_rounded,
-          'Notes',
-          Text(
-            comment.isEmpty ? 'No notes written for this day.' : comment,
-            style: MyntWebTextStyles.body(context,
-                    color: comment.isEmpty ? muted : null,
-                    darkColor: MyntColors.textPrimaryDark,
-                    lightColor: MyntColors.textPrimary)
-                .copyWith(height: 1.55),
+        if (comment.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.notes_rounded,
+            'Notes',
+            Text(
+              comment,
+              style: MyntWebTextStyles.body(context,
+                      darkColor: MyntColors.textPrimaryDark,
+                      lightColor: MyntColors.textPrimary)
+                  .copyWith(height: 1.55),
+            ),
           ),
-        ),
-        _viewSection(
-          context,
-          Icons.sell_outlined,
-          'Tags',
-          _tags.isEmpty
-              ? _viewNone(context)
-              : Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [for (final tag in _tags) _tagChip(context, tag)],
-                ),
-        ),
-        _viewSection(
-          context,
-          Icons.attach_file_rounded,
-          'Attachments',
-          _attachments.isEmpty
-              ? _viewNone(context)
-              : Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  // Read-only: the tile still previews / downloads, but readOnly
-                  // hides the remove ×.
-                  children: [
-                    for (final a in _attachments)
-                      _buildServerAttachmentTile(context, a, readOnly: true),
-                  ],
-                ),
-          last: true,
-        ),
+        if (_tags.isNotEmpty)
+          _viewSection(
+            context,
+            // Lucide's tag glyph (with the hole) — used for all tag
+            // iconography.
+            shadcn.LucideIcons.tag,
+            'Tags',
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [for (final tag in _tags) _tagChip(context, tag)],
+            ),
+          ),
+        if (_attachments.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.attach_file_rounded,
+            'Attachments',
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              // Read-only: the tile still previews / downloads, but readOnly
+              // hides the remove ×.
+              children: [
+                for (final a in _attachments)
+                  _buildServerAttachmentTile(context, a, readOnly: true),
+              ],
+            ),
+            last: widget.trades.isEmpty,
+          ),
+        // What was actually traded that day, straight from the P&L response
+        // behind the calendar — the note's own record of the day.
+        if (widget.trades.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.receipt_long_rounded,
+            'Trades on this day',
+            _buildDayTradesList(context),
+            trailing: _tradeCountBadge(context, widget.trades.length),
+            last: true,
+          ),
       ],
+    );
+  }
+
+  /// One row per scrip in the holdings-card shape: name and realised P&L on
+  /// the first line, then buy and sell quantity/average stacked beneath, with
+  /// net quantity only when a position was actually carried.
+  Widget _buildDayTradesList(BuildContext context) {
+    final qty = NumberFormat('#,##,##0', 'en_IN');
+    final rate = NumberFormat('#,##,##0.00', 'en_IN');
+    final rows = <Widget>[];
+
+    for (var i = 0; i < widget.trades.length; i++) {
+      final t = widget.trades[i];
+      final pnl = t.safeRealisedPnl;
+      final color = pnl >= 0
+          ? resolveThemeColor(context,
+              dark: MyntColors.profitDark, light: MyntColors.profit)
+          : resolveThemeColor(context,
+              dark: MyntColors.lossDark, light: MyntColors.loss);
+
+      if (i > 0) {
+        rows.add(Divider(
+          height: 1,
+          color: resolveThemeColor(context,
+              dark: MyntColors.dividerDark, light: MyntColors.divider),
+        ));
+      }
+
+      // Holdings-card shape: the name and the money on the first line, then
+      // label/value pairs stacked left and right — it carries four more
+      // numbers without the row turning into a wall of text.
+      rows.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    (t.sCRIPSYMBOL ?? t.sCRIPNAME ?? '—').trim(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.body(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.semiBold),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  _formatAmount(pnl),
+                  style: MyntWebTextStyles.body(context,
+                      color: color, fontWeight: MyntFonts.semiBold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            _tradeMetaLine(
+              context,
+              left: 'BUY ${qty.format(t.safeBuyQty)}  AVG '
+                  '${rate.format(t.safeBuyRate)}',
+              right: 'SELL ${qty.format(t.safeSellQty)}  AVG '
+                  '${rate.format(t.safeSellRate)}',
+            ),
+            // Only a carried position is worth a line — a squared-off day
+            // reads "NET QTY 0" on every row otherwise.
+            if (t.safeNetQty != 0) ...[
+              const SizedBox(height: 3),
+              _tradeMetaLine(
+                context,
+                left: 'NET QTY ${qty.format(t.safeNetQty)}',
+                right: '',
+              ),
+            ],
+          ],
+        ),
+      ));
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows);
+  }
+
+  /// One detail line of a trade row: grey label/value text pinned left and
+  /// right, the way the holdings card stacks its quantity and value lines.
+  Widget _tradeMetaLine(BuildContext context,
+      {required String left, required String right}) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final style = MyntWebTextStyles.caption(context, color: secondary);
+    return Row(
+      children: [
+        Expanded(
+          child: Text(left,
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
+        ),
+        if (right.isNotEmpty) ...[
+          const SizedBox(width: 10),
+          Text(right, maxLines: 1, style: style),
+        ],
+      ],
+    );
+  }
+
+  /// Rounded tinted count beside a section header — the same badge the
+  /// Manage tags header uses.
+  Widget _tradeCountBadge(BuildContext context, int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary)
+            .withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(
+        '$count',
+        style: MyntWebTextStyles.para(context,
+            darkColor: MyntColors.primaryDark,
+            lightColor: MyntColors.primary,
+            fontWeight: MyntFonts.semiBold),
+      ),
     );
   }
 
@@ -940,7 +1382,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   /// Gives the view real structure instead of a stack of tiny labels.
   Widget _viewSection(BuildContext context, IconData icon, String label,
       Widget child,
-      {bool last = false}) {
+      {bool last = false, Widget? trailing}) {
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Column(
@@ -952,16 +1394,29 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
               dark: MyntColors.dividerDark, light: MyntColors.divider),
         ),
         const SizedBox(height: 14),
+        // Header sized like the edit form's field labels (body, medium) so
+        // both modes read at the same weight; icon scaled up to match.
         Row(
           children: [
-            Icon(icon, size: 14, color: muted),
+            Icon(icon, size: 18, color: muted),
             const SizedBox(width: 7),
-            Text(
-              label.toUpperCase(),
-              style: MyntWebTextStyles.caption(context,
-                      color: muted, fontWeight: MyntFonts.medium)
-                  .copyWith(letterSpacing: 0.6),
+            Flexible(
+              child: Text(
+                label.toUpperCase(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                // style: MyntWebTextStyles.caption(context,
+                //         color: muted, fontWeight: MyntFonts.medium)
+                //     .copyWith(letterSpacing: 0.6),
+                style: MyntWebTextStyles.body(context,
+                        color: muted, fontWeight: MyntFonts.medium)
+                    .copyWith(letterSpacing: 0.6),
+              ),
             ),
+            if (trailing != null) ...[
+              const SizedBox(width: 8),
+              trailing,
+            ],
           ],
         ),
         const SizedBox(height: 10),
@@ -971,24 +1426,26 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     );
   }
 
-  Widget _viewNone(BuildContext context) => Text(
-        'None',
-        style: MyntWebTextStyles.caption(context,
-            darkColor: MyntColors.textTertiaryDark,
-            lightColor: MyntColors.textTertiary),
-      );
+  /// Retired: empty sections are hidden now instead of showing "None".
+  // Widget _viewNone(BuildContext context) => Text(
+  //       'None',
+  //       style: MyntWebTextStyles.caption(context,
+  //           darkColor: MyntColors.textTertiaryDark,
+  //           lightColor: MyntColors.textTertiary),
+  //     );
 
   /// "Added 12 May 2026" (+ "· edited 13 May" when it was changed later).
-  String _viewMetaLine() {
-    final c = widget.existing?.createdAt;
-    if (c == null) return '';
-    final added = 'Added ${DateFormat('d MMM yyyy').format(c)}';
-    final u = widget.existing?.updatedAt;
-    if (u != null && u.difference(c).inMinutes.abs() > 1) {
-      return '$added · edited ${DateFormat('d MMM').format(u)}';
-    }
-    return added;
-  }
+  /// Hidden from the view per design review; kept for cheap re-enable.
+  // String _viewMetaLine() {
+  //   final c = widget.existing?.createdAt;
+  //   if (c == null) return '';
+  //   final added = 'Added ${DateFormat('d MMM yyyy').format(c)}';
+  //   final u = widget.existing?.updatedAt;
+  //   if (u != null && u.difference(c).inMinutes.abs() > 1) {
+  //     return '$added · edited ${DateFormat('d MMM').format(u)}';
+  //   }
+  //   return added;
+  // }
 
   // --- Attachments UI --------------------------------------------------------
 
@@ -997,15 +1454,18 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Count rides next to the label — "Attachments (2/3)" — instead of
+        // sitting detached at the far right of the row.
         Row(
           children: [
             _label(context, 'Attachments'),
-            const Spacer(),
+            const SizedBox(width: 6),
             Text(
-              '$count of $_kMaxAttachments',
-              style: MyntWebTextStyles.caption(context,
+              '($count/$_kMaxAttachments)',
+              style: MyntWebTextStyles.bodySmall(context,
                   darkColor: MyntColors.textTertiaryDark,
-                  lightColor: MyntColors.textTertiary),
+                  lightColor: MyntColors.textTertiary,
+                  fontWeight: MyntFonts.medium),
             ),
           ],
         ),
@@ -1014,21 +1474,22 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final a in _attachments) _buildServerAttachmentTile(context, a),
+            for (final a in _attachments)
+              _buildServerAttachmentTile(context, a),
             for (var i = 0; i < _queuedFiles.length; i++)
               _buildQueuedFileTile(context, i),
             if (count < _kMaxAttachments) _buildAddTile(context),
           ],
         ),
-        if (_queuedFiles.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Text(
-            'Uploads when the note is saved.',
-            style: MyntWebTextStyles.caption(context,
-                darkColor: MyntColors.textTertiaryDark,
-                lightColor: MyntColors.textTertiary),
-          ),
-        ],
+        // if (_queuedFiles.isNotEmpty) ...[
+        //   const SizedBox(height: 6),
+        //   Text(
+        //     'Uploads when the note is saved.',
+        //     style: MyntWebTextStyles.caption(context,
+        //         darkColor: MyntColors.textTertiaryDark,
+        //         lightColor: MyntColors.textTertiary),
+        //   ),
+        // ],
       ],
     );
   }
@@ -1210,7 +1671,13 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     );
   }
 
+  /// The Add tile in the cloud-upload style: blue dashed border on a light
+  /// primary wash (static — no hover state by design), accent cloud icon,
+  /// semibold "Add image", size limit underneath. Clicking opens the picker;
+  /// the spinner shows while a file round-trip is in flight.
   Widget _buildAddTile(BuildContext context) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Semantics(
@@ -1218,39 +1685,49 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       button: true,
       child: InkWell(
         onTap: _attachmentBusy ? null : _pickAttachments,
+        // The tile's own tint is the affordance; the default grey ink hover
+        // would muddy it.
+        hoverColor: Colors.transparent,
         borderRadius: BorderRadius.circular(8),
-        child: Container(
-          width: 84,
-          height: 84,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: resolveThemeColor(context,
-                  dark: MyntColors.borderMutedDark,
-                  light: MyntColors.borderMuted),
+        child: CustomPaint(
+          painter: _DashedBorderPainter(accent.withValues(alpha: 0.7)),
+          child: Container(
+            width: 120,
+            height: 84,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(8),
             ),
-          ),
-          child: _attachmentBusy
-              ? const Center(
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                )
-              : Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.add_photo_alternate_outlined,
-                        size: 22, color: secondary),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Add',
-                      style: MyntWebTextStyles.caption(context,
-                          color: secondary, fontWeight: MyntFonts.medium),
+            child: _attachmentBusy
+                ? const Center(
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                  ],
-                ),
+                  )
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(shadcn.LucideIcons.cloudUpload,
+                          size: 24, color: accent),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Add image',
+                        style: MyntWebTextStyles.bodySmall(context,
+                            darkColor: MyntColors.textPrimaryDark,
+                            lightColor: MyntColors.textPrimary,
+                            fontWeight: MyntFonts.semiBold),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'up to 5 MB',
+                        style: MyntWebTextStyles.caption(context,
+                            color: secondary),
+                      ),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -1437,10 +1914,14 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     final top = _tagHighlight * _kTagRowHeight;
     final bottom = top + _kTagRowHeight;
     final position = _tagPanelScroll.position;
+    // Clamped: the create row lives OUTSIDE the list as a pinned footer, so
+    // when the highlight moves onto it (index == rows.length) the raw target
+    // would overshoot the list's scroll range.
     if (top < position.pixels) {
-      position.jumpTo(top);
+      position.jumpTo(top.clamp(0.0, position.maxScrollExtent));
     } else if (bottom > position.pixels + position.viewportDimension) {
-      position.jumpTo(bottom - position.viewportDimension);
+      position.jumpTo((bottom - position.viewportDimension)
+          .clamp(0.0, position.maxScrollExtent));
     }
   }
 
@@ -1467,7 +1948,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   }
 
   Widget _buildTagsSection(BuildContext context) {
-    final tagsAsync = ref.watch(journalTagsProvider);
+    final tagsAsync = ref.watch(journalTagsProvider(journalTagsKey()));
     final allTags = [...(tagsAsync.value ?? const <JournalTag>[])]
       ..sort(_byUsage);
 
@@ -1492,17 +1973,18 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                       const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   child: Text(
                     'Manage',
-                    style: MyntWebTextStyles.caption(context,
+                    style: MyntWebTextStyles.para(context,
                         darkColor: MyntColors.primaryDark,
                         lightColor: MyntColors.primary,
-                        fontWeight: MyntFonts.medium),
+                        fontWeight: MyntFonts.semiBold),
                   ),
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        // Same label-to-field gap as the Title/Notes fields.
+        const SizedBox(height: 10),
         // Clicking a panel row must not count as tapping outside the text
         // field (which would blur it and close the panel mid-selection).
         TextFieldTapRegion(
@@ -1539,56 +2021,92 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   /// wrapping ahead of the caret.
   Widget _buildTagField(
       BuildContext context, List<JournalTag> rows, bool showCreate) {
-    final focused = _tagFocus.hasFocus;
-    final borderColor = focused
-        ? resolveThemeColor(context,
-            dark: MyntColors.primaryDark, light: MyntColors.primary)
-        : resolveThemeColor(context,
-            dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
+    // Border matches MyntTextField's (used by the Title/Notes fields above):
+    // one colour whether focused or not, so all fields in the form agree.
+    // final focused = _tagFocus.hasFocus;
+    // final borderColor = focused
+    //     ? resolveThemeColor(context,
+    //         dark: MyntColors.primaryDark, light: MyntColors.primary)
+    //     : resolveThemeColor(context,
+    //         dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
+    final borderColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.primary);
 
     final input = TextField(
       controller: _tagQuery,
       focusNode: _tagFocus,
       maxLength: 40,
-      style: MyntWebTextStyles.body(context,
-          darkColor: MyntColors.textPrimaryDark,
-          lightColor: MyntColors.textPrimary),
+      // A tag is created from whatever is typed here, so capitalising as the
+      // user types is what makes the saved tag start with a capital. Matching
+      // and duplicate checks fold case on both sides, so this cannot make an
+      // existing tag unfindable.
+      inputFormatters: const [_CapitaliseFirstLetterFormatter()],
+      // Text and placeholder styles mirror MyntTextField's medium defaults.
+      style: MyntWebTextStyles.bodyMedium(context),
       decoration: InputDecoration(
         isDense: true,
         border: InputBorder.none,
         counterText: '',
         contentPadding: const EdgeInsets.symmetric(vertical: 6),
         hintText: _tags.isEmpty ? 'Add tags — setup, mistake, emotion…' : 'Add…',
-        hintStyle: MyntWebTextStyles.bodySmall(context,
-            darkColor: MyntColors.textTertiaryDark,
-            lightColor: MyntColors.textTertiary),
+        hintStyle: MyntWebTextStyles.placeholder(context),
       ),
       onSubmitted: (text) => _onTagSubmitted(text, rows, showCreate),
+      // Explicit close-on-outside-click: the framework's default tap-outside
+      // unfocus does not fire reliably inside the shadcn drawer overlay.
+      // Clicks on the panel itself stay "inside" via TextFieldTapRegion.
+      onTapOutside: (_) => _tagFocus.unfocus(),
     );
 
-    return InkWell(
-      onTap: () => _tagFocus.requestFocus(),
-      child: Container(
-        width: double.infinity,
+    // A plain tap target, not an InkWell: ink hover/press highlights painted
+    // a grey wash over the field once its opaque fill was removed.
+    return MouseRegion(
+      cursor: SystemMouseCursors.text,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => _tagFocus.requestFocus(),
+        child: Container(
+          width: double.infinity,
+        // Radius and minimum height match MyntTextField, so this chip field
+        // reads as the same family as the Title/Notes inputs. No fill,
+        // unlike those fields — the coloured chips sit directly on the sheet
+        // background; a tinted fill behind them looked muddy.
+        constraints: const BoxConstraints(minHeight: 40),
+        alignment: Alignment.centerLeft,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         decoration: BoxDecoration(
-          color: resolveThemeColor(context,
-              dark: MyntColors.inputBgDark, light: MyntColors.inputBg),
-          borderRadius: BorderRadius.circular(8),
+          // color: resolveThemeColor(context,
+          //     dark: const Color(0xffB5C0CF).withValues(alpha: .15),
+          //     light: const Color(0xffF1F3F8)),
+          borderRadius: BorderRadius.circular(5),
           border: Border.all(color: borderColor),
         ),
-        child: _tags.isEmpty
-            ? input
-            : Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  for (final tag in _tags)
-                    _tagChip(context, tag, onRemove: () => _removeTag(tag)),
-                  SizedBox(width: 120, child: input),
-                ],
-              ),
+          // Always a Wrap, even with no chips. This used to be
+          // `_tags.isEmpty ? input : Wrap(...)`, which swapped the child's
+          // widget type the moment the first chip landed — Flutter then tore
+          // down the TextField's element and built a new one, taking the
+          // browser's hidden input with it. Our FocusNode survived that (it
+          // is owned by this State), so it still reported hasFocus: true, the
+          // new EditableText saw no focus *change* and never reopened its
+          // input connection, and requestFocus() on an already-focused node
+          // did nothing. Net effect: after creating the very first tag the
+          // caret vanished and typing went nowhere until the field was
+          // clicked. Keeping one structure keeps one element.
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final tag in _tags)
+                _tagChip(context, tag, onRemove: () => _removeTag(tag)),
+              // Full width while it is the only thing in the field, a fixed
+              // slot once chips share the line. A SizedBox either way, so the
+              // input keeps its element.
+              SizedBox(
+                  width: _tags.isEmpty ? double.infinity : 120, child: input),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1607,25 +2125,38 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     if (tagsAsync.isLoading && allTags.isEmpty) {
       body = _panelMessage(context, 'Loading tags…');
     } else if (itemCount == 0) {
-      body = _panelMessage(
-          context,
-          allTags.isEmpty
-              ? 'No tags yet — type a name and press Enter to create one.'
-              : 'No matching tags — keep typing to create one.');
+      // True no-data uses the app-wide empty-state widget (as on Holdings);
+      // the transient "no match while typing" stays a one-liner.
+      // secondaryEnabled: false — the default shows an "Explore" button that
+      // navigates to the watchlist, which makes no sense inside this panel.
+      body = allTags.isEmpty
+          ? NoDataFoundWeb(
+              title: 'No tags yet',
+              subtitle: 'Type a name and press Enter to create one.',
+              secondaryEnabled: false,
+              // Compact: the panel is a popover, not a page.
+              compact: true,
+              iconWidget: Icon(shadcn.LucideIcons.tag,
+                  size: 36,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary)),
+            )
+          : _panelMessage(
+              context, 'No matching tags — keep typing to create one.');
     } else {
+      // Only the existing tag rows scroll. The create row is pinned below
+      // the list as a footer (see the panel Column) so it never scrolls out
+      // of sight while the user is typing a new name.
       body = ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: _kTagPanelMaxHeight),
         child: ListView.builder(
           controller: _tagPanelScroll,
           shrinkWrap: true,
           itemExtent: _kTagRowHeight,
-          itemCount: itemCount,
-          itemBuilder: (context, index) {
-            if (showCreate && index == rows.length) {
-              return _buildCreatePanelRow(context, allTags, index);
-            }
-            return _buildTagPanelRow(context, rows[index], index);
-          },
+          itemCount: rows.length,
+          itemBuilder: (context, index) =>
+              _buildTagPanelRow(context, rows[index], index),
         ),
       );
     }
@@ -1649,43 +2180,60 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         children: [
           if (_tagBusy) const LinearProgressIndicator(minHeight: 2),
           body,
-          Divider(
-            height: 1,
-            color: resolveThemeColor(context,
-                dark: MyntColors.dividerDark, light: MyntColors.divider),
-          ),
-          // The panel's footer action, à la GitHub's label picker.
-          Semantics(
-            label: 'Manage tags',
-            button: true,
-            child: InkWell(
-              onTap: () {
-                _tagFocus.unfocus();
-                setState(() => _managingTags = true);
-              },
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                child: Row(
-                  children: [
-                    Icon(Icons.tune_rounded,
-                        size: 14,
-                        color: resolveThemeColor(context,
-                            dark: MyntColors.textSecondaryDark,
-                            light: MyntColors.textSecondary)),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Manage tags',
-                      style: MyntWebTextStyles.caption(context,
-                          darkColor: MyntColors.textSecondaryDark,
-                          lightColor: MyntColors.textSecondary,
-                          fontWeight: MyntFonts.medium),
-                    ),
-                  ],
-                ),
-              ),
+          // The create row is a pinned footer under the scrollable list —
+          // always in sight while typing, never scrolled away. Keyboard
+          // navigation still treats it as the last index (rows.length).
+          if (showCreate) ...[
+            Divider(
+              height: 1,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.dividerDark, light: MyntColors.divider),
             ),
-          ),
+            SizedBox(
+              height: _kTagRowHeight,
+              child: _buildCreatePanelRow(context, allTags, rows.length),
+            ),
+          ],
+          // Footer "Manage tags" removed: the header's Manage link (opposite
+          // the Tags label) is always visible, so the duplicate here only ate
+          // a row of the scrollable list.
+          // Divider(
+          //   height: 1,
+          //   color: resolveThemeColor(context,
+          //       dark: MyntColors.dividerDark, light: MyntColors.divider),
+          // ),
+          // // The panel's footer action, à la GitHub's label picker.
+          // Semantics(
+          //   label: 'Manage tags',
+          //   button: true,
+          //   child: InkWell(
+          //     onTap: () {
+          //       _tagFocus.unfocus();
+          //       setState(() => _managingTags = true);
+          //     },
+          //     child: Padding(
+          //       padding:
+          //           const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          //       child: Row(
+          //         children: [
+          //           Icon(Icons.tune_rounded,
+          //               size: 14,
+          //               color: resolveThemeColor(context,
+          //                   dark: MyntColors.textSecondaryDark,
+          //                   light: MyntColors.textSecondary)),
+          //           const SizedBox(width: 6),
+          //           Text(
+          //             'Manage tags',
+          //             style: MyntWebTextStyles.caption(context,
+          //                 darkColor: MyntColors.textSecondaryDark,
+          //                 lightColor: MyntColors.textSecondary,
+          //                 fontWeight: MyntFonts.medium),
+          //           ),
+          //         ],
+          //       ),
+          //     ),
+          //   ),
+          // ),
         ],
       ),
     );
@@ -1703,13 +2251,13 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     );
   }
 
-  /// One toggling row: colour dot, name, usage count, and a ✓ when attached.
+  /// One toggling row: name, usage count, and a ✓ when attached.
   Widget _buildTagPanelRow(BuildContext context, JournalTag tag, int index) {
     final attached = _isAttached(tag);
     final highlighted = _tagHighlight == index;
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final color = hexToColor(tag.color, fallback: secondary);
+    // final color = hexToColor(tag.color, fallback: secondary); // fed the dot
     final count = tag.noteCount ?? 0;
 
     return Semantics(
@@ -1730,13 +2278,14 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Row(
             children: [
-              Container(
-                width: 10,
-                height: 10,
-                decoration:
-                    BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 10),
+              // Dot dropped, matching the chips.
+              // Container(
+              //   width: 10,
+              //   height: 10,
+              //   decoration:
+              //       BoxDecoration(color: color, shape: BoxShape.circle),
+              // ),
+              // const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   tag.name,
@@ -1766,16 +2315,15 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     );
   }
 
-  /// The last panel row when the query matches nothing exactly, previewing
-  /// the palette colour the new tag will receive.
+  /// The pinned footer row when the query matches nothing exactly.
   Widget _buildCreatePanelRow(
       BuildContext context, List<JournalTag> allTags, int index) {
     final query = _tagQuery.text.trim();
     final highlighted = _tagHighlight == index;
     final accent = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final previewColor =
-        hexToColor(_kTagPalette[allTags.length % _kTagPalette.length]);
+    // final previewColor =
+    //     hexToColor(_kTagPalette[allTags.length % _kTagPalette.length]); // fed the preview dot
 
     return Semantics(
       label: 'Create tag $query',
@@ -1800,12 +2348,15 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                       color: accent, fontWeight: MyntFonts.medium),
                 ),
               ),
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                    color: previewColor, shape: BoxShape.circle),
-              ),
+              // Palette-preview dot dropped along with the other dots — it
+              // read as stray decoration; the colour can be changed in
+              // Manage tags anyway.
+              // Container(
+              //   width: 10,
+              //   height: 10,
+              //   decoration: BoxDecoration(
+              //       color: previewColor, shape: BoxShape.circle),
+              // ),
             ],
           ),
         ),
@@ -1826,19 +2377,19 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.35)),
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(5),
+          // Borderless by design: inside the tag field the outlined chips
+          // fought with the field's own border.
+          // border: Border.all(color: color.withValues(alpha: 0.50)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            ),
-            const SizedBox(width: 6),
+            // Tag glyph in the tag's own colour (replaced the old dot) —
+            // same icon the TAGS section header and empty states use.
+            Icon(shadcn.LucideIcons.tag, size: 12, color: color),
+            const SizedBox(width: 4),
             Flexible(
               child: Text(
                 tag.name,
@@ -1872,7 +2423,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   }
 
   Widget _buildManageTagsView(BuildContext context) {
-    final tagsAsync = ref.watch(journalTagsProvider);
+    final tagsAsync = ref.watch(journalTagsProvider(journalTagsKey()));
     final allTags = [...(tagsAsync.value ?? const <JournalTag>[])]
       ..sort(_byUsage);
 
@@ -1904,24 +2455,36 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
                     Text('Manage tags',
                         style: MyntWebTextStyles.title(context,
                             darkColor: MyntColors.textPrimaryDark,
                             lightColor: MyntColors.textPrimary,
                             fontWeight: MyntFonts.semiBold)),
-                    const SizedBox(height: 2),
-                    Text(
-                        allTags.isEmpty
-                            ? 'Label your trading days'
-                            : '${allTags.length} '
-                                'tag${allTags.length == 1 ? '' : 's'} · '
-                                'most used first',
-                        style: MyntWebTextStyles.caption(context,
-                            darkColor: MyntColors.textSecondaryDark,
-                            lightColor: MyntColors.textSecondary)),
+                    // Count rides beside the heading as a rounded tinted
+                    // badge; the "N tags · most used first" subtitle is gone.
+                    if (allTags.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: resolveThemeColor(context,
+                                  dark: MyntColors.primaryDark,
+                                  light: MyntColors.primary)
+                              .withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          '${allTags.length}',
+                          style: MyntWebTextStyles.para(context,
+                              darkColor: MyntColors.primaryDark,
+                              lightColor: MyntColors.primary,
+                              fontWeight: MyntFonts.semiBold),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1957,10 +2520,11 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
               return ListView.separated(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 itemCount: sorted.length,
+                // Same separator as the Position Group tiles: full-width
+                // hairline, 0.5 thickness (was inset 20/20).
                 separatorBuilder: (_, __) => Divider(
                   height: 1,
-                  indent: 20,
-                  endIndent: 20,
+                  thickness: 0.5,
                   color: resolveThemeColor(context,
                       dark: MyntColors.dividerDark, light: MyntColors.divider),
                 ),
@@ -1977,26 +2541,35 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   Widget _buildManageEmptyState(BuildContext context) {
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.sell_outlined, size: 30, color: secondary),
-          const SizedBox(height: 10),
-          Text('No tags yet',
-              style: MyntWebTextStyles.body(context,
-                  darkColor: MyntColors.textPrimaryDark,
-                  lightColor: MyntColors.textPrimary,
-                  fontWeight: MyntFonts.medium)),
-          const SizedBox(height: 4),
-          Text(
-            'Create tags from the note editor\'s tag field —\n'
-            'label your setups, mistakes and emotions.',
-            textAlign: TextAlign.center,
-            style: MyntWebTextStyles.caption(context, color: secondary),
-          ),
-        ],
-      ),
+    // App-wide empty-state widget, keeping the tag glyph (no SVG asset for it
+    // exists, hence iconWidget).
+    // return Center(
+    //   child: Column(
+    //     mainAxisSize: MainAxisSize.min,
+    //     children: [
+    //       Icon(Icons.sell_outlined, size: 30, color: secondary),
+    //       const SizedBox(height: 10),
+    //       Text('No tags yet',
+    //           style: MyntWebTextStyles.body(context,
+    //               darkColor: MyntColors.textPrimaryDark,
+    //               lightColor: MyntColors.textPrimary,
+    //               fontWeight: MyntFonts.medium)),
+    //       const SizedBox(height: 4),
+    //       Text(
+    //         'Create tags from the note editor\'s tag field —\n'
+    //         'label your setups, mistakes and emotions.',
+    //         textAlign: TextAlign.center,
+    //         style: MyntWebTextStyles.caption(context, color: secondary),
+    //       ),
+    //     ],
+    //   ),
+    // );
+    return NoDataFoundWeb(
+      title: 'No tags yet',
+      subtitle: "Create tags from the note editor's tag field — "
+          'label your setups, mistakes and emotions.',
+      secondaryEnabled: false,
+      iconWidget: Icon(shadcn.LucideIcons.tag, size: 48, color: secondary),
     );
   }
 
@@ -2008,7 +2581,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     final expanded = _editingTagId == tag.tagId;
     final secondary = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final count = tag.noteCount ?? 0;
+    // final count = tag.noteCount ?? 0; // fed the commented-out usage text
 
     // While expanded, the header chip doubles as the live preview.
     final headerChip = expanded
@@ -2047,11 +2620,13 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                   child: headerChip,
                 ),
               ),
-              Text(
-                count == 0 ? 'unused' : '$count note${count == 1 ? '' : 's'}',
-                style: MyntWebTextStyles.caption(context, color: secondary),
-              ),
-              const SizedBox(width: 6),
+              // Usage text dropped from the row — the delete confirmation
+              // still spells out how many notes a tag is attached to.
+              // Text(
+              //   count == 0 ? 'unused' : '$count note${count == 1 ? '' : 's'}',
+              //   style: MyntWebTextStyles.caption(context, color: secondary),
+              // ),
+              // const SizedBox(width: 6),
               Icon(
                 expanded
                     ? Icons.expand_less_rounded
@@ -2067,28 +2642,52 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
 
     if (!expanded) return header;
 
-    return Container(
-      color: resolveThemeColor(context,
-          dark: MyntColors.rowHoverDark, light: MyntColors.rowHover),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          header,
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+    // Position-group accordion treatment: while expanded, only the header
+    // row carries a tint (same colours the group tiles use); the editor body
+    // stays on the sheet background.
+    // return Container(
+    //   color: resolveThemeColor(context,
+    //       dark: MyntColors.rowHoverDark, light: MyntColors.rowHover),
+    //   child: Column( ... ),
+    // );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          color: resolveThemeColor(context,
+              dark: const Color(0xffB5C0CF).withValues(alpha: 0.15),
+              light: const Color(0xffF1F3F8)),
+          child: header,
+        ),
+        Padding(
+            // Top gap separates the editor from the tinted header row.
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                MyntTextField(
+                // Same field recipe as the sheet's Title/Notes inputs: full
+                // 40px box, limit via formatter, counter drawn below.
+                // MyntTextField(
+                //   controller: _editTagName,
+                //   placeholder: 'Tag name',
+                //   maxLength: 40,
+                //   size: MyntTextFieldSize.medium,
+                //   onSubmitted: (_) => _saveTagEdit(tag),
+                //   textStyle: MyntWebTextStyles.body(context,
+                //       darkColor: MyntColors.textPrimaryDark,
+                //       lightColor: MyntColors.textPrimary),
+                // ),
+                MyntFormTextField(
                   controller: _editTagName,
                   placeholder: 'Tag name',
-                  maxLength: 40,
-                  size: MyntTextFieldSize.medium,
+                  height: 40,
+                  inputFormatters: [
+                    LengthLimitingTextInputFormatter(40),
+                    const _CapitaliseFirstLetterFormatter(),
+                  ],
                   onSubmitted: (_) => _saveTagEdit(tag),
-                  textStyle: MyntWebTextStyles.body(context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textPrimary),
                 ),
+                _charCounter(context, _editTagName, 40),
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 8,
@@ -2118,59 +2717,77 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 20),
+                // Compact, right-aligned Delete | Save at intrinsic widths —
+                // the footer's full-width pair overpowered an inline
+                // accordion row. Delete keeps the watchlist dialog's red
+                // fill. Cancel is dropped — collapsing the row via its
+                // header is the cancel.
+                // MyntTextButton(
+                //   label: 'Cancel',
+                //   onPressed: () => setState(() => _editingTagId = null),
+                // ),
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    MyntButton(
-                      label: 'Delete',
-                      type: MyntButtonType.text,
-                      textColor: resolveThemeColor(context,
-                          dark: MyntColors.lossDark, light: MyntColors.loss),
-                      onPressed:
-                          _tagBusy ? null : () => _requestDeleteTag(tag),
+                    SizedBox(
+                      height: 36,
+                      child: MyntButton(
+                        label: 'Delete',
+                        type: MyntButtonType.primary,
+                        backgroundColor: resolveThemeColor(context,
+                            dark: MyntColors.errorDark,
+                            light: MyntColors.tertiary),
+                        onPressed:
+                            _tagBusy ? null : () => _requestDeleteTag(tag),
+                      ),
                     ),
-                    const Spacer(),
-                    MyntTextButton(
-                      label: 'Cancel',
-                      onPressed: () => setState(() => _editingTagId = null),
-                    ),
-                    const SizedBox(width: 8),
-                    MyntPrimaryButton(
-                      label: 'Save',
-                      isLoading: _tagBusy,
-                      onPressed: _tagBusy ? null : () => _saveTagEdit(tag),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      height: 36,
+                      child: MyntPrimaryButton(
+                        label: 'Save',
+                        isLoading: _tagBusy,
+                        onPressed: _tagBusy ? null : () => _saveTagEdit(tag),
+                      ),
                     ),
                   ],
                 ),
               ],
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
+
+  /// One colour per asset class so the header badge identifies the segment
+  /// at a glance. Presentation only; Equity keeps the app's primary blue and
+  /// the rest use palette hexes.
+  Color _segmentColor(BuildContext context) => switch (widget.group) {
+        SegmentGroup.equity => resolveThemeColor(context,
+            dark: MyntColors.primaryDark, light: MyntColors.primary),
+        SegmentGroup.fno => const Color(0xff6E56CF),
+        SegmentGroup.commodity => const Color(0xffE5934D),
+        SegmentGroup.currency => const Color(0xff12A594),
+      };
 
   Widget _buildHeader(BuildContext context) {
     final accent = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final segColor = _segmentColor(context);
+    final d = DateTime.tryParse(widget.noteDate);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
+      // padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
+      padding: const EdgeInsets.fromLTRB(20, 10, 12, 10),
       child: Row(
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(Icons.edit_note_rounded, size: 22, color: accent),
-          ),
+          // The note icon badge anchors the header; the calendar tile sits at
+          // the right end of the row, before the actions.
+          Icon(Icons.edit_note_rounded, size: 36, color: accent),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
+    
               children: [
                 Text(
                   _editing ? (_isNew ? 'Add note' : 'Edit note') : 'View note',
@@ -2179,14 +2796,35 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
                       lightColor: MyntColors.textPrimary,
                       fontWeight: MyntFonts.semiBold),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '$_prettyDate · ${widget.group.tabLabel}',
-                  style: MyntWebTextStyles.caption(context,
-                      darkColor: MyntColors.textSecondaryDark,
-                      lightColor: MyntColors.textSecondary,
-                      fontWeight: MyntFonts.medium),
+                const SizedBox(width: 6),
+                // Segment badge inline with the title keeps the header a
+                // single line — count-badge recipe (10% tint, radius 5,
+                // para semiBold).
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: segColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Text(
+                    widget.group.tabLabel.toUpperCase(),
+                    style: MyntWebTextStyles.para(context,
+                        fontWeight: MyntFonts.semiBold, color: segColor),
+                  ),
                 ),
+                // The calendar tile is hidden when the date cannot be parsed —
+                // fall back to plain text so the date is never lost.
+                if (d == null) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    _prettyDate,
+                    style: MyntWebTextStyles.caption(context,
+                        darkColor: MyntColors.textSecondaryDark,
+                        lightColor: MyntColors.textSecondary,
+                        fontWeight: MyntFonts.medium),
+                  ),
+                ],
               ],
             ),
           ),
@@ -2210,17 +2848,93 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
     );
   }
 
+  /// Calendar tile — weekday strip on top, day number, month + year below.
+  /// Null when the note date cannot be parsed; callers keep their old visual
+  /// in that case so nothing renders blank.
+  Widget? _calendarTile(BuildContext context) {
+    final d = DateTime.tryParse(widget.noteDate);
+    if (d == null) return null;
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return Container(
+      // width: 56,
+      width: 64,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        // Solid sheet background so the tile stays readable on the banner's
+        // red/green tint.
+        color: resolveThemeColor(context,
+            dark: MyntColors.backgroundColorDark,
+            light: MyntColors.backgroundColor),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: accent.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: double.infinity,
+            color: accent,
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(
+              DateFormat('EEE').format(d).toUpperCase(),
+              textAlign: TextAlign.center,
+              style: MyntWebTextStyles.caption(context, color: Colors.white)
+                  .copyWith(height: 1.0, letterSpacing: 1.0),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            DateFormat('dd').format(d),
+            // Day number leads the tile: head (18) instead of title (16).
+            style: MyntWebTextStyles.head(context,
+                    darkColor: MyntColors.textPrimaryDark,
+                    lightColor: MyntColors.textPrimary,
+                    fontWeight: MyntFonts.bold)
+                .copyWith(height: 1.0),
+          ),
+          const SizedBox(height: 3),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                DateFormat('MMM yyyy').format(d).toUpperCase(),
+                maxLines: 1,
+                style: MyntWebTextStyles.caption(context,
+                        darkColor: MyntColors.textSecondaryDark,
+                        lightColor: MyntColors.textSecondary)
+                    .copyWith(height: 1.0, letterSpacing: 0.4),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
+      ),
+    );
+  }
+
   /// Shows the number being stored, so the note and the heat map visibly agree.
   Widget _buildSnapshotSummary(BuildContext context) {
     final snapshot = _effectiveSnapshot;
     if (snapshot == null) {
       // No P&L row for this day — the note saves, but analytics cannot see it.
-      return _infoBanner(
+      // The calendar tile still rides alongside so the date stays visible.
+      final banner = _infoBanner(
         context,
         'No P&L was recorded for this day, so this note will not appear in '
         'your tag insights.',
         resolveThemeColor(context,
             dark: MyntColors.warningDark, light: MyntColors.warning),
+      );
+      final tile = _calendarTile(context);
+      if (tile == null) return banner;
+      return Row(
+        children: [
+          Expanded(child: banner),
+          const SizedBox(width: 8),
+          tile,
+        ],
       );
     }
 
@@ -2232,53 +2946,47 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
         : resolveThemeColor(context,
             dark: MyntColors.lossDark, light: MyntColors.loss);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.22)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "This day's realised P&L",
-                  style: MyntWebTextStyles.bodySmall(context,
-                      darkColor: MyntColors.textSecondaryDark,
-                      lightColor: MyntColors.textSecondary),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _formatAmount(realised),
-                  style: MyntWebTextStyles.head(context,
-                      color: color, fontWeight: MyntFonts.bold),
-                ),
-              ],
-            ),
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "This day's realised P&L",
+                style: MyntWebTextStyles.bodySmall(context,
+                    darkColor: MyntColors.textSecondaryDark,
+                    lightColor: MyntColors.textSecondary),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _formatAmount(realised),
+                style: MyntWebTextStyles.hero(context,
+                    color: color, fontWeight: MyntFonts.bold),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Container(
-            width: 36,
-            height: 36,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.14),
-              shape: BoxShape.circle,
+        ),
+        
+        
+        _calendarTile(context) ??
+            Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                isProfit
+                    ? Icons.trending_up_rounded
+                    : Icons.trending_down_rounded,
+                size: 20,
+                color: color,
+              ),
             ),
-            child: Icon(
-              isProfit
-                  ? Icons.trending_up_rounded
-                  : Icons.trending_down_rounded,
-              size: 20,
-              color: color,
-            ),
-          ),
-        ],
-      ),
+      ],
     );
   }
 
@@ -2302,10 +3010,39 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
   Widget _label(BuildContext context, String text) {
     return Text(
       text,
-      style: MyntWebTextStyles.bodySmall(context,
-          darkColor: MyntColors.textSecondaryDark,
-          lightColor: MyntColors.textSecondary,
+      // Same label recipe as the Create SIP dialog: body size, medium
+      // weight, primary text colour.
+      // style: MyntWebTextStyles.bodySmall(context,
+      //     darkColor: MyntColors.textSecondaryDark,
+      //     lightColor: MyntColors.textSecondary,
+      //     fontWeight: MyntFonts.medium),
+      style: MyntWebTextStyles.body(context,
+          darkColor: MyntColors.textPrimaryDark,
+          lightColor: MyntColors.textPrimary,
           fontWeight: MyntFonts.medium),
+    );
+  }
+
+  /// Live "N/max" counter below a field. Replaces the TextField's built-in
+  /// `maxLength` counter, which renders inside the field's fixed height and
+  /// squeezes the input box.
+  Widget _charCounter(
+      BuildContext context, TextEditingController controller, int max) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: controller,
+          builder: (context, value, _) => Text(
+            '${value.text.length}/$max',
+            style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textSecondaryDark,
+                lightColor: MyntColors.textSecondary,
+                fontWeight: MyntFonts.medium),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2320,43 +3057,69 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
           ),
         ),
       ),
-      child: Row(
+      // Half-and-half button row like the Holding Details sheet (Exit | Add);
+      // on a new note the lone Save takes the full width. Both buttons stay
+      // enabled always — validation happens on click (login pattern); only a
+      // request in flight shows the loading state.
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (!_isNew)
-            // MyntTextButton does not forward textColor, so use the base
-            // button with the text variant to tint Delete red.
-            MyntButton(
-              label: 'Delete',
-              type: MyntButtonType.text,
-              textColor: resolveThemeColor(context,
-                  dark: MyntColors.lossDark, light: MyntColors.loss),
-              isLoading: _deleting,
-              onPressed: _deleting ? null : _requestDelete,
-            ),
-          const Spacer(),
-          // Rebuilds on every keystroke so the Save button's enabled state
-          // tracks the text live. A plain field listener + setState would not
-          // do: the button reads the controllers, and nothing else here
-          // depends on their per-keystroke value.
+          // Inline validation, red per app convention (client-side checks are
+          // inline; toasts would render behind this sheet anyway). Tracks the
+          // text live so it clears itself as soon as the note is saveable.
           AnimatedBuilder(
             animation: Listenable.merge([_title, _comment]),
             builder: (context, _) {
-              final canSave = _canSave;
-              // MyntButton renders a null onPressed identically to an enabled
-              // button — same fill, same text — so a disabled Save looks
-              // clickable and silently does nothing. Mute it explicitly.
-              return MyntPrimaryButton(
-                label: _isNew ? 'Save note' : 'Save changes',
-                isLoading: _saving,
-                backgroundColor: canSave
-                    ? null
-                    : resolveThemeColor(context,
-                            dark: MyntColors.textSecondaryDark,
-                            light: MyntColors.textSecondary)
-                        .withValues(alpha: 0.25),
-                onPressed: canSave ? _save : null,
+              if (_saveError == null || _canSave) {
+                return const SizedBox.shrink();
+              }
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _saveError!,
+                  style: MyntWebTextStyles.bodySmall(context,
+                      darkColor: MyntColors.lossDark,
+                      lightColor: MyntColors.loss,
+                      fontWeight: MyntFonts.medium),
+                ),
               );
             },
+          ),
+          Row(
+            children: [
+              if (!_isNew) ...[
+                // Red filled Delete — the same button as the Delete Watchlist
+                // dialog's action.
+                Expanded(
+                  child: SizedBox(
+                    height: 44,
+                    child: MyntButton(
+                      label: 'Delete',
+                      type: MyntButtonType.primary,
+                      isFullWidth: true,
+                      backgroundColor: resolveThemeColor(context,
+                          dark: MyntColors.errorDark,
+                          light: MyntColors.tertiary),
+                      isLoading: _deleting,
+                      onPressed: _requestDelete,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+              ],
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: MyntPrimaryButton(
+                    label: _isNew ? 'Save note' : 'Save changes',
+                    isLoading: _saving,
+                    isFullWidth: true,
+                    onPressed: _save,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -2365,4 +3128,36 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent> {
 
   bool get _hasContent =>
       _title.text.trim().isNotEmpty || _comment.text.trim().isNotEmpty;
+}
+
+/// Dashed rounded-rect outline for the attachment Add tile. Flutter's
+/// [Border] has no dashed style and the app carries no dashed-border package,
+/// so the outline is painted: the rounded-rect path is walked and stroked in
+/// 5px dashes with 4px gaps.
+class _DashedBorderPainter extends CustomPainter {
+  final Color color;
+  const _DashedBorderPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+          Offset.zero & size, const Radius.circular(8)));
+    const dash = 5.0, gap = 4.0;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        canvas.drawPath(metric.extractPath(distance, distance + dash), paint);
+        distance += dash + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedBorderPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
