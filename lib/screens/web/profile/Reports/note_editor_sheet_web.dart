@@ -14,6 +14,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../../api/core/api_export.dart';
 import '../../../../locator/locator.dart';
+import '../../../../models/desk_reports_model/calender_pnl_model.dart';
 import '../../../../models/journal_notes_model/journal_note.dart';
 import '../../../../models/journal_notes_model/journal_notes_exception.dart';
 import '../../../../models/journal_notes_model/journal_tag.dart';
@@ -56,6 +57,7 @@ Future<void> openNoteEditorSheet(
   required NotePnlSnapshot? snapshot,
   required NotesRangeKey rangeKey,
   bool startInEdit = false,
+  List<TradeData> trades = const [],
 }) async {
   if (_isSheetOpening) return;
   _isSheetOpening = true;
@@ -114,6 +116,7 @@ Future<void> openNoteEditorSheet(
                   existing: existing,
                   snapshot: snapshot,
                   rangeKey: rangeKey,
+                  trades: trades,
                   // A new note has nothing to view, so it always starts in
                   // the form.
                   startInEdit: startInEdit || existing == null,
@@ -139,6 +142,10 @@ Future<void> openNoteEditorSheet(
   // through Save — so the grid's cached copy of the note can be stale by the
   // time the sheet closes. One refresh here covers every exit path.
   ref.invalidate(notesForRangeProvider(rangeKey));
+  // The Journal tab's per-tag analytics go stale on the same mutations
+  // (attached tags feed day counts and totals) — drop the whole family, the
+  // tab refetches when it renders.
+  ref.invalidate(tagPnlProvider);
 
   // Attachment bytes are held in the provider so thumbnails don't refetch on
   // every rebuild; the cost is they stay resident. Drop them all when the
@@ -161,6 +168,29 @@ const List<String> _kTagPalette = [
   '#8E4EC6', // purple
 ];
 
+/// Forces the first character of a field to upper case as the user types, so
+/// titles, notes and tag names always start capitalised without the user
+/// having to reach for shift.
+///
+/// Deliberately only the first character: the rest is the user's own text.
+/// The replacement never changes the string's length — a case fold that would
+/// (German ß → SS, for one) is skipped — so the caret and any selection stay
+/// exactly where the framework put them.
+class _CapitaliseFirstLetterFormatter extends TextInputFormatter {
+  const _CapitaliseFirstLetterFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final text = newValue.text;
+    if (text.isEmpty) return newValue;
+    final first = text[0];
+    final upper = first.toUpperCase();
+    if (upper == first || upper.length != first.length) return newValue;
+    return newValue.copyWith(text: upper + text.substring(1));
+  }
+}
+
 /// Matches the P&L Summary screen's own formatting: the sign sits outside the
 /// symbol (`-₹1,234.00`), so the number in the editor reads the same as the
 /// number in the row it was opened from.
@@ -177,6 +207,10 @@ class _NoteEditorContent extends ConsumerStatefulWidget {
   final NotesRangeKey rangeKey;
   final bool startInEdit;
 
+  /// This day's trade rows, read from the calendar P&L response already on
+  /// screen — no extra call. Empty when the day has none.
+  final List<TradeData> trades;
+
   const _NoteEditorContent({
     required this.noteDate,
     required this.group,
@@ -184,6 +218,7 @@ class _NoteEditorContent extends ConsumerStatefulWidget {
     required this.snapshot,
     required this.rangeKey,
     required this.startInEdit,
+    this.trades = const [],
   });
 
   @override
@@ -367,10 +402,16 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
     // overlay, which sits BELOW this drawer sheet — a toast here would be
     // invisible behind the sheet.
     if (!_canSave) {
+      // An existing note with no pending TEXT changes is not an error: tag
+      // and attachment edits were persisted the moment they were made, so
+      // Save simply confirms and closes. Only an empty new note has truly
+      // nothing to save.
+      if (!_isNew) {
+        shadcn.closeSheet(context);
+        return;
+      }
       setState(() {
-        _saveError = _isNew
-            ? 'Add a title, note, tag or attachment before saving.'
-            : 'No changes to save yet.';
+        _saveError = 'Add a title, note, tag or attachment before saving.';
       });
       return;
     }
@@ -423,6 +464,9 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
 
       ref.invalidate(notesForRangeProvider(widget.rangeKey));
       ref.invalidate(hasAnyNotesProvider);
+      // A saved note changes the analytics too (snapshot resend, and a new
+      // note's queued tags were just attached).
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       // openSheet is a shadcn drawer, not a route — Navigator.pop would not
       // close it and would leave the save spinner hung.
@@ -648,6 +692,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
       await locator<ApiExporter>().deleteNote(note.noteId);
       ref.invalidate(notesForRangeProvider(widget.rangeKey));
       ref.invalidate(hasAnyNotesProvider);
+      // The deleted note's tags leave the analytics — the "Trump ghost"
+      // bug: without this, a tag from a deleted note kept showing in the
+      // Journal ranking until a full reload.
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       shadcn.closeSheet(context);
       successMessage(context, 'Note deleted');
@@ -757,7 +805,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
     }
     setState(() => _tagBusy = true);
     try {
-      final allTags = ref.read(journalTagsProvider).value ?? const [];
+      final allTags =
+          ref.read(journalTagsProvider(journalTagsKey())).value ?? const [];
       final result = await locator<ApiExporter>().createTag(
         name: trimmed,
         // Rotate through the palette so consecutive tags differ; recolour
@@ -801,6 +850,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
         color: _editTagColor == original.color ? null : _editTagColor,
       );
       ref.invalidate(journalTagsProvider);
+      // Analytics rows carry the tag's name and colour.
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       setState(() {
         // Reflect the rename/recolour on this note's chips too.
@@ -843,6 +894,8 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
       // backend's TAG_IN_USE refusal exists to prompt.
       await locator<ApiExporter>().deleteTag(tagId: tag.tagId, force: true);
       ref.invalidate(journalTagsProvider);
+      // The tag disappears from every note it was on — analytics included.
+      ref.invalidate(tagPnlProvider);
       if (!mounted) return;
       setState(() {
         _tags.removeWhere((t) => t.tagId == tag.tagId);
@@ -1081,7 +1134,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
           controller: _title,
           placeholder: 'What happened today?',
           height: 40,
-          inputFormatters: [LengthLimitingTextInputFormatter(200)],
+          inputFormatters: [
+            LengthLimitingTextInputFormatter(200),
+            const _CapitaliseFirstLetterFormatter(),
+          ],
         ),
         _charCounter(context, _title, 200),
         const SizedBox(height: 16),
@@ -1095,7 +1151,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
                 'differently?',
             height: 180,
             maxLines: 8,
-            inputFormatters: [LengthLimitingTextInputFormatter(20000)],
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(20000),
+              const _CapitaliseFirstLetterFormatter(),
+            ],
           ),
         ),
         _charCounter(context, _comment, 20000),
@@ -1171,18 +1230,151 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
             Icons.attach_file_rounded,
             'Attachments',
             Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  // Read-only: the tile still previews / downloads, but readOnly
-                  // hides the remove ×.
-                  children: [
-                    for (final a in _attachments)
-                      _buildServerAttachmentTile(context, a, readOnly: true),
-                  ],
-                ),
-          last: true,
-        ),
+              spacing: 8,
+              runSpacing: 8,
+              // Read-only: the tile still previews / downloads, but readOnly
+              // hides the remove ×.
+              children: [
+                for (final a in _attachments)
+                  _buildServerAttachmentTile(context, a, readOnly: true),
+              ],
+            ),
+            last: widget.trades.isEmpty,
+          ),
+        // What was actually traded that day, straight from the P&L response
+        // behind the calendar — the note's own record of the day.
+        if (widget.trades.isNotEmpty)
+          _viewSection(
+            context,
+            Icons.receipt_long_rounded,
+            'Trades on this day',
+            _buildDayTradesList(context),
+            trailing: _tradeCountBadge(context, widget.trades.length),
+            last: true,
+          ),
       ],
+    );
+  }
+
+  /// One row per scrip in the holdings-card shape: name and realised P&L on
+  /// the first line, then buy and sell quantity/average stacked beneath, with
+  /// net quantity only when a position was actually carried.
+  Widget _buildDayTradesList(BuildContext context) {
+    final qty = NumberFormat('#,##,##0', 'en_IN');
+    final rate = NumberFormat('#,##,##0.00', 'en_IN');
+    final rows = <Widget>[];
+
+    for (var i = 0; i < widget.trades.length; i++) {
+      final t = widget.trades[i];
+      final pnl = t.safeRealisedPnl;
+      final color = pnl >= 0
+          ? resolveThemeColor(context,
+              dark: MyntColors.profitDark, light: MyntColors.profit)
+          : resolveThemeColor(context,
+              dark: MyntColors.lossDark, light: MyntColors.loss);
+
+      if (i > 0) {
+        rows.add(Divider(
+          height: 1,
+          color: resolveThemeColor(context,
+              dark: MyntColors.dividerDark, light: MyntColors.divider),
+        ));
+      }
+
+      // Holdings-card shape: the name and the money on the first line, then
+      // label/value pairs stacked left and right — it carries four more
+      // numbers without the row turning into a wall of text.
+      rows.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    (t.sCRIPSYMBOL ?? t.sCRIPNAME ?? '—').trim(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.body(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.semiBold),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  _formatAmount(pnl),
+                  style: MyntWebTextStyles.body(context,
+                      color: color, fontWeight: MyntFonts.semiBold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            _tradeMetaLine(
+              context,
+              left: 'BUY ${qty.format(t.safeBuyQty)}  AVG '
+                  '${rate.format(t.safeBuyRate)}',
+              right: 'SELL ${qty.format(t.safeSellQty)}  AVG '
+                  '${rate.format(t.safeSellRate)}',
+            ),
+            // Only a carried position is worth a line — a squared-off day
+            // reads "NET QTY 0" on every row otherwise.
+            if (t.safeNetQty != 0) ...[
+              const SizedBox(height: 3),
+              _tradeMetaLine(
+                context,
+                left: 'NET QTY ${qty.format(t.safeNetQty)}',
+                right: '',
+              ),
+            ],
+          ],
+        ),
+      ));
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows);
+  }
+
+  /// One detail line of a trade row: grey label/value text pinned left and
+  /// right, the way the holdings card stacks its quantity and value lines.
+  Widget _tradeMetaLine(BuildContext context,
+      {required String left, required String right}) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final style = MyntWebTextStyles.caption(context, color: secondary);
+    return Row(
+      children: [
+        Expanded(
+          child: Text(left,
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
+        ),
+        if (right.isNotEmpty) ...[
+          const SizedBox(width: 10),
+          Text(right, maxLines: 1, style: style),
+        ],
+      ],
+    );
+  }
+
+  /// Rounded tinted count beside a section header — the same badge the
+  /// Manage tags header uses.
+  Widget _tradeCountBadge(BuildContext context, int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary)
+            .withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(
+        '$count',
+        style: MyntWebTextStyles.para(context,
+            darkColor: MyntColors.primaryDark,
+            lightColor: MyntColors.primary,
+            fontWeight: MyntFonts.semiBold),
+      ),
     );
   }
 
@@ -1190,7 +1382,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
   /// Gives the view real structure instead of a stack of tiny labels.
   Widget _viewSection(BuildContext context, IconData icon, String label,
       Widget child,
-      {bool last = false}) {
+      {bool last = false, Widget? trailing}) {
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     return Column(
@@ -1208,15 +1400,23 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
           children: [
             Icon(icon, size: 18, color: muted),
             const SizedBox(width: 7),
-            Text(
-              label.toUpperCase(),
-              // style: MyntWebTextStyles.caption(context,
-              //         color: muted, fontWeight: MyntFonts.medium)
-              //     .copyWith(letterSpacing: 0.6),
-              style: MyntWebTextStyles.body(context,
-                      color: muted, fontWeight: MyntFonts.medium)
-                  .copyWith(letterSpacing: 0.6),
+            Flexible(
+              child: Text(
+                label.toUpperCase(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                // style: MyntWebTextStyles.caption(context,
+                //         color: muted, fontWeight: MyntFonts.medium)
+                //     .copyWith(letterSpacing: 0.6),
+                style: MyntWebTextStyles.body(context,
+                        color: muted, fontWeight: MyntFonts.medium)
+                    .copyWith(letterSpacing: 0.6),
+              ),
             ),
+            if (trailing != null) ...[
+              const SizedBox(width: 8),
+              trailing,
+            ],
           ],
         ),
         const SizedBox(height: 10),
@@ -1748,7 +1948,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
   }
 
   Widget _buildTagsSection(BuildContext context) {
-    final tagsAsync = ref.watch(journalTagsProvider);
+    final tagsAsync = ref.watch(journalTagsProvider(journalTagsKey()));
     final allTags = [...(tagsAsync.value ?? const <JournalTag>[])]
       ..sort(_byUsage);
 
@@ -1836,6 +2036,11 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
       controller: _tagQuery,
       focusNode: _tagFocus,
       maxLength: 40,
+      // A tag is created from whatever is typed here, so capitalising as the
+      // user types is what makes the saved tag start with a capital. Matching
+      // and duplicate checks fold case on both sides, so this cannot make an
+      // existing tag unfindable.
+      inputFormatters: const [_CapitaliseFirstLetterFormatter()],
       // Text and placeholder styles mirror MyntTextField's medium defaults.
       style: MyntWebTextStyles.bodyMedium(context),
       decoration: InputDecoration(
@@ -1876,18 +2081,31 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
           borderRadius: BorderRadius.circular(5),
           border: Border.all(color: borderColor),
         ),
-          child: _tags.isEmpty
-              ? input
-              : Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    for (final tag in _tags)
-                      _tagChip(context, tag, onRemove: () => _removeTag(tag)),
-                    SizedBox(width: 120, child: input),
-                  ],
-                ),
+          // Always a Wrap, even with no chips. This used to be
+          // `_tags.isEmpty ? input : Wrap(...)`, which swapped the child's
+          // widget type the moment the first chip landed — Flutter then tore
+          // down the TextField's element and built a new one, taking the
+          // browser's hidden input with it. Our FocusNode survived that (it
+          // is owned by this State), so it still reported hasFocus: true, the
+          // new EditableText saw no focus *change* and never reopened its
+          // input connection, and requestFocus() on an already-focused node
+          // did nothing. Net effect: after creating the very first tag the
+          // caret vanished and typing went nowhere until the field was
+          // clicked. Keeping one structure keeps one element.
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final tag in _tags)
+                _tagChip(context, tag, onRemove: () => _removeTag(tag)),
+              // Full width while it is the only thing in the field, a fixed
+              // slot once chips share the line. A SizedBox either way, so the
+              // input keeps its element.
+              SizedBox(
+                  width: _tags.isEmpty ? double.infinity : 120, child: input),
+            ],
+          ),
         ),
       ),
     );
@@ -1916,9 +2134,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
               title: 'No tags yet',
               subtitle: 'Type a name and press Enter to create one.',
               secondaryEnabled: false,
-              // Same tag glyph as the Manage tags empty state.
+              // Compact: the panel is a popover, not a page.
+              compact: true,
               iconWidget: Icon(shadcn.LucideIcons.tag,
-                  size: 64,
+                  size: 36,
                   color: resolveThemeColor(context,
                       dark: MyntColors.textSecondaryDark,
                       light: MyntColors.textSecondary)),
@@ -2160,7 +2379,9 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(5),
-          border: Border.all(color: color.withValues(alpha: 0.50)),
+          // Borderless by design: inside the tag field the outlined chips
+          // fought with the field's own border.
+          // border: Border.all(color: color.withValues(alpha: 0.50)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -2202,7 +2423,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
   }
 
   Widget _buildManageTagsView(BuildContext context) {
-    final tagsAsync = ref.watch(journalTagsProvider);
+    final tagsAsync = ref.watch(journalTagsProvider(journalTagsKey()));
     final allTags = [...(tagsAsync.value ?? const <JournalTag>[])]
       ..sort(_byUsage);
 
@@ -2348,7 +2569,7 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
       subtitle: "Create tags from the note editor's tag field — "
           'label your setups, mistakes and emotions.',
       secondaryEnabled: false,
-      iconWidget: Icon(shadcn.LucideIcons.tag, size: 64, color: secondary),
+      iconWidget: Icon(shadcn.LucideIcons.tag, size: 48, color: secondary),
     );
   }
 
@@ -2460,7 +2681,10 @@ class _NoteEditorContentState extends ConsumerState<_NoteEditorContent>
                   controller: _editTagName,
                   placeholder: 'Tag name',
                   height: 40,
-                  inputFormatters: [LengthLimitingTextInputFormatter(40)],
+                  inputFormatters: [
+                    LengthLimitingTextInputFormatter(40),
+                    const _CapitaliseFirstLetterFormatter(),
+                  ],
                   onSubmitted: (_) => _saveTagEdit(tag),
                 ),
                 _charCounter(context, _editTagName, 40),

@@ -31,6 +31,11 @@ class NoDataFoundWeb extends ConsumerWidget {
   final bool showTip;
   final String tipText;
 
+  /// Tight spacing for small hosts (dropdown panels, popovers): slimmer
+  /// margins, an icon box sized to the icon, a title one step smaller, and
+  /// smaller gaps. Default off — full-screen callers are unaffected.
+  final bool compact;
+
   const NoDataFoundWeb({
     super.key,
     this.title = "No Data Found",
@@ -47,6 +52,7 @@ class NoDataFoundWeb extends ConsumerWidget {
     this.iconSize = 100,
     this.showTip = false,
     this.tipText = "",
+    this.compact = false,
   });
 
   @override
@@ -56,15 +62,16 @@ class NoDataFoundWeb extends ConsumerWidget {
 
     return Center(
       child: Container(
-        margin: const EdgeInsets.all(24),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        margin: EdgeInsets.all(compact ? 8 : 24),
+        padding: EdgeInsets.symmetric(
+            horizontal: 16, vertical: compact ? 8 : 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             // Icon with a soft glow background
             Container(
-              width: 80,
-              height: 80,
+              width: compact ? 44 : 80,
+              height: compact ? 44 : 80,
               padding: const EdgeInsets.all(0),
               child: iconWidget ??
                   SvgPicture.asset(
@@ -79,20 +86,27 @@ class NoDataFoundWeb extends ConsumerWidget {
                   ),
             ),
 
-            const SizedBox(height: 24),
+            SizedBox(height: compact ? 10 : 24),
 
             // Title
             Text(
               title,
-              style: MyntWebTextStyles.head(
-                context,
-                fontWeight: MyntFonts.semiBold,
-                color: resolveThemeColor(
-                  context,
-                  dark: MyntColors.textPrimaryDark,
-                  light: MyntColors.textPrimary,
-                ),
-              ),
+              style: (compact
+                  ? MyntWebTextStyles.title(
+                      context,
+                      fontWeight: MyntFonts.semiBold,
+                      darkColor: MyntColors.textPrimaryDark,
+                      lightColor: MyntColors.textPrimary,
+                    )
+                  : MyntWebTextStyles.head(
+                      context,
+                      fontWeight: MyntFonts.semiBold,
+                      color: resolveThemeColor(
+                        context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary,
+                      ),
+                    )),
               textAlign: TextAlign.center,
             ),
 
