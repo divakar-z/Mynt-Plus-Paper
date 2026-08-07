@@ -91,6 +91,8 @@ import 'market_watch/watchlist_screen_web.dart';
 import 'holdings/holding_screen_web.dart';
 import 'position/position_screen_web.dart';
 import 'dashboard_screen_web.dart';
+import 'all_strategies_screen_web.dart';
+import 'all_algo_strategies_screen_web.dart';
 import 'trade_action_screen_web.dart';
 import 'portfolio_analysis_web.dart';
 // import '../Mobile/order_book/order_book_screen.dart';
@@ -497,6 +499,12 @@ class _CustomizableSplitHomeScreenState
             _navigateToScreen(ScreenType.mtfDetails);
           } else if (routeName == "myAccount") {
             _navigateToScreen(ScreenType.myAccount);
+          } else if (routeName == Routes.curatedStrategies ||
+              routeName == "curatedStrategies") {
+            _handleCuratedStrategiesTap();
+          } else if (routeName == Routes.algoStrategies ||
+              routeName == "algoStrategies") {
+            _handleAlgoStrategiesTap();
           }
         },
         replaceScreen: (routeName, {arguments}) {
@@ -575,7 +583,13 @@ class _CustomizableSplitHomeScreenState
             _navigateToScreen(ScreenType.mtfDetails);
           } else if (routeName == "myAccount") {
             _navigateToScreen(ScreenType.myAccount);
-          } 
+          } else if (routeName == Routes.curatedStrategies ||
+              routeName == "curatedStrategies") {
+            _handleCuratedStrategiesTap();
+          } else if (routeName == Routes.algoStrategies ||
+              routeName == "algoStrategies") {
+            _handleAlgoStrategiesTap();
+          }
         },
         goBack: () {
           // Handle back navigation if needed
@@ -2320,6 +2334,16 @@ class _CustomizableSplitHomeScreenState
     _replaceScreenInPanel(ScreenType.strategyBuilder);
   }
 
+  void _handleCuratedStrategiesTap() {
+    // Show the Curated Strategies list in the panel like other full pages.
+    _replaceScreenInPanel(ScreenType.curatedStrategies);
+  }
+
+  void _handleAlgoStrategiesTap() {
+    // Show the Algo Strategies list in the panel like other full pages.
+    _replaceScreenInPanel(ScreenType.allAlgoStrategies);
+  }
+
   void _handleWebHookTap() {
     _replaceScreenInPanel(ScreenType.tradingViewWebHook);
   }
@@ -3260,6 +3284,10 @@ class _CustomizableSplitHomeScreenState
         );
       case ScreenType.orderflow:
         return const OrderflowShellScreen();
+      case ScreenType.curatedStrategies:
+        return AllStrategiesScreenWeb(onBack: _handleDashboardTap);
+      case ScreenType.allAlgoStrategies:
+        return AllAlgoStrategiesScreenWeb(onBack: _handleDashboardTap);
       // caEvent and cpAction removed
     }
   }
@@ -3377,6 +3405,10 @@ class _CustomizableSplitHomeScreenState
         return 'Scanner';
       case ScreenType.orderflow:
         return 'Orderflow';
+      case ScreenType.curatedStrategies:
+        return 'Strategies';
+      case ScreenType.allAlgoStrategies:
+        return 'Algo Strategies';
       // caEvent and cpAction removed
     }
   }
@@ -3494,6 +3526,10 @@ class _CustomizableSplitHomeScreenState
         return Icons.radar;
       case ScreenType.orderflow:
         return Icons.show_chart;
+      case ScreenType.curatedStrategies:
+        return Icons.auto_awesome;
+      case ScreenType.allAlgoStrategies:
+        return Icons.smart_toy_outlined;
       // caEvent and cpAction removed
     }
   }
@@ -3946,6 +3982,12 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenType.orderflow:
         _replaceScreenInPanel(ScreenType.orderflow);
+        break;
+      case ScreenType.curatedStrategies:
+        _replaceScreenInPanel(ScreenType.curatedStrategies);
+        break;
+      case ScreenType.allAlgoStrategies:
+        _replaceScreenInPanel(ScreenType.allAlgoStrategies);
         break;
       // caEvent and cpAction removed
     }
@@ -6008,6 +6050,8 @@ enum ScreenType {
   closureDetails,
   scanner,
   orderflow,
+  curatedStrategies,
+  allAlgoStrategies,
 }
 
 // Hoverable navigation item widget

@@ -16,11 +16,12 @@ import '../../../provider/order_provider.dart';
 import '../../../provider/fund_provider.dart';
 import '../../../provider/mf_provider.dart';
 import '../../../provider/privacy_provider.dart';
+import '../../../provider/rupeecase_provider.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/explore_model/stocks_model/toplist_stocks.dart';
 import 'dart:async';
-import 'market_watch/index/index_bottom_sheet_web.dart';
 import 'trade_action_screen_web.dart';
+import 'rupeecase_strategies_section.dart';
 import '../../../routes/route_names.dart';
 import '../../../utils/custom_navigator.dart';
 import '../../../utils/rupee_convert_format.dart';
@@ -39,6 +40,12 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
   final ScrollController _indexScrollController = ScrollController();
   final ScrollController _toolsScrollController = ScrollController();
   final ScrollController _tradeActionScrollController = ScrollController();
+
+  // Arrow visibility for the top indices strip. Index cards are intrinsic-width,
+  // so whether the row overflows is only known after layout — these are updated
+  // from the scroll controller's actual extent in [_updateIndexArrows].
+  bool _canScrollLeftIdx = false;
+  bool _canScrollRightIdx = false;
   // WebSocket subscription for live position updates
   StreamSubscription? _positionSocketSubscription;
   // WebSocket subscription for live holdings updates
@@ -52,6 +59,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
   @override
   void initState() {
     super.initState();
+    _indexScrollController.addListener(_updateIndexArrows);
     // Note: Data fetching is handled by _handleDashboardTap() in customizable_split_home_screen.dart
     // This prevents duplicate API calls when dashboard button is clicked
     // WebSocket bodyscription is handled by WebbodyscriptionManager
@@ -59,6 +67,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       if (!mounted) return;
 
       final indexProvider = ref.read(indexListProvider);
+      ref.read(rupeeCaseProvider).fetchStrategies();
+      ref.read(rupeeCaseProvider).fetchAlgoStrategies();
 
       // Get top indices for dashboard (8 specific indices) if not already fetched
       // This ensures tokens are available for WebbodyscriptionManager
@@ -179,10 +189,32 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     // when screen is replaced or removed via updateActiveScreen()
     // No need to unbodyscribe here to avoid double calls
 
+    _indexScrollController.removeListener(_updateIndexArrows);
     _indexScrollController.dispose();
     _toolsScrollController.dispose();
     _tradeActionScrollController.dispose();
     super.dispose();
+  }
+
+  /// Recomputes whether the top indices strip can scroll left/right from the
+  /// controller's actual position, and shows/hides the scroll arrows to match.
+  /// Only calls setState when the visibility actually changes, so it is safe to
+  /// invoke from both the scroll listener and a post-frame callback.
+  void _updateIndexArrows() {
+    if (!mounted) return;
+    bool left = false;
+    bool right = false;
+    if (_indexScrollController.hasClients) {
+      final pos = _indexScrollController.position;
+      left = pos.pixels > 0.5;
+      right = pos.pixels < pos.maxScrollExtent - 0.5;
+    }
+    if (left != _canScrollLeftIdx || right != _canScrollRightIdx) {
+      setState(() {
+        _canScrollLeftIdx = left;
+        _canScrollRightIdx = right;
+      });
+    }
   }
 
   @override
@@ -200,10 +232,26 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildTopIndicesSection(context, indexProvider),
+              const SizedBox(height: 22),
+              
+              // Algo trading banner and Zebu Algo Strategies
+              // (Original single-row layout commented out — the stacked 2×2 copy
+              // below is shown instead.)
+              // const AlgoStrategiesSection(),
+              // const SizedBox(height: 32),
+
+              // Copy of the Zebu Algo Strategies row, with the four card metrics
+              // laid out as a 2×2 grid (DD and Win Rate beneath Min Cap and CAGR).
+              const AlgoStrategiesSection(stackedMetrics: true),
               const SizedBox(height: 32),
+
               // Dashboard cards section (Holdings, Position, Orders, Margins)
               _buildDashboardCardsSection(context),
               const SizedBox(height: 32),
+              // RupeeCase Strategies section — shown below Portfolio.
+              // Self-hides (renders nothing) until data loads.
+              // const RupeeCaseStrategiesSection(),
+              
               // Tools section (Scalper, Strategy Builder, OptionZ)
               _buildToolsSection(context),
               const SizedBox(height: 32),
@@ -866,421 +914,88 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final indexValues = allIndexValues.take(5).toList();
     final hasIndices = indexValues.isNotEmpty;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Header with title and navigation arrows
-        Row(
-          children: [
-            Text(
-              'Indices',
-              style: MyntWebTextStyles.head(
-                context,
-                darkColor: MyntColors.textPrimaryDark,
-                lightColor: MyntColors.textPrimary,
-                fontWeight: MyntFonts.bold,
-              ),
+    // After each layout, re-evaluate which arrows are needed from the actual
+    // scroll extent — index cards are intrinsic-width, so whether the row
+    // overflows can't be known before layout. Cheap: only setStates on change.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateIndexArrows());
+
+    // Tight spacing between ticker items so the indices read as a compact strip.
+    const double cardSpacing = 8.0;
+
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          // Left scroll button — shown only when there is content to the left.
+          if (_canScrollLeftIdx)
+            _buildIndexScrollButton(
+              context,
+              icon: Icons.arrow_back_ios,
+              onTap: () {
+                if (_indexScrollController.hasClients) {
+                  final newOffset =
+                      (_indexScrollController.offset - 250.0).clamp(
+                    0.0,
+                    _indexScrollController.position.maxScrollExtent,
+                  );
+                  _indexScrollController.animateTo(
+                    newOffset,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                }
+              },
             ),
-            const SizedBox(width: 12),
-            // "See all indices" link moved near the title
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: () async {
-                  await _showAllIndicesBottomSheet(context, indexProvider);
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: shadcn.Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withOpacity(0.0),
-                  ),
-                  child: Icon(
-                    Icons.arrow_forward_ios,
-                    size: 14,
-                    color: resolveThemeColor(context,
-                        dark: MyntColors.primaryDark,
-                        light: MyntColors.primary),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        // Index cards + Algo Trading card in a row
-        SizedBox(
-          height: 130,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final availableWidth = constraints.maxWidth;
-              const algoCardWidth = 280.0;
-              const cardSpacing = 12.0;
-              // Reserve space for the algo card on the right
-              final indicesAvailableWidth =
-                  availableWidth - algoCardWidth - cardSpacing;
-
-              const minCardWidth = 140.0;
-              final totalCards = indexValues.length;
-              final totalSpacing = cardSpacing * (totalCards - 1);
-              final totalMinWidth =
-                  (minCardWidth * totalCards) + totalSpacing;
-
-              double cardWidth;
-              bool needsScrolling = false;
-
-              if (indicesAvailableWidth >= totalMinWidth) {
-                cardWidth =
-                    (indicesAvailableWidth - totalSpacing) / totalCards;
-              } else {
-                cardWidth = minCardWidth;
-                needsScrolling = true;
-              }
-
-              return Row(
-                children: [
-                  // Left scroll button (outside scroll area)
-                  if (needsScrolling)
-                    _buildIndexScrollButton(
-                      context,
-                      icon: Icons.arrow_back_ios,
-                      onTap: () {
-                        if (_indexScrollController.hasClients) {
-                          final scrollAmount = cardWidth + cardSpacing;
-                          final newOffset =
-                              (_indexScrollController.offset - scrollAmount)
-                                  .clamp(
-                            0.0,
-                            _indexScrollController.position.maxScrollExtent,
-                          );
-                          _indexScrollController.animateTo(
-                            newOffset,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut,
-                          );
-                        }
-                      },
-                    ),
-                  if (needsScrolling) const SizedBox(width: 8),
-                  // Scrollable indices section
-                  Expanded(
-                    child: hasIndices
-                        ? SingleChildScrollView(
-                            controller: _indexScrollController,
-                            scrollDirection: Axis.horizontal,
-                            physics: needsScrolling
-                                ? const ClampingScrollPhysics()
-                                : const NeverScrollableScrollPhysics(),
-                            child: Row(
-                              children: indexValues
-                                  .asMap()
-                                  .entries
-                                  .map((entry) {
-                                final index = entry.key;
-                                final item = entry.value;
-                                return Container(
-                                  width: cardWidth,
-                                  margin: EdgeInsets.only(
-                                    right: index < indexValues.length - 1
-                                        ? cardSpacing
-                                        : 0,
-                                  ),
-                                  child: _DashboardIndexCard(
-                                    indexItem: item,
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          )
-                        : Center(
-                            child:
-                                MyntLoader.simple(size: MyntLoaderSize.small),
-                          ),
-                  ),
-                  // Right scroll button (outside scroll area)
-                  if (needsScrolling) const SizedBox(width: 8),
-                  if (needsScrolling)
-                    _buildIndexScrollButton(
-                      context,
-                      icon: Icons.arrow_forward_ios,
-                      onTap: () {
-                        if (_indexScrollController.hasClients) {
-                          final scrollAmount = cardWidth + cardSpacing;
-                          final newOffset =
-                              (_indexScrollController.offset + scrollAmount)
-                                  .clamp(
-                            0.0,
-                            _indexScrollController.position.maxScrollExtent,
-                          );
-                          _indexScrollController.animateTo(
-                            newOffset,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut,
-                          );
-                        }
-                      },
-                    ),
-                  const SizedBox(width: cardSpacing),
-                  // Algo Trading card next to indices
-                  _buildAlgoTradingBannerCard(),
-                ],
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAlgoTradingBannerCard() {
-    const Color accent = Color(0xFF4A1F8E);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () async {
-          final Uri algoUri = Uri.parse('https://algo.zebuetrade.com/');
-          if (await canLaunchUrl(algoUri)) {
-            await launchUrl(
-              algoUri,
-              mode: LaunchMode.externalApplication,
-            );
-          }
-        },
-        child: Container(
-          width: 280,
-          height: 130,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              stops: [0.0, 0.55, 1.0],
-              colors: [
-                Color(0xFF170B26),
-                Color(0xFF4A1F8E),
-                Color(0xFF7B3FB5),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.10),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: accent.withValues(alpha: 0.28),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              // Bottom-right glow (same as Tools card)
-              Positioned(
-                right: -70,
-                bottom: -70,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 240,
-                    height: 240,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          const Color(0xFFB685FF).withValues(alpha: 0.65),
-                          const Color(0xFFB685FF).withValues(alpha: 0.0),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Top-left glow (same as Tools card)
-              Positioned(
-                left: -50,
-                top: -50,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 160,
-                    height: 160,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          Colors.white.withValues(alpha: 0.06),
-                          Colors.white.withValues(alpha: 0.0),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+          if (_canScrollLeftIdx) const SizedBox(width: 8),
+          // Indices strip — always scrollable so trailing cards are never
+          // clipped inaccessibly; the arrows reflect the real scroll extent.
+          Expanded(
+            child: hasIndices
+                ? SingleChildScrollView(
+                    controller: _indexScrollController,
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    child: Row(
                       children: [
-                        // Stacked rotated icon (same as Tools card)
-                        SizedBox(
-                          width: 48,
-                          height: 42,
-                          child: Stack(
-                            children: [
-                              Positioned(
-                                left: 0,
-                                top: 8,
-                                child: Transform.rotate(
-                                  angle: -0.18,
-                                  child: Container(
-                                    width: 32,
-                                    height: 32,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white
-                                          .withValues(alpha: 0.22),
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                left: 6,
-                                top: 4,
-                                child: Transform.rotate(
-                                  angle: -0.09,
-                                  child: Container(
-                                    width: 32,
-                                    height: 32,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white
-                                          .withValues(alpha: 0.45),
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                left: 12,
-                                top: 0,
-                                child: Container(
-                                  width: 32,
-                                  height: 32,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius:
-                                        BorderRadius.circular(8),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: accent.withValues(
-                                            alpha: 0.4),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Center(
-                                    child: SvgPicture.asset(
-                                      assets.boltIcon,
-                                      width: 18,
-                                      height: 18,
-                                      colorFilter: const ColorFilter.mode(
-                                        accent,
-                                        BlendMode.srcIn,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
+                        for (int i = 0; i < indexValues.length; i++)
+                          Padding(
+                            padding: EdgeInsets.only(
+                              right:
+                                  i < indexValues.length - 1 ? cardSpacing : 0,
+                            ),
+                            child: _DashboardIndexCard(
+                              indexItem: indexValues[i],
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      'Algo Trading',
-                                      style: MyntWebTextStyles.body(
-                                        context,
-                                        color: Colors.white,
-                                        fontWeight: MyntFonts.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius:
-                                          BorderRadius.circular(5),
-                                    ),
-                                    child: Text(
-                                      'NEW',
-                                      style: MyntWebTextStyles.caption(
-                                        context,
-                                        color: const Color(0xFF170B26),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                'Automated • Rule-based',
-                                style: MyntWebTextStyles.para(
-                                  context,
-                                  color: Colors.white
-                                      .withValues(alpha: 0.85),
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
                       ],
                     ),
-                    const SizedBox(height: 6),
-                    Divider(
-                      height: 1,
-                      color: Colors.white.withValues(alpha: 0.18),
-                    ),
-                    const SizedBox(height: 6),
-                    Expanded(
-                      child: Text(
-                        'Create & deploy automated trading strategies with Zebu Algo.',
-                        style: MyntWebTextStyles.para(
-                          context,
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontWeight: FontWeight.w500,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+                  )
+                : Center(
+                    child: MyntLoader.simple(size: MyntLoaderSize.small),
+                  ),
           ),
-        ),
+          // Right scroll button — shown only when there is content to the right.
+          if (_canScrollRightIdx) const SizedBox(width: 8),
+          if (_canScrollRightIdx)
+            _buildIndexScrollButton(
+              context,
+              icon: Icons.arrow_forward_ios,
+              onTap: () {
+                if (_indexScrollController.hasClients) {
+                  final newOffset =
+                      (_indexScrollController.offset + 250.0).clamp(
+                    0.0,
+                    _indexScrollController.position.maxScrollExtent,
+                  );
+                  _indexScrollController.animateTo(
+                    newOffset,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                }
+              },
+            ),
+        ],
       ),
     );
   }
@@ -1862,13 +1577,13 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
                                 color: darkMode
-                                    ? accent.withValues(alpha: 0.06)
-                                    : Colors.white,
+                                    ? MyntColors.cardDark
+                                    : MyntColors.card,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
                                   color: darkMode
-                                      ? accent.withValues(alpha: 0.20)
-                                      : accent.withValues(alpha: 0.15),
+                                      ? MyntColors.cardBorderDark
+                                      : MyntColors.cardBorder,
                                   width: 1,
                                 ),
                               ),
@@ -2740,51 +2455,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     );
   }
 
-  Future<void> _showAllIndicesBottomSheet(
-    BuildContext context,
-    IndexListProvider indexProvider,
-  ) async {
-    try {
-      // Get first index from top indices or default index list as reference
-      final topIndices = indexProvider.topIndicesForDashboard?.indValues;
-      final defaultIndices = indexProvider.defaultIndexList?.indValues;
 
-      // Use first index from top indices, or fallback to first default index
-      final defaultIndex = (topIndices != null && topIndices.isNotEmpty)
-          ? topIndices[0]
-          : (defaultIndices != null && defaultIndices.isNotEmpty)
-              ? defaultIndices[0]
-              : null;
-
-      if (defaultIndex == null) {
-        return;
-      }
-
-      // Fetch index list for the bottom sheet
-      await indexProvider.fetchIndexList("NSE", context);
-
-      // Show the bottom sheet
-      showDialog(
-        context: context,
-        barrierDismissible: true,
-        builder: (BuildContext context) {
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            child: IndexBottomSheetWeb(
-              defaultIndex: defaultIndex,
-              indexPosition: 0, // Use position 0 for "See all indices"
-            ),
-          );
-        },
-      );
-
-      // Clean up after dialog closes
-      await indexProvider.fetchIndexList("exit", context);
-      final marketWatch = ref.read(marketWatchProvider);
-      await marketWatch.requestMWScrip(context: context, isSubscribe: true);
-    } catch (e) {
-    }
-  }
 }
 
 // Custom index card widget for dashboard
@@ -2947,84 +2618,48 @@ class _DashboardIndexCardState extends ConsumerState<_DashboardIndexCard> {
           } catch (e) {
           }
         },
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Use responsive width - minimum 140, expand to fit available space
-            final cardWidth = constraints.maxWidth > 0 ? constraints.maxWidth : 180.0;
-            final isCompact = cardWidth < 160;
-
-            return Container(
-              constraints: const BoxConstraints(minWidth: 140),
-              padding: EdgeInsets.all(isCompact ? 12 : 15),
-              decoration: BoxDecoration(
-                color: _isHovered
-                    ? shadcn.Theme.of(context).colorScheme.muted
-                    : resolveThemeColor(context,
-                        dark: MyntColors.dashboardCarColor,
-                        light: shadcn.Theme.of(context).colorScheme.card),
-                borderRadius: BorderRadius.circular(4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: _isHovered
+                ? shadcn.Theme.of(context).colorScheme.muted
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                widget.indexItem.idxname?.toUpperCase() ?? "",
+                style: MyntWebTextStyles.symbol(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary),
+                ),
+                maxLines: 1,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    widget.indexItem.idxname?.toUpperCase() ?? "",
-                    style: MyntWebTextStyles.symbol(
-                      context,
-                      color: resolveThemeColor(context,
-                          dark: MyntColors.textPrimaryDark,
-                          light: MyntColors.textPrimary),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 8),
-                  // Price and change section
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // LTP without ₹ symbol, with profit/loss color
-                      Text(
-                        _ltp,
-                        style: MyntWebTextStyles.price(
-                          context,
-                          color: changeColor,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      // Change and percentage - wrap to next line if needed
-                      Wrap(
-                        spacing: 4,
-                        runSpacing: 2,
-                        children: [
-                          Text(
-                            _change.startsWith("-") ? _change : "+$_change",
-                            style: MyntWebTextStyles.priceChange(
-                              context,
-                              color: resolveThemeColor(context,
-                                  dark: MyntColors.textPrimaryDark,
-                                  light: MyntColors.textPrimary),
-                            ),
-                          ),
-                          Text(
-                            "($_perChange%)",
-                            style: MyntWebTextStyles.priceChange(
-                              context,
-                              color: resolveThemeColor(context,
-                                  dark: MyntColors.textPrimaryDark,
-                                  light: MyntColors.textPrimary),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
+              const SizedBox(width: 8),
+              Text(
+                _ltp,
+                style: MyntWebTextStyles.price(
+                  context,
+                  color: changeColor,
+                ),
               ),
-            );
-          },
+              const SizedBox(width: 8),
+              Text(
+                "${_change.startsWith('-') ? _change : '+$_change'} ($_perChange%)",
+                style: MyntWebTextStyles.priceChange(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

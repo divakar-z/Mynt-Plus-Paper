@@ -185,6 +185,8 @@ class Routes {
 
   static const String optionStrategy = "optionStrategy";
   static const String strategyBuilder = "strategyBuilder";
+  static const String curatedStrategies = "curatedStrategies";
+  static const String algoStrategies = "algoStrategies";
 
   static const String bestMfScreen = "bestMfScreen";
 
