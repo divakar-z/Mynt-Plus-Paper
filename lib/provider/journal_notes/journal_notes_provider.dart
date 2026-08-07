@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/models/journal_notes_model/journal_note.dart';
 import 'package:mynt_plus/models/journal_notes_model/journal_tag.dart';
 import 'package:mynt_plus/models/journal_notes_model/segment_group.dart';
@@ -10,17 +11,42 @@ import 'package:mynt_plus/models/journal_notes_model/tag_pnl_analytics.dart';
 
 ApiExporter get _api => locator<ApiExporter>();
 
+/// The account every journal cache entry belongs to.
+///
+/// Load-bearing, not decoration. These providers are not auto-disposed and
+/// used to be keyed by date range alone, so their entries were shared across
+/// accounts on the same browser. Logging out invalidates them (see
+/// `auth_provider`), but invalidating a provider that still has listeners
+/// makes it refetch *immediately* — and at that moment the P&L Summary screen
+/// is still mounted while `apiToken` and `clientId` are still in prefs
+/// (`clearClientSession` only drops `clientSession`). The refetch therefore
+/// succeeded as the outgoing account and re-cached its notes, tags and
+/// analytics right after the invalidation; the next login on the same browser
+/// read them straight out of the cache without a request, and drew another
+/// client's notes and note markers.
+///
+/// Keying every entry by client id removes the shared slot altogether, so the
+/// fix does not depend on the order of steps in any logout path.
+String get _cacheClientId => locator<Preferences>().clientId ?? '';
+
 /// Deliberately kept out of `LDProvider`, which backs the P&L Summary screen.
 /// That is a 4,100-line ChangeNotifier shared across Ledger, Tradebook,
 /// Positions, Tax P&L and P&L Summary; adding notes to it would make this
 /// feature untestable and couple it to four unrelated screens.
 
-/// Every tag for this client. Cache-friendly: tags change rarely and the
+/// Every tag for one client. Cache-friendly: tags change rarely and the
 /// type-ahead filters locally, so read this once and reuse.
+///
+/// Keyed by client id — see [_cacheClientId]. Callers pass
+/// [journalTagsKey]; the argument exists to separate accounts, not to let a
+/// screen ask for somebody else's tags.
 ///
 /// Invalidate after create/update/delete.
 final journalTagsProvider =
-    FutureProvider<List<JournalTag>>((_) => _api.listTags());
+    FutureProvider.family<List<JournalTag>, String>((_, __) => _api.listTags());
+
+/// The current account's key for [journalTagsProvider].
+String journalTagsKey() => _cacheClientId;
 
 /// Identifies a window of notes for one asset class.
 class NotesRangeKey {
@@ -32,20 +58,32 @@ class NotesRangeKey {
   /// Null lists every group.
   final SegmentGroup? group;
 
-  const NotesRangeKey({required this.from, required this.to, this.group});
+  /// The account this window belongs to. Defaulted from prefs so every
+  /// existing call site is scoped without passing it — see [_cacheClientId]
+  /// for why the cache must never be shared between accounts.
+  final String clientId;
+
+  NotesRangeKey({
+    required this.from,
+    required this.to,
+    this.group,
+    String? clientId,
+  }) : clientId = clientId ?? _cacheClientId;
 
   @override
   bool operator ==(Object other) =>
       other is NotesRangeKey &&
       other.from == from &&
       other.to == to &&
-      other.group == group;
+      other.group == group &&
+      other.clientId == clientId;
 
   @override
-  int get hashCode => Object.hash(from, to, group);
+  int get hashCode => Object.hash(from, to, group, clientId);
 
   @override
-  String toString() => 'NotesRangeKey($from..$to, ${group?.wire ?? 'all'})';
+  String toString() =>
+      'NotesRangeKey($clientId, $from..$to, ${group?.wire ?? 'all'})';
 }
 
 /// Notes in a window, indexed by `note_date` for merging onto the P&L grid.
@@ -100,13 +138,17 @@ class TagPnlKey {
   /// The threshold below which per-tag averages are suppressed as noise.
   final int minSample;
 
-  const TagPnlKey({
+  /// The account these analytics belong to — see [NotesRangeKey.clientId].
+  final String clientId;
+
+  TagPnlKey({
     required this.from,
     required this.to,
     required this.group,
     this.pnlBasis = 'total',
     this.minSample = 5,
-  });
+    String? clientId,
+  }) : clientId = clientId ?? _cacheClientId;
 
   @override
   bool operator ==(Object other) =>
@@ -115,13 +157,16 @@ class TagPnlKey {
       other.to == to &&
       other.group == group &&
       other.pnlBasis == pnlBasis &&
-      other.minSample == minSample;
+      other.minSample == minSample &&
+      other.clientId == clientId;
 
   @override
-  int get hashCode => Object.hash(from, to, group, pnlBasis, minSample);
+  int get hashCode =>
+      Object.hash(from, to, group, pnlBasis, minSample, clientId);
 
   @override
-  String toString() => 'TagPnlKey($from..$to, ${group.wire}, $pnlBasis)';
+  String toString() =>
+      'TagPnlKey($clientId, $from..$to, ${group.wire}, $pnlBasis)';
 }
 
 final tagPnlProvider =
