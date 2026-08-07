@@ -68,6 +68,9 @@ class AlgoStrategy {
   final double totalReturn;
   final double winRate;
   final double sharpeRatio;
+
+  /// Worst peak-to-trough equity drop over the back-test, in ₹ (absolute).
+  final double maxDrawdown;
   final List<String> tags;
 
   const AlgoStrategy({
@@ -83,17 +86,18 @@ class AlgoStrategy {
     required this.totalReturn,
     required this.winRate,
     required this.sharpeRatio,
+    required this.maxDrawdown,
     required this.tags,
   });
 
-  /// Left-column meta line, mirroring the curated card's `40 stocks · NIFTY 50`.
-  /// Reads e.g. `6 strategies · Conservative`.
-  String get subtitle {
-    final String count =
-        '$strategiesCount ${strategiesCount == 1 ? 'strategy' : 'strategies'}';
-    final String label =
-        category.isNotEmpty ? _titleCase(category) : _titleCase(riskLevel);
-    return label.isEmpty ? count : '$count · $label';
+  /// Max drawdown as a percentage of the capital required to run the basket.
+  /// The API only returns the drawdown as an absolute ₹ figure ([maxDrawdown]),
+  /// so dividing by [capitalRequired] gives the worst equity dip relative to the
+  /// money deployed — the percentage the strategy cards display. Returns 0 when
+  /// either input is non-positive.
+  double get maxDrawdownPct {
+    if (capitalRequired <= 0 || maxDrawdown <= 0) return 0;
+    return (maxDrawdown / capitalRequired) * 100;
   }
 
   factory AlgoStrategy.fromJson(Map<String, dynamic> json) {
@@ -110,6 +114,7 @@ class AlgoStrategy {
       totalReturn: _asDouble(json['backtest_total_return']),
       winRate: _asDouble(json['backtest_win_rate']),
       sharpeRatio: _asDouble(json['backtest_sharpe_ratio']),
+      maxDrawdown: _asDouble(json['backtest_max_drawdown']),
       tags: ((json['tags'] as List<dynamic>?) ?? const [])
           .map(_asString)
           .where((t) => t.isNotEmpty)
@@ -121,13 +126,6 @@ class AlgoStrategy {
 // ---------------------------------------------------------------------------
 // Safe primitive coercion helpers.
 // ---------------------------------------------------------------------------
-
-/// Title-cases a single word — `CONSERVATIVE` → `Conservative`.
-String _titleCase(String value) {
-  final s = value.trim();
-  if (s.isEmpty) return s;
-  return s[0].toUpperCase() + s.substring(1).toLowerCase();
-}
 
 double _asDouble(dynamic value, {double fallback = 0.0}) {
   if (value is num) return value.toDouble();

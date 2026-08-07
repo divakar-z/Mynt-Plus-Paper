@@ -3,6 +3,7 @@ import 'dart:math' as math; // used by the risk gauge painter
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:skeletonizer/skeletonizer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/rupeecase_model/algo_strategy_model.dart';
@@ -19,14 +20,11 @@ import '../../utils/rupee_convert_format.dart';
 class StrategyCardData {
   const StrategyCardData({
     required this.name,
-    required this.stocksLabel,
     required this.cagr,
     required this.returnValue,
     required this.returnLabel,
     required this.minInvest,
-    this.assetClass = 'EQUITY',
     this.benchmark = '',
-    this.compositionTags = const [],
     this.alpha,
     this.riskLevel = '',
     this.rebalanceLabel = '',
@@ -38,12 +36,6 @@ class StrategyCardData {
   /// Strategy / basket name (title line).
   final String name;
 
-  final String stocksLabel;
-
-  /// Asset-composition tags (`EQ DYNAMIC · 50 stocks`…) rendered after the
-  /// instrument tag. Empty when the strategy carries no breakdown.
-  final List<String> compositionTags;
-
   /// Annualised return (%), shown as the neutral `CAGR` headline.
   final double cagr;
 
@@ -54,8 +46,6 @@ class StrategyCardData {
   final String returnLabel;
   final double minInvest;
 
-  /// Instrument-type chip label shown top-left (`EQUITY`, the basket category…).
-  final String assetClass;
   final String benchmark;
   final double? alpha;
   final String riskLevel;
@@ -72,15 +62,11 @@ class StrategyCardData {
           {Color? accentColor}) =>
       StrategyCardData(
         name: s.name,
-        stocksLabel:
-            '${s.totalStocks} ${s.totalStocks == 1 ? 'Stock' : 'Stocks'}',
         cagr: s.cagr,
         returnValue: s.netReturn,
         returnLabel: 'Net Returns',
         minInvest: s.minInvest,
-        assetClass: '',
         benchmark: s.benchmark,
-        compositionTags: _compositionTags(s),
         alpha: s.alpha,
         riskLevel: s.riskLevel,
         rebalanceLabel: _weeksLabel(s.rebalanceWeeks),
@@ -90,28 +76,20 @@ class StrategyCardData {
         accentColor: accentColor,
       );
 
-  factory StrategyCardData.fromAlgo(AlgoStrategy s) => StrategyCardData(
+  factory StrategyCardData.fromAlgo(AlgoStrategy s, {Color? accentColor}) =>
+      StrategyCardData(
         name: s.title,
-        stocksLabel:
-            '${s.strategiesCount} ${s.strategiesCount == 1 ? 'Strategy' : 'Strategies'}',
         cagr: s.cagr,
         returnValue: s.totalReturn,
         returnLabel: 'Total Return',
         minInvest: s.capitalRequired,
-        assetClass: s.category.isEmpty ? 'ALGO' : s.category.toUpperCase(),
         benchmark: '',
-        compositionTags: s.tags,
         alpha: null,
         riskLevel: s.riskLevel,
         rebalanceLabel: '',
+        accentColor: accentColor,
       );
 }
-
-List<String> _compositionTags(RupeeCaseStrategy s) => s.composition
-    .where((a) => a.name.trim().isNotEmpty)
-    .map((a) =>
-        '${a.name} · ${a.stockCount} ${a.stockCount == 1 ? 'stock' : 'stocks'}')
-    .toList();
 
 String _weeksLabel(int weeks) {
   if (weeks <= 0) return '';
@@ -128,6 +106,23 @@ const List<Color> kStrategyAccentPalette = [
   Color(0xFFCA8A04), // gold
   Color(0xFF0891B2), // cyan
 ];
+
+/// Distinct palette for automated strategies; the cooler, more saturated hues
+/// keep the Algo collection visually separate from curated RupeeCase cards.
+const List<Color> kAlgoStrategyAccentPalette = [
+  Color(0xFF6D28D9), // violet
+  Color(0xFF4338CA), // indigo
+  Color(0xFFBE185D), // fuchsia
+  Color(0xFF0F766E), // deep teal
+  Color(0xFFC2410C), // burnt orange
+  Color(0xFF0369A1), // deep blue
+  Color(0xFF7E22CE), // purple
+  Color(0xFFB45309), // amber
+];
+
+/// Every algo strategy card (dashboard scroller and the "see all" table) opens
+/// this Zebu Algo marketplace link on tap.
+const String _kAlgoMarketplaceUrl = 'https://algo.zebuetrade.com/marketplace';
 
 class StrategyCard extends ConsumerStatefulWidget {
   const StrategyCard({super.key, required this.data});
@@ -186,6 +181,409 @@ class _StrategyCardState extends ConsumerState<StrategyCard> {
   }
 }
 
+/// Algo-specific card that mirrors the RupeeCase card's premium accent-gradient
+/// layout while exposing the key algo back-test metrics. Uses a distinct cooler
+/// accent palette so the two sections remain visually distinguishable.
+class AlgoStrategyCard extends StatefulWidget {
+  const AlgoStrategyCard({
+    super.key,
+    required this.strategy,
+    required this.accentColor,
+    this.stackedMetrics = false,
+  });
+
+  final AlgoStrategy strategy;
+  final Color accentColor;
+
+  /// When true the footer metrics render as a 2×2 grid (MIN. CAP / CAGR on top,
+  /// DD / WIN RATE beneath) instead of the default single four-column row.
+  final bool stackedMetrics;
+
+  @override
+  State<AlgoStrategyCard> createState() => _AlgoStrategyCardState();
+}
+
+class _AlgoStrategyCardState extends State<AlgoStrategyCard> {
+  bool _hovered = false;
+
+  AlgoStrategy get _s => widget.strategy;
+  Color get _accent => widget.accentColor;
+
+  // ---------------------------------------------------------------  build ---
+  @override
+  Widget build(BuildContext context) {
+    // Diagonal accent wash — strongest at the top-left, fading out toward the
+    // bottom-right (flipped from the old top→bottom fill) for a distinct per-
+    // card pattern. Inner stats stay on white. Flat — no box shadow.
+    final Color cardStrong = resolveThemeColor(context,
+        dark: Color.lerp(MyntColors.cardDark, _accent, 0.20)!,
+        light: Color.lerp(MyntColors.card, _accent, 0.11)!);
+    final Color cardSoft = resolveThemeColor(context,
+        dark: Color.lerp(MyntColors.cardDark, _accent, 0.05)!,
+        light: Color.lerp(MyntColors.card, _accent, 0.02)!);
+    final Color sectionBorder = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final Color hoverOverlay = resolveThemeColor(context,
+        dark: Colors.white.withValues(alpha: 0.05),
+        light: Colors.black.withValues(alpha: 0.035));
+
+    return MouseRegion(
+      // Every algo strategy card opens the Zebu Algo marketplace on tap.
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: () => _launchUrl(_kAlgoMarketplaceUrl),
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          foregroundDecoration: BoxDecoration(
+            color: _hovered ? hoverOverlay : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          // A single bordered accent-gradient panel holds the "Deployed" count,
+          // the risk gauge, the strategy title and a four-metric footer row. It
+          // fills the full (uniform) row height so every algo card is the same
+          // size.
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [cardStrong, cardSoft],
+              ),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: sectionBorder),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.max,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Header: "Deployed N" (left) + the risk gauge (right). ──
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(child: _deployedLabel(context)),
+                    if (_s.riskLevel.trim().isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      _AlgoRiskGauge(riskLevel: _s.riskLevel),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // ── Title (Title Case, wraps to 2 lines). ──
+                _titleLine(context),
+                const SizedBox(height: 12),
+                const Spacer(),
+                // ── Footer metrics: a single four-column row, or a 2×2 grid
+                //    for the stacked-metrics card copy. ──
+                widget.stackedMetrics
+                    ? _metricsGrid(context)
+                    : _metricsRow(context),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------  deployed label ---
+  /// Small muted "Deployed N" line (top-left), where N is how many users have
+  /// deployed/subscribed to this basket. Mirrors the "Live N" label in the
+  /// design, worded as "Deployed".
+  Widget _deployedLabel(BuildContext context) {
+    return Text(
+      'Deployed ${_s.subscriberCount}',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: MyntWebTextStyles.para(
+        context,
+        color: _cardMutedText(context),
+        fontWeight: MyntFonts.semiBold,
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------  title ---
+  /// Full-width title in Title Case (first letter of each word capitalised, the
+  /// rest lower-case), allowed to wrap onto a second line so the whole strategy
+  /// name stays visible on the narrow (280px) card.
+  Widget _titleLine(BuildContext context) {
+    // The stacked-metrics card copy uses a smaller (body / 14px) title so it
+    // stays compact; the default card keeps its larger title size.
+    final TextStyle base = widget.stackedMetrics
+        ? MyntWebTextStyles.body(
+            context,
+            darkColor: const Color(0xFFEDF2F7),
+            lightColor: MyntColors.textPrimary,
+            fontWeight: MyntFonts.semiBold,
+          )
+        : MyntWebTextStyles.title(
+            context,
+            darkColor: const Color(0xFFEDF2F7),
+            lightColor: MyntColors.textPrimary,
+            fontWeight: MyntFonts.semiBold,
+          );
+    final TextStyle style = base.copyWith(letterSpacing: 0.4, height: 1.2);
+    return Text(
+      // The narrow stacked copy shows the first two words on line one and wraps
+      // the rest beneath; the default card wraps naturally.
+      widget.stackedMetrics
+          ? _titleTwoWordsFirstLine(_s.title)
+          : _titleCase(_s.title),
+      maxLines: widget.stackedMetrics ? 3 : 2,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+  }
+
+  // -------------------------------------------------------  metrics row ---
+  /// The footer metric strip shown along the bottom of the card: four metrics —
+  /// MIN. CAP · CAGR · DD · WIN RATE — a small label over a coloured value, all
+  /// wrapped in a single white panel ([_statPanel]) with no gaps between them.
+  /// (Risk is shown by the gauge in the header.) Figures carry no +/- sign;
+  /// profit/loss is conveyed by colour alone. Drawdown is a percentage of the
+  /// required capital ([AlgoStrategy.maxDrawdownPct]).
+  Widget _metricsRow(BuildContext context) {
+    final Color profitColor = resolveThemeColor(context,
+        dark: const Color(0xFF56D364), light: MyntColors.profit);
+    final Color lossColor = resolveThemeColor(context,
+        dark: const Color(0xFFFF8981), light: MyntColors.loss);
+
+    final double ddPct = _s.maxDrawdownPct;
+    final String ddValue = ddPct > 0 ? _unsignedPct(ddPct) : '—';
+
+    final tiles = <Widget>[
+      _metric(
+        context,
+        label: 'MIN. CAP',
+        tooltip: 'Minimum capital required to run this basket.',
+        value: _compactRupee(_s.capitalRequired),
+        valueColor: _cardPrimaryText(context),
+      ),
+      _metric(
+        context,
+        label: 'CAGR',
+        tooltip:
+            'Compound Annual Growth Rate — back-tested annualised return.',
+        value: _unsignedPct(_s.cagr),
+        valueColor: _pnlColor(context, _s.cagr),
+      ),
+      _metric(
+        context,
+        label: 'DD',
+        tooltip:
+            'Max drawdown — the worst peak-to-trough equity drop over the '
+            'back-test, as a percentage of the required capital.',
+        value: ddValue,
+        valueColor: ddPct > 0 ? lossColor : _cardMutedText(context),
+      ),
+      _metric(
+        context,
+        label: 'WIN RATE',
+        tooltip:
+            'Percentage of trades that closed in profit during the back-test.',
+        value: _unsignedPct(_s.winRate),
+        valueColor: profitColor,
+      ),
+    ];
+
+    return _statPanel(
+      context,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final tile in tiles) Expanded(child: tile),
+        ],
+      ),
+    );
+  }
+
+  /// Alternative footer used by the stacked-metrics card copy: the same four
+  /// tiles as a 2×2 grid — MIN. CAP / CAGR on top, DD / WIN RATE beneath.
+  Widget _metricsGrid(BuildContext context) {
+    final Color profitColor = resolveThemeColor(context,
+        dark: const Color(0xFF56D364), light: MyntColors.profit);
+    final Color lossColor = resolveThemeColor(context,
+        dark: const Color(0xFFFF8981), light: MyntColors.loss);
+
+    final double ddPct = _s.maxDrawdownPct;
+    final String ddValue = ddPct > 0 ? _unsignedPct(ddPct) : '—';
+
+    final Widget minCap = _metric(
+      context,
+      label: 'MIN. CAP',
+      tooltip: 'Minimum capital required to run this basket.',
+      value: _compactRupee(_s.capitalRequired),
+      valueColor: _cardPrimaryText(context),
+    );
+    final Widget cagr = _metric(
+      context,
+      label: 'CAGR',
+      tooltip:
+          'Compound Annual Growth Rate — back-tested annualised return.',
+      value: _unsignedPct(_s.cagr),
+      valueColor: _pnlColor(context, _s.cagr),
+    );
+    final Widget dd = _metric(
+      context,
+      label: 'DD',
+      tooltip:
+          'Max drawdown — the worst peak-to-trough equity drop over the '
+          'back-test, as a percentage of the required capital.',
+      value: ddValue,
+      valueColor: ddPct > 0 ? lossColor : _cardMutedText(context),
+    );
+    final Widget winRate = _metric(
+      context,
+      label: 'WIN RATE',
+      tooltip:
+          'Percentage of trades that closed in profit during the back-test.',
+      value: _unsignedPct(_s.winRate),
+      valueColor: profitColor,
+    );
+
+    Widget rowOf(Widget left, Widget right) => Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: left),
+            Expanded(child: right),
+          ],
+        );
+
+    return _statPanel(
+      context,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          rowOf(minCap, cagr),
+          const SizedBox(height: 10),
+          rowOf(dd, winRate),
+        ],
+      ),
+    );
+  }
+
+  /// One footer metric (content only): a small muted [label] with an info glyph
+  /// over a larger coloured [value]. The white background is provided once by
+  /// [_statPanel], which wraps all four metrics into a single container.
+  Widget _metric(
+    BuildContext context, {
+    required String label,
+    required String value,
+    required Color valueColor,
+    String? tooltip,
+  }) {
+    final Color labelColor = _cardLabelText(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                // Fixed size (no per-tile scaling) so every label renders at the
+                // same size. Both the original 4-column card and the stacked
+                // copy use a 10px label so even the longest labels fit uniformly.
+                style: widget.stackedMetrics
+                    ? MyntWebTextStyles.caption(
+                        context,
+                        color: labelColor,
+                        fontWeight: MyntFonts.semiBold,
+                      )
+                    : webText(
+                        context,
+                        size: 10,
+                        weight: MyntFonts.semiBold,
+                        color: labelColor,
+                      ),
+              ),
+            ),
+            if (tooltip != null) ...[
+              const SizedBox(width: 2),
+              _infoTooltip(context, tooltip, labelColor),
+            ],
+          ],
+        ),
+        SizedBox(height: widget.stackedMetrics ? 3 : 5),
+        Text(
+          value,
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
+          // Fixed size so all values render uniformly (price / 14px).
+          style: MyntWebTextStyles.price(
+            context,
+            color: valueColor,
+            fontWeight: MyntFonts.medium,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// The single white panel wrapping all four footer metrics into one container
+  /// (no per-stat backgrounds or gaps). Shared by the row and 2×2 grid layouts.
+  Widget _statPanel(BuildContext context, {required Widget child}) {
+    final Color panelBg = resolveThemeColor(context,
+        dark: Colors.white.withValues(alpha: 0.10), light: Colors.white);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      decoration: BoxDecoration(
+        color: panelBg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: child,
+    );
+  }
+
+  /// The small `info` glyph + hover tooltip shown beside each stat label.
+  Widget _infoTooltip(BuildContext context, String message, Color color) {
+    final Color tooltipBg = resolveThemeColor(context,
+        dark: const Color(0xFF252A33), light: Colors.white);
+    final Color tooltipText = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    return Tooltip(
+      message: message,
+      waitDuration: const Duration(milliseconds: 200),
+      showDuration: const Duration(seconds: 6),
+      preferBelow: false,
+      verticalOffset: 12,
+      padding: const EdgeInsets.all(12),
+      constraints: const BoxConstraints(maxWidth: 220),
+      decoration: BoxDecoration(
+        color: tooltipBg,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1A000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      textStyle: MyntWebTextStyles.bodySmall(context,
+          color: tooltipText, fontWeight: MyntFonts.regular),
+      child: SvgPicture.asset(
+        assets.info,
+        width: 10,
+        height: 10,
+        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+      ),
+    );
+  }
+}
+
 class _StrategyBody extends StatelessWidget {
   const _StrategyBody({required this.data});
 
@@ -224,7 +622,7 @@ class _StrategyBody extends StatelessWidget {
         // ---------------- Section 1: bordered card ----------------
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(12),
           decoration: section1Deco,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -235,7 +633,7 @@ class _StrategyBody extends StatelessWidget {
                 children: [
                   Expanded(child: _nameLine(context)),
                   if (showRisk) ...[
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 10),
                     _RiskGauge(
                       riskLevel: data.riskLevel,
                       benchmark: data.benchmark,
@@ -243,118 +641,36 @@ class _StrategyBody extends StatelessWidget {
                   ],
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 10),
               _statBlock(context),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
               _metaRow(context),
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        // ---------------- Section 2: tags (no border) ----------------
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-          child: _tags(context),
-        ),
       ],
-    );
-  }
-
-  // ---- tags ---
-  Widget _tags(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        if (data.assetClass.trim().isNotEmpty)
-          _tagLabel(context, label: data.assetClass, color: _primary(context)),
-        for (final tag in data.compositionTags)
-          _tagLabel(
-            context,
-            label: tag,
-            color: resolveThemeColor(context,
-                dark: MyntColors.secondaryDark, light: MyntColors.secondary),
-          ),
-      ],
-    );
-  }
-
-  Widget _tagLabel(
-    BuildContext context, {
-    required String label,
-    required Color color,
-  }) {
-    // Chip: the label colour as text over a soft same-hue fill.
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        label,
-        style: MyntWebTextStyles.caption(
-          context,
-          color: color,
-          fontWeight: MyntFonts.semiBold,
-        ),
-      ),
     );
   }
 
   // --- name ---
 
-  /// Strategy name (title line), rendered in full uppercase.
+  /// Strategy name (title line), Title-cased the same way as the algo card
+  /// (first letter of each word capitalised, the rest lower-case).
   Widget _nameLine(BuildContext context) {
-    // return Text(
-    //   data.name.toUpperCase(),
-    //   maxLines: 1,
-    //   overflow: TextOverflow.ellipsis,
-    //   style: MyntWebTextStyles.title(
-    //     context,
-    //     darkColor: MyntColors.textPrimaryDark,
-    //     lightColor: MyntColors.textPrimary,
-    //     fontWeight: MyntFonts.bold,
-    //   ).copyWith(letterSpacing: 0.3),
-    // );
-    final TextStyle style = MyntWebTextStyles.title(
+    // Same sizing as the algo card title (titlesub / 15px, bold, ls 0.2, h 1.2).
+    final TextStyle style = MyntWebTextStyles.titlesub(
       context,
-      darkColor: MyntColors.textPrimaryDark,
+      darkColor: const Color(0xFFEDF2F7),
       lightColor: MyntColors.textPrimary,
       fontWeight: MyntFonts.bold,
-    ).copyWith(letterSpacing: 0.3);
-    return _smallCaps(data.name, style);
-  }
-
-  Widget _smallCaps(String text, TextStyle style) {
-    final double smallSize = (style.fontSize ?? 14) * 0.80;
-    final List<InlineSpan> spans = [];
-    final StringBuffer run = StringBuffer();
-    bool runSmall = false;
-
-    void flush() {
-      if (run.isEmpty) return;
-      spans.add(TextSpan(
-        text: run.toString(),
-        style: runSmall ? TextStyle(fontSize: smallSize) : null,
-      ));
-      run.clear();
-    }
-
-    for (final int rune in text.runes) {
-      final String ch = String.fromCharCode(rune);
-      // A lowercase letter is one that changes when uppercased.
-      final bool isLower = ch != ch.toUpperCase() && ch == ch.toLowerCase();
-      if (run.isNotEmpty && runSmall != isLower) flush();
-      runSmall = isLower;
-      run.write(isLower ? ch.toUpperCase() : ch);
-    }
-    flush();
-
-    return Text.rich(
-      TextSpan(style: style, children: spans),
-      maxLines: 1,
+    ).copyWith(letterSpacing: 0.2, height: 1.2);
+    // Keep the title at full size — never shrink it — and let it wrap onto a
+    // second line when the name is too long for the card width.
+    return Text(
+      _titleCase(data.name),
+      maxLines: 2,
       overflow: TextOverflow.ellipsis,
+      style: style,
     );
   }
 
@@ -368,7 +684,6 @@ class _StrategyBody extends StatelessWidget {
         context,
         caption: 'CAGR',
         tooltip: 'Compound Annual Growth Rate - the average yearly return if gains were reinvested over 5 years.',
-        subtitle: 'YEARLY GROWTH',
         value: '${data.cagr.toStringAsFixed(2)}%',
         valueColor: _pnlColor(context, data.cagr),
       ),
@@ -377,7 +692,6 @@ class _StrategyBody extends StatelessWidget {
           context,
           caption: 'ALPHA',
           tooltip: 'How much this strategy beat (or tailed) NIFTY 50 over the full 5-year history period.',
-          subtitle: 'VS BENCHMARK',
           value: '${data.alpha!.toStringAsFixed(2)}%',
           valueColor: _pnlColor(context, data.alpha!),
         ),
@@ -385,7 +699,6 @@ class _StrategyBody extends StatelessWidget {
         context,
         caption: data.returnLabel.toUpperCase(),
         tooltip: 'Total net return after all estimated charges (brokerage, STT, taxes) over the 5-year history period.',
-        subtitle: 'CUMULATIVE RETURN',
         value:
             '${data.returnValue >= 0 ? '+' : ''}${data.returnValue.toStringAsFixed(2)}%',
         valueColor: _pnlColor(context, data.returnValue),
@@ -396,7 +709,7 @@ class _StrategyBody extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (int i = 0; i < stats.length; i++) ...[
-            if (i > 0) const SizedBox(width: 10),
+            if (i > 0) const SizedBox(width: 6),
             Expanded(child: stats[i]),
           ],
         ],
@@ -408,21 +721,19 @@ class _StrategyBody extends StatelessWidget {
     BuildContext context, {
     required String caption,
     required String tooltip,
-    required String subtitle,
     required String value,
     required Color valueColor,
   }) {
-    final Color captionColor = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final Color captionColor = _cardLabelText(context);
     // White tiles that read as clean panels over the accent-washed section.
     final Color tileBg = resolveThemeColor(context,
-        dark: Colors.white.withValues(alpha: 0.06), light: const Color(0xFFFFFFFF));
+        dark: Colors.white.withValues(alpha: 0.10), light: const Color(0xFFFFFFFF));
     final Color tooltipBg = resolveThemeColor(context,
         dark: const Color(0xFF252A33), light: Colors.white);
     final Color tooltipText = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       decoration: BoxDecoration(
         color: tileBg,
         borderRadius: BorderRadius.circular(6),
@@ -435,18 +746,25 @@ class _StrategyBody extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Flexible(
-                child: Text(
-                  caption,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: MyntWebTextStyles.caption(
-                    context,
-                    color: captionColor,
-                    fontWeight: MyntFonts.semiBold,
+                // Scale the caption down (never truncate) so the full label
+                // shows even in a narrow tile.
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    caption,
+                    maxLines: 1,
+                    softWrap: false,
+                    // Portfolio-card label sizing (exch / 12px).
+                    style: MyntWebTextStyles.exch(
+                      context,
+                      color: captionColor,
+                      fontWeight: MyntFonts.semiBold,
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 3),
               Tooltip(
                 message: tooltip,
                 waitDuration: const Duration(milliseconds: 200),
@@ -468,36 +786,27 @@ class _StrategyBody extends StatelessWidget {
                 ),
                 textStyle: MyntWebTextStyles.bodySmall(context,
                     color: tooltipText, fontWeight: MyntFonts.regular),
-                child: Icon(
-                  Icons.info_outline,
-                  size: 13,
-                  color: captionColor,
+                child: SvgPicture.asset(
+                  assets.info,
+                  width: 12,
+                  height: 12,
+                  colorFilter: ColorFilter.mode(captionColor, BlendMode.srcIn),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
               value,
               maxLines: 1,
-              style: MyntWebTextStyles.title(
+              // Portfolio-card value sizing (price / 14px).
+              style: MyntWebTextStyles.price(
                 context,
                 color: valueColor,
                 fontWeight: MyntFonts.medium,
               ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: captionColor,
-              fontWeight: MyntFonts.semiBold,
             ),
           ),
         ],
@@ -513,11 +822,6 @@ class _StrategyBody extends StatelessWidget {
         context,
         iconAsset: assets.rupee,
         value: 'Min ₹${RupeeFormat.format(data.minInvest, decimalPlaces: 0)}',
-      ),
-      _metaItem(
-        context,
-        iconAsset: assets.chart,
-        value: data.stocksLabel,
       ),
       if (data.rebalanceLabel.trim().isNotEmpty)
         _metaItem(
@@ -539,10 +843,8 @@ class _StrategyBody extends StatelessWidget {
     required String iconAsset,
     required String value,
   }) {
-    final Color muted = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final Color primary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final Color muted = _cardMutedText(context);
+    final Color primary = _cardPrimaryText(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -554,18 +856,183 @@ class _StrategyBody extends StatelessWidget {
         ),
         const SizedBox(width: 6),
         Flexible(
-          child: Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: MyntWebTextStyles.bodySmall(
-              context,
-              color: primary,
-              fontWeight: MyntFonts.semiBold,
+          // Scale down rather than truncate so the full value stays readable.
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              softWrap: false,
+              style: MyntWebTextStyles.bodySmall(
+                context,
+                color: primary,
+                fontWeight: MyntFonts.semiBold,
+              ),
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Shimmer placeholder that mirrors a loaded [StrategyCard] / [AlgoStrategyCard]
+/// while its section is fetching: one bordered section (title, risk gauge, three
+/// stat tiles, meta row) matching the real card. Uses [Skeletonizer.zone] so only
+/// the [Bone] blocks shimmer while the card shell (border + fill) stays crisp,
+/// matching the skeleton style used elsewhere in the app.
+class StrategyCardSkeleton extends StatelessWidget {
+  const StrategyCardSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final Color sectionBorder = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final Color base = resolveThemeColor(context,
+        dark: MyntColors.cardDark, light: MyntColors.card);
+
+    return Skeletonizer.zone(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Section 1: bordered ──
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: base,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: sectionBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title bar + risk gauge.
+                Row(
+                  children: const [
+                    Bone(width: 150, height: 14, uniRadius: 6),
+                    Spacer(),
+                    Bone(width: 52, height: 28, uniRadius: 6),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // Three stat tiles (CAGR, ALPHA, NET RETURNS).
+                Row(
+                  children: [
+                    for (int i = 0; i < 3; i++) ...[
+                      if (i > 0) const SizedBox(width: 6),
+                      const Expanded(
+                        child: Bone(height: 48, uniRadius: 6),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Meta row.
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: const [
+                    Bone(width: 74, height: 12, uniRadius: 6),
+                    Bone(width: 52, height: 12, uniRadius: 6),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shimmer placeholder for the [AlgoStrategyCard]. Mirrors that card's layout —
+/// a single bordered panel with a "Deployed" line + risk gauge header, a two-
+/// line title and a four-column metric footer — so the loading state matches the
+/// algo cards exactly.
+class AlgoStrategyCardSkeleton extends StatelessWidget {
+  const AlgoStrategyCardSkeleton({super.key});
+
+  // Per-column bone widths, so the footer shimmer reads like real labels/values
+  // rather than four identical bars.
+  static const List<double> _labelWidths = [46, 34, 20, 50];
+  static const List<double> _valueWidths = [34, 42, 40, 40];
+
+  @override
+  Widget build(BuildContext context) {
+    final Color sectionBorder = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final Color base = resolveThemeColor(context,
+        dark: MyntColors.cardDark, light: MyntColors.card);
+    final Color tileBg = resolveThemeColor(context,
+        dark: Colors.white.withValues(alpha: 0.10), light: Colors.white);
+
+    return Skeletonizer.zone(
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: base,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: sectionBorder),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.max,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── "Deployed N" line + risk gauge ──
+            Row(
+              children: const [
+                Bone(width: 70, height: 12, uniRadius: 6),
+                Spacer(),
+                Bone(width: 42, height: 20, uniRadius: 6),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // ── Title (two lines) ──
+            const Bone(width: 160, height: 14, uniRadius: 6),
+            const SizedBox(height: 6),
+            const Bone(width: 100, height: 14, uniRadius: 6),
+            const Spacer(),
+            // ── Four-column metric footer (tinted tiles) ──
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (int i = 0; i < 4; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: tileBg,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Bone(
+                                width: _labelWidths[i],
+                                height: 9,
+                                uniRadius: 6),
+                            const SizedBox(height: 6),
+                            Bone(
+                                width: _valueWidths[i],
+                                height: 13,
+                                uniRadius: 6),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -604,7 +1071,7 @@ class _RiskGauge extends StatelessWidget {
         Tooltip(
           message: riskLevel,
           child: CustomPaint(
-            size: const Size(58, 30),
+            size: const Size(58, 25),
             painter:
                 _RiskGaugePainter(fraction: _fraction, needleColor: needle),
           ),
@@ -683,19 +1150,224 @@ class _RiskGaugePainter extends CustomPainter {
       oldDelegate.needleColor != needleColor;
 }
 
-Color _primary(BuildContext context) => resolveThemeColor(context,
-    dark: MyntColors.primaryDark, light: MyntColors.primary);
+/// Title-cases [text]: lower-cases everything, then capitalises the first letter
+/// of each whitespace-separated word — "BANKNIFTY MONTHLY BUY" → "Banknifty
+/// Monthly Buy". Shared by the algo and RupeeCase [_StrategyBody] card titles.
+String _titleCase(String text) {
+  final String trimmed = text.trim();
+  if (trimmed.isEmpty) return trimmed;
+  return trimmed
+      .split(RegExp(r'\s+'))
+      .map((w) => '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}')
+      .join(' ');
+}
+
+/// Title-cases [text] and forces a line break after the first two words, so the
+/// first row shows two words and the remaining words wrap beneath. Used by the
+/// narrow stacked-metrics card copy.
+String _titleTwoWordsFirstLine(String text) {
+  final String t = _titleCase(text);
+  final List<String> words = t.split(RegExp(r'\s+'));
+  if (words.length <= 2) return t;
+  return '${words.take(2).join(' ')}\n${words.skip(2).join(' ')}';
+}
+
+/// Formats a percentage without a leading +/- sign, e.g. `-8.3` → `"8.30%"`.
+/// The card conveys profit/loss through colour, so the sign is dropped.
+String _unsignedPct(double value) => '${value.abs().toStringAsFixed(2)}%';
+
+/// Compact ₹ figure for the cards' "Min. Cap" metric (`₹2L`, `₹1.5Cr`), trimming
+/// a redundant `.00` and the space before the unit so the value reads compactly.
+String _compactRupee(double value) {
+  final String s = RupeeFormat.formatCompactWithRupee(value, decimalPlaces: 2);
+  return s
+      .replaceAll(RegExp(r'\.00(?= |$)'), '') // trim redundant ".00"
+      .replaceAll(' L', 'L')
+      .replaceAll(' Cr', 'Cr');
+}
+
+/// A risk tier: needle position (0 = lowest … 1 = highest) and dial hue.
+class _RiskTier {
+  const _RiskTier(this.fraction, this.color);
+  final double fraction;
+  final Color color;
+}
+
+const Color _kRiskGreen = Color(0xFF16A34A);
+const Color _kRiskLime = Color(0xFF84CC16);
+const Color _kRiskAmber = Color(0xFFF5B70A);
+const Color _kRiskOrange = Color(0xFFF97316);
+const Color _kRiskRed = Color(0xFFEF4444);
+
+/// Maps a free-text risk label to one of five tiers (Very Low → Very High).
+/// More specific phrases ("moderately high/low") are matched before the plain
+/// "high"/"low"/"moderate" terms they contain.
+_RiskTier _riskTier(String riskLevel) {
+  final String r = riskLevel.toLowerCase();
+  if (r.contains('very high') || r.contains('aggressive')) {
+    return const _RiskTier(0.9, _kRiskRed);
+  }
+  if (r.contains('moderately high') || r.contains('high')) {
+    return const _RiskTier(0.72, _kRiskOrange);
+  }
+  if (r.contains('moderately low')) {
+    return const _RiskTier(0.3, _kRiskLime);
+  }
+  if (r.contains('moderate') || r.contains('medium') || r.contains('balanced')) {
+    return const _RiskTier(0.5, _kRiskAmber);
+  }
+  if (r.contains('very low')) {
+    return const _RiskTier(0.1, _kRiskGreen);
+  }
+  if (r.contains('low') || r.contains('conservative')) {
+    return const _RiskTier(0.3, _kRiskLime);
+  }
+  return const _RiskTier(0.5, _kRiskAmber);
+}
+
+/// Speedometer-style risk gauge for the algo cards — a single-hue dial whose
+/// colour and needle position map to the strategy's risk tier (green → red).
+/// Sits top-right of the title; the full risk label shows on hover.
+class _AlgoRiskGauge extends StatelessWidget {
+  const _AlgoRiskGauge({required this.riskLevel});
+
+  final String riskLevel;
+
+  @override
+  Widget build(BuildContext context) {
+    final _RiskTier tier = _riskTier(riskLevel);
+    return Tooltip(
+      message: riskLevel,
+      child: CustomPaint(
+        size: const Size(42, 20),
+        painter: _AlgoRiskGaugePainter(
+          fraction: tier.fraction,
+          color: tier.color,
+          trackColor: resolveThemeColor(context,
+              dark: Colors.white.withValues(alpha: 0.10),
+              light: Colors.black.withValues(alpha: 0.06)),
+        ),
+      ),
+    );
+  }
+}
+
+class _AlgoRiskGaugePainter extends CustomPainter {
+  _AlgoRiskGaugePainter({
+    required this.fraction,
+    required this.color,
+    required this.trackColor,
+  });
+
+  final double fraction;
+  final Color color;
+  final Color trackColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double stroke = size.height * 0.15;
+    final Offset center = Offset(size.width / 2, size.height - stroke / 2);
+    final double radius = math.min(size.width / 2, size.height) - stroke;
+    final Rect rect = Rect.fromCircle(center: center, radius: radius);
+
+    // Faint full track under the coloured dial.
+    canvas.drawArc(
+      rect,
+      math.pi,
+      math.pi,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round
+        ..color = trackColor,
+    );
+
+    // Coloured dial — a light → full sweep of the tier hue.
+    canvas.drawArc(
+      rect,
+      math.pi,
+      math.pi,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round
+        ..shader = SweepGradient(
+          startAngle: math.pi,
+          endAngle: 2 * math.pi,
+          colors: [color.withValues(alpha: 0.55), color],
+        ).createShader(rect),
+    );
+
+    // Tick marks around the outer edge.
+    final Paint tickPaint = Paint()
+      ..color = color
+      ..strokeWidth = 1.0
+      ..strokeCap = StrokeCap.round;
+    const int ticks = 5;
+    for (int i = 0; i <= ticks; i++) {
+      final double a = math.pi - (i / ticks) * math.pi;
+      final double rInner = radius + stroke * 0.15;
+      final double rOuter = radius + stroke * 0.55;
+      canvas.drawLine(
+        Offset(center.dx + rInner * math.cos(a), center.dy - rInner * math.sin(a)),
+        Offset(center.dx + rOuter * math.cos(a), center.dy - rOuter * math.sin(a)),
+        tickPaint,
+      );
+    }
+
+    // Needle.
+    final double clamped = fraction.clamp(0.0, 1.0);
+    final double angle = math.pi - clamped * math.pi;
+    final double needleLen = radius - stroke * 0.15;
+    final Offset tip = Offset(
+      center.dx + needleLen * math.cos(angle),
+      center.dy - needleLen * math.sin(angle),
+    );
+    canvas.drawLine(
+      center,
+      tip,
+      Paint()
+        ..color = color
+        ..strokeWidth = 1.6
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // Hub with a white centre.
+    canvas.drawCircle(center, stroke * 0.62, Paint()..color = color);
+    canvas.drawCircle(center, stroke * 0.28, Paint()..color = Colors.white);
+  }
+
+  @override
+  bool shouldRepaint(_AlgoRiskGaugePainter old) =>
+      old.fraction != fraction ||
+      old.color != color ||
+      old.trackColor != trackColor;
+}
+
+/// Brighter dark-mode text for the strategy cards' inner contents (used by both
+/// the algo card and the RupeeCase [_StrategyBody]) so the values/labels read
+/// crisply on the dark card gradient.
+Color _cardPrimaryText(BuildContext context) => resolveThemeColor(context,
+    dark: const Color(0xFFEDF2F7), light: MyntColors.textPrimary);
+Color _cardMutedText(BuildContext context) => resolveThemeColor(context,
+    dark: const Color(0xFFB8C2CC), light: MyntColors.textSecondary);
+
+/// Brighter dark-mode colour for the stat captions (CAGR, WIN RATE, ALPHA, NET
+/// RETURNS…) on both the algo and RupeeCase cards, so the labels stay legible
+/// against the accent-washed card instead of fading into it. Light mode keeps
+/// the muted secondary tone.
+Color _cardLabelText(BuildContext context) => resolveThemeColor(context,
+    dark: const Color(0xFFDCE4EC), light: MyntColors.textSecondary);
 
 Color _pnlColor(BuildContext context, double value) {
-  if (value == 0) {
-    return resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-  }
+  if (value == 0) return _cardPrimaryText(context);
   return value < 0
       ? resolveThemeColor(context,
-          dark: MyntColors.lossDark, light: MyntColors.loss)
+          dark: const Color(0xFFFF8981), light: MyntColors.loss)
       : resolveThemeColor(context,
-          dark: MyntColors.profitDark, light: MyntColors.profit);
+          dark: const Color(0xFF56D364), light: MyntColors.profit);
 }
 
 /// Opens a URL in a new tab/app; failures are swallowed so a bad link never

@@ -229,7 +229,10 @@ class _StrategyTableState extends State<_StrategyTable> {
         if (w > maxWidth) maxWidth = w;
       }
 
-      if (col == _kStrategyCol && maxWidth < 220) maxWidth = 220;
+      // Give the strategy-name column a generous floor so the name stays legible
+      // and gets the most room (it's the primary identifier), mirroring the
+      // Positions table's Instrument column.
+      if (col == _kStrategyCol && maxWidth < 300) maxWidth = 300;
       widths[col] = maxWidth + padding;
     }
     return widths;
@@ -261,7 +264,7 @@ class _StrategyTableState extends State<_StrategyTable> {
           double totalWeight = 0;
           final weights = <int, double>{};
           for (int i = 0; i < _kHeaders.length; i++) {
-            final double w = i == _kStrategyCol ? 3.0 : 1.0;
+            final double w = i == _kStrategyCol ? 3.5 : 1.0;
             weights[i] = w;
             totalWeight += w;
           }
@@ -274,7 +277,11 @@ class _StrategyTableState extends State<_StrategyTable> {
           final absMin = <int, double>{
             for (int i = 0; i < _kHeaders.length; i++) i: 72.0,
           };
-          absMin[_kStrategyCol] = columnWidths[_kStrategyCol]!;
+          // The name column may shrink (with ellipsis + tooltip) down to a
+          // prominent floor before the table resorts to horizontal scrolling —
+          // the same graceful shrink-to-fit the Positions table uses. The action
+          // column stays pinned since its link has a fixed width.
+          absMin[_kStrategyCol] = 240.0;
           absMin[_kActionCol] = columnWidths[_kActionCol]!;
 
           double totalShrinkable = 0;
@@ -399,8 +406,10 @@ class _StrategyTableState extends State<_StrategyTable> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (alignRight && sortedHere) ...[sortIcon, const SizedBox(width: 4)],
-          Text(header,
-              maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
+          Flexible(
+            child: Text(header,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
+          ),
           if (!alignRight && sortedHere) ...[
             const SizedBox(width: 4),
             sortIcon
@@ -555,25 +564,27 @@ Widget _cellContent(
         style: MyntWebTextStyles.tableCell(context, color: primary),
       );
     case 'Stocks':
-      return Text('${s.totalStocks}', style: _num(context, primary));
+      return _numCell(context, '${s.totalStocks}', primary);
     case 'Rebalance':
-      return Text(
+      return _numCell(
+        context,
         s.rebalanceWeeks > 0 ? '${s.rebalanceWeeks}W' : '—',
-        style: _num(context, primary),
+        primary,
       );
     case 'CAGR':
-      return Text('${s.cagr.toStringAsFixed(2)}%',
-          style: _num(context, primary));
+      return _numCell(context, '${s.cagr.toStringAsFixed(2)}%', primary);
     case '5Y Return':
       final double r = s.netReturn;
-      return Text(
+      return _numCell(
+        context,
         '${r >= 0 ? '+' : ''}${r.toStringAsFixed(2)}%',
-        style: _num(context, _returnColor(context, r)),
+        _returnColor(context, r),
       );
     case 'Min Investment':
-      return Text(
+      return _numCell(
+        context,
         '₹${RupeeFormat.format(s.minInvest, decimalPlaces: 0)}',
-        style: _num(context, primary),
+        primary,
       );
     default:
       return _backtestButton(
@@ -597,14 +608,17 @@ Widget _strategyName(
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
       Flexible(
-        child: Text(
-          s.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: MyntWebTextStyles.tableCell(
-            context,
-            color: primary,
-            fontWeight: MyntFonts.semiBold,
+        child: Tooltip(
+          message: s.name,
+          child: Text(
+            s.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: MyntWebTextStyles.tableCell(
+              context,
+              color: primary,
+              fontWeight: MyntFonts.semiBold,
+            ),
           ),
         ),
       ),
@@ -666,6 +680,17 @@ Widget _backtestButton(
 TextStyle _num(BuildContext context, Color color) =>
     MyntWebTextStyles.tableCell(context, color: color).copyWith(
       fontFeatures: const [FontFeature.tabularFigures()],
+    );
+
+/// Numeric cell rendered as a single-line, ellipsised [Text] so a narrow column
+/// truncates the value instead of wrapping it onto a second line (which would
+/// overflow the fixed row height).
+Widget _numCell(BuildContext context, String text, Color color) => Text(
+      text,
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.ellipsis,
+      style: _num(context, color),
     );
 
 Color _returnColor(BuildContext context, double value) {
