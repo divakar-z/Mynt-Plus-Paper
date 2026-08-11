@@ -40,7 +40,7 @@ class AllStrategiesScreenWeb extends ConsumerWidget {
                 const SizedBox(width: 4),
               ],
               Text(
-                'RupeeCase',
+                'Momentum Investing',
                 style: MyntWebTextStyles.head(
                   context,
                   darkColor: MyntColors.textPrimaryDark,
@@ -526,7 +526,7 @@ String _cellText(String header, RupeeCaseStrategy s) {
     case 'CAGR':
       return '${s.cagr.toStringAsFixed(2)}%';
     case '5Y Return':
-      return '${s.netReturn >= 0 ? '+' : ''}${s.netReturn.toStringAsFixed(2)}%';
+      return '${s.netReturn >= 0 ? '' : ''}${s.netReturn.toStringAsFixed(2)}%';
     case 'Min Investment':
       return '₹${RupeeFormat.format(s.minInvest, decimalPlaces: 0)}';
     default:
@@ -577,7 +577,7 @@ Widget _cellContent(
       final double r = s.netReturn;
       return _numCell(
         context,
-        '${r >= 0 ? '+' : ''}${r.toStringAsFixed(2)}%',
+        '${r >= 0 ? '' : ''}${r.toStringAsFixed(2)}%',
         _returnColor(context, r),
       );
     case 'Min Investment':
