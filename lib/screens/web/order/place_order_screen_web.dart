@@ -8346,6 +8346,32 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       // Only close basket dialog when editing existing basket script
       addBasketScrip(orderInput, bsktName, false);
     } else {
+      // TC_300.4: CO/BO Stoploss (in Rs) and BO Target (in Rs) must be a
+      // multiple of the tick size — same rule Price/Trigger already follow.
+      // Placed before the slice/non-slice split so it guards both paths.
+      // CO has Stoploss only; BO has both Stoploss and Target.
+      if (orderType == "CO - BO") {
+        final String slR =
+            roundOffWithInterval(SafeParse.toDouble(stopLossCtrl.text), tik)
+                .toStringAsFixed(2);
+        if (stopLossCtrl.text.isNotEmpty &&
+            SafeParse.toDouble(stopLossCtrl.text) != SafeParse.toDouble(slR)) {
+          ResponsiveSnackBar.showWarning(
+              context, "Stoploss should be multiple of tick size $tik => $slR");
+          return;
+        }
+        if (_isBracketOrderEnabled) {
+          final String tgtR =
+              roundOffWithInterval(SafeParse.toDouble(targetCtrl.text), tik)
+                  .toStringAsFixed(2);
+          if (targetCtrl.text.isNotEmpty &&
+              SafeParse.toDouble(targetCtrl.text) != SafeParse.toDouble(tgtR)) {
+            ResponsiveSnackBar.showWarning(context,
+                "Target should be multiple of tick size $tik => $tgtR");
+            return;
+          }
+        }
+      }
       if (!isSliceOrd) {
         bool placeorder = true;
         if (priceType == "Limit" || priceType == "SL Limit") {

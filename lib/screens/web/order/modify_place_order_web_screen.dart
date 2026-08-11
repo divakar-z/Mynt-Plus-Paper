@@ -3188,6 +3188,11 @@ class _ModifyPlaceOrderScreenState
             : "Stoploss cannot be 0";
       }
       final double sl = SafeParse.toDouble(stopLossCtrl.text);
+      if (tik > 0 &&
+          roundOffWithInterval(sl, tik).toStringAsFixed(2) !=
+              sl.toStringAsFixed(2)) {
+        return "Stoploss should be multiple of tick size $tik => ${roundOffWithInterval(sl, tik).toStringAsFixed(2)}";
+      }
       if (_hasValidCircuitBreakerValues) {
         if (isBuy &&
             (ordPrice - sl) < SafeParse.toDouble(widget.scripInfo.lc)) {
@@ -3209,6 +3214,11 @@ class _ModifyPlaceOrderScreenState
             : "Target cannot be 0";
       }
       final double tgt = SafeParse.toDouble(targetCtrl.text);
+      if (tik > 0 &&
+          roundOffWithInterval(tgt, tik).toStringAsFixed(2) !=
+              tgt.toStringAsFixed(2)) {
+        return "Target should be multiple of tick size $tik => ${roundOffWithInterval(tgt, tik).toStringAsFixed(2)}";
+      }
       if (_hasValidCircuitBreakerValues) {
         if (isBuy &&
             (ordPrice + tgt) > SafeParse.toDouble(widget.scripInfo.uc)) {
