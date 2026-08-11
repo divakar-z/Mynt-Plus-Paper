@@ -250,7 +250,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               const SizedBox(height: 32),
               // RupeeCase Strategies section — shown below Portfolio.
               // Self-hides (renders nothing) until data loads.
-              // const RupeeCaseStrategiesSection(),
+              const RupeeCaseStrategiesSection(),
               
               // Tools section (Scalper, Strategy Builder, OptionZ)
               _buildToolsSection(context),
