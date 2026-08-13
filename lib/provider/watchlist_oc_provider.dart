@@ -148,7 +148,9 @@ class WatchlistOCProvider extends ChangeNotifier {
     unsubscribeFromWebSocket(context);
     _loadGeneration++;
 
-    final optExch = symbol.exch == 'BSE' ? 'BFO' : 'NFO';
+    // MCX commodities keep MCX as their option exchange; sending NFO makes
+    // GetOptionChain reject the request with a 400.
+    final optExch = optionExchangeForUnderlying(symbol.exch);
     _selectedSymbol = ScalperIndex(
       name: symbol.tsym ?? symbol.cname ?? '',
       token: symbol.token ?? '',
@@ -253,10 +255,16 @@ class WatchlistOCProvider extends ChangeNotifier {
           ? _currentIndexLTP.toStringAsFixed(2)
           : '0';
 
+      // The expiry from getLinkedScrip carries its own exchange (NFO/BFO/MCX);
+      // that is authoritative. _selectedSymbol.optExch is only a fallback (and
+      // may be stale for symbols persisted before MCX support existed).
+      final optExchange = optionExchangeForExpiry(
+          _selectedExpiry, optionExchangeForUnderlying(_selectedSymbol.exch));
+
       final chainData = await _api.getOptionChain(
         strPrc: strPrc,
         tradeSym: _selectedExpiry!.tsym ?? '',
-        exchange: _selectedSymbol.optExch,
+        exchange: optExchange,
         context: context,
         numofStrike: '15',
       );
