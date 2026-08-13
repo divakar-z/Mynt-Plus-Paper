@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick, SubSet } = require('./popout-shell.js');
+const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick, SubSet, mapScripValues } = require('./popout-shell.js');
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); console.log('  ✓', n); pass++; } catch (e) { console.log('  ✗', n, e.message); fail++; } };
 
@@ -46,6 +46,21 @@ t('SubSet dedups and lists', () => {
   assert.strictEqual(s.has('NSE|26000'), false);
   assert.deepStrictEqual(s.all(), ['MCX|1']);
 });
+
+t('mapScripValues maps real ls/ti/instname with numeric fallbacks', () => {
+  const out = mapScripValues([
+    { exch: 'NSE', token: '26000', tsym: 'NIFTY', dname: 'Nifty 50', ls: '1', ti: '0.05', instname: 'INDEX' },
+    { exch: 'NSE', token: '11536', tsym: 'TCS-EQ', ls: 'x', ti: '' },
+  ]);
+  assert.deepStrictEqual(out[0], {
+    exch: 'NSE', token: '26000', tsym: 'NIFTY', dispName: 'Nifty 50', ls: 1, ti: 0.05, instname: 'INDEX',
+  });
+  assert.deepStrictEqual(out[1], {
+    exch: 'NSE', token: '11536', tsym: 'TCS-EQ', dispName: 'TCS-EQ', ls: 1, ti: 0.05, instname: '',
+  });
+});
+t('mapScripValues tolerates non-array input', () =>
+  assert.deepStrictEqual(mapScripValues(undefined), []));
 
 console.log(`${pass} passed · ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

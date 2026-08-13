@@ -40,6 +40,32 @@
     return parseTpseries(Array.isArray(data) ? data : []);
   }
 
+  // Pure: maps raw SearchScrip `values[]` rows to the shape the engine's
+  // setPaneSymbol `scrip` wants. Real ls/ti/instname now come from the
+  // response (not placeholders) with safe numeric fallbacks.
+  function mapScripValues(values) {
+    return (Array.isArray(values) ? values : []).map((v) => ({
+      exch: v.exch,
+      token: v.token,
+      tsym: v.tsym,
+      dispName: v.dname || v.tsym,
+      ls: Number(v.ls) || 1,
+      ti: Number(v.ti) || 0.05,
+      instname: v.instname || '',
+    }));
+  }
+
+  async function searchScrip(query) {
+    const { uid, jKey } = window.__popout.session;
+    const j = { uid, stext: query };
+    const body = 'jData=' + encodeURIComponent(JSON.stringify(j)) + '&jKey=' + encodeURIComponent(jKey);
+    const res = await fetch('https://go.mynt.in/NorenWClientWeb/SearchScrip',
+      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+    const data = await res.json();
+    if (isSessionExpired(data)) { showExpired(); return []; }
+    return mapScripValues(data.values);
+  }
+
   function normalizeTick(frame, nowSec) {
     if (!frame || !['tf', 'tk', 'df', 'dk'].includes(frame.t)) return null;
     if (frame.tk == null || frame.lp == null || frame.lp === '') return null;
@@ -248,6 +274,38 @@
       if (!d || !d.type) return;
       if (d.type === 'chart-engine-ready') {
         console.log('[popout] engine ready', params);
+        // Initial boot handshake — mirrors the app's lite host
+        // (lib/screens/web/chart_engine/widgets/lite_chart_iframe_host.dart
+        // _bootstrap), plus this popout's own per-pane symbol/timeframe from
+        // the URL params. The engine applies setPaneSymbol and emits
+        // fetchHistory (Task 3) + subscribe (Task 5 relays) on its own.
+        const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+        post('setTheme', theme);
+        post('setLiteMode', { value: true });
+        // Single pane — area 'a', id '0'. Mirrors lite_chart_iframe_host.dart's
+        // _bootstrap encodeSetLayout call verbatim (chart-engine.js's
+        // applyLayout constructs panes with stringified integer ids
+        // ('0', '1', ...) and area letters starting at 'a').
+        post('setLayout', {
+          id: 'single-explain',
+          areas: '"a"',
+          rows: '1fr',
+          columns: '1fr',
+          paneCount: 1,
+        });
+        post('setPaneSymbol', {
+          paneId: '0',
+          scrip: {
+            exch: params.exch,
+            token: params.token,
+            tsym: params.tsym,
+            dispName: params.tsym,
+            ls: 1,
+            ti: 0.05,
+            instname: '',
+          },
+        });
+        post('setPaneTimeframe', { paneId: '0', minutes: Number(params.tf) || 5 });
         if (feedManager) feedManager.start();
         return;
       }
@@ -284,13 +342,60 @@
       feedManager = new FeedManager(uid, n);
       window.__popout.feed = feedManager;
     }
+
+    // Symbol search UI: debounced input -> searchScrip -> clickable results.
+    // On pick, post setPaneSymbol — the engine emits unsubscribe old +
+    // subscribe new on its own (FeedManager relays via the message
+    // listener above); this handler does not touch feedManager directly.
+    (function wireSearchUi() {
+      const searchInput = document.getElementById('pop-search');
+      const resultsEl = document.getElementById('pop-results');
+      if (!searchInput || !resultsEl) return;
+      let debounceTimer = null;
+
+      function hideResults() {
+        resultsEl.innerHTML = '';
+        resultsEl.style.display = 'none';
+      }
+
+      function renderResults(list) {
+        resultsEl.innerHTML = '';
+        if (!list || !list.length) { hideResults(); return; }
+        list.forEach((scrip) => {
+          const row = document.createElement('div');
+          row.className = 'pop-result-row';
+          row.textContent = scrip.dispName + ' · ' + scrip.exch;
+          row.addEventListener('click', () => {
+            post('setPaneSymbol', { paneId: '0', scrip });
+            searchInput.value = '';
+            hideResults();
+          });
+          resultsEl.appendChild(row);
+        });
+        resultsEl.style.display = 'block';
+      }
+
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim();
+        if (debounceTimer) clearTimeout(debounceTimer);
+        if (!q) { hideResults(); return; }
+        debounceTimer = setTimeout(() => {
+          if (window.__popout.expired) return;
+          searchScrip(q).then(renderResults).catch(() => hideResults());
+        }, 300);
+      });
+
+      document.addEventListener('click', (e) => {
+        if (e.target !== searchInput && !resultsEl.contains(e.target)) hideResults();
+      });
+    })();
   }
 
   // Expose for browser global scope (no module system in iframe) and node tests.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       isSessionExpired, feedUid, connectUid, readSession, showExpired, parseTpseries,
-      normalizeTick, mintSocketToken, createFeedClient, SubSet,
+      normalizeTick, mintSocketToken, createFeedClient, SubSet, mapScripValues, searchScrip,
     };
   }
 })();
