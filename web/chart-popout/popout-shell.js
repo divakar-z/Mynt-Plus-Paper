@@ -40,6 +40,65 @@
     return parseTpseries(Array.isArray(data) ? data : []);
   }
 
+  function normalizeTick(frame, nowSec) {
+    if (!frame || !['tf', 'tk', 'df', 'dk'].includes(frame.t)) return null;
+    if (frame.tk == null || frame.lp == null || frame.lp === '') return null;
+    const packet = {
+      lp: Number(frame.lp),
+      v: 0,
+      ft: nowSec,
+      bp1: frame.bp1 != null ? Number(frame.bp1) : undefined,
+      sp1: frame.sp1 != null ? Number(frame.sp1) : undefined,
+    };
+    const exch = frame.exch != null ? frame.exch : frame.e;
+    if (exch != null) packet.exch = exch;
+    return { token: String(frame.tk), packet };
+  }
+
+  async function mintSocketToken(baseUid, n) {
+    try {
+      const res = await fetch('https://sess.mynt.in/generateSocketSession',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: feedUid(baseUid, n), src: 'TV', source: 'TV' }) });
+      const j = await res.json();
+      return (j && j.session) ? j.session : '';
+    } catch (_) { return ''; }
+  }
+
+  function createFeedClient(baseUid, n, token) {
+    const client = { onTick: null, onOpenAck: null, _ws: null };
+    client.connect = function () {
+      const ws = new WebSocket('wss://ws.zebull.in/NorenWS/');
+      client._ws = ws;
+      ws.onopen = function () {
+        client.send({
+          t: 'c',
+          uid: connectUid(baseUid, n),
+          actid: connectUid(baseUid, n),
+          source: 'TV',
+          susertoken: token,
+        });
+      };
+      ws.onmessage = function (evt) {
+        let frame;
+        try { frame = JSON.parse(evt.data); } catch (_) { return; }
+        if (frame && frame.t === 'ck') {
+          if (client.onOpenAck) client.onOpenAck();
+          return;
+        }
+        const result = normalizeTick(frame, Math.floor(Date.now() / 1000));
+        if (result && client.onTick) client.onTick(result);
+      };
+    };
+    client.send = function (obj) {
+      try { client._ws && client._ws.send(JSON.stringify(obj)); } catch (_) {}
+    };
+    client.close = function () {
+      try { client._ws && client._ws.close(); } catch (_) {}
+    };
+    return client;
+  }
+
   function showExpired() {
     if (typeof document === 'undefined') return;
     try {
@@ -82,11 +141,23 @@
       showExpired();
     } else {
       window.__popout.session = { uid, jKey };
+      const n = params.n != null ? params.n : 1;
+      mintSocketToken(uid, n).then((token) => {
+        if (!token) { showExpired(); return; }
+        const feed = createFeedClient(uid, n, token);
+        feed.onTick = (result) => post('tick', { token: result.token, packet: result.packet });
+        feed.onOpenAck = () => {}; // Task 5 subscribes here
+        window.__popout.feed = feed;
+        feed.connect();
+      });
     }
   }
 
   // Expose for browser global scope (no module system in iframe) and node tests.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { isSessionExpired, feedUid, connectUid, readSession, showExpired, parseTpseries };
+    module.exports = {
+      isSessionExpired, feedUid, connectUid, readSession, showExpired, parseTpseries,
+      normalizeTick, mintSocketToken, createFeedClient,
+    };
   }
 })();
