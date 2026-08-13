@@ -32,9 +32,12 @@
     const { uid, jKey } = window.__popout.session;
     const j = { uid, exch: req.exch, token: String(req.token),
                 st: String(req.start), et: String(req.end), intrv: req.interval };
-    const body = 'jData=' + encodeURIComponent(JSON.stringify(j)) + '&jKey=' + encodeURIComponent(jKey);
+    // Match the app verbatim (market_watch_api.getTPSeriesChart): raw JSON in
+    // jData (NOT url-encoded) + Content-Type application/json (Noren quirk —
+    // the body is jData=<rawjson>&jKey=<key> yet the header says json).
+    const body = 'jData=' + JSON.stringify(j) + '&jKey=' + jKey;
     const res = await fetch('https://go.mynt.in/NorenWClientWeb/TPSeries',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     const data = await res.json();
     if (isSessionExpired(data)) { showExpired(); throw new Error('session'); }
     return parseTpseries(Array.isArray(data) ? data : []);
@@ -58,9 +61,11 @@
   async function searchScrip(query) {
     const { uid, jKey } = window.__popout.session;
     const j = { uid, stext: query };
-    const body = 'jData=' + encodeURIComponent(JSON.stringify(j)) + '&jKey=' + encodeURIComponent(jKey);
+    // Match the app verbatim (market_watch_api.getSearchScrip): raw JSON in
+    // jData + Content-Type application/json.
+    const body = 'jData=' + JSON.stringify(j) + '&jKey=' + jKey;
     const res = await fetch('https://go.mynt.in/NorenWClientWeb/SearchScrip',
-      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     const data = await res.json();
     if (isSessionExpired(data)) { showExpired(); return []; }
     return mapScripValues(data.values);
