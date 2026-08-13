@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { isSessionExpired, feedUid, connectUid } = require('./popout-shell.js');
+const { isSessionExpired, feedUid, connectUid, parseTpseries } = require('./popout-shell.js');
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); console.log('  ✓', n); pass++; } catch (e) { console.log('  ✗', n, e.message); fail++; } };
 
@@ -15,6 +15,16 @@ t('non-session Not_Ok is not expired', () =>
 t('feedUid/connectUid build the suffix', () => {
   assert.strictEqual(feedUid('ZP00172', 2), 'ZP00172_2_TA');
   assert.strictEqual(connectUid('ZP00172', 2), 'ZP00172_2_TA_TV');
+});
+t('parses TPSeries rows oldest->newest', () => {
+  const out = parseTpseries([
+    { stat: 'Ok', ssboe: '200', into: '2', inth: '3', intl: '1', intc: '2', intv: '5' },
+    { stat: 'Ok', ssboe: '100', into: '1', inth: '2', intl: '0', intc: '1', intv: '4' },
+    { stat: 'Not_Ok' },
+  ]);
+  assert.strictEqual(out.length, 2);
+  assert.strictEqual(out[0].ts, 100);
+  assert.deepStrictEqual(out[1], { ts: 200, o: 2, h: 3, l: 1, c: 2, v: 5 });
 });
 console.log(`${pass} passed · ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
