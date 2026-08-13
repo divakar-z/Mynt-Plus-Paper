@@ -332,6 +332,20 @@
       }
     });
 
+    // Free this popout's slot when the window/tab closes, so a later
+    // popout can reuse the lowest-free `n` again. Best-effort — never
+    // block unload on storage errors.
+    window.addEventListener('beforeunload', () => {
+      try {
+        const n = Number(params.n);
+        if (!n) return;
+        const slots = (JSON.parse(localStorage.getItem('popoutSlots') || '[]') || [])
+          .map(Number)
+          .filter((x) => x !== n);
+        localStorage.setItem('popoutSlots', JSON.stringify(slots));
+      } catch (_) {}
+    });
+
     // Session bootstrap: block with the expiry overlay if no session is present.
     const { uid, jKey } = readSession();
     if (!uid || !jKey) {
