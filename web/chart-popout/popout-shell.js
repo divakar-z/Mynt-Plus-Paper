@@ -83,6 +83,46 @@
     }
   }
 
+  // Pure: default indicator payload for a freshly-added indicator kind. The
+  // engine only wants {id, kind, period, color} on the wire (no
+  // params/thickness/hidden — the engine fills its own per-kind defaults).
+  const IND_PERIOD = { rsi:14, macd:12, stoch:14, atr:14, bb:20, vwap:0, zlema:20, mcginley:14,
+    stochrsi:14, squeeze:20, efi:13, ribbon:0, ichi:26, vstop:14, wt:10, crsi:3, ao:0, mfi:14,
+    obv:0, cmf:20, wr:14, cisd:0, fvg:0, ob:14, liqsweep:0, mss:0, supertrend:10, wma:20, hma:20,
+    keltner:20, donchian:20, cci:20, roc:9, adx:14, cvd:0, psar:0, vwma:20, trix:15, vortex:14,
+    uo:0, dpo:20, pvt:0, ad:0, pivots:0, sma:20, ema:20 };
+  const IND_COLOR = { sma:'#3B82F6', ema:'#F59E0B', rsi:'#8B5CF6', bb:'#8B5CF6', vwap:'#06B6D4',
+    macd:'#3B82F6', stoch:'#8B5CF6', atr:'#10B981', zlema:'#EC4899', mcginley:'#0EA5E9',
+    stochrsi:'#A855F7', squeeze:'#22D3EE', efi:'#84CC16', ribbon:'#3B82F6', ichi:'#10B981',
+    vstop:'#22C55E', wt:'#3B82F6', crsi:'#8B5CF6', ao:'#22C55E', mfi:'#06B6D4', obv:'#84CC16',
+    cmf:'#A855F7', wr:'#F59E0B', cisd:'#22C55E', fvg:'#22C55E', ob:'#22C55E', liqsweep:'#22C55E',
+    mss:'#22C55E', supertrend:'#22C55E', wma:'#F59E0B', hma:'#EC4899', keltner:'#06B6D4',
+    donchian:'#06B6D4', cci:'#3B82F6', roc:'#A855F7', adx:'#3B82F6', cvd:'#06B6D4', psar:'#22C55E',
+    vwma:'#F59E0B', trix:'#A855F7', vortex:'#22C55E', uo:'#3B82F6', dpo:'#EAB308', pvt:'#06B6D4',
+    ad:'#10B981', pivots:'#F59E0B' };
+  function defaultIndicator(kind, id) {
+    return { id, kind, period: (IND_PERIOD[kind] != null ? IND_PERIOD[kind] : 20),
+             color: (IND_COLOR[kind] || '#3B82F6') };
+  }
+
+  // Pure: translates a settings-gear view-state patch key into the engine's
+  // inbound `{type, value}` shape. gridlines/volume are handled separately
+  // in the stateful glue (always sent together via setOverlays), so this
+  // returns null for those two keys.
+  function viewKeyToEngine(key, value) {
+    switch (key) {
+      case 'showHighLowMarkers': return { type: 'setPaneHighLowMarkers',   value: { paneId: '0', show: value === true } };
+      case 'showOptionChainOi':  return { type: 'setPaneShowOptionChainOi',value: { paneId: '0', show: value === true } };
+      case 'showBarCountdown':   return { type: 'setPaneShowBarCountdown', value: { paneId: '0', show: value === true } };
+      case 'showKeyLevels':      return { type: 'setPaneShowKeyLevels',    value: { paneId: '0', show: value === true } };
+      case 'showAutoPattern':    return { type: 'setPaneShowAutoPattern',  value: { paneId: '0', show: value === true } };
+      case 'showVolumeProfile':  return { type: 'setPaneShowVolumeProfile',value: { paneId: '0', show: value === true } };
+      case 'pivotVariant':       return (typeof value === 'string') ? { type: 'setPanePivotVariant', value: { paneId: '0', variant: value } } : null;
+      case 'magnetEnabled':      return { type: 'setPaneMagnetEnabled',    value: { paneId: '0', enabled: value === true } };
+      default: return null; // gridlines/volume handled via setOverlays in the glue
+    }
+  }
+
   function normalizeTick(frame, nowSec) {
     if (!frame || !['tf', 'tk', 'df', 'dk'].includes(frame.t)) return null;
     if (frame.tk == null || frame.lp == null || frame.lp === '') return null;
@@ -184,6 +224,37 @@
       try { iframe.contentWindow.postMessage(JSON.stringify({ type, value }), '*'); } catch (_) {}
     }
     window.__popout = { post, params };
+
+    // paneMirror: local mirror of the single pane's topbar state, needed
+    // because the engine's fx "Active" indicators list and the timeframe/
+    // candleStyle/showCrosshairLines fields only refresh from
+    // setActivePaneTopBarState — so any re-push (e.g. after an indicator
+    // add/remove) must carry the CURRENT values, not stale boot defaults.
+    // Kept in sync with the Task-10 topbarToEngine relay below.
+    let indId = 0;
+    const paneMirror = {
+      timeframeMinutes: Number(params.tf) || 5,
+      candleStyle: 'candles',
+      showCrosshairLines: true,
+      indicators: [],
+    };
+    function pushIndicators() {
+      post('setPaneIndicators', { paneId: '0', indicators: paneMirror.indicators });
+      post('setActivePaneTopBarState', {
+        timeframeMinutes: paneMirror.timeframeMinutes,
+        candleStyle: paneMirror.candleStyle,
+        showCrosshairLines: paneMirror.showCrosshairLines,
+        indicators: paneMirror.indicators,
+      });
+    }
+
+    // Settings-gear view-state: overlays (gridlines/volume) are always sent
+    // together via setOverlays; viewBag mirrors the full gear patch so it
+    // can be re-pushed via setActivePaneViewState after every change.
+    const overlays = { gridlines: true, volume: true };
+    const viewBag = { showHighLowMarkers: false, showOptionChainOi: false, showBarCountdown: false,
+      showKeyLevels: false, showAutoPattern: false, showVolumeProfile: false, pivotVariant: '', magnetEnabled: false,
+      gridlines: overlays.gridlines, volume: overlays.volume };
 
     // FeedManager: the SINGLE owner of the live FeedClient. Relays engine
     // subscribe/unsubscribe, re-subscribes the tracked set on (re)connect,
@@ -403,11 +474,62 @@
           .catch(() => post('reply', { replyId: d.replyTo, payload: { results: [] } }));
         return;
       }
+      // Indicators (fx): the engine only draws from setPaneIndicators and
+      // only refreshes the fx "Active" list from setActivePaneTopBarState,
+      // so every add/remove posts both (pushIndicators).
+      if (d.type === 'addIndicatorByKind') {
+        const kind = d.value && d.value.kind;
+        if (kind) {
+          paneMirror.indicators = paneMirror.indicators.concat([defaultIndicator(kind, 'i-' + (++indId).toString(36))]);
+          pushIndicators();
+        }
+        return;
+      }
+      if (d.type === 'removeIndicatorById') {
+        const id = d.value && d.value.id;
+        if (id) {
+          paneMirror.indicators = paneMirror.indicators.filter((i) => i.id !== id);
+          pushIndicators();
+        }
+        return;
+      }
+      // Settings-gear view-state: translate each patch key to its engine
+      // message (gridlines/volume batched into one setOverlays), then
+      // re-push the full gear mirror so the toggles reflect applied state.
+      if (d.type === 'updateActivePaneViewState') {
+        const patch = d.value || {};
+        let overlayTouched = false;
+        for (const k of Object.keys(patch)) {
+          if (k === 'gridlines' || k === 'volume') {
+            overlays[k] = patch[k] === true;
+            viewBag[k] = overlays[k];
+            overlayTouched = true;
+            continue;
+          }
+          const msg = viewKeyToEngine(k, patch[k]);
+          if (msg) {
+            post(msg.type, msg.value);
+            viewBag[k] = (k === 'pivotVariant') ? patch[k] : (patch[k] === true);
+          }
+        }
+        if (overlayTouched) post('setOverlays', { paneId: '0', gridlines: overlays.gridlines, volume: overlays.volume });
+        post('setActivePaneViewState', viewBag);
+        return;
+      }
       // Loopback host: translate any other mapped topbar outbound message
       // into the engine's inbound message and relay it straight into the
       // iframe (the popout has no Flutter host to round-trip through).
       const mapped = topbarToEngine(d.type, d.value);
-      if (mapped) { post(mapped.type, mapped.value); return; }
+      if (mapped) {
+        // Keep paneMirror's timeframe/candleStyle/showCrosshairLines fields
+        // in sync so a later indicator add/remove re-push doesn't regress
+        // them back to boot defaults.
+        if (d.type === 'setActiveTimeframe') paneMirror.timeframeMinutes = Number((d.value || {}).minutes);
+        if (d.type === 'setActiveCandleStyle') paneMirror.candleStyle = String((d.value || {}).style);
+        if (d.type === 'setActiveShowCrosshairLines') paneMirror.showCrosshairLines = (d.value || {}).value === true;
+        post(mapped.type, mapped.value);
+        return;
+      }
     });
 
     // Free this popout's slot when the window/tab closes, so a later
@@ -441,6 +563,7 @@
     module.exports = {
       isSessionExpired, feedUid, connectUid, readSession, showExpired, parseTpseries,
       normalizeTick, mintSocketToken, createFeedClient, SubSet, searchScripRaw, topbarToEngine,
+      defaultIndicator, viewKeyToEngine,
     };
   }
 })();

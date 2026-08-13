@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick, SubSet, topbarToEngine } = require('./popout-shell.js');
+const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick, SubSet, topbarToEngine, defaultIndicator, viewKeyToEngine } = require('./popout-shell.js');
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); console.log('  ✓', n); pass++; } catch (e) { console.log('  ✗', n, e.message); fail++; } };
 
@@ -84,6 +84,29 @@ t('topbarToEngine returns null for unmapped types', () => {
   assert.strictEqual(topbarToEngine('searchSymbols', {}), null);
   assert.strictEqual(topbarToEngine('someUnknownType', {}), null);
 });
+
+t('defaultIndicator fills sma defaults', () =>
+  assert.deepStrictEqual(defaultIndicator('sma', 'x'), { id: 'x', kind: 'sma', period: 20, color: '#3B82F6' }));
+t('defaultIndicator fills rsi defaults', () =>
+  assert.deepStrictEqual(defaultIndicator('rsi', 'y'), { id: 'y', kind: 'rsi', period: 14, color: '#8B5CF6' }));
+t('defaultIndicator falls back for an unknown kind', () =>
+  assert.deepStrictEqual(defaultIndicator('nope', 'z'), { id: 'z', kind: 'nope', period: 20, color: '#3B82F6' }));
+
+t('viewKeyToEngine maps magnetEnabled', () =>
+  assert.deepStrictEqual(viewKeyToEngine('magnetEnabled', true),
+    { type: 'setPaneMagnetEnabled', value: { paneId: '0', enabled: true } }));
+t('viewKeyToEngine maps showHighLowMarkers (no "Show" in message type)', () =>
+  assert.deepStrictEqual(viewKeyToEngine('showHighLowMarkers', true),
+    { type: 'setPaneHighLowMarkers', value: { paneId: '0', show: true } }));
+t('viewKeyToEngine maps pivotVariant string', () =>
+  assert.deepStrictEqual(viewKeyToEngine('pivotVariant', 'classic'),
+    { type: 'setPanePivotVariant', value: { paneId: '0', variant: 'classic' } }));
+t('viewKeyToEngine rejects non-string pivotVariant', () =>
+  assert.strictEqual(viewKeyToEngine('pivotVariant', 5), null));
+t('viewKeyToEngine defers gridlines to the overlay glue', () =>
+  assert.strictEqual(viewKeyToEngine('gridlines', true), null));
+t('viewKeyToEngine returns null for an unknown key', () =>
+  assert.strictEqual(viewKeyToEngine('someUnknownKey', true), null));
 
 console.log(`${pass} passed · ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
