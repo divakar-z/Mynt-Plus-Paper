@@ -3098,6 +3098,40 @@
 
   root.appendChild(labBtn);
 
+  // ── Pop out ─────────────────────────────────────────────────────────────
+  // Opens the current pane's symbol in a standalone view-only popout window
+  // (web/chart-popout/), fed by the alternate socket. Never shown inside a
+  // popout itself.
+  let popBtn = null;
+  if (!IS_POPOUT) {
+  popBtn = document.createElement('button');
+  popBtn.className = 'tb-chip tb-popout';
+  popBtn.type = 'button';
+  popBtn.title = 'Pop out chart';
+  popBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" '
+    + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M15 3h6v6"/><path d="M10 14 21 3"/>'
+    + '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+  popBtn.addEventListener('click', () => {
+    const s = symbolCurrent;
+    if (!s || !s.exch || !s.token) return;               // nothing to pop out
+    let slots = [];
+    try { slots = JSON.parse(localStorage.getItem('popoutSlots') || '[]'); } catch (_) { slots = []; }
+    const used = new Set(slots.map((x) => Number(x)).filter((x) => !isNaN(x)));
+    let n = 1; while (used.has(n)) n++;
+    used.add(n);
+    try { localStorage.setItem('popoutSlots', JSON.stringify(Array.from(used).sort((a, b) => a - b))); } catch (_) {}
+    const tf = (activePaneState && activePaneState.timeframeMinutes) || 5;
+    const qs = 'exch=' + encodeURIComponent(s.exch)
+      + '&token=' + encodeURIComponent(s.token)
+      + '&tsym=' + encodeURIComponent(s.tsym || '')
+      + '&tf=' + encodeURIComponent(tf)
+      + '&n=' + n;
+    window.open('/chart-popout/?' + qs, 'mynt_popout_' + n);
+  });
+  root.appendChild(popBtn);
+  }
+
   // ── Snap (screenshot) ───────────────────────────────────────────────────
   // Directly drives the active pane's takeScreenshot() — no Flutter round
   // trip to decide which pane (the iframe knows its own active state). The
@@ -3196,7 +3230,7 @@
   // Reorder children to the canonical sequence per user spec:
   //   [Symbol] [Timeframe] [Style] [fx] [Cursor]
   //       ...flex spacer...
-  //   [Layout] [INSTANT] [Order Defaults] [Snap] [Settings]
+  //   [Layout] [INSTANT] [Order Defaults] [Pop out] [Snap] [Settings]
   // `appendChild` of an existing child MOVES it (doesn't create a duplicate);
   // the first right-group button gets `.tb-right-start` which applies
   // `margin-left: auto` for the flex spacer.
@@ -3204,11 +3238,12 @@
   // and the crosshair/cursor-mode picker both moved to the floating left rail
   // (buildDrawRail). drawBtn stays constructed (its repaint helpers are still
   // referenced) but is never mounted.
-  // `.filter(Boolean)` tolerates `badge`/`odBtn` being omitted in popout
-  // view-only mode (both stay `undefined` when `IS_POPOUT` is true).
+  // `.filter(Boolean)` tolerates `badge`/`odBtn`/`popBtn` being omitted in
+  // popout view-only mode (all stay `undefined`/`null` when `IS_POPOUT` is
+  // true — a popout window never offers to pop itself out).
   const ORDER = [
     symWrap, tfBtn, styleBtn, fxBtn,
-    layoutBtn, labBtn, badge, odBtn, snapBtn, settingsBtn,
+    layoutBtn, labBtn, badge, odBtn, popBtn, snapBtn, settingsBtn,
   ].filter(Boolean);
   // Move the right-anchor class — Layout is now the first right-group
   // button instead of the INSTANT badge. Guarded because `badge` is

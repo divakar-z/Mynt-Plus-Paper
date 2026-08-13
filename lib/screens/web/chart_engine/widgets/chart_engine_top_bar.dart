@@ -13,7 +13,6 @@ import 'package:mynt_plus/screens/web/chart_engine/widgets/timeframe_picker.dart
 import 'package:mynt_plus/screens/web/chart_engine/widgets/top_bar_flags.dart';
 import 'package:mynt_plus/screens/web/chart_engine/widgets/order_defaults_tabs.dart';
 import 'package:mynt_plus/screens/web/chart_engine/widgets/customize_tab.dart';
-import 'package:mynt_plus/screens/web/chart_engine/utils/popout_launcher.dart';
 
 class ChartEngineTopBar extends ConsumerWidget {
   final ValueChanged<bool> onPopupVisibilityChanged;
@@ -96,21 +95,9 @@ class ChartEngineTopBar extends ConsumerWidget {
                 ref.read(screenshotRequestProvider.notifier).request(activeIdx);
               },
             ),
-          // Pop out — opens this pane in a standalone window/tab so it can
-          // keep streaming independently of the main app.
-          Tooltip(
-            message: 'Pop out chart',
-            child: TextButton.icon(
-              icon: const Icon(Icons.open_in_new, size: 14),
-              label: const Text('Pop out'),
-              onPressed: pane.scrip == null
-                  ? null
-                  : () => openPopoutForPane(
-                        scrip: pane.scrip!,
-                        timeframeMinutes: pane.timeframeMinutes,
-                      ),
-            ),
-          ),
+          // Pop out moved into the iframe top bar (web/chart-engine/topbar.js,
+          // next to the camera/gear buttons) — the Flutter bar is skipped
+          // entirely in embedded mode, so a button here would be invisible.
           // Indicators (fx) button moved into the iframe top bar. See [TopBarFlags].
           if (!TopBarFlags.kJsIndicatorsButton)
             _IndicatorsButton(onPopupVisibilityChanged: onPopupVisibilityChanged),
