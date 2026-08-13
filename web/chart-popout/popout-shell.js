@@ -188,6 +188,7 @@
       this._lastTickAt = 0;
       this._watchdog = null;
       this._emptyMintCount = 0;
+      this._heartbeat = null; // {t:'h'} ping every 5s while connected
     }
     FeedManager.prototype.start = function () {
       if (!this._watchdog) {
@@ -244,6 +245,11 @@
           self._lastTickAt = Date.now();
           const all = self.subs.all();
           if (all.length) client.send({ t: 't', k: all.join('#') });
+          // Heartbeat: Noren closes an idle socket quickly, so ping every 5s.
+          if (self._heartbeat) clearInterval(self._heartbeat);
+          self._heartbeat = setInterval(function () {
+            if (gen === self._gen && self._up && self.client) self.client.send({ t: 'h' });
+          }, 5000);
         };
         client.onClose = function () {
           if (gen !== self._gen) return;
@@ -268,6 +274,7 @@
       this._gen += 1;
       const gen = this._gen;
       this._up = false;
+      if (this._heartbeat) { clearInterval(this._heartbeat); this._heartbeat = null; }
       if (this.client) { this.client.close(); }
       const wait = this._backoff;
       this._backoff = Math.min(this._backoff * 2, 15000);
@@ -285,6 +292,7 @@
     FeedManager.prototype.stop = function () {
       this._gen += 1;
       if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
+      if (this._heartbeat) { clearInterval(this._heartbeat); this._heartbeat = null; }
       if (this.client) { this.client.close(); this.client = null; }
       this._up = false;
     };
