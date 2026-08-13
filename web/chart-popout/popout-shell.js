@@ -352,6 +352,11 @@
       const resultsEl = document.getElementById('pop-results');
       if (!searchInput || !resultsEl) return;
       let debounceTimer = null;
+      // Monotonic sequence guard: the 300ms debounce only prevents
+      // overlapping TIMERS, not overlapping in-flight requests. If an
+      // older query's response resolves after a newer one, drop it so the
+      // dropdown never shows results for a stale/narrower query.
+      let searchSeq = 0;
 
       function hideResults() {
         resultsEl.innerHTML = '';
@@ -378,10 +383,13 @@
       searchInput.addEventListener('input', () => {
         const q = searchInput.value.trim();
         if (debounceTimer) clearTimeout(debounceTimer);
-        if (!q) { hideResults(); return; }
+        if (!q) { searchSeq += 1; hideResults(); return; }
         debounceTimer = setTimeout(() => {
           if (window.__popout.expired) return;
-          searchScrip(q).then(renderResults).catch(() => hideResults());
+          const mySeq = ++searchSeq;
+          searchScrip(q)
+            .then((list) => { if (mySeq === searchSeq) renderResults(list); })
+            .catch(() => { if (mySeq === searchSeq) hideResults(); });
         }, 300);
       });
 
