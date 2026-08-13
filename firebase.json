@@ -22,6 +22,10 @@
     ],
     "rewrites": [
       {
+        "source": "/chart-popout/**",
+        "destination": "/chart-popout/index.html"
+      },
+      {
         "source": "/OAuthlogin/**",
         "destination": "/lite/index.html"
       },

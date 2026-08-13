@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="MYNT Chart Popout" />
+<title>MYNT Chart</title>
+<link rel="icon" href="/favicon.png" />
+<script>
+  /* Theme parity with the Flutter app. The app does NOT follow the OS theme: it
+     reads the saved `userAppTheme` preference (shared_preferences-web key
+     `flutter.userAppTheme`, a JSON-encoded string) and defaults to Light when it
+     is anything other than "Dark" (incl. "Light", "System Default", or absent).
+     Mirror that here, and set it before first paint so there is no theme flash. */
+  (function(){
+    try {
+      var raw = localStorage.getItem('flutter.userAppTheme');
+      var v = raw; try { v = JSON.parse(raw); } catch(e){}
+      document.documentElement.setAttribute('data-theme', v === 'Dark' ? 'dark' : 'light');
+    } catch(e) {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  })();
+</script>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
+  body{background:#FFFFFF}
+  :root[data-theme=dark] body{background:#0D0F11}
+</style>
+</head>
+<body>
+<iframe id="pop-chart" src="/chart-engine/index.html" style="border:0;position:fixed;inset:0;width:100vw;height:100vh"></iframe>
+<script src="popout-shell.js"></script>
+</body>
+</html>
