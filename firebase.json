@@ -133,6 +133,15 @@
             "value": "no-cache"
           }
         ]
+      },
+      {
+        "source": "chart-popout/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
       }
     ]
   }

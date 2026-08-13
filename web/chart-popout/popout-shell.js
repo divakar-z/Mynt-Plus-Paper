@@ -152,6 +152,12 @@
     } catch (_) {}
     window.__popout = window.__popout || {};
     window.__popout.expired = true;
+    // Stop the feed too (spec §6) — an expired session means the popout is
+    // done fetching; the watchdog/reconnect loop must not keep running
+    // (and possibly re-minting) against a dead session.
+    if (window.__popout && window.__popout.feed && typeof window.__popout.feed.stop === 'function') {
+      window.__popout.feed.stop();
+    }
   }
 
   if (typeof document !== 'undefined') {
@@ -212,7 +218,7 @@
         if (!token) {
           self._emptyMintCount += 1;
           if (self._emptyMintCount >= 3) {
-            if (self._watchdog) { clearInterval(self._watchdog); self._watchdog = null; }
+            self.stop();
             showExpired();
             return;
           }
@@ -266,10 +272,25 @@
         self._open();
       }, wait);
     };
+    // stop(): permanent teardown — clears the watchdog, closes the current
+    // client, and bumps the generation so any in-flight open()/reconnect()
+    // continuation is a no-op. Reuses the same teardown the 3-strike
+    // empty-mint path in _open() already performs before calling
+    // showExpired(); that path now calls stop() too instead of duplicating it.
+    FeedManager.prototype.stop = function () {
+      this._gen += 1;
+      if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
+      if (this.client) { this.client.close(); this.client = null; }
+      this._up = false;
+    };
 
     let feedManager = null;
 
     window.addEventListener('message', (e) => {
+      // Only trust messages from the engine iframe itself — an unrelated
+      // window/extension posting into this popout should never be able to
+      // drive the boot handshake or feed relay.
+      if (iframe && e.source !== iframe.contentWindow) return;
       let d = e.data; if (typeof d === 'string') { try { d = JSON.parse(d); } catch (_) { return; } }
       if (!d || !d.type) return;
       if (d.type === 'chart-engine-ready') {
@@ -281,7 +302,12 @@
         // fetchHistory (Task 3) + subscribe (Task 5 relays) on its own.
         const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
         post('setTheme', theme);
-        post('setLiteMode', { value: true });
+        // NOTE: no setLiteMode here — the iframe src carries `?popout=1`
+        // (see index.html), which the engine reads at module top and
+        // applies to every pane as it's created. Posting setLiteMode would
+        // both be a no-op (panes are empty when this handshake runs) and
+        // semantically wrong for popout (plain lite hides the indicator
+        // chips/drawing rail the popout is supposed to keep).
         // Single pane — area 'a', id '0'. Mirrors lite_chart_iframe_host.dart's
         // _bootstrap encodeSetLayout call verbatim (chart-engine.js's
         // applyLayout constructs panes with stringified integer ids

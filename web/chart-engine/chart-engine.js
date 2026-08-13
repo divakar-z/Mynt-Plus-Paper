@@ -132,6 +132,13 @@ function applyLayout(spec) {
           typeof chart.setLiteMode === 'function') {
         chart.setLiteMode(true);
       }
+      // Same inheritance pattern for popout mode — a freshly-created pane
+      // picks up `_popoutMode` immediately rather than waiting on a
+      // separate setPopoutMode message that could race setLayout.
+      if (window.__chartPopout === true &&
+          typeof chart.setPopoutMode === 'function') {
+        chart.setPopoutMode(true);
+      }
       panes.set(id, chart);
       _attachPaneControls(container, id);
     }
@@ -806,6 +813,17 @@ try {
     const tb = document.getElementById('top-bar');
     if (tb) tb.style.display = 'none';
   }
+} catch (_) {}
+
+// Popout view-only mode: `?popout=1` in the iframe URL flags the window so
+// the chart suppresses trading UI (order/depth click dispatch, bid/ask/qty
+// strip) while keeping the top bar, drawing rail, LTP marker, and indicator
+// chips. Unlike lite mode, the top bar is NOT hidden here — the popout
+// still needs draw/indicator/timeframe tools. Runs at module top, same as
+// the lite block above, so the flag is set before topbar.js's IIFE reads it.
+try {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('popout') === '1') { window.__chartPopout = true; }
 } catch (_) {}
 
 function boot() {

@@ -28,6 +28,14 @@
   const root = document.getElementById('top-bar');
   if (!root) return;
 
+  // Popout view-only mode — the iframe URL carries `?popout=1`. Unlike
+  // lite mode above, do NOT early-return: the popout window still renders
+  // the full bar (search / timeframe / fx / draw / Snap / Settings) so
+  // draw/indicator/timeframe tools stay usable. Only the two trading
+  // controls (INSTANT badge, Order-Defaults button) are omitted below.
+  let IS_POPOUT = false;
+  try { IS_POPOUT = new URLSearchParams(window.location.search).get('popout') === '1'; } catch (_) {}
+
   // ── Shared form-row builders ────────────────────────────────────────────
   // Each builder returns the row's DOM element. Caller wires the change
   // callback. The visual contract mirrors Flutter's RefinedRow (label +
@@ -1384,7 +1392,12 @@
     }
   }
 
-  const odBtn = document.createElement('button');
+  // Popout view-only mode omits the Order-Defaults control entirely (it's
+  // a trading surface) — `odBtn` stays undefined and the ORDER array below
+  // filters it out.
+  let odBtn;
+  if (!IS_POPOUT) {
+  odBtn = document.createElement('button');
   odBtn.className = 'tb-chip tb-od';
   odBtn.type = 'button';
   odBtn.title = 'Order defaults';
@@ -1459,6 +1472,7 @@
   });
 
   root.appendChild(odBtn);
+  }
 
   // ── Draw button + popover ───────────────────────────────────────────────
   // Session-level state (NOT per-pane): activeDrawTool, drawingsLocked,
@@ -3107,13 +3121,20 @@
   root.appendChild(snapBtn);
 
   // ── INSTANT toggle ──────────────────────────────────────────────────────
+  // Popout view-only mode omits this control entirely — it's a trading
+  // surface, and building it would also read/write the shared
+  // `chartEngineTopBarV1.instantOrders` localStorage key and wire the
+  // `setInstantOrders` bridge listener, neither of which the popout should
+  // touch. `badge` stays undefined and the ORDER array below filters it out.
+  let badge;
+  if (!IS_POPOUT) {
   const INSTANT_KEY = 'chartEngineTopBarV1.instantOrders';
   let instantOn = (function () {
     try { return localStorage.getItem(INSTANT_KEY) === '1'; }
     catch (_) { return false; }
   })();
 
-  const badge = document.createElement('button');
+  badge = document.createElement('button');
   badge.className = 'tb-chip tb-instant';
   badge.type = 'button';
   badge.innerHTML = '<span class="tb-instant-icon">⚠</span> INSTANT';
@@ -3169,6 +3190,7 @@
   });
 
   root.appendChild(badge);
+  }
 
   // ── Final layout pass ───────────────────────────────────────────────────
   // Reorder children to the canonical sequence per user spec:
@@ -3182,13 +3204,16 @@
   // and the crosshair/cursor-mode picker both moved to the floating left rail
   // (buildDrawRail). drawBtn stays constructed (its repaint helpers are still
   // referenced) but is never mounted.
+  // `.filter(Boolean)` tolerates `badge`/`odBtn` being omitted in popout
+  // view-only mode (both stay `undefined` when `IS_POPOUT` is true).
   const ORDER = [
     symWrap, tfBtn, styleBtn, fxBtn,
     layoutBtn, labBtn, badge, odBtn, snapBtn, settingsBtn,
-  ];
+  ].filter(Boolean);
   // Move the right-anchor class — Layout is now the first right-group
-  // button instead of the INSTANT badge.
-  badge.classList.remove('tb-right-start');
+  // button instead of the INSTANT badge. Guarded because `badge` is
+  // undefined in popout mode.
+  if (badge) badge.classList.remove('tb-right-start');
   layoutBtn.classList.add('tb-right-start');
   for (const el of ORDER) root.appendChild(el);
 })();

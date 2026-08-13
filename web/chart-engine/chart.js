@@ -80,6 +80,11 @@ class Chart {
     // tap-to-place). When `_explainPayload` is set, the render loop also
     // paints matched-bar shading and server-supplied indicator series.
     this._liteMode = false;
+    // Popout view-only mode — separate from `_liteMode`. Gates ONLY the two
+    // true trading surfaces (order/overlay click dispatch, bid/ask/qty
+    // strip) so the popout window keeps the drawing rail, LTP marker, and
+    // indicator chips that lite mode hides.
+    this._popoutMode = false;
     this._explainPayload = null;
     this._oiData = []; // [{strike, callOi, putOi, callOiChgPct, putOiChgPct}]
     // 1Hz redraw so the countdown text updates each second without ticks.
@@ -577,6 +582,15 @@ class Chart {
     const next = value === true;
     if (this._liteMode === next) return;
     this._liteMode = next;
+    this.scheduleRedraw();
+  }
+
+  // Popout mode — view-only window. Suppresses order/depth click dispatch
+  // and the bid/ask/qty strip while keeping draw/indicator/timeframe tools.
+  setPopoutMode(value) {
+    const v = value === true;
+    if (this._popoutMode === v) return;
+    this._popoutMode = v;
     this.scheduleRedraw();
   }
 
@@ -2069,7 +2083,7 @@ class Chart {
           this._pinnedHover = { x, y };
           this.scheduleRedraw();
         }
-        if (msg && !this._liteMode) {
+        if (msg && !this._liteMode && !this._popoutMode) {
           // In lite mode the chart is read-only — suppress every
           // order/depth/overlay click dispatch (plus, bid/ask, qty chip,
           // overlay open, overlay close). The explain host doesn't pass
@@ -3912,7 +3926,7 @@ class Chart {
     // Bid/ask/qty strip is for active trading — and on a non-tradable
     // pseudo-scrip (explain mode) it falls into the "INDEX" placeholder
     // rendering with empty BID/ASK chips. Skip it entirely in lite mode.
-    if (!this._liteMode) {
+    if (!this._liteMode && !this._popoutMode) {
       this._drawBidAskQtyStrip(plot);
     }
   }
