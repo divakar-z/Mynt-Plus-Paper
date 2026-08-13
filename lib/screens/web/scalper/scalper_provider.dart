@@ -20,13 +20,50 @@ final scalperProvider = ChangeNotifierProvider<ScalperProvider>((ref) {
   return ScalperProvider(ref);
 });
 
+/// Maps an underlying's exchange to the exchange its option chain lives on.
+/// NSE equities/indices -> NFO, BSE -> BFO, MCX commodities -> MCX (commodity
+/// options trade on MCX itself, not on a separate F&O segment), CDS -> CDS.
+/// Used as a fallback only — when the linked-scrip response carries an explicit
+/// `OptionExp.exch`, that value wins (see `optionExchangeForExpiry`).
+String optionExchangeForUnderlying(String? underlyingExch) {
+  switch ((underlyingExch ?? '').toUpperCase()) {
+    case 'BSE':
+    case 'BFO':
+      return 'BFO';
+    case 'MCX':
+      return 'MCX';
+    case 'NCO':
+    case 'NCOM':
+      return 'NCO';
+    case 'BCO':
+    case 'BCOM':
+      return 'BCO';
+    case 'CDS':
+      return 'CDS';
+    case 'BCD':
+      return 'BCD';
+    default:
+      return 'NFO';
+  }
+}
+
+/// The exchange to send to `GetOptionChain` for [expiry].
+/// The linked-scrip response tags every expiry with its own exchange, which is
+/// authoritative (this is what the main option-chain screen uses). Falls back to
+/// [fallbackExch] when the field is missing.
+String optionExchangeForExpiry(OptionExp? expiry, String fallbackExch) {
+  final exch = expiry?.exch;
+  if (exch != null && exch.trim().isNotEmpty) return exch.trim();
+  return fallbackExch;
+}
+
 /// Index configuration for scalper screen
 class ScalperIndex {
   final String name;
   final String token;
   final String exch;
   final String tsym;
-  final String optExch; // Exchange for options (NFO for NSE indices, BFO for BSE)
+  final String optExch; // Exchange for options (NFO for NSE, BFO for BSE, MCX for commodities)
 
   const ScalperIndex({
     required this.name,
@@ -185,6 +222,12 @@ class ScalperProvider extends ChangeNotifier {
 
   bool _isLoadingOptionChain = false;
   bool get isLoadingOptionChain => _isLoadingOptionChain;
+
+  // Last option-chain failure message (null when the last load succeeded).
+  // The screen reads this once after a failed load so it can tell the user why
+  // the chain is empty instead of silently re-requesting.
+  String? _optionChainError;
+  String? get optionChainError => _optionChainError;
 
   // Lot size for the current index
   String _lotSize = '1';
@@ -452,8 +495,10 @@ class ScalperProvider extends ChangeNotifier {
       }
     }
 
-    // Custom symbol — becomes/replaces the 4th tab
-    final optExch = symbol.exch == 'BSE' ? 'BFO' : 'NFO';
+    // Custom symbol — becomes/replaces the 4th tab.
+    // MCX commodities keep MCX as their option exchange; sending NFO makes
+    // GetOptionChain reject the request with a 400.
+    final optExch = optionExchangeForUnderlying(symbol.exch);
 
     // Unsubscribe old option tokens before switching
     unsubscribeFromWebSocket(context);
@@ -656,6 +701,7 @@ class ScalperProvider extends ChangeNotifier {
     final gen = _loadGeneration;
 
     _isLoadingOptionChain = true;
+    _optionChainError = null;
     notifyListeners();
 
     try {
@@ -667,11 +713,16 @@ class ScalperProvider extends ChangeNotifier {
           : '0';
 
 
+      // The expiry from getLinkedScrip carries its own exchange (NFO/BFO/MCX);
+      // that is authoritative. index.optExch is only a fallback.
+      final optExchange =
+          optionExchangeForExpiry(_selectedExpiry, index.optExch);
+
       // Fetch option chain using direct API call - 35 strikes to ensure we have 15 above and below ATM
       final chainData = await _api.getOptionChain(
         strPrc: strPrc,
         tradeSym: _selectedExpiry!.tsym ?? '',
-        exchange: index.optExch,
+        exchange: optExchange,
         context: context,
         numofStrike: '35',
       );
@@ -722,8 +773,12 @@ class ScalperProvider extends ChangeNotifier {
             chainData?.stat == "Not_Ok") {
           ref.read(authProvider).ifSessionExpired(context);
         }
+        _optionChainError = (chainData?.emsg?.isNotEmpty ?? false)
+            ? chainData!.emsg!
+            : 'Option chain unavailable for ${index.name} ($optExchange)';
       }
     } catch (e) {
+      _optionChainError = 'Option chain request failed: $e';
     } finally {
       // Always reset loading flag — even on generation mismatch, so the UI doesn't stay stuck.
       // The newer load call will set it back to true when it starts.
