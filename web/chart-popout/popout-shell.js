@@ -150,6 +150,7 @@
       this._backoff = 1000; // ms; doubles per consecutive failure, cap 15000
       this._lastTickAt = 0;
       this._watchdog = null;
+      this._emptyMintCount = 0;
     }
     FeedManager.prototype.start = function () {
       if (!this._watchdog) {
@@ -182,7 +183,17 @@
       const self = this;
       mintSocketToken(this.baseUid, this.n).then(function (token) {
         if (gen !== self._gen) return; // superseded by a newer generation
-        if (!token) { self.reconnect(); return; }
+        if (!token) {
+          self._emptyMintCount += 1;
+          if (self._emptyMintCount >= 3) {
+            if (self._watchdog) { clearInterval(self._watchdog); self._watchdog = null; }
+            showExpired();
+            return;
+          }
+          self.reconnect();
+          return;
+        }
+        self._emptyMintCount = 0;
         const client = createFeedClient(self.baseUid, self.n, token);
         client.onTick = function (result) {
           if (gen !== self._gen) return;
