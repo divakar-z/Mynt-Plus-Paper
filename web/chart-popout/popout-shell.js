@@ -66,7 +66,7 @@
   }
 
   function createFeedClient(baseUid, n, token) {
-    const client = { onTick: null, onOpenAck: null, _ws: null };
+    const client = { onTick: null, onOpenAck: null, onClose: null, onError: null, _ws: null };
     client.connect = function () {
       const ws = new WebSocket('wss://ws.zebull.in/NorenWS/');
       client._ws = ws;
@@ -89,6 +89,12 @@
         const result = normalizeTick(frame, Math.floor(Date.now() / 1000));
         if (result && client.onTick) client.onTick(result);
       };
+      ws.onclose = function () {
+        if (client.onClose) client.onClose();
+      };
+      ws.onerror = function (err) {
+        if (client.onError) client.onError(err);
+      };
     };
     client.send = function (obj) {
       try { client._ws && client._ws.send(JSON.stringify(obj)); } catch (_) {}
@@ -98,6 +104,15 @@
     };
     return client;
   }
+
+  // SubSet: dedup tracker of "exch|token" subscription keys. Pure — no DOM/timers.
+  function SubSet() {
+    this._set = new Set();
+  }
+  SubSet.prototype.add = function (key) { this._set.add(key); };
+  SubSet.prototype.remove = function (key) { this._set.delete(key); };
+  SubSet.prototype.has = function (key) { return this._set.has(key); };
+  SubSet.prototype.all = function () { return Array.from(this._set); };
 
   function showExpired() {
     if (typeof document === 'undefined') return;
@@ -120,11 +135,109 @@
       try { iframe.contentWindow.postMessage(JSON.stringify({ type, value }), '*'); } catch (_) {}
     }
     window.__popout = { post, params };
+
+    // FeedManager: the SINGLE owner of the live FeedClient. Relays engine
+    // subscribe/unsubscribe, re-subscribes the tracked set on (re)connect,
+    // and force-reconnects on close/error/stall. Browser-only (WebSocket via
+    // createFeedClient, setInterval, Date.now); not node-requirable.
+    function FeedManager(baseUid, n) {
+      this.baseUid = baseUid;
+      this.n = n;
+      this.subs = new SubSet();
+      this.client = null;
+      this._gen = 0;
+      this._up = false; // true once the current client has acked ('ck')
+      this._backoff = 1000; // ms; doubles per consecutive failure, cap 15000
+      this._lastTickAt = 0;
+      this._watchdog = null;
+    }
+    FeedManager.prototype.start = function () {
+      if (!this._watchdog) {
+        const self = this;
+        this._watchdog = setInterval(function () {
+          if (self._up && self._lastTickAt && (Date.now() - self._lastTickAt > 10000)) {
+            self.reconnect();
+          }
+        }, 2000);
+      }
+      this._open();
+    };
+    FeedManager.prototype.subscribe = function (exch, token) {
+      const key = `${exch}|${token}`;
+      this.subs.add(key);
+      if (this._up && this.client) this.client.send({ t: 't', k: key });
+    };
+    FeedManager.prototype.unsubscribe = function (exch, token) {
+      const key = `${exch}|${token}`;
+      this.subs.remove(key);
+      if (this._up && this.client) this.client.send({ t: 'u', k: key });
+    };
+    // Opens a brand-new generation immediately (no backoff delay). Used by
+    // start() and, after a backoff wait, by reconnect().
+    FeedManager.prototype._open = function () {
+      this._gen += 1;
+      const gen = this._gen;
+      this._up = false;
+      if (this.client) { this.client.close(); }
+      const self = this;
+      mintSocketToken(this.baseUid, this.n).then(function (token) {
+        if (gen !== self._gen) return; // superseded by a newer generation
+        if (!token) { self.reconnect(); return; }
+        const client = createFeedClient(self.baseUid, self.n, token);
+        client.onTick = function (result) {
+          if (gen !== self._gen) return;
+          self._lastTickAt = Date.now();
+          post('tick', { token: result.token, packet: result.packet });
+        };
+        client.onOpenAck = function () {
+          if (gen !== self._gen) return;
+          self._up = true;
+          self._backoff = 1000;
+          self._lastTickAt = Date.now();
+          const all = self.subs.all();
+          if (all.length) client.send({ t: 't', k: all.join('#') });
+        };
+        client.onClose = function () {
+          if (gen !== self._gen) return;
+          self._up = false;
+          self.reconnect();
+        };
+        client.onError = function () {
+          if (gen !== self._gen) return;
+          self._up = false;
+          self.reconnect();
+        };
+        self.client = client;
+        client.connect();
+      }).catch(function () {
+        if (gen === self._gen) self.reconnect();
+      });
+    };
+    // reconnect(): bumps generation (invalidating the dying client's
+    // callbacks), closes it (close-before-connect), then re-opens after the
+    // current backoff, doubling backoff (capped 15s) for next time.
+    FeedManager.prototype.reconnect = function () {
+      this._gen += 1;
+      const gen = this._gen;
+      this._up = false;
+      if (this.client) { this.client.close(); }
+      const wait = this._backoff;
+      this._backoff = Math.min(this._backoff * 2, 15000);
+      const self = this;
+      setTimeout(function () {
+        if (gen !== self._gen) return; // superseded by a newer reconnect
+        self._open();
+      }, wait);
+    };
+
+    let feedManager = null;
+
     window.addEventListener('message', (e) => {
       let d = e.data; if (typeof d === 'string') { try { d = JSON.parse(d); } catch (_) { return; } }
       if (!d || !d.type) return;
       if (d.type === 'chart-engine-ready') {
         console.log('[popout] engine ready', params);
+        if (feedManager) feedManager.start();
         return;
       }
       if (d.type === 'fetchHistory') {
@@ -132,6 +245,21 @@
         _tpseries(value)
           .then((candles) => post('historyResult', { requestId: value.requestId, candles }))
           .catch((err) => post('historyError', { requestId: value.requestId, message: String(err) }));
+        return;
+      }
+      if (d.type === 'subscribe') {
+        const value = d.value || {};
+        if (feedManager && value.exch != null && value.token != null) {
+          feedManager.subscribe(value.exch, value.token);
+        }
+        return;
+      }
+      if (d.type === 'unsubscribe') {
+        const value = d.value || {};
+        if (feedManager && value.exch != null && value.token != null) {
+          feedManager.unsubscribe(value.exch, value.token);
+        }
+        return;
       }
     });
 
@@ -142,14 +270,8 @@
     } else {
       window.__popout.session = { uid, jKey };
       const n = params.n != null ? params.n : 1;
-      mintSocketToken(uid, n).then((token) => {
-        if (!token) { showExpired(); return; }
-        const feed = createFeedClient(uid, n, token);
-        feed.onTick = (result) => post('tick', { token: result.token, packet: result.packet });
-        feed.onOpenAck = () => {}; // Task 5 subscribes here
-        window.__popout.feed = feed;
-        feed.connect();
-      });
+      feedManager = new FeedManager(uid, n);
+      window.__popout.feed = feedManager;
     }
   }
 
@@ -157,7 +279,7 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       isSessionExpired, feedUid, connectUid, readSession, showExpired, parseTpseries,
-      normalizeTick, mintSocketToken, createFeedClient,
+      normalizeTick, mintSocketToken, createFeedClient, SubSet,
     };
   }
 })();

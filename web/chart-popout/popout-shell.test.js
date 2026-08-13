@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick } = require('./popout-shell.js');
+const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick, SubSet } = require('./popout-shell.js');
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); console.log('  ✓', n); pass++; } catch (e) { console.log('  ✗', n, e.message); fail++; } };
 
@@ -38,6 +38,14 @@ t('ignores non-feed frames', () =>
   assert.strictEqual(normalizeTick({ t: 'ck' }, 1700), null));
 t('ignores feed frame without lp', () =>
   assert.strictEqual(normalizeTick({ t: 'tf', tk: '1' }, 1700), null));
+t('SubSet dedups and lists', () => {
+  const s = new SubSet();
+  s.add('NSE|26000'); s.add('NSE|26000'); s.add('MCX|1');
+  assert.deepStrictEqual(s.all().sort(), ['MCX|1', 'NSE|26000']);
+  s.remove('NSE|26000');
+  assert.strictEqual(s.has('NSE|26000'), false);
+  assert.deepStrictEqual(s.all(), ['MCX|1']);
+});
 
 console.log(`${pass} passed · ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
