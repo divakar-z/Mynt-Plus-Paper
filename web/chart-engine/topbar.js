@@ -302,10 +302,16 @@
   // opens a popover grouped by pane count showing all layouts in the
   // catalog Flutter pushed via `setLayoutCatalog`. Picking one posts
   // `setActiveLayoutId` back to Flutter which routes through the existing
-  // setLayout pipeline (catalog stays Flutter-owned).
+  // setLayout pipeline (catalog stays Flutter-owned). The catalog is
+  // Flutter-pushed and the popout has no Flutter host, so this control is
+  // hidden entirely in popout mode (same guard pattern as the INSTANT
+  // badge/Order-Defaults button). `layoutBtn` stays `undefined` and the
+  // ORDER array's `.filter(Boolean)` skips it.
+  let layoutBtn;
+  if (!IS_POPOUT) {
   let layoutCatalog = [];                // [{id, paneCount, areas, ...}]
   let activeLayoutId = null;
-  const layoutBtn = document.createElement('button');
+  layoutBtn = document.createElement('button');
   layoutBtn.className = 'tb-chip tb-layout';
   layoutBtn.type = 'button';
   layoutBtn.title = 'Layout';
@@ -423,6 +429,7 @@
     repaintLayoutButton();
   });
   root.appendChild(layoutBtn);
+  }
 
   // ── Symbol typeahead ────────────────────────────────────────────────────
   // 220px text input. Focus opens a result popover below; debounced search
@@ -3245,10 +3252,14 @@
     symWrap, tfBtn, styleBtn, fxBtn,
     layoutBtn, labBtn, badge, odBtn, popBtn, snapBtn, settingsBtn,
   ].filter(Boolean);
-  // Move the right-anchor class — Layout is now the first right-group
-  // button instead of the INSTANT badge. Guarded because `badge` is
-  // undefined in popout mode.
+  // Move the right-anchor class — Layout is normally the first right-group
+  // button instead of the INSTANT badge. In popout mode `layoutBtn`,
+  // `badge`, `odBtn` and `popBtn` are all omitted (view-only, no Flutter
+  // host/catalog), and `labBtn` is permanently `display:none`, so the
+  // actual first VISIBLE right-group control there is `snapBtn` — walk the
+  // same candidates in ORDER and anchor whichever is first present.
   if (badge) badge.classList.remove('tb-right-start');
-  layoutBtn.classList.add('tb-right-start');
+  const rightAnchorBtn = layoutBtn || badge || odBtn || popBtn || snapBtn;
+  if (rightAnchorBtn) rightAnchorBtn.classList.add('tb-right-start');
   for (const el of ORDER) root.appendChild(el);
 })();

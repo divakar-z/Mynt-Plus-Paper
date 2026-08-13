@@ -43,22 +43,11 @@
     return parseTpseries(Array.isArray(data) ? data : []);
   }
 
-  // Pure: maps raw SearchScrip `values[]` rows to the shape the engine's
-  // setPaneSymbol `scrip` wants. Real ls/ti/instname now come from the
-  // response (not placeholders) with safe numeric fallbacks.
-  function mapScripValues(values) {
-    return (Array.isArray(values) ? values : []).map((v) => ({
-      exch: v.exch,
-      token: v.token,
-      tsym: v.tsym,
-      dispName: v.dname || v.tsym,
-      ls: Number(v.ls) || 1,
-      ti: Number(v.ti) || 0.05,
-      instname: v.instname || '',
-    }));
-  }
-
-  async function searchScrip(query) {
+  // Symbol search for the engine's native topbar (loopback host). The
+  // topbar's `searchSymbols` bridge request expects RAW Noren SearchScrip
+  // `values[]` rows back (it reads `dname`/`exch`/`token`/`tsym`/`ls`/`ti`/
+  // `instname`/`symbol` directly off each row) — do NOT remap them.
+  async function searchScripRaw(query) {
     const { uid, jKey } = window.__popout.session;
     const j = { uid, stext: query };
     // Match the app verbatim (market_watch_api.getSearchScrip): raw JSON in
@@ -68,7 +57,30 @@
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
     const data = await res.json();
     if (isSessionExpired(data)) { showExpired(); return []; }
-    return mapScripValues(data.values);
+    return data.values || [];
+  }
+
+  // Pure: translates a topbar outbound bridge message into the engine's
+  // inbound `{type, value}` shape (a "loopback host" — the popout has no
+  // Flutter host to round-trip through, so it answers the topbar itself).
+  // paneId is always '0' (single-pane popout). Returns null for anything
+  // not mapped here (indicators/settings-gear stay deferred; search is
+  // handled separately via the reply protocol; layout is hidden in the
+  // popout topbar).
+  function topbarToEngine(type, value) {
+    const v = value || {};
+    switch (type) {
+      case 'setActivePaneSymbol':        return { type: 'setPaneSymbol',            value: { paneId: '0', scrip: v.scrip } };
+      case 'setActiveTimeframe':         return { type: 'setPaneTimeframe',         value: { paneId: '0', minutes: Number(v.minutes) } };
+      case 'setActiveCandleStyle':       return { type: 'setPaneCandleStyle',       value: { paneId: '0', style: String(v.style) } };
+      case 'setActiveShowCrosshairLines':return { type: 'setPaneShowCrosshairLines',value: { paneId: '0', show: v.value === true } };
+      case 'setActiveDrawTool':          return { type: 'setDrawMode',              value: { kind: v.kind != null ? v.kind : null } };
+      case 'setDrawingsLocked':          return { type: 'setDrawingsLocked',        value: { locked: v.value === true } };
+      case 'setDrawingsHidden':          return { type: 'setDrawingsHidden',        value: { hidden: v.value === true } };
+      case 'clearDrawingsForActivePane': return { type: 'setPaneDrawings',          value: { paneId: '0', drawings: [] } };
+      case 'updateChartPalette':         return { type: 'setChartPalette',          value: { palette: v } };
+      default: return null;
+    }
   }
 
   function normalizeTick(frame, nowSec) {
@@ -345,6 +357,18 @@
           },
         });
         post('setPaneTimeframe', { paneId: '0', minutes: Number(params.tf) || 5 });
+        // Mirror the boot state into the engine's native topbar too, so it
+        // shows the right timeframe/symbol instead of its own defaults
+        // (the topbar has no Flutter host to sync from in the popout).
+        post('setActivePaneTopBarState', {
+          timeframeMinutes: Number(params.tf) || 5,
+          candleStyle: 'candles',
+          showCrosshairLines: true,
+          indicators: [],
+        });
+        post('setActivePaneSymbol', {
+          scrip: { exch: params.exch, token: params.token, tsym: params.tsym, dispName: params.tsym, ls: 1, ti: 0.05, instname: '' },
+        });
         if (feedManager) feedManager.start();
         return;
       }
@@ -369,6 +393,21 @@
         }
         return;
       }
+      // Symbol search (reply protocol): the topbar's `searchSymbols` is a
+      // request carrying `d.replyTo` and expects a `{type:'reply', value:
+      // {replyId, payload}}` message posted back into the iframe.
+      if (d.type === 'searchSymbols') {
+        const q = (d.value && d.value.q) || '';
+        searchScripRaw(q)
+          .then((results) => post('reply', { replyId: d.replyTo, payload: { results } }))
+          .catch(() => post('reply', { replyId: d.replyTo, payload: { results: [] } }));
+        return;
+      }
+      // Loopback host: translate any other mapped topbar outbound message
+      // into the engine's inbound message and relay it straight into the
+      // iframe (the popout has no Flutter host to round-trip through).
+      const mapped = topbarToEngine(d.type, d.value);
+      if (mapped) { post(mapped.type, mapped.value); return; }
     });
 
     // Free this popout's slot when the window/tab closes, so a later
@@ -395,68 +434,13 @@
       feedManager = new FeedManager(uid, n);
       window.__popout.feed = feedManager;
     }
-
-    // Symbol search UI: debounced input -> searchScrip -> clickable results.
-    // On pick, post setPaneSymbol — the engine emits unsubscribe old +
-    // subscribe new on its own (FeedManager relays via the message
-    // listener above); this handler does not touch feedManager directly.
-    (function wireSearchUi() {
-      const searchInput = document.getElementById('pop-search');
-      const resultsEl = document.getElementById('pop-results');
-      if (!searchInput || !resultsEl) return;
-      let debounceTimer = null;
-      // Monotonic sequence guard: the 300ms debounce only prevents
-      // overlapping TIMERS, not overlapping in-flight requests. If an
-      // older query's response resolves after a newer one, drop it so the
-      // dropdown never shows results for a stale/narrower query.
-      let searchSeq = 0;
-
-      function hideResults() {
-        resultsEl.innerHTML = '';
-        resultsEl.style.display = 'none';
-      }
-
-      function renderResults(list) {
-        resultsEl.innerHTML = '';
-        if (!list || !list.length) { hideResults(); return; }
-        list.forEach((scrip) => {
-          const row = document.createElement('div');
-          row.className = 'pop-result-row';
-          row.textContent = scrip.dispName + ' · ' + scrip.exch;
-          row.addEventListener('click', () => {
-            post('setPaneSymbol', { paneId: '0', scrip });
-            searchInput.value = '';
-            hideResults();
-          });
-          resultsEl.appendChild(row);
-        });
-        resultsEl.style.display = 'block';
-      }
-
-      searchInput.addEventListener('input', () => {
-        const q = searchInput.value.trim();
-        if (debounceTimer) clearTimeout(debounceTimer);
-        if (!q) { searchSeq += 1; hideResults(); return; }
-        debounceTimer = setTimeout(() => {
-          if (window.__popout.expired) return;
-          const mySeq = ++searchSeq;
-          searchScrip(q)
-            .then((list) => { if (mySeq === searchSeq) renderResults(list); })
-            .catch(() => { if (mySeq === searchSeq) hideResults(); });
-        }, 300);
-      });
-
-      document.addEventListener('click', (e) => {
-        if (e.target !== searchInput && !resultsEl.contains(e.target)) hideResults();
-      });
-    })();
   }
 
   // Expose for browser global scope (no module system in iframe) and node tests.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       isSessionExpired, feedUid, connectUid, readSession, showExpired, parseTpseries,
-      normalizeTick, mintSocketToken, createFeedClient, SubSet, mapScripValues, searchScrip,
+      normalizeTick, mintSocketToken, createFeedClient, SubSet, searchScripRaw, topbarToEngine,
     };
   }
 })();

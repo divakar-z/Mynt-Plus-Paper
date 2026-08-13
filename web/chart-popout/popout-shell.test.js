@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick, SubSet, mapScripValues } = require('./popout-shell.js');
+const { isSessionExpired, feedUid, connectUid, parseTpseries, normalizeTick, SubSet, topbarToEngine } = require('./popout-shell.js');
 let pass = 0, fail = 0;
 const t = (n, f) => { try { f(); console.log('  ✓', n); pass++; } catch (e) { console.log('  ✗', n, e.message); fail++; } };
 
@@ -47,20 +47,43 @@ t('SubSet dedups and lists', () => {
   assert.deepStrictEqual(s.all(), ['MCX|1']);
 });
 
-t('mapScripValues maps real ls/ti/instname with numeric fallbacks', () => {
-  const out = mapScripValues([
-    { exch: 'NSE', token: '26000', tsym: 'NIFTY', dname: 'Nifty 50', ls: '1', ti: '0.05', instname: 'INDEX' },
-    { exch: 'NSE', token: '11536', tsym: 'TCS-EQ', ls: 'x', ti: '' },
-  ]);
-  assert.deepStrictEqual(out[0], {
-    exch: 'NSE', token: '26000', tsym: 'NIFTY', dispName: 'Nifty 50', ls: 1, ti: 0.05, instname: 'INDEX',
-  });
-  assert.deepStrictEqual(out[1], {
-    exch: 'NSE', token: '11536', tsym: 'TCS-EQ', dispName: 'TCS-EQ', ls: 1, ti: 0.05, instname: '',
-  });
+t('topbarToEngine maps setActiveTimeframe', () =>
+  assert.deepStrictEqual(topbarToEngine('setActiveTimeframe', { minutes: 5 }),
+    { type: 'setPaneTimeframe', value: { paneId: '0', minutes: 5 } }));
+t('topbarToEngine maps setActivePaneSymbol', () => {
+  const scrip = { exch: 'NSE', token: '26000', tsym: 'NIFTY' };
+  assert.deepStrictEqual(topbarToEngine('setActivePaneSymbol', { scrip }),
+    { type: 'setPaneSymbol', value: { paneId: '0', scrip } });
 });
-t('mapScripValues tolerates non-array input', () =>
-  assert.deepStrictEqual(mapScripValues(undefined), []));
+t('topbarToEngine maps setActiveCandleStyle', () =>
+  assert.deepStrictEqual(topbarToEngine('setActiveCandleStyle', { style: 'bars' }),
+    { type: 'setPaneCandleStyle', value: { paneId: '0', style: 'bars' } }));
+t('topbarToEngine maps setActiveShowCrosshairLines', () =>
+  assert.deepStrictEqual(topbarToEngine('setActiveShowCrosshairLines', { value: true }),
+    { type: 'setPaneShowCrosshairLines', value: { paneId: '0', show: true } }));
+t('topbarToEngine maps setActiveDrawTool with a kind', () =>
+  assert.deepStrictEqual(topbarToEngine('setActiveDrawTool', { kind: 'trendline' }),
+    { type: 'setDrawMode', value: { kind: 'trendline' } }));
+t('topbarToEngine maps setActiveDrawTool with null kind', () =>
+  assert.deepStrictEqual(topbarToEngine('setActiveDrawTool', { kind: null }),
+    { type: 'setDrawMode', value: { kind: null } }));
+t('topbarToEngine maps setDrawingsLocked', () =>
+  assert.deepStrictEqual(topbarToEngine('setDrawingsLocked', { value: true }),
+    { type: 'setDrawingsLocked', value: { locked: true } }));
+t('topbarToEngine maps setDrawingsHidden', () =>
+  assert.deepStrictEqual(topbarToEngine('setDrawingsHidden', { value: true }),
+    { type: 'setDrawingsHidden', value: { hidden: true } }));
+t('topbarToEngine maps clearDrawingsForActivePane', () =>
+  assert.deepStrictEqual(topbarToEngine('clearDrawingsForActivePane', {}),
+    { type: 'setPaneDrawings', value: { paneId: '0', drawings: [] } }));
+t('topbarToEngine maps updateChartPalette', () =>
+  assert.deepStrictEqual(topbarToEngine('updateChartPalette', { primary: '#fff' }),
+    { type: 'setChartPalette', value: { palette: { primary: '#fff' } } }));
+t('topbarToEngine returns null for unmapped types', () => {
+  assert.strictEqual(topbarToEngine('addIndicatorByKind', {}), null);
+  assert.strictEqual(topbarToEngine('searchSymbols', {}), null);
+  assert.strictEqual(topbarToEngine('someUnknownType', {}), null);
+});
 
 console.log(`${pass} passed · ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
