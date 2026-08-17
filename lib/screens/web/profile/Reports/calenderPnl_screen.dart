@@ -189,6 +189,14 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     super.dispose();
   }
 
+  bool get _rangeCoversToday {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final start = DateTime(_startDate.year, _startDate.month, _startDate.day);
+    final end = DateTime(_endDate.year, _endDate.month, _endDate.day);
+    return !today.isBefore(start) && !today.isAfter(end);
+  }
+
   DateTime _getFinancialYearStart(DateTime date) {
     final startYear = date.month < 4 ? date.year - 1 : date.year;
     return DateTime(startYear, 4, 1);
@@ -666,18 +674,30 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     final unrealized = data?.unrealized ?? 0.0;
     final charges = data?.totalCharges ?? 0.0;
     final hasData = data?.data != null;
+    final showUnrealized = _rangeCoversToday;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
-          // 5 columns for wide (>=1000), 3 for medium (>=600), 2 for narrow
+
+          final cards = <Widget>[
+            _buildSummaryCard(context, 'Realised P&L', realized),
+            if (showUnrealized)
+              _buildSummaryCard(context, 'Unrealised P&L', unrealized),
+            _buildSummaryCard(context, 'Charges & Taxes', charges,
+                isNeutral: true,
+                onTap: () => showChargesDialog(context, ref: ref)),
+            _buildSummaryCard(context, 'Net Realised P&L', netValue),
+            if (hasData) _buildShareCard(context, ledgerprovider),
+          ];
+
           final int columns;
-          if (hasData && w >= 1000) {
-            columns = 5;
+          if (w >= 1000) {
+            columns = cards.length;
           } else if (w >= 600) {
-            columns = hasData ? 3 : 4;
+            columns = cards.length > 4 ? 3 : cards.length;
           } else {
             columns = 2;
           }
@@ -689,34 +709,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
             spacing: spacing,
             runSpacing: spacing,
             children: [
-              SizedBox(
-                width: cardWidth,
-                height: 115,
-                child: _buildSummaryCard(context, 'Realised P&L', realized),
-              ),
-              SizedBox(
-                width: cardWidth,
-                height: 115,
-                child: _buildSummaryCard(context, 'Unrealised P&L', unrealized),
-              ),
-              SizedBox(
-                width: cardWidth,
-                height: 115,
-                child: _buildSummaryCard(context, 'Charges & Taxes', charges,
-                    isNeutral: true,
-                    onTap: () => showChargesDialog(context, ref: ref)),
-              ),
-              SizedBox(
-                width: cardWidth,
-                height: 115,
-                child: _buildSummaryCard(context, 'Net Realised P&L', netValue),
-              ),
-              if (hasData)
-                SizedBox(
-                  width: cardWidth,
-                  height: 115,
-                  child: _buildShareCard(context, ledgerprovider),
-                ),
+              for (final card in cards)
+                SizedBox(width: cardWidth, height: 115, child: card),
             ],
           );
         },
