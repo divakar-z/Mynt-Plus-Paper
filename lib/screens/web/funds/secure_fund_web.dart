@@ -402,6 +402,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                 value: "${funds.fundDetailModel?.utilizedMrgn ?? 0.00}",
                 content: _buildMarginUsedContent(funds, theme),
                 context: context,
+                onTap: () => _showSegmentBreakdown(funds),
               ),
             ],
           )
@@ -431,6 +432,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                   value: "${funds.fundDetailModel?.utilizedMrgn ?? 0.00}",
                   content: _buildMarginUsedContent(funds, theme),
                   context: context,
+                  onTap: () => _showSegmentBreakdown(funds),
                 ),
               ),
             ],
@@ -465,27 +467,27 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
     required String value,
     required Widget content,
     required BuildContext context,
+    VoidCallback? onTap,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: resolveThemeColor(
-                  context,
-                  dark: MyntColors.dividerDark,
-                  light: MyntColors.divider,
-                ),
-                width: 1,
-              ),
+    final header = Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: resolveThemeColor(
+              context,
+              dark: MyntColors.dividerDark,
+              light: MyntColors.divider,
             ),
+            width: 1,
           ),
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+      ),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
               Text(
                 title,
@@ -496,23 +498,51 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                   fontWeight: MyntFonts.medium,
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                ref.watch(privacyProvider).mask(getFormatter(
-                      value: double.tryParse(value) ?? 0.00,
-                      v4d: false,
-                      noDecimal: false,
-                    )),
-                style: MyntWebTextStyles.title(
-                  context,
-                  darkColor: MyntColors.textPrimaryDark,
-                  lightColor: MyntColors.textPrimary,
-                  fontWeight: MyntFonts.semiBold,
+              if (onTap != null) ...[
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.chevron_right,
+                  size: 16,
+                  color: resolveThemeColor(
+                    context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.textSecondary,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
-        ),
+          const SizedBox(height: 4),
+          Text(
+            ref.watch(privacyProvider).mask(getFormatter(
+                  value: double.tryParse(value) ?? 0.00,
+                  v4d: false,
+                  noDecimal: false,
+                )),
+            style: MyntWebTextStyles.title(
+              context,
+              darkColor: MyntColors.textPrimaryDark,
+              lightColor: MyntColors.textPrimary,
+              fontWeight: MyntFonts.semiBold,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (onTap == null)
+          header
+        else
+          InkWell(
+            onTap: onTap,
+            hoverColor: Colors.transparent,
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            child: header,
+          ),
         content,
       ],
     );
@@ -674,11 +704,15 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         ),
 
         // Basket Margin
+        // The Limits response carries basket margin as `scripbskmrg`; the
+        // `scripbskmar` key this row used to read is never sent, so the row
+        // always printed 0.00 while the vendor showed the real figure.
+        // value: _safeParseDouble("${funds.fundDetailModel?.scripbskmar ?? 0.00}"),
         _buildInfoRow(
           "Basket Margin",
           getFormatter(
             value: _safeParseDouble(
-                "${funds.fundDetailModel?.scripbskmar ?? 0.00}"),
+                "${funds.fundDetailModel?.scripbskmrg ?? 0.00}"),
             v4d: false,
             noDecimal: false,
           ),
@@ -779,6 +813,298 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
     );
   }
 
+  /// Segment-wise utilisation breakdown, opened from the Margin Used header.
+  ///
+  /// Every component key below was verified one by one against the vendor
+  /// Margins page on 17-08-2026 (account ZV100, holding equity CNC and MIS,
+  /// derivative MIS and NRML, commodity MIS and NRML). Each of their tiles
+  /// matched the sums here to the paisa.
+  ///
+  /// Deliberately NOT included:
+  ///  - Brokerage. The vendor keeps the `brkage_*` keys out of the segment
+  ///    tiles and reports them once as Unrealized Expenses, which is why that
+  ///    sits on its own row at the bottom here rather than inside a segment.
+  ///  - Span, exposure and additional margin. No position on the test account
+  ///    blocked span, so those keys never arrived and their per-segment names
+  ///    are unconfirmed. Add them here once the backend field list lands —
+  ///    until then a span-blocking position will under-report these rows.
+  ///  - Currency Intraday and Currency CF. The vendor draws both, but Zebu
+  ///    trades NSE, BSE, NFO, BFO and MCX only, so they would sit at zero for
+  ///    every client.
+  void _showSegmentBreakdown(dynamic funds) {
+    final m = funds.fundDetailModel;
+    double val(String? raw) => _safeParseDouble("${raw ?? 0.00}");
+
+    final segments = <_MarginSegment>[
+      _MarginSegment("Equity", [
+        _MarginProduct("Intraday", [
+          _MarginComponent("Unrealised MToM MIS", val(m?.uzpnlEI)),
+          _MarginComponent("Basket Margin MIS", val(m?.scripbskmarEI)),
+        ]),
+        const _MarginProduct("Normal", []),
+        _MarginProduct("Delivery", [
+          _MarginComponent("Delivery Margin", val(m?.cbu)),
+        ]),
+      ]),
+      _MarginSegment("Derivative", [
+        _MarginProduct("Intraday", [
+          _MarginComponent("Premium MIS", val(m?.premiumDI)),
+        ]),
+        _MarginProduct("Carry Forward", [
+          _MarginComponent("Premium CF", val(m?.premiumDM)),
+        ]),
+      ]),
+      _MarginSegment("Commodity", [
+        _MarginProduct("Intraday", [
+          _MarginComponent("Premium MIS", val(m?.premiumCI)),
+        ]),
+        _MarginProduct("Carry Forward", [
+          _MarginComponent("Premium CF", val(m?.premiumCM)),
+        ]),
+      ]),
+      // Currency (CDS). These two rows exist so the screen carries the same
+      // segments as the vendor, but they are NOT wired to the API yet.
+      //
+      // The segment letter is unknown. e, d and c are taken by equity,
+      // derivative and commodity — all three verified against live positions
+      // on 17-08-2026 — and no currency position has ever been held on the
+      // test account, so no currency key has ever appeared in a response.
+      //
+      // TODO(funds-parity): replace the zeros with the real keys, taken from
+      // the backend Limits field list or from a capture with a USDINR
+      // position open. Until then these rows print 0.00 even for a client who
+      // holds currency positions, and on such an account the rows will not
+      // reconcile against Total Utilised. Do not treat them as working.
+      const _MarginSegment("Currency", [
+        _MarginProduct("Intraday", [
+          _MarginComponent("Premium MIS", 0.0),
+        ]),
+        _MarginProduct("Carry Forward", [
+          _MarginComponent("Premium CF", 0.0),
+        ]),
+      ]),
+    ];
+
+    final double totalUsed = val(m?.utilizedMrgn);
+    final double brokerage = val(m?.brokerage);
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Center(
+            child: shadcn.Card(
+              borderRadius: BorderRadius.circular(8),
+              padding: EdgeInsets.zero,
+              child: SizedBox(
+                width: 460,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            color: shadcn.Theme.of(dialogContext)
+                                .colorScheme
+                                .border,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Margin Used',
+                            style: MyntWebTextStyles.title(
+                              dialogContext,
+                              color: resolveThemeColor(dialogContext,
+                                  dark: MyntColors.textPrimaryDark,
+                                  light: MyntColors.textPrimary),
+                              fontWeight: MyntFonts.medium,
+                            ),
+                          ),
+                          MyntCloseButton(
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Content
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(16),
+                        child: Consumer(
+                          builder: (ctx, innerRef, _) {
+                            final privacy = innerRef.watch(privacyProvider);
+                            String fmt(double v) => privacy.mask(getFormatter(
+                                  value: v,
+                                  v4d: false,
+                                  noDecimal: false,
+                                ));
+
+                            final children = <Widget>[
+                              _breakdownRow(ctx, "Total Utilised",
+                                  fmt(totalUsed),
+                                  emphasis: true),
+                              _breakdownDivider(ctx),
+                            ];
+
+                            for (final segment in segments) {
+                              children.add(_breakdownLabel(ctx, segment.name));
+                              for (final product in segment.products) {
+                                children.add(_breakdownRow(
+                                  ctx,
+                                  product.name,
+                                  fmt(product.total),
+                                  emphasis: true,
+                                ));
+                                // Empty components are not drawn, matching the
+                                // vendor — a product with nothing blocked shows
+                                // its heading row alone.
+                                for (final c in product.components) {
+                                  if (c.value == 0) continue;
+                                  children.add(_breakdownRow(
+                                      ctx, c.label, fmt(c.value),
+                                      indented: true));
+                                }
+                              }
+                              children.add(const SizedBox(height: 6));
+                            }
+
+                            children
+                              ..add(_breakdownDivider(ctx))
+                              ..add(_breakdownRow(
+                                  ctx, "Unrealized Expenses", fmt(brokerage),
+                                  emphasis: true))
+                              ..add(_breakdownRow(
+                                  ctx,
+                                  "Charged across all segments, not split by segment",
+                                  "",
+                                  caption: true));
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: children,
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _breakdownLabel(BuildContext ctx, String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(
+        text.toUpperCase(),
+        style: MyntWebTextStyles.bodySmall(
+          ctx,
+          color: resolveThemeColor(
+            ctx,
+            dark: MyntColors.textSecondaryDark,
+            light: MyntColors.textSecondary,
+          ),
+          fontWeight: MyntFonts.semiBold,
+        ),
+      ),
+    );
+  }
+
+  Widget _breakdownDivider(BuildContext ctx) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Divider(
+        height: 1,
+        color: resolveThemeColor(
+          ctx,
+          dark: MyntColors.dividerDark,
+          light: MyntColors.divider,
+        ),
+      ),
+    );
+  }
+
+  Widget _breakdownRow(
+    BuildContext ctx,
+    String label,
+    String value, {
+    bool indented = false,
+    bool emphasis = false,
+    bool caption = false,
+  }) {
+    if (caption) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          label,
+          style: MyntWebTextStyles.bodySmall(
+            ctx,
+            color: resolveThemeColor(
+              ctx,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary,
+            ),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: EdgeInsets.only(
+        left: indented ? 14 : 0,
+        top: 5,
+        bottom: 5,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Flexible(
+            child: Text(
+              label,
+              style: MyntWebTextStyles.body(
+                ctx,
+                darkColor: emphasis
+                    ? MyntColors.textPrimaryDark
+                    : MyntColors.textSecondaryDark,
+                lightColor: emphasis
+                    ? MyntColors.textPrimary
+                    : MyntColors.textSecondary,
+                fontWeight: emphasis ? MyntFonts.semiBold : MyntFonts.medium,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            value,
+            style: MyntWebTextStyles.body(
+              ctx,
+              darkColor: emphasis
+                  ? MyntColors.textPrimaryDark
+                  : MyntColors.textSecondaryDark,
+              lightColor:
+                  emphasis ? MyntColors.textPrimary : MyntColors.textSecondary,
+              fontWeight: emphasis ? MyntFonts.semiBold : MyntFonts.medium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   double _safeParseDouble(String value) {
     try {
       if (value.isEmpty || value == "null" || value == "undefined") {
@@ -789,4 +1115,31 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
       return 0.0;
     }
   }
+}
+
+/// One market segment in the Margin Used breakdown (Equity, Derivative,
+/// Commodity). Currency is intentionally absent — Zebu does not trade it.
+class _MarginSegment {
+  final String name;
+  final List<_MarginProduct> products;
+  const _MarginSegment(this.name, this.products);
+}
+
+/// One product within a segment (Intraday, Normal, Delivery, Carry Forward).
+/// The displayed figure is the sum of its components, mirroring how the
+/// vendor totals each tile.
+class _MarginProduct {
+  final String name;
+  final List<_MarginComponent> components;
+  const _MarginProduct(this.name, this.components);
+
+  double get total =>
+      components.fold<double>(0.0, (sum, c) => sum + c.value);
+}
+
+/// A single API-backed line inside a product, e.g. "Premium MIS".
+class _MarginComponent {
+  final String label;
+  final double value;
+  const _MarginComponent(this.label, this.value);
 }

@@ -33,6 +33,9 @@ class FundDetailModel {
   String? blkAmt;
   String? cbu;
   String? premiumDM;
+  String? premiumDI;
+  String? premiumCI;
+  String? premiumCM;
   String? brkageDM;
   String? premium;
   String? scripbskmarEI;
@@ -91,6 +94,9 @@ class FundDetailModel {
       this.blkAmt,
       this.cbu,
       this.premiumDM,
+      this.premiumDI,
+      this.premiumCI,
+      this.premiumCM,
       this.brkageDM,
       this.premium,
       this.scripbskmarEI,
@@ -150,6 +156,12 @@ class FundDetailModel {
     blkAmt = json['blk_amt'];
     cbu = json['cbu'];
     premiumDM = json['premium_d_m'];
+    // Segment-and-product option premium. Suffix reads <segment>_<product>:
+    // d = derivative, c = commodity; i = intraday (MIS), m = margin (NRML/CF).
+    // Verified against the vendor Margins page on 17-08-2026.
+    premiumDI = json['premium_d_i'];
+    premiumCI = json['premium_c_i'];
+    premiumCM = json['premium_c_m'];
     brkageDM = json['brkage_d_m'];
     premium = json['premium'];
     scripbskmarEI = json['scripbskmar_e_i'];
@@ -209,6 +221,9 @@ class FundDetailModel {
     data['blk_amt'] = blkAmt;
     data['cbu'] = cbu;
     data['premium_d_m'] = premiumDM;
+    data['premium_d_i'] = premiumDI;
+    data['premium_c_i'] = premiumCI;
+    data['premium_c_m'] = premiumCM;
     data['brkage_d_m'] = brkageDM;
     data['premium'] = premium;
     data['scripbskmar_e_i'] = scripbskmarEI;
