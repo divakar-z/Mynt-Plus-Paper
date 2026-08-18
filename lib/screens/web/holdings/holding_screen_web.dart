@@ -25,6 +25,7 @@ import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../sharedWidget/snack_bar.dart';
 import '../../../utils/rupee_convert_format.dart';
 import 'holdings_download_helper.dart';
+import 'mf_holdings_download_helper.dart';
 
 class HoldingScreenWeb extends ConsumerWidget {
   final List<dynamic> listofHolding;
@@ -671,40 +672,55 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     );
   }
 
+  // Totals for the Mutual Fund (demat) tab. Prefers the API summary when
+  // present; otherwise computes them from the demat holdings rows (the demat
+  // endpoint may omit a summary block). Shared by the summary cards and the
+  // PDF / Excel export so both always show the same numbers.
+  ({
+    double invested,
+    double currentValue,
+    double returns,
+    double returnsPercent,
+  }) _mfDematTotals(MFProvider mfData) {
+    final summary = mfData.mfDematHolding?.summary;
+    final holdings = mfData.mfDematHolding?.data ?? [];
+
+    double invested;
+    double currentValue;
+    double returns;
+    if (summary != null) {
+      invested = double.tryParse(summary.invested ?? '0') ?? 0.0;
+      currentValue = double.tryParse(summary.currentValue ?? '0') ?? 0.0;
+      returns = double.tryParse(summary.absReturnValue ?? '0') ??
+          (currentValue - invested);
+    } else {
+      invested = 0.0;
+      currentValue = 0.0;
+      for (final h in holdings) {
+        invested += double.tryParse(h.investedValue ?? '0') ?? 0.0;
+        currentValue += double.tryParse(h.currentValue ?? '0') ?? 0.0;
+      }
+      returns = currentValue - invested;
+    }
+
+    return (
+      invested: invested,
+      currentValue: currentValue,
+      returns: returns,
+      returnsPercent: invested != 0 ? (returns / invested) * 100 : 0.0,
+    );
+  }
+
   Widget _buildMfDematSummaryCards(ThemesProvider theme) {
     return Consumer(
       builder: (context, ref, _) {
         final mfData = ref.watch(mfProvider);
-        final summary = mfData.mfDematHolding?.summary;
-        final holdings = mfData.mfDematHolding?.data ?? [];
+        final totals = _mfDematTotals(mfData);
 
-        // Prefer the API summary when present; otherwise compute totals from
-        // the demat holdings rows (the demat endpoint may omit a summary block).
-        double invested;
-        double currentValue;
-        double returns;
-        if (summary != null) {
-          invested = double.tryParse(summary.invested ?? '0') ?? 0.0;
-          currentValue = double.tryParse(summary.currentValue ?? '0') ?? 0.0;
-          returns = double.tryParse(summary.absReturnValue ?? '0') ??
-              (currentValue - invested);
-        } else {
-          invested = 0.0;
-          currentValue = 0.0;
-          for (final h in holdings) {
-            invested += double.tryParse(h.investedValue ?? '0') ?? 0.0;
-            currentValue += double.tryParse(h.currentValue ?? '0') ?? 0.0;
-          }
-          returns = currentValue - invested;
-        }
-
-        final returnsPercent =
-            invested != 0 ? (returns / invested) * 100 : 0.0;
-
-        final investedStr = invested.toStringAsFixed(2);
-        final currentStr = currentValue.toStringAsFixed(2);
-        final returnsStr = returns.toStringAsFixed(2);
-        final returnsPercentStr = returnsPercent.toStringAsFixed(2);
+        final investedStr = totals.invested.toStringAsFixed(2);
+        final currentStr = totals.currentValue.toStringAsFixed(2);
+        final returnsStr = totals.returns.toStringAsFixed(2);
+        final returnsPercentStr = totals.returnsPercent.toStringAsFixed(2);
 
         final cards = [
           _buildStatCard(
@@ -1107,6 +1123,11 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                     isMtf: _selectedTabIndex == 1),
                 const SizedBox(width: 12),
               ],
+              // Download button (Mutual Fund tab)
+              if (_selectedTabIndex == 3) ...[
+                _buildMfDownloadButton(theme),
+                const SizedBox(width: 12),
+              ],
               // Reload button - triggers manual refresh
               _buildIconButton(
                 icon: Icons.refresh,
@@ -1335,7 +1356,68 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
           );
         }
       },
-      itemBuilder: (context) => [
+      itemBuilder: (context) => _downloadMenuItems(),
+    );
+  }
+
+  // Download button (PDF / Excel) for the Mutual Fund tab. Exports the demat
+  // MF holdings and the same totals the summary cards show.
+  Widget _buildMfDownloadButton(ThemesProvider theme) {
+    return PopupMenuButton<String>(
+      icon: Icon(
+        Icons.download,
+        size: 24,
+        color: theme.isDarkMode
+            ? MyntColors.textWhite
+            : MyntColors.textPrimary,
+      ),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      tooltip: 'Download',
+      color: resolveThemeColor(context,
+          dark: MyntColors.cardDark, light: MyntColors.card),
+      onSelected: (value) {
+        final pref = locator<Preferences>();
+        final clientId = pref.clientId ?? '';
+        final clientName = pref.clientName ?? '';
+        final mfData = ref.read(mfProvider);
+        final holdings = mfData.mfDematHolding?.data ?? [];
+
+        if (holdings.isEmpty) {
+          warningMessage(context, 'No mutual fund holdings to download');
+          return;
+        }
+
+        final totals = _mfDematTotals(mfData);
+
+        if (value == 'pdf') {
+          MfHoldingsDownloadHelper.downloadPdf(
+            holdings: holdings,
+            clientId: clientId,
+            clientName: clientName,
+            totalInvested: totals.invested,
+            totalCurrentValue: totals.currentValue,
+            totalReturns: totals.returns,
+            totalReturnsPercent: totals.returnsPercent,
+          );
+        } else if (value == 'excel') {
+          MfHoldingsDownloadHelper.downloadExcel(
+            holdings: holdings,
+            clientId: clientId,
+            clientName: clientName,
+            totalInvested: totals.invested,
+            totalCurrentValue: totals.currentValue,
+            totalReturns: totals.returns,
+            totalReturnsPercent: totals.returnsPercent,
+          );
+        }
+      },
+      itemBuilder: (context) => _downloadMenuItems(),
+    );
+  }
+
+  // Shared PDF / Excel entries for every download menu on this screen.
+  List<PopupMenuEntry<String>> _downloadMenuItems() => [
         PopupMenuItem(
           value: 'pdf',
           child: Row(
@@ -1356,9 +1438,7 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
             ],
           ),
         ),
-      ],
-    );
-  }
+      ];
 
   // E-DIS button
   Widget _buildEdisButton(

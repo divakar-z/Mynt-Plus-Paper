@@ -1092,20 +1092,20 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       //     }
       //   },
       // },
-      {
-        'title': 'MF Stratergy',
-      'subtitle': 'Mutual Funds • Smart Investing',
-    'description': 'Create and invest in curated mutual fund baskets with a single tap. Diversify your portfolio and manage multiple funds effortlessly.',
-        'badge': null,
-        'isIcon' :false,
-        'accentColor': const Color(0xFF16C4C5),
-        'svgAsset': assets.mfIcon,
-        'onTap': () {
-          if (WebNavigationHelper.isAvailable) {
-            WebNavigationHelper.navigateTo('basketDashboard');
-          }
-        },
-      },
+    //   {
+    //     'title': 'MF Stratergy',
+    //   'subtitle': 'Mutual Funds • Smart Investing',
+    // 'description': 'Create and invest in curated mutual fund baskets with a single tap. Diversify your portfolio and manage multiple funds effortlessly.',
+    //     'badge': null,
+    //     'isIcon' :false,
+    //     'accentColor': const Color(0xFF16C4C5),
+    //     'svgAsset': assets.mfIcon,
+    //     'onTap': () {
+    //       if (WebNavigationHelper.isAvailable) {
+    //         WebNavigationHelper.navigateTo('basketDashboard');
+    //       }
+    //     },
+    //   },
       {
         'title': 'WebHook Trading',
         'subtitle': 'TradingView • Auto Alert',
