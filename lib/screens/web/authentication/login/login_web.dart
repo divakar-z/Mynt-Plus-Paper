@@ -51,12 +51,12 @@ class LoginScreenWeb extends ConsumerStatefulWidget {
 class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   // Short version shown in the login footer. Hovering it reveals the full
   // build/release details (_appVersionLabel) in a tooltip.
-  static const String _appVersionShort = "Version 3.0.2";
+  static const String _appVersionShort = "Version 3.0.3";
 
   // Full build/release details — surfaced only in the hover tooltip. Update
   // this single string on each release.
   static const String _appVersionLabel =
-      "Version 3.0.2 Build 1.0.530 Released on 10 Aug 2026";
+      "Version 3.0.3 Build 1.0.535 Released on 17 Aug 2026";
   
   bool _isProcessing = false;
   bool _isInitializing = true; // True until auto-login check completes
