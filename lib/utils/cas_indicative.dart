@@ -7,5 +7,5 @@ String casIndicativeDisplay(String? ic) {
   if (s.isEmpty || s == 'null') return '—';
   final v = double.tryParse(s);
   if (v == null || v <= 0) return '—';
-  return '₹$s';
+  return '$s';
 }
