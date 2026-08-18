@@ -1166,7 +1166,8 @@ class Chart {
     if (!this._isSessionWindow(_ftSec)) return;
     const targetMs = this.timeframeMinutes * 60_000;
     const result = ingestTickIntoBucket(
-        this.candles, this.tickState, this.aggState, targetMs);
+        this.candles, this.tickState, this.aggState, targetMs,
+        this.scrip && this.scrip.exch);
     if (result === 'applied') {
       this._lastTickAt = Date.now();
       // Phase 26 — rebinned styles re-derive their pseudo-candle array from the
@@ -1191,7 +1192,7 @@ class Chart {
       this._pendingRefreshId = null;
       if (!Array.isArray(candles) || candles.length === 0) return;
       const fresh = bucketCandles(
-          this._sessionFilterIntraday(candles), this.timeframeMinutes);
+          this._sessionFilterIntraday(candles), this.timeframeMinutes, this.scrip && this.scrip.exch);
       if (fresh.length === 0) return;
       // Union merge by ts: keep EVERY existing candle and overlay the fetched
       // ones (server wins for overlapping buckets). A plain head+fresh splice
@@ -1220,7 +1221,7 @@ class Chart {
         return;
       }
       const fresh = bucketCandles(
-          this._sessionFilterIntraday(candles), this.timeframeMinutes);
+          this._sessionFilterIntraday(candles), this.timeframeMinutes, this.scrip && this.scrip.exch);
       if (fresh.length === 0) {
         this._noMoreHistory = true;
         return;
@@ -1274,7 +1275,7 @@ class Chart {
     // so the series starts at the real session open; daily+ bars pass through.
     // Bucketing then collapses any same-bucket candles correctly.
     this.candles = bucketCandles(
-        this._sessionFilterIntraday(candles), this.timeframeMinutes);
+        this._sessionFilterIntraday(candles), this.timeframeMinutes, this.scrip && this.scrip.exch);
     this._noMoreHistory = false;  // fresh series — extend is allowed again
     if (this.candleStyle === 'renko') {
       this._rebuildRenko();
