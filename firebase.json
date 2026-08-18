@@ -22,6 +22,10 @@
     ],
     "rewrites": [
       {
+        "source": "/chart-popout/**",
+        "destination": "/chart-popout/index.html"
+      },
+      {
         "source": "/OAuthlogin/**",
         "destination": "/lite/index.html"
       },
@@ -123,6 +127,15 @@
       },
       {
         "source": "chart-engine/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "chart-popout/**",
         "headers": [
           {
             "key": "Cache-Control",
