@@ -3106,9 +3106,10 @@
   root.appendChild(labBtn);
 
   // ── Pop out ─────────────────────────────────────────────────────────────
-  // Opens the current pane's symbol in a standalone view-only popout window
-  // (web/chart-popout/), fed by the alternate socket. Never shown inside a
-  // popout itself.
+  // Opens the current pane's symbol in a standalone view-only popout window —
+  // the Flutter `/chart-popout` route (a second app instance that reuses the
+  // real chart host in `?popout=1` mode, fed by the alternate socket). Never
+  // shown inside a popout itself.
   let popBtn = null;
   if (!IS_POPOUT) {
   popBtn = document.createElement('button');
@@ -3134,7 +3135,9 @@
       + '&tsym=' + encodeURIComponent(s.tsym || '')
       + '&tf=' + encodeURIComponent(tf)
       + '&n=' + n;
-    window.open('/chart-popout/?' + qs, 'mynt_popout_' + n);
+    // The Flutter popout owns its own drawings/indicators/session (no JS
+    // handoff): reuses the real host, so those all work natively in-window.
+    window.open('/chart-popout?' + qs, 'mynt_popout_' + n);
   });
   root.appendChild(popBtn);
   }

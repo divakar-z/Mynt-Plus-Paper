@@ -14,6 +14,8 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:mynt_plus/firebase_options.dart';
 import 'package:mynt_plus/locator/constant.dart';
 import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart'
+    show kChartPopoutMode;
 import 'package:mynt_plus/sharedWidget/accessibility/accessibility_panel.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/chart_a11y_filter.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/focus_indicator_overlay.dart';
@@ -253,12 +255,23 @@ void _clearBadgeOnStartup() async {
   await AwesomeNotifications().resetGlobalBadge();
 }
 
+// The detached chart popout window (`/chart-popout`). It's a second Flutter
+// instance opened from the logged-in app; it feeds from the alternate socket
+// and must run isolated from the main window's saved chart session.
+bool _isChartPopoutRoute() {
+  if (!kIsWeb) return false;
+  final path = Uri.base.path;
+  return path == '/chart-popout' || path.startsWith('/chart-popout/');
+}
+
 // Public web routes that don't require auth and shouldn't trigger
 // notification permission prompts or Firebase messaging init on load.
 bool _isPublicWebRoute() {
   if (!kIsWeb) return false;
   final path = Uri.base.path;
-  return path == '/dailypnl' || path.startsWith('/dailypnl/');
+  return path == '/dailypnl' ||
+      path.startsWith('/dailypnl/') ||
+      _isChartPopoutRoute();
 }
 
 // This method represents the project's entry level.
@@ -290,6 +303,13 @@ void main() async {
     applyHttpOverrides();
   }
   setupLocator();
+
+  // Detached popout window: flip the chart session store into throwaway mode
+  // BEFORE the ProviderScope mounts, so its ChartEngineSessionNotifier never
+  // hydrates from — or persists to — the main window's saved session.
+  if (_isChartPopoutRoute()) {
+    kChartPopoutMode = true;
+  }
 
   final bool isPublicRoute = _isPublicWebRoute();
 
