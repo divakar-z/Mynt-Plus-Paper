@@ -33,6 +33,19 @@ class FundDetailModel {
   String? blkAmt;
   String? cbu;
   String? premiumDM;
+  String? premiumDI;
+  String? premiumCI;
+  String? premiumCM;
+  String? premiumFI;
+  String? premiumFM;
+  String? spanFI;
+  String? spanFM;
+  String? expoFI;
+  String? expoFM;
+  String? spanDI;
+  String? expoDI;
+  String? spanCI;
+  String? expoCI;
   String? brkageDM;
   String? premium;
   String? scripbskmarEI;
@@ -91,6 +104,19 @@ class FundDetailModel {
       this.blkAmt,
       this.cbu,
       this.premiumDM,
+      this.premiumDI,
+      this.premiumCI,
+      this.premiumCM,
+      this.premiumFI,
+      this.premiumFM,
+      this.spanFI,
+      this.spanFM,
+      this.expoFI,
+      this.expoFM,
+      this.spanDI,
+      this.expoDI,
+      this.spanCI,
+      this.expoCI,
       this.brkageDM,
       this.premium,
       this.scripbskmarEI,
@@ -150,6 +176,27 @@ class FundDetailModel {
     blkAmt = json['blk_amt'];
     cbu = json['cbu'];
     premiumDM = json['premium_d_m'];
+    // Segment-and-product option premium. Suffix reads <segment>_<product>:
+    // d = derivative, c = commodity; i = intraday (MIS), m = margin (NRML/CF).
+    // Verified against the vendor Margins page on 17-08-2026.
+    premiumDI = json['premium_d_i'];
+    premiumCI = json['premium_c_i'];
+    premiumCM = json['premium_c_m'];
+    // Currency (CDS). Segment token is `f` for FX, per the Noren REST API
+    // spec (Feb 2025), pages 113 and 117: segments are EQT / DER / FX / COM.
+    premiumFI = json['premium_f_i'];
+    premiumFM = json['premium_f_m'];
+    spanFI = json['span_f_i'];
+    spanFM = json['span_f_m'];
+    expoFI = json['expo_f_i'];
+    expoFM = json['expo_f_m'];
+    // Intraday span and exposure. Named in the Noren REST API spec
+    // (Feb 2025) page 116, alongside the carry-forward pair which was also
+    // verified live on 17-08-2026 against a funded account.
+    spanDI = json['span_d_i'];
+    expoDI = json['expo_d_i'];
+    spanCI = json['span_c_i'];
+    expoCI = json['expo_c_i'];
     brkageDM = json['brkage_d_m'];
     premium = json['premium'];
     scripbskmarEI = json['scripbskmar_e_i'];
@@ -209,6 +256,19 @@ class FundDetailModel {
     data['blk_amt'] = blkAmt;
     data['cbu'] = cbu;
     data['premium_d_m'] = premiumDM;
+    data['premium_d_i'] = premiumDI;
+    data['premium_c_i'] = premiumCI;
+    data['premium_c_m'] = premiumCM;
+    data['premium_f_i'] = premiumFI;
+    data['premium_f_m'] = premiumFM;
+    data['span_f_i'] = spanFI;
+    data['span_f_m'] = spanFM;
+    data['expo_f_i'] = expoFI;
+    data['expo_f_m'] = expoFM;
+    data['span_d_i'] = spanDI;
+    data['expo_d_i'] = expoDI;
+    data['span_c_i'] = spanCI;
+    data['expo_c_i'] = expoCI;
     data['brkage_d_m'] = brkageDM;
     data['premium'] = premium;
     data['scripbskmar_e_i'] = scripbskmarEI;

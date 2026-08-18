@@ -95,6 +95,9 @@ class ChartEngineTopBar extends ConsumerWidget {
                 ref.read(screenshotRequestProvider.notifier).request(activeIdx);
               },
             ),
+          // Pop out moved into the iframe top bar (web/chart-engine/topbar.js,
+          // next to the camera/gear buttons) — the Flutter bar is skipped
+          // entirely in embedded mode, so a button here would be invisible.
           // Indicators (fx) button moved into the iframe top bar. See [TopBarFlags].
           if (!TopBarFlags.kJsIndicatorsButton)
             _IndicatorsButton(onPopupVisibilityChanged: onPopupVisibilityChanged),

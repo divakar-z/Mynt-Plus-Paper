@@ -7,6 +7,15 @@ import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/option_underlying_match.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// When true, the running Flutter instance is the detached `/chart-popout`
+/// window. Set ONCE at startup (main.dart) from the launch URL, before any
+/// provider is read. In this mode [ChartEngineSessionNotifier] neither hydrates
+/// from nor persists to the shared `chartEngineSession` prefs key — the popout
+/// runs on a throwaway session seeded from the URL, so it can never clobber the
+/// main window's saved layout/panes/indicators. Isolated to the session store
+/// only; palette/order-defaults still share prefs (read-only, harmless).
+bool kChartPopoutMode = false;
+
 /// All supported chart layouts. The enum NAME is the persistence id and the
 /// postMessage value — keep stable across versions.
 enum ChartLayout {
@@ -729,6 +738,10 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
 
   @override
   ChartEngineSession build() {
+    // Popout runs on a fresh throwaway session (seeded from the URL by
+    // ChartPopoutScreen) — never hydrate the shared saved session, so the
+    // detached window can't inherit or overwrite the main window's layout.
+    if (kChartPopoutMode) return const ChartEngineSession();
     // Hydrate from SharedPreferences on first build. Fall back to the
     // default on ANY error so a corrupted prefs entry can't brick the
     // chart engine.
@@ -784,6 +797,8 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
   }
 
   Future<void> _persist() async {
+    // Popout must never write the shared session key (see [kChartPopoutMode]).
+    if (kChartPopoutMode) return;
     try {
       final json = jsonEncode(state.toJson());
       await locator<Preferences>().setChartEngineSession(json);

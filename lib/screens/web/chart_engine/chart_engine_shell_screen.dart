@@ -19,6 +19,7 @@ import 'package:mynt_plus/screens/web/chart_engine/state/indicator_schema.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/pane_runtime_status.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/overlay_payload.dart';
 import 'package:mynt_plus/screens/web/chart_engine/utils/chart_engine_bridge.dart';
+import 'package:mynt_plus/screens/web/chart_engine/utils/popout_feed_client.dart';
 import 'package:mynt_plus/screens/web/chart_engine/widgets/chart_engine_top_bar.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -76,7 +77,24 @@ class ChartEngineShellScreen extends ConsumerStatefulWidget {
   /// owns all controls. Used by `EmbeddedChartView` to drop the now-empty
   /// Flutter chrome inside the symbol details screen.
   final bool embedded;
-  const ChartEngineShellScreen({super.key, this.embedded = false});
+
+  /// When true, this shell hosts the detached `/chart-popout` window (a second
+  /// Flutter instance). It feeds from [feed] (the alternate `ws.zebull.in`
+  /// socket) instead of the shared `websocketProvider` — the main window owns
+  /// the one allowed `go.mynt.in` socket, so the popout must never open it. The
+  /// iframe also boots in `?popout=1` (order surfaces hidden) and order-book /
+  /// GTT fetches are skipped.
+  final bool popout;
+
+  /// Popout-only live feed over the alternate socket. Non-null iff [popout].
+  final PopoutFeedClient? feed;
+
+  const ChartEngineShellScreen({
+    super.key,
+    this.embedded = false,
+    this.popout = false,
+    this.feed,
+  });
 
   @override
   ConsumerState<ChartEngineShellScreen> createState() =>
@@ -219,6 +237,24 @@ class _ChartEngineShellScreenState
         const Duration(seconds: 1), (_) => _wsForwardAll());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (widget.popout) {
+        // POPOUT: never touch the shared websocketProvider — the MAIN window
+        // owns the single allowed go.mynt.in Noren socket, and a second
+        // connection with the same uid would kick it. Drive ticks from the
+        // alternate ws.zebull.in feed instead. The engine's per-token
+        // subscribe requests route to `_feed.subscribe` (see _handleSubscribe)
+        // and each tick posts straight into the iframe. No GTT/order book —
+        // the popout is view-only (order handlers are gated off, ?popout=1).
+        final feed = widget.feed;
+        if (feed != null) {
+          feed.onTick = (token, packet) {
+            if (!mounted) return;
+            _post(encodeTick(token, packet));
+          };
+          feed.start();
+        }
+        return;
+      }
       final ws = ref.read(websocketProvider);
       // All three paths funnel into a microtask-coalesced wrapper so a
       // burst of notifies (very common: ChangeNotifier fires once per WS
@@ -252,6 +288,9 @@ class _ChartEngineShellScreenState
   void dispose() {
     _oiFetchTimer?.cancel();
     _tickPollTimer?.cancel();
+    // Popout: tear down the alternate feed socket (heartbeat, watchdog,
+    // reconnect timers) so the closed window leaves no live connection.
+    widget.feed?.stop();
     _dismissAllPopups();
     if (_windowMessageRef != null) {
       html.window.removeEventListener('message', _windowMessageRef);
@@ -284,6 +323,9 @@ class _ChartEngineShellScreenState
   /// covers every delivery mechanism.
   void _wsForwardAll() {
     if (!mounted) return;
+    // Popout drives ticks from the alternate feed (see initState); the shared
+    // socket is off-limits here, so the 1s poll-forward is a no-op.
+    if (widget.popout) return;
     if (_subscribedKeys.isEmpty && _oiSubs.isEmpty) return;
     final ws = ref.read(websocketProvider);
     // Reconnect detection — re-subscribe everything when WS comes back up.
@@ -393,7 +435,8 @@ class _ChartEngineShellScreenState
         ..style.backgroundColor =
             ref.read(themeProvider).isDarkMode ? '#0B0F14' : '#FFFFFF'
         ..allow = 'autoplay'
-        ..src = '/chart-engine/index.html?theme=${_currentThemeName()}';
+        ..src = '/chart-engine/index.html?theme=${_currentThemeName()}'
+            '${widget.popout ? '&popout=1' : ''}';
       el.style.setProperty('pointer-events', 'auto', 'important');
       el.onLoad.first.then((_) {
         try { el.focus(); } catch (_) {}
@@ -1402,6 +1445,9 @@ class _ChartEngineShellScreenState
   /// reattachment here.
   void _resubscribeAll() {
     if (!mounted) return;
+    // Popout has no shared socket to re-subscribe; the alternate feed client
+    // re-sends its own tracked SubSet on every reconnect ack.
+    if (widget.popout) return;
     final ws = ref.read(websocketProvider);
     for (final key in _subscribedKeys) {
       ws.establishConnection(channelInput: key, task: 't', context: context);
@@ -1414,6 +1460,13 @@ class _ChartEngineShellScreenState
     final exch = value['exch'] as String?;
     final token = value['token'] as String?;
     if (exch == null || token == null) return;
+    if (widget.popout) {
+      // Route to the alternate ws.zebull.in feed — the main socket is
+      // off-limits in popout. The feed client dedups + primes on ack, so we
+      // skip the _subscribedKeys tracking and socketDatas prime below.
+      widget.feed?.subscribe(exch, token);
+      return;
+    }
     final key = '$exch|$token';
     if (_subscribedKeys.contains(key)) return;
     _subscribedKeys.add(key);
@@ -1466,6 +1519,10 @@ class _ChartEngineShellScreenState
     final exch = value['exch'] as String?;
     final token = value['token'] as String?;
     if (exch == null || token == null) return;
+    if (widget.popout) {
+      widget.feed?.unsubscribe(exch, token);
+      return;
+    }
     final key = '$exch|$token';
     if (!_subscribedKeys.contains(key)) return;
     // Remove from our forwarding set — the WS listener will stop posting ticks
@@ -2815,6 +2872,9 @@ class _ChartEngineShellScreenState
   ///           after 120s since last fetch (unchanged cadence).
   void _maybeFetchOptionChain(Timer? _) {
     if (!mounted || !_iframeReady) return;
+    // Popout is view-only over the alternate feed: the option-chain OI path
+    // subscribes tokens on the shared socket, which the popout must not open.
+    if (widget.popout) return;
     final session = ref.read(chartEngineSessionProvider);
     final oiData = ref.read(chartOiDataProvider);
     final oiNotifier = ref.read(chartOiDataProvider.notifier);

@@ -883,7 +883,7 @@ class _ColumnHeaders extends ConsumerWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          "CALLS",
+                          "CALL",
                           style: MyntWebTextStyles.body(context,
                               fontWeight: MyntFonts.medium,
                               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary)),
@@ -943,7 +943,7 @@ class _ColumnHeaders extends ConsumerWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          "PUTS",
+                          "PUT",
                           style: MyntWebTextStyles.body(context,
                               fontWeight: MyntFonts.medium,
                               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary)),
