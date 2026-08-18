@@ -94,6 +94,11 @@ class WebSocketProvider extends ChangeNotifier {
   final Map<String, Timer> _subscriptionTimers = {};
   final Map<String, dynamic> _socketDatas = {};
   final Map<String, String> _ltpCache = {}; // Cache for last known LTP values
+  // CAS indicative price (`ic`) per token. It's a rare auction-only delta, so
+  // persist the last valid value independently of the volatile _socketDatas
+  // merge (the depth screen reads it via indicativeClose). Scoped per token so
+  // one scrip's value never leaks onto another.
+  final Map<String, String> _indicativeByToken = {};
   Timer? _holdStartTime;
   Timer? _reconnectBackoff; // Add backoff timer
 
@@ -105,6 +110,8 @@ class WebSocketProvider extends ChangeNotifier {
   bool get wsConnected => _wsConnected;
   bool get retryScreen => _retryScreen;
   Map get socketDatas => _socketDatas;
+  /// Last valid CAS indicative price seen for [token] this session, or null.
+  String? indicativeClose(String token) => _indicativeByToken[token];
   bool get reconnectionSuccess => _reconnectionSuccess;
   
   // Get cached LTP for a token. Used by mobile order_book.
@@ -600,6 +607,7 @@ class WebSocketProvider extends ChangeNotifier {
     _pendingSubscriptions['d'] = [];
     _socketDatas.clear();
     _ltpCache.clear();
+    _indicativeByToken.clear();
 
     // Drive a clean teardown via the state machine.
     _transitionTo(SocketState.disconnected);
@@ -664,6 +672,7 @@ class WebSocketProvider extends ChangeNotifier {
       // Full close (logout / re-login): clear everything for fresh state.
       _socketDatas.clear();
       _ltpCache.clear();
+      _indicativeByToken.clear();
       log('Cleared socket data and LTP cache');
     }
 
@@ -960,6 +969,15 @@ class WebSocketProvider extends ChangeNotifier {
     for (final entry in _pendingSocketUpdates.entries) {
       final token = entry.key;
       final updateData = entry.value;
+
+      // Capture the CAS indicative price (`ic`) — a rare auction-only delta —
+      // per token, retained across frames that omit it (unlike the _socketDatas
+      // merge that the depth screen can miss).
+      final icRaw = updateData['ic'];
+      if (icRaw != null) {
+        final icv = double.tryParse(icRaw.toString());
+        if (icv != null && icv > 0) _indicativeByToken[token] = icRaw.toString();
+      }
 
       // If this is a new token, initialize it
       if (!_socketDatas.containsKey(token)) {
