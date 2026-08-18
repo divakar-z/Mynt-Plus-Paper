@@ -2675,6 +2675,9 @@ class _CustomizableSplitHomeScreenState
                                   lightColor: MyntColors.textPrimary,
                                 ),
                               ),
+                              // Scalper "Beta" badge removed — Scalper is no
+                              // longer beta. Kept commented for easy rollback.
+                              /*
                               const SizedBox(width: 4),
                               Transform.translate(
                                 offset: const Offset(0, -6),
@@ -2691,6 +2694,7 @@ class _CustomizableSplitHomeScreenState
                                   ).copyWith(fontSize: 10),
                                 ),
                               ),
+                              */
                             ],
                           ),
                         ),

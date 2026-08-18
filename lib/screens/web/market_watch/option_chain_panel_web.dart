@@ -631,7 +631,7 @@ class _OptionChainPanelWebState extends ConsumerState<OptionChainPanelWeb> {
                   flex: 6,
                   child: Center(
                     child: Text(
-                      "CALLS",
+                      "CALL",
                       style: MyntWebTextStyles.bodySmall(context,
                           fontWeight: MyntFonts.medium,
                           color: resolveThemeColor(context,
@@ -656,7 +656,7 @@ class _OptionChainPanelWebState extends ConsumerState<OptionChainPanelWeb> {
                   flex: 6,
                   child: Center(
                     child: Text(
-                      "PUTS",
+                      "PUT",
                       style: MyntWebTextStyles.bodySmall(context,
                           fontWeight: MyntFonts.medium,
                           color: resolveThemeColor(context,
