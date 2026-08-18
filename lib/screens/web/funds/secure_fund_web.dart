@@ -884,21 +884,22 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
           _MarginComponent("Span CF", val(m?.spanCM)),
           _MarginComponent("Exposure CF", val(m?.expoCM)),
           _MarginComponent("Premium CF", paid(m?.premiumCM)),
-          _MarginComponent("Additional Margin CF", val(m?.addmrgCM)),
           _MarginComponent("Unrealised MToM CF", val(m?.uzpnlCM)),
         ]),
       ]),
-      // Currency (CDS). Wired the same way as every other segment, but the
-      // segment token is an assumption — no currency position has ever been
-      // held on a test account, so the key has never appeared in a response.
-      // See the note in fund_detial_model.dart for the alternatives to try if
-      // these rows stay at 0.00 on an account that does hold currency.
+      // Currency (CDS). Segment token is `f` for FX — Noren REST API spec
+      // (Feb 2025) pages 113 and 117, where the segments are EQT / DER / FX
+      // / COM. Same components as the other derivative segments.
       _MarginSegment("Currency", [
         _MarginProduct("Intraday", [
-          _MarginComponent("Premium MIS", paid(m?.premiumCurrI)),
+          _MarginComponent("Span MIS", val(m?.spanFI)),
+          _MarginComponent("Exposure MIS", val(m?.expoFI)),
+          _MarginComponent("Premium MIS", paid(m?.premiumFI)),
         ]),
         _MarginProduct("Carry Forward", [
-          _MarginComponent("Premium CF", paid(m?.premiumCurrM)),
+          _MarginComponent("Span CF", val(m?.spanFM)),
+          _MarginComponent("Exposure CF", val(m?.expoFM)),
+          _MarginComponent("Premium CF", paid(m?.premiumFM)),
         ]),
       ]),
     ];

@@ -36,8 +36,12 @@ class FundDetailModel {
   String? premiumDI;
   String? premiumCI;
   String? premiumCM;
-  String? premiumCurrI;
-  String? premiumCurrM;
+  String? premiumFI;
+  String? premiumFM;
+  String? spanFI;
+  String? spanFM;
+  String? expoFI;
+  String? expoFM;
   String? spanDI;
   String? expoDI;
   String? spanCI;
@@ -103,8 +107,12 @@ class FundDetailModel {
       this.premiumDI,
       this.premiumCI,
       this.premiumCM,
-      this.premiumCurrI,
-      this.premiumCurrM,
+      this.premiumFI,
+      this.premiumFM,
+      this.spanFI,
+      this.spanFM,
+      this.expoFI,
+      this.expoFM,
       this.spanDI,
       this.expoDI,
       this.spanCI,
@@ -174,22 +182,17 @@ class FundDetailModel {
     premiumDI = json['premium_d_i'];
     premiumCI = json['premium_c_i'];
     premiumCM = json['premium_c_m'];
-    // Currency (CDS). The segment token is UNCONFIRMED — no currency position
-    // has ever been held on a test account, so the key has never appeared in a
-    // response. `curr` is the working assumption. If the Currency rows stay at
-    // 0.00 on an account that genuinely holds a currency position, try `u` or
-    // `f` in place of `curr` — the single-letter tokens for equity, derivative
-    // and commodity are e, d and c respectively.
-    // A wrong guess here yields null, which renders as 0.00 — the same as
-    // showing nothing, so this cannot report an incorrect figure.
-    premiumCurrI = json['premium_curr_i'];
-    premiumCurrM = json['premium_curr_m'];
-    // Intraday span and exposure. The carry-forward pair (span_d_m, expo_d_m,
-    // span_c_m, expo_c_m) is confirmed — verified 17-08-2026 against a funded
-    // account where the per-segment values summed exactly to `span` and
-    // `expo`. The intraday pair below follows the same naming but has not
-    // been seen yet, because that account held only NRML positions. A wrong
-    // name yields null, which renders as 0.00.
+    // Currency (CDS). Segment token is `f` for FX, per the Noren REST API
+    // spec (Feb 2025), pages 113 and 117: segments are EQT / DER / FX / COM.
+    premiumFI = json['premium_f_i'];
+    premiumFM = json['premium_f_m'];
+    spanFI = json['span_f_i'];
+    spanFM = json['span_f_m'];
+    expoFI = json['expo_f_i'];
+    expoFM = json['expo_f_m'];
+    // Intraday span and exposure. Named in the Noren REST API spec
+    // (Feb 2025) page 116, alongside the carry-forward pair which was also
+    // verified live on 17-08-2026 against a funded account.
     spanDI = json['span_d_i'];
     expoDI = json['expo_d_i'];
     spanCI = json['span_c_i'];
@@ -256,8 +259,12 @@ class FundDetailModel {
     data['premium_d_i'] = premiumDI;
     data['premium_c_i'] = premiumCI;
     data['premium_c_m'] = premiumCM;
-    data['premium_curr_i'] = premiumCurrI;
-    data['premium_curr_m'] = premiumCurrM;
+    data['premium_f_i'] = premiumFI;
+    data['premium_f_m'] = premiumFM;
+    data['span_f_i'] = spanFI;
+    data['span_f_m'] = spanFM;
+    data['expo_f_i'] = expoFI;
+    data['expo_f_m'] = expoFM;
     data['span_d_i'] = spanDI;
     data['expo_d_i'] = expoDI;
     data['span_c_i'] = spanCI;
