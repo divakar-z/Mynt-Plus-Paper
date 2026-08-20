@@ -244,17 +244,17 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               // laid out as a 2×2 grid (DD and Win Rate beneath Min Cap and CAGR).
               const AlgoStrategiesSection(stackedMetrics: true),
               const SizedBox(height: 32),
-
-              // Dashboard cards section (Holdings, Position, Orders, Margins)
-              _buildDashboardCardsSection(context),
-              const SizedBox(height: 32),
-              // RupeeCase Strategies section — shown below Portfolio.
-              // Self-hides (renders nothing) until data loads.
-              const RupeeCaseStrategiesSection(),
               
               // Tools section (Scalper, Strategy Builder, OptionZ)
               _buildToolsSection(context),
               const SizedBox(height: 32),
+               // Dashboard cards section (Holdings, Position, Orders, Margins)
+              // _buildDashboardCardsSection(context),
+              // const SizedBox(height: 32),
+              // RupeeCase Strategies section.
+              // Self-hides (renders nothing) until data loads.
+              const RupeeCaseStrategiesSection(),
+              
               // Today's trade action section
               // _buildFeatureCardsSection(context),
               // const SizedBox(height: 32),

@@ -210,8 +210,8 @@ class _MutualFundNewScreenWebState extends ConsumerState<MutualFundNewScreenWeb>
                 Expanded(
                   child: nfoCard(context, mfData, theme),
                 ),
-                // const SizedBox(width: 32),
-                // Expanded(child: _strategyCard(context, theme)),
+                const SizedBox(width: 32),
+                Expanded(child: _strategyCard(context, theme)),
               ],
             ),
           ),

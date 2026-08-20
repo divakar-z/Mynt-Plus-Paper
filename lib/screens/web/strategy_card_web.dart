@@ -14,16 +14,6 @@ import '../../res/mynt_web_text_styles.dart';
 import '../../res/res.dart';
 import '../../utils/rupee_convert_format.dart';
 
-/// Which risk dial the card draws beside its header label.
-enum StrategyRiskGauge {
-  /// Five-segment rainbow arc (58 × 25) with the benchmark caption beneath —
-  /// used by the curated RupeeCase cards.
-  rainbow,
-
-  /// Compact single-hue speedometer (42 × 20) — used by the algo cards.
-  dial,
-}
-
 /// How the footer metrics are arranged inside the card's stat panel.
 enum StrategyMetricsLayout {
   /// Two per row (MIN.CAP | CAGR over ALPHA | NET RETURNS).
@@ -103,7 +93,6 @@ class StrategyCardData {
     required this.metrics,
     this.riskLevel = '',
     this.benchmark = '',
-    this.gauge = StrategyRiskGauge.rainbow,
     this.metricsLayout = StrategyMetricsLayout.grid,
     this.metricLabelGap = 5,
     this.titleBesideGauge = true,
@@ -127,10 +116,10 @@ class StrategyCardData {
   /// Free-text risk label; empty hides the gauge.
   final String riskLevel;
 
-  /// Index the strategy is measured against; captions the [rainbow] gauge.
+  /// Index the strategy is measured against; captions the risk gauge. Empty
+  /// (the algo cards) simply drops the caption.
   final String benchmark;
 
-  final StrategyRiskGauge gauge;
   final StrategyMetricsLayout metricsLayout;
 
   /// Gap between a metric's label and its value.
@@ -167,7 +156,6 @@ class StrategyCardData {
         headerLabel: _weeksLabel(s.rebalanceWeeks),
         riskLevel: s.riskLevel,
         benchmark: s.benchmark,
-        gauge: StrategyRiskGauge.rainbow,
         // The curated title has always rendered at a flat 14px, unlike the algo
         // one which follows the width-based scale.
         titleFontSize: MyntFonts.body,
@@ -221,7 +209,6 @@ class StrategyCardData {
       name: s.title,
       headerLabel: 'Subscribed ${s.subscriberCount}',
       riskLevel: s.riskLevel,
-      gauge: StrategyRiskGauge.dial,
       metricsLayout: stackedMetrics
           ? StrategyMetricsLayout.grid
           : StrategyMetricsLayout.row,
@@ -463,9 +450,9 @@ class _StrategyCardBody extends StatelessWidget {
 
   Widget? _riskGauge() {
     if (data.riskLevel.trim().isEmpty) return null;
-    return data.gauge == StrategyRiskGauge.rainbow
-        ? _RiskGauge(riskLevel: data.riskLevel, benchmark: data.benchmark)
-        : _AlgoRiskGauge(riskLevel: data.riskLevel);
+    // One gauge for both rows — the curated and algo cards differ only in
+    // whether they carry a benchmark caption.
+    return _RiskGauge(riskLevel: data.riskLevel, benchmark: data.benchmark);
   }
 
   /// Single muted line above the title ("Rebalance 4W" / "Subscribed 120").
@@ -848,65 +835,30 @@ String _compactRupee(double value) {
       .replaceAll(' K', 'K');
 }
 
-/// A risk tier: needle position (0 = lowest … 1 = highest) and dial hue.
-class _RiskTier {
-  const _RiskTier(this.fraction, this.color);
-  final double fraction;
-  final Color color;
-}
-
-const Color _kRiskGreen = Color(0xFF16A34A);
-const Color _kRiskLime = Color(0xFF84CC16);
-const Color _kRiskAmber = Color(0xFFF5B70A);
-const Color _kRiskOrange = Color(0xFFF97316);
-const Color _kRiskRed = Color(0xFFEF4444);
-
-/// Maps a free-text risk label to one of five tiers (Very Low → Very High).
-/// More specific phrases ("moderately high/low") are matched before the plain
-/// "high"/"low"/"moderate" terms they contain.
-_RiskTier _riskTier(String riskLevel) {
-  final String r = riskLevel.toLowerCase();
-  if (r.contains('very high') || r.contains('aggressive')) {
-    return const _RiskTier(0.9, _kRiskRed);
-  }
-  if (r.contains('moderately high') || r.contains('high')) {
-    return const _RiskTier(0.72, _kRiskOrange);
-  }
-  if (r.contains('moderately low')) {
-    return const _RiskTier(0.3, _kRiskLime);
-  }
-  if (r.contains('moderate') || r.contains('medium') || r.contains('balanced')) {
-    return const _RiskTier(0.5, _kRiskAmber);
-  }
-  if (r.contains('very low')) {
-    return const _RiskTier(0.1, _kRiskGreen);
-  }
-  if (r.contains('low') || r.contains('conservative')) {
-    return const _RiskTier(0.3, _kRiskLime);
-  }
-  return const _RiskTier(0.5, _kRiskAmber);
-}
-
-/// Original 5-segment rainbow risk gauge for RupeeCase cards — a semicircular
-/// arc split into five coloured segments (green → lime → yellow → orange → red)
-/// with a needle that points to the strategy's risk position. Shows the full
-/// risk label on hover. Larger than the algo gauge (58 × 25 px).
+/// 5-segment rainbow risk gauge (58 × 25 px), shared by the curated and algo
+/// cards — a semicircular arc split into five coloured segments (green → lime →
+/// yellow → orange → red) with a needle that points to the strategy's risk
+/// position. Shows the full risk label on hover, and the benchmark caption
+/// beneath when the card carries one.
 class _RiskGauge extends StatelessWidget {
   const _RiskGauge({required this.riskLevel, required this.benchmark});
 
   final String riskLevel;
   final String benchmark;
 
+  /// Order matters: every phrase is matched before the plainer term it
+  /// contains. "Moderately low" has to be tested ahead of "moderate", or it
+  /// falls into the mid-risk branch and the needle reads a tier too high.
   double get _fraction {
     final String r = riskLevel.toLowerCase();
     if (r.contains('very high') || r.contains('aggressive')) return 0.94;
     if (r.contains('moderately high') || r.contains('high')) return 0.72;
+    if (r.contains('moderately low')) return 0.28;
     if (r.contains('moderate') ||
         r.contains('medium') ||
         r.contains('balanced')) {
       return 0.5;
     }
-    if (r.contains('moderately low')) return 0.28;
     if (r.contains('low') || r.contains('conservative')) return 0.12;
     return 0.5;
   }
@@ -1005,126 +957,6 @@ class _RiskGaugePainter extends CustomPainter {
       old.fraction != fraction || old.needleColor != needleColor;
 }
 
-/// Speedometer-style risk gauge for the algo cards — a single-hue dial whose
-/// colour and needle position map to the strategy's risk tier (green → red).
-/// Sits top-right of the title; the full risk label shows on hover.
-class _AlgoRiskGauge extends StatelessWidget {
-  const _AlgoRiskGauge({required this.riskLevel});
-
-  final String riskLevel;
-
-  @override
-  Widget build(BuildContext context) {
-    final _RiskTier tier = _riskTier(riskLevel);
-    return Tooltip(
-      message: riskLevel,
-      child: CustomPaint(
-        size: const Size(42, 20),
-        painter: _AlgoRiskGaugePainter(
-          fraction: tier.fraction,
-          color: tier.color,
-          trackColor: resolveThemeColor(context,
-              dark: Colors.white.withValues(alpha: 0.10),
-              light: Colors.black.withValues(alpha: 0.06)),
-        ),
-      ),
-    );
-  }
-}
-
-class _AlgoRiskGaugePainter extends CustomPainter {
-  _AlgoRiskGaugePainter({
-    required this.fraction,
-    required this.color,
-    required this.trackColor,
-  });
-
-  final double fraction;
-  final Color color;
-  final Color trackColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double stroke = size.height * 0.15;
-    final Offset center = Offset(size.width / 2, size.height - stroke / 2);
-    final double radius = math.min(size.width / 2, size.height) - stroke;
-    final Rect rect = Rect.fromCircle(center: center, radius: radius);
-
-    // Faint full track under the coloured dial.
-    canvas.drawArc(
-      rect,
-      math.pi,
-      math.pi,
-      false,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = stroke
-        ..strokeCap = StrokeCap.round
-        ..color = trackColor,
-    );
-
-    // Coloured dial — a light → full sweep of the tier hue.
-    canvas.drawArc(
-      rect,
-      math.pi,
-      math.pi,
-      false,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = stroke
-        ..strokeCap = StrokeCap.round
-        ..shader = SweepGradient(
-          startAngle: math.pi,
-          endAngle: 2 * math.pi,
-          colors: [color.withValues(alpha: 0.55), color],
-        ).createShader(rect),
-    );
-
-    // Tick marks around the outer edge.
-    final Paint tickPaint = Paint()
-      ..color = color
-      ..strokeWidth = 1.0
-      ..strokeCap = StrokeCap.round;
-    const int ticks = 5;
-    for (int i = 0; i <= ticks; i++) {
-      final double a = math.pi - (i / ticks) * math.pi;
-      final double rInner = radius + stroke * 0.15;
-      final double rOuter = radius + stroke * 0.55;
-      canvas.drawLine(
-        Offset(center.dx + rInner * math.cos(a), center.dy - rInner * math.sin(a)),
-        Offset(center.dx + rOuter * math.cos(a), center.dy - rOuter * math.sin(a)),
-        tickPaint,
-      );
-    }
-
-    // Needle.
-    final double clamped = fraction.clamp(0.0, 1.0);
-    final double angle = math.pi - clamped * math.pi;
-    final double needleLen = radius - stroke * 0.15;
-    final Offset tip = Offset(
-      center.dx + needleLen * math.cos(angle),
-      center.dy - needleLen * math.sin(angle),
-    );
-    canvas.drawLine(
-      center,
-      tip,
-      Paint()
-        ..color = color
-        ..strokeWidth = 1.6
-        ..strokeCap = StrokeCap.round,
-    );
-
-    // Hub with a white centre.
-    canvas.drawCircle(center, stroke * 0.62, Paint()..color = color);
-    canvas.drawCircle(center, stroke * 0.28, Paint()..color = Colors.white);
-  }
-
-  @override
-  bool shouldRepaint(_AlgoRiskGaugePainter old) =>
-      old.fraction != fraction ||
-      old.color != color ||
-      old.trackColor != trackColor;
-}
 
 /// Brighter dark-mode text for the strategy cards' inner contents so the
 /// values/labels read crisply on the dark card gradient.
