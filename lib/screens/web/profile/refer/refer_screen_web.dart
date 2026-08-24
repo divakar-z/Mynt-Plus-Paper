@@ -273,12 +273,17 @@ class _ReferScreenWebState extends ConsumerState<ReferScreenWeb> {
       successColor.withValues(alpha: dark ? 0.22 : 0.16),
       bubbleColor,
     );
-    // No outlines in the reference — the bubbles are separated by fill and
-    // shadow alone. Dark mode still needs a hairline or the surface swallows
-    // them.
-    final Border? hairline = dark
-        ? Border.all(color: MyntColors.borderMutedDark, width: 1)
-        : null;
+    // Tinted borders matching the screenshot: primary-blue for the outgoing
+    // bubble, success-green for the reply. Slightly more opaque in dark mode
+    // so they hold against the darker surface.
+    final Border outgoingBorder = Border.all(
+      color: primaryColor.withValues(alpha: dark ? 0.35 : 0.22),
+      width: 1,
+    );
+    final Border replyBorder = Border.all(
+      color: successColor.withValues(alpha: dark ? 0.45 : 0.30),
+      width: 1,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -289,7 +294,7 @@ class _ReferScreenWebState extends ConsumerState<ReferScreenWeb> {
           decoration: BoxDecoration(
             color: bubbleColor,
             borderRadius: BorderRadius.circular(8),
-            border: hairline,
+            border: outgoingBorder,
             boxShadow: dark ? MyntShadows.cardDark : MyntShadows.card,
           ),
           child: Row(
@@ -354,7 +359,7 @@ class _ReferScreenWebState extends ConsumerState<ReferScreenWeb> {
               decoration: BoxDecoration(
                 color: replyFill,
                 borderRadius: BorderRadius.circular(8),
-                border: hairline,
+                border: replyBorder,
                 boxShadow: dark ? MyntShadows.cardDark : MyntShadows.card,
               ),
               child: Text(
