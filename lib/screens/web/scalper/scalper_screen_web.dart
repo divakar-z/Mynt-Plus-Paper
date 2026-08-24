@@ -240,6 +240,20 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     }
   }
 
+  /// Release the option-chain subscriptions.
+  ///
+  /// MUST run here and not in `dispose()`. `dispose()` executes while the
+  /// element is being unmounted, where `ref.read` is no longer reliable — the
+  /// unsubscribe silently never reached the socket and the whole chain kept
+  /// streaming after the scalper was closed. `deactivate()` fires when the
+  /// widget leaves the tree while the element is still mounted, so `ref` and
+  /// `context` are both valid.
+  @override
+  void deactivate() {
+    ref.read(scalperProvider).unsubscribeFromWebSocket(context);
+    super.deactivate();
+  }
+
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
@@ -248,7 +262,8 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     _searchController.dispose();
     _removeSearchOverlay();
     _removeExpiryOverlay();
-    ref.read(scalperProvider).unsubscribeFromWebSocket(context);
+    // Subscriptions were released in deactivate() — see the note there.
+
     // Only fully reset charts when NOT embedded.
     // When embedded (in split home screen), the widget gets unmounted/remounted
     // on screen switches. Keeping symbol state lets the factory callback

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../api/core/api_export.dart';
+import '../../../locator/constant.dart';
 import '../../../locator/locator.dart';
 import '../../../locator/preference.dart';
 import '../../../models/marketwatch_model/linked_scrips.dart';
@@ -1261,10 +1262,11 @@ class ScalperProvider extends ChangeNotifier {
 
   /// Subscribe to WebSocket for index and options.
   ///
-  /// Scalper uses the touchline feed (`t`), not depth (`d`): touchline carries
-  /// `lp` plus level-1 `bp1`/`sp1`, which are the only book fields the scalper
-  /// reads (see the order bar's ASK/BID), so full 5-level depth is wasted
-  /// bandwidth across ~64 option tokens.
+  /// Scalper uses the touchline feed (`t`), not depth (`d`): the option chain
+  /// exceeds the websocket depth limit, which stalled PE prices. The order bar's
+  /// ASK/BID read `sp1`/`bp1` and fall back to the chain's `lp` until a touchline
+  /// delta carrying the book arrives (`_updateSocketData` merges every field
+  /// present in a delta, so no scalper-specific provider change is needed).
   Future<void> subscribeToWebSocket(BuildContext context) async {
     final websocket = ref.read(websocketProvider);
     final index = selectedIndex;
@@ -1291,11 +1293,20 @@ class ScalperProvider extends ChangeNotifier {
 
     if (optionTokens.isNotEmpty) {
       _subscribedOptionTokens = optionTokens;
+
+      // Keep the chain out of ConstantName.lastSubscribe. establishConnection
+      // stashes every "t" channel in that global, and on reconnect
+      // network_state_provider._restoreLegacySubscriptions replays it as *depth*
+      // on web — which would put all ~64 tokens back on the depth feed and
+      // re-create the limit overflow this screen switched to touchline to avoid.
+      // Restoring right after the call is enough: the write is synchronous.
+      final savedLastSubscribe = ConstantName.lastSubscribe;
       websocket.establishConnection(
         channelInput: optionTokens.join('#'),
         task: "t",
         context: context,
       );
+      ConstantName.lastSubscribe = savedLastSubscribe;
     }
   }
 
