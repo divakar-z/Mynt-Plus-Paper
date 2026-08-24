@@ -352,12 +352,12 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               child: FeatureCard(
                 badgeNumber: '04',
                 iconData: shadcn.BootstrapIcons.wechat,
-                title: 'Refer & Earn',
-                description: 'Invite your friends and earn rewards. Share the benefits of smart trading together.',
+                title: 'Refer',
+                description: 'Invite your friends and family. Share the benefits of smart trading together.',
                 badgeColor: const Color(0xFFF59E0B), // Amber - warm and inviting
                 iconColor: const Color(0xFFF59E0B),
                 onTap: () async {
-                  // Open Refer & Earn in external browser (same as profile dropdown)
+                  // Open Refer in external browser (same as profile dropdown)
                   final Preferences pref = locator<Preferences>();
                   final url = 'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
                   launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
@@ -1184,10 +1184,11 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         },
       },
       {
-        'title': 'Refer & Earn',
-        'subtitle': 'Instant Rewards • Unlimited Referrals',
+        'title': 'Refer',
+        // Echoes the headline on the refer page this card opens.
+        'subtitle': 'Your word is worth more',
         'description':
-            'Invite friends to Mynt and earn rewards for every successful referral.',
+            'Share Zebu with friends and family you want to see grow — they start in minutes.',
         'accentColor': const Color(0xFFF59E0B),
         'badge': null,
         'icon': Icons.card_giftcard_rounded,
