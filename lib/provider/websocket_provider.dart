@@ -1429,6 +1429,14 @@ class WebSocketProvider extends ChangeNotifier {
     // Initialize depth data if available
     if (res['t']?.toString().toLowerCase() == "dk") {
       _initializeDepthData(data, res);
+    } else {
+      // Touchline snapshots ("tk") carry level-1 book fields. Copy the ones
+      // actually present — deltas omit unchanged fields, so a value dropped
+      // here can stay missing for a long time on an illiquid contract
+      // (scalper reads bp1/sp1 for ASK/BID and holds no depth subscription).
+      for (final field in const ['bp1', 'sp1', 'bq1', 'sq1']) {
+        if (res[field] != null) data[field] = res[field];
+      }
     }
 
     // Calculate change

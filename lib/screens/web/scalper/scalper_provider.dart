@@ -1259,7 +1259,12 @@ class ScalperProvider extends ChangeNotifier {
     return _lotQuantity * ls;
   }
 
-  /// Subscribe to WebSocket for index and options
+  /// Subscribe to WebSocket for index and options.
+  ///
+  /// Scalper uses the touchline feed (`t`), not depth (`d`): touchline carries
+  /// `lp` plus level-1 `bp1`/`sp1`, which are the only book fields the scalper
+  /// reads (see the order bar's ASK/BID), so full 5-level depth is wasted
+  /// bandwidth across ~64 option tokens.
   Future<void> subscribeToWebSocket(BuildContext context) async {
     final websocket = ref.read(websocketProvider);
     final index = selectedIndex;
@@ -1267,7 +1272,7 @@ class ScalperProvider extends ChangeNotifier {
     // Subscribe to index token
     websocket.establishConnection(
       channelInput: "${index.exch}|${index.token}",
-      task: "d",
+      task: "t",
       context: context,
     );
 
@@ -1288,7 +1293,7 @@ class ScalperProvider extends ChangeNotifier {
       _subscribedOptionTokens = optionTokens;
       websocket.establishConnection(
         channelInput: optionTokens.join('#'),
-        task: "d",
+        task: "t",
         context: context,
       );
     }
@@ -1299,10 +1304,13 @@ class ScalperProvider extends ChangeNotifier {
     if (_subscribedOptionTokens.isEmpty) return;
 
     final websocket = ref.read(websocketProvider);
-    // Send unsubscribe depth command for all option tokens
+    // Send unsubscribe touchline command for all option tokens. Must stay "u"
+    // (not "ud") to match the "t" subscribe above — the websocket provider
+    // tracks sent subscriptions per task type, and "ud" would tear down the
+    // depth subscriptions WebSubscriptionManager holds for open positions.
     websocket.establishConnection(
       channelInput: _subscribedOptionTokens.join('#'),
-      task: "ud",
+      task: "u",
       context: context,
     );
     _subscribedOptionTokens.clear();

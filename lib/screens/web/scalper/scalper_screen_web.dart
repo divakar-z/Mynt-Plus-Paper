@@ -136,14 +136,15 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     // Fetch initial quotes for ALL indices via API first (for immediate display)
     await scalper.fetchAllIndicesQuotes(context);
 
-    // Subscribe to ALL indices for LTP display (depth subscription for live updates)
+    // Subscribe to ALL indices for LTP display (touchline subscription for live
+    // updates — the tabs render LTP/change only, no book)
     final allIndicesTokens = ScalperProvider.indices
         .map((idx) => "${idx.exch}|${idx.token}")
         .join('#');
 
     websocket.establishConnection(
       channelInput: allIndicesTokens,
-      task: "d",
+      task: "t",
       context: context,
     );
 
@@ -1032,7 +1033,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     if (scalper.customIndex != null) {
       ref.read(websocketProvider).establishConnection(
         channelInput: "${scalper.customIndex!.exch}|${scalper.customIndex!.token}",
-        task: "d",
+        task: "t",
         context: context,
       );
     }
