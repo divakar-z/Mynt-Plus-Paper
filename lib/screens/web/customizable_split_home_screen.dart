@@ -117,6 +117,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../res/mynt_web_text_styles.dart';
 import 'market_watch/index/index_bottom_sheet_web.dart';
 import 'home/widgets/app_bar/profile_dropdown.dart';
+import 'home/widgets/portfolio_summary_ticker_strip.dart';
 import 'home/widgets/app_bar/navigation_drawer_web.dart';
 import '../../../res/responsive_extensions.dart';
 import 'scalper/scalper_screen_web.dart';
@@ -255,6 +256,9 @@ class _CustomizableSplitHomeScreenState
   final int _panelCount = 2; // Fixed to 2 panels
   bool _isInitialLoad = true; // Track if this is the initial load
   int _holdingsInitialTabIndex = 0; // Track initial tab for holdings screen
+  // Bumped on every navigation into Holdings so the screen honours the
+  // requested tab even when it is already open on another one.
+  int _holdingsTabRequestId = 0;
   bool _isScalperMode = false; // When true, hides watchlist and shows scalper full-width
   bool _isChartsMode = false; // When true, hides watchlist body and shows chart workspace full-width with slim index strip on left
 
@@ -449,8 +453,9 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            // Mutual Fund tab is index 2 (Equity=0, MTF=1, MF=2, MF BETA=3).
-            _handleHoldingsTap(initialTabIndex: 2);
+            // Mutual Fund is the demat-backed tab at index 3; index 2 is the
+            // retired MF tab, which renders no chip and no table.
+            _handleHoldingsTap(initialTabIndex: 3);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();
@@ -533,8 +538,9 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            // Mutual Fund tab is index 2 (Equity=0, MTF=1, MF=2, MF BETA=3).
-            _handleHoldingsTap(initialTabIndex: 2);
+            // Mutual Fund is the demat-backed tab at index 3; index 2 is the
+            // retired MF tab, which renders no chip and no table.
+            _handleHoldingsTap(initialTabIndex: 3);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();
@@ -1316,7 +1322,9 @@ class _CustomizableSplitHomeScreenState
                 Container(
                     width: 1,
                     color: shadcn.Theme.of(context).colorScheme.border),
+                // Old auto-scrolling position ticker:
                 const Expanded(child: PortfolioTickerStrip()),
+                // const Expanded(child: PortfolioSummaryTickerStrip()),
               ],
             ),
           ),
@@ -1359,7 +1367,9 @@ class _CustomizableSplitHomeScreenState
                 const AutoLoadTextNuggetWidget(
                   screenType: TextNuggetScreenType.homescreen,
                 ),
-                const PortfolioTickerStrip(),
+                // Old auto-scrolling position ticker:
+                // const PortfolioTickerStrip(),
+                const PortfolioSummaryTickerStrip(),
                 Expanded(
                   child: _buildContentPanel(theme, panelIndex: 1),
                 ),
@@ -1380,7 +1390,9 @@ class _CustomizableSplitHomeScreenState
                 const AutoLoadTextNuggetWidget(
                   screenType: TextNuggetScreenType.homescreen,
                 ),
-                const PortfolioTickerStrip(),
+                // Old auto-scrolling position ticker:
+                // const PortfolioTickerStrip(),
+                const PortfolioSummaryTickerStrip(),
                 Expanded(
                   child: _buildContentPanel(theme, panelIndex: 0),
                 ),
@@ -3029,6 +3041,7 @@ class _CustomizableSplitHomeScreenState
             return HoldingScreenWeb(
               listofHolding: holdingsModel ?? [],
               initialTabIndex: _holdingsInitialTabIndex,
+              tabRequestId: _holdingsTabRequestId,
             );
           },
         );
@@ -5142,6 +5155,7 @@ class _CustomizableSplitHomeScreenState
     // Set loading state immediately
     setState(() {
       _holdingsInitialTabIndex = initialTabIndex;
+      _holdingsTabRequestId++;
       _screenLoadingStates[ScreenType.holdings] = true;
     });
 

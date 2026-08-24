@@ -30,8 +30,15 @@ import 'mf_holdings_download_helper.dart';
 class HoldingScreenWeb extends ConsumerWidget {
   final List<dynamic> listofHolding;
   final int initialTabIndex;
-  const HoldingScreenWeb(
-      {super.key, required this.listofHolding, this.initialTabIndex = 0});
+
+  final int tabRequestId;
+
+  const HoldingScreenWeb({
+    super.key,
+    required this.listofHolding,
+    this.initialTabIndex = 0,
+    this.tabRequestId = 0,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -43,15 +50,22 @@ class HoldingScreenWeb extends ConsumerWidget {
     }
 
     return _HoldingScreenContent(
-        listofHolding: listofHolding, initialTabIndex: initialTabIndex);
+      listofHolding: listofHolding,
+      initialTabIndex: initialTabIndex,
+      tabRequestId: tabRequestId,
+    );
   }
 }
 
 class _HoldingScreenContent extends ConsumerStatefulWidget {
   final List<dynamic> listofHolding;
   final int initialTabIndex;
-  const _HoldingScreenContent(
-      {required this.listofHolding, this.initialTabIndex = 0});
+  final int tabRequestId;
+  const _HoldingScreenContent({
+    required this.listofHolding,
+    this.initialTabIndex = 0,
+    this.tabRequestId = 0,
+  });
 
   @override
   ConsumerState<_HoldingScreenContent> createState() =>
@@ -78,6 +92,15 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
   StreamSubscription? _holdingsSocketSubscription;
   DateTime _lastUpdate = DateTime.now();
   static const Duration _updateInterval = Duration(milliseconds: 300);
+
+  @override
+  void didUpdateWidget(covariant _HoldingScreenContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.tabRequestId != oldWidget.tabRequestId &&
+        widget.initialTabIndex != _selectedTabIndex) {
+      setState(() => _selectedTabIndex = widget.initialTabIndex);
+    }
+  }
 
   @override
   void initState() {
