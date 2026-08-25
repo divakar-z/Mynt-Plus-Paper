@@ -1083,14 +1083,14 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.headers.addAll(funddefaultHeaders);
       request.fields['bank_exists'] = jsonEncode(existingBanks);
 
+      // Only attach the proof/PAN file when one was actually selected.
+      // If it doesn't exist, don't send it (not even an empty field).
       if (proofBytes != null && proofBytes.isNotEmpty) {
         request.files.add(http.MultipartFile.fromBytes(
           'proff',
           proofBytes,
           filename: proofFileName ?? 'proof.pdf',
         ));
-      } else {
-        request.fields['proff'] = '';
       }
 
       var response = await request.send();

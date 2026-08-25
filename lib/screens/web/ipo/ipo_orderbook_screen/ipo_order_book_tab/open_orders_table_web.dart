@@ -149,7 +149,8 @@ class _OpenOrdersTableState extends ConsumerState<OpenOrdersTable> {
                   // Body
                   Expanded(
                     child: ordersToDisplay.isEmpty
-                        ? const Center(child: NoDataFoundWeb())
+                        ? const Center(
+                            child: NoDataFoundWeb(secondaryEnabled: false))
                         : SingleChildScrollView(
                             child: shadcn.Table(
                               columnWidths: columnWidths,
