@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 
+import '../../../../locator/locator.dart';
+import '../../../../locator/preference.dart';
 import '../../../../models/desk_reports_model/tradebook_model.dart';
 import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/thems.dart';
@@ -15,6 +17,8 @@ import '../../../../sharedWidget/common_search_fields_web.dart';
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/scroll_to_load_mixin.dart';
+import '../../../../sharedWidget/snack_bar.dart';
+import 'tradebook_download_helper.dart';
 
 class TradebookScreenWeb extends ConsumerStatefulWidget {
   final VoidCallback? onBack;
@@ -315,6 +319,86 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
     );
   }
 
+  /// PDF / Excel download menu. Exports the same filtered + sorted list the
+  /// table is showing, for the currently selected date range.
+  Widget _buildDownloadButton(BuildContext context) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.download,
+          size: 20,
+          color: resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary)),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      tooltip: 'Download',
+      color: resolveThemeColor(context,
+          dark: MyntColors.cardDark, light: MyntColors.card),
+      onSelected: (value) {
+        final ledger = ref.read(ledgerProvider);
+        final trades = _getFilteredAndSortedList(ledger.tradebookdata);
+
+        if (trades.isEmpty) {
+          warningMessage(context, 'No data to download');
+          return;
+        }
+
+        final pref = locator<Preferences>();
+        final clientId = pref.clientId ?? '';
+        final clientName = pref.clientName ?? '';
+        final dateRange =
+            '${DateFormat('dd/MM/yyyy').format(_startDate)} to ${DateFormat('dd/MM/yyyy').format(_endDate)}';
+
+        if (value == 'pdf') {
+          TradebookDownloadHelper.downloadPdf(
+            trades: trades,
+            clientId: clientId,
+            clientName: clientName,
+            dateRange: dateRange,
+          );
+        } else if (value == 'excel') {
+          TradebookDownloadHelper.downloadExcel(
+            trades: trades,
+            clientId: clientId,
+            clientName: clientName,
+            dateRange: dateRange,
+          );
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'pdf',
+          child: Row(
+            children: [
+              Icon(Icons.picture_as_pdf, size: 18, color: Colors.red[700]),
+              const SizedBox(width: 8),
+              Text('Download PDF',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'excel',
+          child: Row(
+            children: [
+              Icon(Icons.table_chart, size: 18, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              Text('Download Excel',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildHeader(
       BuildContext context, ThemesProvider theme, int tradeCount) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -362,16 +446,10 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
           // ),
           SizedBox(width: isSmallScreen ? 8 : 12),
           // Download button
-          // _buildIconButton(
-          //   icon: Icons.download,
-          //   tooltip: 'Download',
-          //   onTap: () {
-          //     // Download functionality
-          //   },
-          // ),
-          // const SizedBox(width: 8),
+          _buildDownloadButton(context),
+          const SizedBox(width: 8),
           // Filter button
-        
+
           // Date range button
           InkWell(
             onTap: _toggleDatePicker,
