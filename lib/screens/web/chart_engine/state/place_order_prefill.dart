@@ -25,11 +25,15 @@ String resolveProduct(ChartScrip scrip, OrderDefaults? defaults) {
 /// Whether an order on [exch] placed *now* should be flagged AMO (After Market
 /// Order) because the market is closed. Mirrors `PlaceOrderScreenWeb`'s
 /// `_checkMarketClosed` so chart orders behave like the normal place-order
-/// screen: MCX/NCOM close at 23:50 IST, every other exchange at 16:00 IST.
+/// screen: MCX/NCOM close at 23:50 IST, every other exchange at 16:00 IST, and
+/// the window carries past midnight until 02:00 IST for every exchange.
 bool isAmoTime(String exch) {
   final nowIst =
       DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
   final minutes = nowIst.hour * 60 + nowIst.minute;
+  // Checked first: the minute counter resets at midnight, so the overnight
+  // stretch has to be handled before the per-exchange close times.
+  if (minutes < 2 * 60) return true; // 00:00 - 01:59 IST
   if (exch == 'MCX' || exch == 'NCOM') return minutes >= 23 * 60 + 50;
   return minutes >= 16 * 60;
 }

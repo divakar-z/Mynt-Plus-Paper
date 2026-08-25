@@ -1055,6 +1055,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     final currentTime = TimeOfDay.fromDateTime(now);
     final currentMinutes = currentTime.hour * 60 + currentTime.minute;
 
+    // AMO window carries past midnight: keep flagging AMO until 02:00 IST
+    // for every exchange (the minute counter resets at midnight, so this has
+    // to be checked before the per-exchange close times below).
+    const amoOvernightEnd = 2 * 60; // 02:00
+    if (currentMinutes < amoOvernightEnd) return true;
+
     final exchange = widget.scripInfo.exch;
 
     // MCX closes at 11:30 PM
