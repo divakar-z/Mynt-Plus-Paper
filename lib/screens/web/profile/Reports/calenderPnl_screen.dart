@@ -30,6 +30,7 @@ import '../../../../sharedWidget/snack_bar.dart';
 import 'charges_dialog_web.dart';
 import 'note_editor_sheet_web.dart';
 import 'pnl_stats_summary_web.dart';
+import 'pnl_summary_download_helper.dart';
 
 /// The table view under the heat map. "Journal" is conditional — it only
 /// exists once the client has journalled at least once (see [hasAnyNotesProvider]).
@@ -365,6 +366,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                   fontWeight: MyntFonts.semiBold),
             ),
           ),
+           // Download button
+          if (ledgerprovider.calenderpnlAllData != null) ...[
+            const SizedBox(width: 8),
+            _buildDownloadMenu(context, ledgerprovider),
+          ],
+           const SizedBox(width: 8),
           // P&L Stats button
           if (ledgerprovider.calenderpnlAllData != null &&
               ledgerprovider.selectedSegment != "Equity")
@@ -2558,7 +2565,9 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
   }
 
   // --- Script Wise Section ---
-  Widget _buildScriptWiseSection(BuildContext context,
+  /// Aggregate trades into script-wise rows — shared by the on-screen table
+  /// and the download export so both show the same numbers.
+  List<_ScriptWiseRowData> _computeScriptWiseRows(
       List<DateTime> sortedDates, LDProvider ledgerprovider, bool isCommodity) {
     // Aggregate trades by symbol
     final Map<String, _ScriptWiseRowData> scriptMap = {};
@@ -2721,7 +2730,158 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
       }
     }
 
-    final scriptRows = scriptMap.values.toList();
+    return scriptMap.values.toList();
+  }
+
+  /// The date-scoped, sorted trade dates for the active segment — the same
+  /// derivation [_buildBody] uses to drive the tables.
+  List<DateTime> _sortedDatesForExport(
+      LDProvider ledgerprovider, bool isCommodity) {
+    final data = ledgerprovider.calenderpnlAllData;
+    List<DateTime> sortedDates;
+    if (isCommodity && data?.dateWise != null) {
+      sortedDates = (data!.dateWise as Map)
+          .keys
+          .map((dateStr) => DateTime.parse(dateStr))
+          .where((date) =>
+              !date.isBefore(ledgerprovider.startTaxDate) &&
+              !date.isAfter(ledgerprovider.endTaxDate))
+          .toList()
+        ..sort((a, b) => b.compareTo(a));
+    } else {
+      sortedDates = ledgerprovider.grouped.keys
+          .where((date) =>
+              !date.isBefore(ledgerprovider.startTaxDate) &&
+              !date.isAfter(ledgerprovider.endTaxDate))
+          .toList()
+        ..sort((a, b) => b.compareTo(a));
+    }
+    return sortedDates;
+  }
+
+  /// Export the current P&L summary (totals + script-wise breakdown) to a
+  /// PDF or Excel file. Mirrors the on-screen figures for the active segment
+  /// and date range.
+  void _downloadPnlSummary(String type, LDProvider ledgerprovider) {
+    final data = ledgerprovider.calenderpnlAllData;
+    if (data == null) {
+      warningMessage(context, 'No data to download');
+      return;
+    }
+    final isCommodity = ledgerprovider.selectedSegment == 'Commodity';
+    final sortedDates = _sortedDatesForExport(ledgerprovider, isCommodity);
+    final scriptRows =
+        _computeScriptWiseRows(sortedDates, ledgerprovider, isCommodity);
+
+    if (scriptRows.isEmpty) {
+      warningMessage(context, 'No data to download');
+      return;
+    }
+
+    final rows = scriptRows
+        .map((r) => PnlSummaryRow(
+              symbol: r.symbol,
+              buyQty: r.buyQty,
+              buyRate: r.buyRate,
+              sellQty: r.sellQty,
+              sellRate: r.sellRate,
+              netQty: r.netQty,
+              closePrice: r.closePrice,
+              realisedPnl: r.realisedPnl,
+            ))
+        .toList();
+
+    final realised = data.realized;
+    final unrealised = data.unrealized;
+    final charges = data.totalCharges ?? 0.0;
+    final net = realised - charges;
+
+    final pref = locator<Preferences>();
+    final dateRange =
+        '${DateFormat('dd/MM/yyyy').format(_startDate)} to ${DateFormat('dd/MM/yyyy').format(_endDate)}';
+
+    if (type == 'pdf') {
+      PnlSummaryDownloadHelper.downloadPdf(
+        rows: rows,
+        segment: ledgerprovider.selectedSegment,
+        clientId: pref.clientId ?? '',
+        clientName: pref.clientName ?? '',
+        dateRange: dateRange,
+        realised: realised,
+        unrealised: unrealised,
+        charges: charges,
+        net: net,
+      );
+    } else if (type == 'excel') {
+      PnlSummaryDownloadHelper.downloadExcel(
+        rows: rows,
+        segment: ledgerprovider.selectedSegment,
+        clientId: pref.clientId ?? '',
+        clientName: pref.clientName ?? '',
+        dateRange: dateRange,
+        realised: realised,
+        unrealised: unrealised,
+        charges: charges,
+        net: net,
+      );
+    }
+  }
+
+  /// The header's download control — a PDF / Excel popup styled to match the
+  /// other Reports download menus.
+  Widget _buildDownloadMenu(
+      BuildContext context, LDProvider ledgerprovider) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.download,
+          size: 20,
+          color: resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary)),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      tooltip: 'Download',
+      color: resolveThemeColor(context,
+          dark: MyntColors.cardDark, light: MyntColors.card),
+      onSelected: (value) => _downloadPnlSummary(value, ledgerprovider),
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'pdf',
+          child: Row(
+            children: [
+              Icon(Icons.picture_as_pdf, size: 18, color: Colors.red[700]),
+              const SizedBox(width: 8),
+              Text('Download PDF',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'excel',
+          child: Row(
+            children: [
+              Icon(Icons.table_chart, size: 18, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              Text('Download Excel',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildScriptWiseSection(BuildContext context,
+      List<DateTime> sortedDates, LDProvider ledgerprovider, bool isCommodity) {
+    final scriptRows =
+        _computeScriptWiseRows(sortedDates, ledgerprovider, isCommodity);
 
     if (scriptRows.isEmpty) {
       return const Center(

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart' hide Table, TableRow, TableCell;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 
+import '../../../../locator/locator.dart';
+import '../../../../locator/preference.dart';
 import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../res/mynt_web_text_styles.dart';
@@ -11,7 +13,9 @@ import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../sharedWidget/custom_back_btn.dart';
 import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/functions.dart';
+import '../../../../sharedWidget/snack_bar.dart';
 import '../../../../utils/rupee_convert_format.dart';
+import 'positions_download_helper.dart';
 
 class PositionScreen extends ConsumerStatefulWidget {
   final String ddd;
@@ -257,11 +261,91 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
     );
   }
 
+  /// PDF / Excel download menu. Exports the same filtered + sorted list the
+  /// table is showing, in whichever valuation mode (P&L or MTM) is active.
+  Widget _buildDownloadButton(BuildContext context) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.download,
+          size: 20,
+          color: resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary)),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      tooltip: 'Download',
+      color: resolveThemeColor(context,
+          dark: MyntColors.cardDark, light: MyntColors.card),
+      onSelected: (value) {
+        final ledger = ref.read(ledgerProvider);
+        final positions = _getFilteredAndSortedList(ledger);
+
+        if (positions.isEmpty) {
+          warningMessage(context, 'No data to download');
+          return;
+        }
+
+        final pref = locator<Preferences>();
+        final clientId = pref.clientId ?? '';
+        final clientName = pref.clientName ?? '';
+
+        if (value == 'pdf') {
+          PositionsDownloadHelper.downloadPdf(
+            positions: positions,
+            clientId: clientId,
+            clientName: clientName,
+            showMtm: _showMtm,
+          );
+        } else if (value == 'excel') {
+          PositionsDownloadHelper.downloadExcel(
+            positions: positions,
+            clientId: clientId,
+            clientName: clientName,
+            showMtm: _showMtm,
+          );
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'pdf',
+          child: Row(
+            children: [
+              Icon(Icons.picture_as_pdf, size: 18, color: Colors.red[700]),
+              const SizedBox(width: 8),
+              Text('Download PDF',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'excel',
+          child: Row(
+            children: [
+              Icon(Icons.table_chart, size: 18, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              Text('Download Excel',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildToolbar(BuildContext context, ThemesProvider theme,
       int scriptCount, LDProvider ledger) {
     return Row(
       children: [
         const Spacer(),
+        _buildDownloadButton(context),
+        const SizedBox(width: 16),
         // P&L / MTM toggle
         Text(
           'P&L',

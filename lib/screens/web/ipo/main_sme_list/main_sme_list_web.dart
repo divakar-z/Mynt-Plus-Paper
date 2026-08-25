@@ -153,13 +153,8 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
         color: resolveThemeColor(context,
             dark: MyntColors.backgroundColorDark,
             light: MyntColors.backgroundColor),
-        child: SingleChildScrollView(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.65,
-            child: _buildIPOTable(
-                sortedIpos, theme, ipos, ref.read(transcationProvider)),
-          ),
-        ),
+        child: _buildIPOTable(
+            sortedIpos, theme, ipos, ref.read(transcationProvider)),
       ),
     );
   }
