@@ -31,6 +31,12 @@ class FundProvider extends DefaultChangeNotifier {
   FundDetailModel? _fundDetailModel;
   FundDetailModel? get fundDetailModel => _fundDetailModel;
 
+  String get ofsBidBalance {
+    final cash = double.tryParse(_fundDetailModel?.cash ?? '0') ?? 0.0;
+    final payin = double.tryParse(_fundDetailModel?.payin ?? '0') ?? 0.0;
+    return (cash + payin).toStringAsFixed(2);
+  }
+
   final TextEditingController viewupiid = TextEditingController();
   PledgeAndUnpledgeModel? _pledgeAndUnpledgeModel;
   PledgeAndUnpledgeModel? get pledgeAndUnpledgeModel => _pledgeAndUnpledgeModel;

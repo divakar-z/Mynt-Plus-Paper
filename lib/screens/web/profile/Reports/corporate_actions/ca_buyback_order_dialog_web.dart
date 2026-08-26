@@ -460,7 +460,7 @@ class _CABuybackOrderDialogWebState
               v,
               _isOFS ? '' : qtyCap,
               _isOFS ? 'OFS' : '',
-              fund.fundDetailModel?.cash ?? '0',
+              fund.ofsBidBalance,
             );
           },
         ),
@@ -490,7 +490,7 @@ class _CABuybackOrderDialogWebState
               _minPrice,
               _maxPrice,
               _isOFS ? 'OFS' : '',
-              fund.fundDetailModel?.cash ?? '0',
+              fund.ofsBidBalance,
             );
           },
         ),
@@ -503,7 +503,7 @@ class _CABuybackOrderDialogWebState
           const SizedBox(height: 8),
           _cutoffCheckbox(
             lp,
-            cash: fund.fundDetailModel?.cash ?? '0',
+            cash: fund.ofsBidBalance,
           ),
         ],
 
