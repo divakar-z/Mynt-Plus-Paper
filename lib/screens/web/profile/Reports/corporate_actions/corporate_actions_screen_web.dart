@@ -422,7 +422,7 @@ class _CorporateActionsScreenWebState
       lp.setordervalueforofs(
         '1',
         item.baseprice ?? '0',
-        fund.fundDetailModel?.cash ?? '0',
+        fund.ofsBidBalance,
       );
     } else {
       lp.setCPActionQty('', '', '', '');
