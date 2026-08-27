@@ -17,6 +17,24 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 const bool kJournalNotesUseLocalDev =
     bool.fromEnvironment('JOURNAL_NOTES_LOCAL');
 
+/// Point the client support API at a different osTicket host — a staging
+/// instance, say.
+///
+/// Empty by default, which falls back to the live `ticket.mynt.in`. Read from
+/// the environment so a dev pointer cannot be committed by accident.
+const String kSupportApiBaseOverride =
+    String.fromEnvironment('SUPPORT_API_BASE');
+
+// The app used to carry an HMAC signing key here and mint its own JWT. It no
+// longer does, and must not again: `POST /auth/session` takes the trading
+// session token the app already holds, and osTicket proves the client code
+// against the trading backend's own `validate_session` before issuing anything.
+// Nothing secret ships, so there is nothing in the bundle left to extract.
+//
+// Removed 2026-08-27 with the backend's SUPPORT_AUTH_CHANGE note. The old key
+// stays in this file's git history — treat it as burnt and rotate it
+// server-side rather than assuming its removal here retired it.
+
 class ApiLinks {
 // UAT----
 
@@ -433,6 +451,26 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get journalNotesApi => kJournalNotesUseLocalDev
       ? 'http://localhost:9003/journal'
       : '${reportsapi}journal';
+
+  /// osTicket's client-facing support API.
+  ///
+  /// Reached through the dispatcher script itself — there is no rewrite rule in
+  /// front of it, exactly like the staff API is reached through `scp/api.php`.
+  /// Dropping `/api/client.php` and calling `/tickets` directly gets osTicket's
+  /// `400 URL not supported`, not a 404.
+  ///
+  /// The app talks to this host directly. That is safe here in a way the staff
+  /// API is not: the credential is a short-lived per-client token obtained from
+  /// [supportMintApi] and exchanged at `/auth/exchange`, never a shared service
+  /// account. CORS is open on this entry point for exactly that reason.
+  ///
+  /// No trailing slash: paths carry their own leading slash, following
+  /// [journalNotesApi].
+  String get supportClientApi => kSupportApiBaseOverride.isNotEmpty
+      ? '$kSupportApiBaseOverride/api/client.php'
+      : 'https://ticket.mynt.in/api/client.php';
+
+
 
 //mf new3
   String get newvenketmfurl => "https://v3.mynt.in/mfapi";

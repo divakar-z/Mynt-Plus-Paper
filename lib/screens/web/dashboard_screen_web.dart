@@ -7,6 +7,7 @@ import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../sharedWidget/mynt_loader.dart';
 import '../../../sharedWidget/feature_card_widget.dart';
+import 'support/report_issue_strip.dart';
 import '../../../provider/index_list_provider.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/websocket_provider.dart';
@@ -94,7 +95,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
 
       // Calculate holdings totals on initial load to ensure correct values
       final portfolio = ref.read(portfolioProvider);
-      if (portfolio.holdingsModel != null && portfolio.holdingsModel!.isNotEmpty) {
+      if (portfolio.holdingsModel != null &&
+          portfolio.holdingsModel!.isNotEmpty) {
         portfolio.pnlHoldCal();
       }
     });
@@ -125,8 +127,12 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
 
           // Update LTP if valid (strict guard rejects null/zero defaults)
           final lp = socketData['lp']?.toString();
-          if (lp != null && lp != "null" && lp != "" &&
-              lp != "0" && lp != "0.0" && lp != "0.00" &&
+          if (lp != null &&
+              lp != "null" &&
+              lp != "" &&
+              lp != "0" &&
+              lp != "0.0" &&
+              lp != "0.00" &&
               lp != position.lp) {
             position.lp = lp;
             needsUpdate = true;
@@ -146,7 +152,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final websocket = ref.read(websocketProvider);
     final portfolio = ref.read(portfolioProvider);
 
-    _holdingsSocketSubscription = websocket.socketDataStream.listen((socketDatas) {
+    _holdingsSocketSubscription =
+        websocket.socketDataStream.listen((socketDatas) {
       if (_isDisposed || !mounted) return;
 
       final holdings = portfolio.holdingsModel ?? [];
@@ -233,7 +240,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
             children: [
               _buildTopIndicesSection(context, indexProvider),
               const SizedBox(height: 22),
-              
+
               // Algo trading banner and Zebu Algo Strategies
               // (Original single-row layout commented out — the stacked 2×2 copy
               // below is shown instead.)
@@ -263,6 +270,12 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               // const SizedBox(height: 32),
               // Portfolio Analysis section
               // _buildPortfolioAnalysisSection(context),
+
+              // Raise a support ticket. Last on the page deliberately, and not
+              // one of the Tools cards above — see the note on
+              // [ReportIssueStrip] for why.
+              // const SizedBox(height: 32),
+              // const ReportIssueStrip(),
             ],
           ),
         ),
@@ -302,9 +315,10 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
             Expanded(
               child: FeatureCard(
                 badgeNumber: '01',
-                iconData:  shadcn.LucideIcons.chartBar,
+                iconData: shadcn.LucideIcons.chartBar,
                 title: 'OptionZ',
-                description: 'Access advanced options trading platform with real-time data and powerful analytics tools.',
+                description:
+                    'Access advanced options trading platform with real-time data and powerful analytics tools.',
                 badgeColor: const Color(0xFF6366F1), // Indigo - vibrant purple
                 iconColor: const Color(0xFF6366F1),
                 onTap: () async {
@@ -321,7 +335,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 badgeNumber: '02',
                 iconData: shadcn.LucideIcons.draftingCompass,
                 title: 'Strategy Builder',
-                description: 'Create and backtest your trading strategies with our powerful strategy building tools.',
+                description:
+                    'Create and backtest your trading strategies with our powerful strategy building tools.',
                 badgeColor: const Color(0xFF06B6D4), // Cyan - bright teal
                 iconColor: const Color(0xFF06B6D4),
                 onTap: () {
@@ -341,7 +356,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 badgeNumber: '03',
                 iconData: shadcn.LucideIcons.shoppingBag,
                 title: 'Scalper',
-                description: 'Quick in & out trading with real-time market data and lightning-fast order execution.',
+                description:
+                    'Quick in & out trading with real-time market data and lightning-fast order execution.',
                 badgeColor: const Color(0xFFEC4899),
                 iconColor: const Color(0xFFEC4899),
                 onTap: () {},
@@ -359,8 +375,10 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 onTap: () async {
                   // Open Refer in external browser (same as profile dropdown)
                   final Preferences pref = locator<Preferences>();
-                  final url = 'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
-                  launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                  final url =
+                      'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
+                  launchUrl(Uri.parse(url),
+                      mode: LaunchMode.externalApplication);
                 },
               ),
             ),
@@ -454,22 +472,21 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               WebNavigationHelper.navigateTo(Routes.holdingscreen);
             }
           },
-            trailing: MouseRegion(
+          trailing: MouseRegion(
             cursor: SystemMouseCursors.click,
             child: GestureDetector(
-               onTap: () {
-              if (WebNavigationHelper.isAvailable) {
-                WebNavigationHelper.navigateTo(Routes.portfolioDashboard);
-              }
-            },
+              onTap: () {
+                if (WebNavigationHelper.isAvailable) {
+                  WebNavigationHelper.navigateTo(Routes.portfolioDashboard);
+                }
+              },
               child: Text(
                 'Insights',
                 style: MyntWebTextStyles.symbol(
                   context,
                   fontWeight: MyntFonts.bold,
                   color: resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: MyntColors.primary),
+                      dark: MyntColors.primaryDark, light: MyntColors.primary),
                 ),
               ),
             ),
@@ -522,8 +539,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                   context,
                   fontWeight: MyntFonts.bold,
                   color: resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: MyntColors.primary),
+                      dark: MyntColors.primaryDark, light: MyntColors.primary),
                 ),
               ),
             ),
@@ -616,7 +632,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         onTap: onTap,
         child: Container(
           decoration: BoxDecoration(
-            color: isDarkMode(context) ? MyntColors.dashboardCarColor : shadcn.Theme.of(context).colorScheme.card,
+            color: isDarkMode(context)
+                ? MyntColors.dashboardCarColor
+                : shadcn.Theme.of(context).colorScheme.card,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: resolveThemeColor(context,
@@ -1092,20 +1110,20 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       //     }
       //   },
       // },
-    //   {
-    //     'title': 'MF Stratergy',
-    //   'subtitle': 'Mutual Funds • Smart Investing',
-    // 'description': 'Create and invest in curated mutual fund baskets with a single tap. Diversify your portfolio and manage multiple funds effortlessly.',
-    //     'badge': null,
-    //     'isIcon' :false,
-    //     'accentColor': const Color(0xFF16C4C5),
-    //     'svgAsset': assets.mfIcon,
-    //     'onTap': () {
-    //       if (WebNavigationHelper.isAvailable) {
-    //         WebNavigationHelper.navigateTo('basketDashboard');
-    //       }
-    //     },
-    //   },
+      //   {
+      //     'title': 'MF Stratergy',
+      //   'subtitle': 'Mutual Funds • Smart Investing',
+      // 'description': 'Create and invest in curated mutual fund baskets with a single tap. Diversify your portfolio and manage multiple funds effortlessly.',
+      //     'badge': null,
+      //     'isIcon' :false,
+      //     'accentColor': const Color(0xFF16C4C5),
+      //     'svgAsset': assets.mfIcon,
+      //     'onTap': () {
+      //       if (WebNavigationHelper.isAvailable) {
+      //         WebNavigationHelper.navigateTo('basketDashboard');
+      //       }
+      //     },
+      //   },
       {
         'title': 'WebHook Trading',
         'subtitle': 'TradingView • Auto Alert',
@@ -1114,7 +1132,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFFEC4899),
         'badge': null,
         'icon': Icons.webhook,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('tradingViewWebHook');
@@ -1129,7 +1147,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF0EA5E9),
         'badge': null,
         'icon': Icons.auto_graph_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           // Navigate to orders screen and switch to SIP tab (index 5)
           ref.read(orderProvider).changeTabIndex(5, context);
@@ -1146,7 +1164,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF3B82F6),
         'badge': null,
         'icon': Icons.rocket_launch_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('scalper');
@@ -1161,7 +1179,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF8B5CF6),
         'badge': null,
         'icon': Icons.show_chart,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('strategyBuilder');
@@ -1176,7 +1194,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF10B981),
         'badge': null,
         'icon': Icons.bar_chart_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () async {
           final funds = ref.read(fundProvider);
           await funds.fetchHstoken(context);
@@ -1192,13 +1210,13 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFFF59E0B),
         'badge': null,
         'icon': Icons.card_giftcard_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         // 'onTap': () {
         //   final Preferences pref = locator<Preferences>();
-          // final url =
-          //     'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
-          // launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-          'onTap': () {
+        // final url =
+        //     'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
+        // launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('refer');
           }
@@ -1424,29 +1442,32 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                           ],
                                                         ),
                                                         child: Center(
-                                                          child: tool['isIcon'] ==
-                                                                  true
-                                                              ? Icon(
-                                                                  tool['icon']
-                                                                      as IconData,
-                                                                  size: 24,
-                                                                  color: const Color(
-                                                                      0xFF4A1F8E),
-                                                                )
-                                                              : SvgPicture.asset(
-                                                                  tool['svgAsset']
-                                                                      as String,
-                                                                  width: 24,
-                                                                  height: 24,
-                                                                  colorFilter:
-                                                                      const ColorFilter
-                                                                          .mode(
-                                                                    Color(
-                                                                        0xFF4A1F8E),
-                                                                    BlendMode
-                                                                        .srcIn,
-                                                                  ),
-                                                                ),
+                                                          child:
+                                                              tool['isIcon'] ==
+                                                                      true
+                                                                  ? Icon(
+                                                                      tool['icon']
+                                                                          as IconData,
+                                                                      size: 24,
+                                                                      color: const Color(
+                                                                          0xFF4A1F8E),
+                                                                    )
+                                                                  : SvgPicture
+                                                                      .asset(
+                                                                      tool['svgAsset']
+                                                                          as String,
+                                                                      width: 24,
+                                                                      height:
+                                                                          24,
+                                                                      colorFilter:
+                                                                          const ColorFilter
+                                                                              .mode(
+                                                                        Color(
+                                                                            0xFF4A1F8E),
+                                                                        BlendMode
+                                                                            .srcIn,
+                                                                      ),
+                                                                    ),
                                                         ),
                                                       ),
                                                     ),
@@ -1470,8 +1491,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                           child: Text(
                                                             tool['title']
                                                                 as String,
-                                                            style: MyntWebTextStyles
-                                                                .body(
+                                                            style:
+                                                                MyntWebTextStyles
+                                                                    .body(
                                                               context,
                                                               color:
                                                                   Colors.white,
@@ -1502,8 +1524,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                             ),
                                                             child: Text(
                                                               'NEW',
-                                                              style: MyntWebTextStyles
-                                                                  .caption(
+                                                              style:
+                                                                  MyntWebTextStyles
+                                                                      .caption(
                                                                 context,
                                                                 color: const Color(
                                                                     0xFF170B26),
@@ -1525,8 +1548,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                                 alpha: 0.85),
                                                       ),
                                                       maxLines: 1,
-                                                      overflow: TextOverflow
-                                                          .ellipsis,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
                                                     ),
                                                   ],
                                                 ),
@@ -1596,184 +1619,194 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.center,
                                     children: [
-                                // Stacked card icon effect
-                                SizedBox(
-                                  width: 64,
-                                  height: 56,
-                                  child: Stack(
-                                    children: [
-                                      // Back card
-                                      Positioned(
-                                        left: 0,
-                                        top: 10,
-                                        child: Transform.rotate(
-                                          angle: -0.18,
-                                          child: Container(
-                                            width: 44,
-                                            height: 44,
-                                            decoration: BoxDecoration(
-                                                    color: accent
-                                                        .withValues(alpha: 0.18),
+                                      // Stacked card icon effect
+                                      SizedBox(
+                                        width: 64,
+                                        height: 56,
+                                        child: Stack(
+                                          children: [
+                                            // Back card
+                                            Positioned(
+                                              left: 0,
+                                              top: 10,
+                                              child: Transform.rotate(
+                                                angle: -0.18,
+                                                child: Container(
+                                                  width: 44,
+                                                  height: 44,
+                                                  decoration: BoxDecoration(
+                                                    color: accent.withValues(
+                                                        alpha: 0.18),
                                                     borderRadius:
-                                                  BorderRadius.circular(11),
+                                                        BorderRadius.circular(
+                                                            11),
+                                                  ),
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                        ),
-                                      ),
-                                      // Mid card
-                                      Positioned(
-                                        left: 8,
-                                        top: 5,
-                                        child: Transform.rotate(
-                                          angle: -0.09,
-                                          child: Container(
-                                            width: 44,
-                                            height: 44,
-                                            decoration: BoxDecoration(
-                                                    color: accent
-                                                        .withValues(alpha: 0.35),
-                                                     borderRadius:
-                                                  BorderRadius.circular(11),
+                                            // Mid card
+                                            Positioned(
+                                              left: 8,
+                                              top: 5,
+                                              child: Transform.rotate(
+                                                angle: -0.09,
+                                                child: Container(
+                                                  width: 44,
+                                                  height: 44,
+                                                  decoration: BoxDecoration(
+                                                    color: accent.withValues(
+                                                        alpha: 0.35),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            11),
+                                                  ),
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                        ),
-                                      ),
-                                      // Front card with icon
-                                      Positioned(
-                                        left: 16,
-                                        top: 0,
-                                        child: Container(
-                                          width: 44,
-                                          height: 44,
-                                          decoration: BoxDecoration(
-                                            color: accent,
-                                            borderRadius:
-                                                BorderRadius.circular(11),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: accent
-                                                          .withValues(alpha: 0.4),
+                                            // Front card with icon
+                                            Positioned(
+                                              left: 16,
+                                              top: 0,
+                                              child: Container(
+                                                width: 44,
+                                                height: 44,
+                                                decoration: BoxDecoration(
+                                                  color: accent,
+                                                  borderRadius:
+                                                      BorderRadius.circular(11),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: accent.withValues(
+                                                          alpha: 0.4),
                                                       blurRadius: 8,
-                                                offset:
-                                                    const Offset(0, 3),
-                                              ),
-                                            ],
-                                          ),
-                                          child: Center(
-                                            child:  tool['isIcon'] == true
-                                  ?  Icon(tool['icon'] as IconData, size: 24, color: Colors.white)
-                                  : SvgPicture.asset(
-                                      tool['svgAsset'] as String,
-                                      width: 24,
-                                      height: 24,
-                                      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
-                                    ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.center,
-                                    children: [
-                                      Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.center,
-                                        children: [
-                                          Flexible(
-                                            child: Text(
-                                              tool['title'] as String,
-                                              style:
-                                                  MyntWebTextStyles.body(
-                                                context,
-                                                darkColor: MyntColors
-                                                    .textPrimaryDark,
-                                                lightColor:
-                                                    MyntColors.textPrimary,
-                                                fontWeight:
-                                                    MyntFonts.bold,
-                                              ),
-                                            ),
-                                          ),
-                                          if (badge != null) ...[
-                                            const SizedBox(width: 6),
-                                            Container(
-                                              padding: const EdgeInsets
-                                                  .symmetric(
-                                                  horizontal: 6,
-                                                  vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: accent,
-                                                borderRadius:
-                                                    BorderRadius.circular(
-                                                        5),
-                                              ),
-                                              child: Text(
-                                                'NEW',
-                                                style: MyntWebTextStyles
-                                                    .caption(
-                                                  context,
-                                                  color: Colors.white,
+                                                      offset:
+                                                          const Offset(0, 3),
+                                                    ),
+                                                  ],
+                                                ),
+                                                child: Center(
+                                                  child: tool['isIcon'] == true
+                                                      ? Icon(
+                                                          tool['icon']
+                                                              as IconData,
+                                                          size: 24,
+                                                          color: Colors.white)
+                                                      : SvgPicture.asset(
+                                                          tool['svgAsset']
+                                                              as String,
+                                                          width: 24,
+                                                          height: 24,
+                                                          colorFilter:
+                                                              const ColorFilter
+                                                                  .mode(
+                                                                  Colors.white,
+                                                                  BlendMode
+                                                                      .srcIn),
+                                                        ),
                                                 ),
                                               ),
                                             ),
                                           ],
-                                        ],
-                                      ),
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        tool['subtitle'] as String,
-                                        style: MyntWebTextStyles.para(
-                                          context,
-                                          darkColor: MyntColors
-                                              .textSecondaryDark,
-                                          lightColor:
-                                              MyntColors.textSecondary,
                                         ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.center,
+                                              children: [
+                                                Flexible(
+                                                  child: Text(
+                                                    tool['title'] as String,
+                                                    style:
+                                                        MyntWebTextStyles.body(
+                                                      context,
+                                                      darkColor: MyntColors
+                                                          .textPrimaryDark,
+                                                      lightColor: MyntColors
+                                                          .textPrimary,
+                                                      fontWeight:
+                                                          MyntFonts.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (badge != null) ...[
+                                                  const SizedBox(width: 6),
+                                                  Container(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 2),
+                                                    decoration: BoxDecoration(
+                                                      color: accent,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              5),
+                                                    ),
+                                                    child: Text(
+                                                      'NEW',
+                                                      style: MyntWebTextStyles
+                                                          .caption(
+                                                        context,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              tool['subtitle'] as String,
+                                              style: MyntWebTextStyles.para(
+                                                context,
+                                                darkColor: MyntColors
+                                                    .textSecondaryDark,
+                                                lightColor:
+                                                    MyntColors.textSecondary,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ],
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            // Divider
-                            Divider(
-                              height: 1,
-                              color: resolveThemeColor(context,
-                                  dark: MyntColors.dividerDark,
-                                  light: MyntColors.divider),
-                            ),
-                            const SizedBox(height: 10),
-                            // Description
-                            Expanded(
-                              child: Text(
-                                tool['description'] as String,
-                                style: MyntWebTextStyles.para(
-                                  context,
-                                  darkColor:
-                                      MyntColors.textSecondaryDark,
-                                  lightColor:
-                                      MyntColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
+                                  const SizedBox(height: 10),
+                                  // Divider
+                                  Divider(
+                                    height: 1,
+                                    color: resolveThemeColor(context,
+                                        dark: MyntColors.dividerDark,
+                                        light: MyntColors.divider),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  // Description
+                                  Expanded(
+                                    child: Text(
+                                      tool['description'] as String,
+                                      style: MyntWebTextStyles.para(
+                                        context,
+                                        darkColor: MyntColors.textSecondaryDark,
+                                        lightColor: MyntColors.textSecondary,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
+                          ),
+                        );
                       }).toList(),
                     ),
                   ),
@@ -1803,8 +1836,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 );
                                 _toolsScrollController.animateTo(
                                   newOffset,
-                                  duration:
-                                      const Duration(milliseconds: 300),
+                                  duration: const Duration(milliseconds: 300),
                                   curve: Curves.easeInOut,
                                 );
                               }
@@ -1815,9 +1847,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                               height: 32,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: shadcn.Theme.of(context)
-                                    .colorScheme
-                                    .card,
+                                color:
+                                    shadcn.Theme.of(context).colorScheme.card,
                                 border: Border.all(
                                   color: shadcn.Theme.of(context)
                                       .colorScheme
@@ -1826,8 +1857,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color:
-                                        Colors.black.withValues(alpha: 0.1),
+                                    color: Colors.black.withValues(alpha: 0.1),
                                     blurRadius: 4,
                                     offset: const Offset(0, 2),
                                   ),
@@ -1873,8 +1903,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 );
                                 _toolsScrollController.animateTo(
                                   newOffset,
-                                  duration:
-                                      const Duration(milliseconds: 300),
+                                  duration: const Duration(milliseconds: 300),
                                   curve: Curves.easeInOut,
                                 );
                               }
@@ -1885,9 +1914,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                               height: 32,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: shadcn.Theme.of(context)
-                                    .colorScheme
-                                    .card,
+                                color:
+                                    shadcn.Theme.of(context).colorScheme.card,
                                 border: Border.all(
                                   color: shadcn.Theme.of(context)
                                       .colorScheme
@@ -1896,8 +1924,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color:
-                                        Colors.black.withValues(alpha: 0.1),
+                                    color: Colors.black.withValues(alpha: 0.1),
                                     blurRadius: 4,
                                     offset: const Offset(0, 2),
                                   ),
@@ -2195,7 +2222,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       width: width,
       height: 400,
       decoration: BoxDecoration(
-        color: isDarkMode(context) ? MyntColors.dashboardCarColor : shadcn.Theme.of(context).colorScheme.card,
+        color: isDarkMode(context)
+            ? MyntColors.dashboardCarColor
+            : shadcn.Theme.of(context).colorScheme.card,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: resolveThemeColor(context,
@@ -2229,7 +2258,6 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
                     onTap: () {
-
                       if (WebNavigationHelper.isAvailable) {
                         try {
                           WebNavigationHelper.navigateTo(
@@ -2455,8 +2483,6 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       ],
     );
   }
-
-
 }
 
 // Custom index card widget for dashboard
@@ -2616,8 +2642,7 @@ class _DashboardIndexCardState extends ConsumerState<_DashboardIndexCard> {
             if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
               await marketWatch.calldepthApis(context, depthArgs, "");
             }
-          } catch (e) {
-          }
+          } catch (e) {}
         },
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2816,8 +2841,7 @@ class _DashboardStockCardState extends ConsumerState<_DashboardStockCard> {
             if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
               await marketWatch.calldepthApis(context, depthArgs, "");
             }
-          } catch (e) {
-          }
+          } catch (e) {}
         },
         child: Container(
           width: 180,
@@ -3073,18 +3097,18 @@ class _TradeActionStockItemState extends ConsumerState<_TradeActionStockItem> {
                 if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
                   await marketWatch.calldepthApis(context, depthArgs, "");
                 }
-              } catch (e) {
-              }
+              } catch (e) {}
             },
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 0),
               decoration: BoxDecoration(
                 color: isHovered
                     // ? shadcn.Theme.of(context).colorScheme.muted
-                  ? resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: shadcn.Theme.of(context).colorScheme.muted,
-                    ).withValues(alpha: 0.08)
+                    ? resolveThemeColor(
+                        context,
+                        dark: MyntColors.primaryDark,
+                        light: shadcn.Theme.of(context).colorScheme.muted,
+                      ).withValues(alpha: 0.08)
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(4),
               ),

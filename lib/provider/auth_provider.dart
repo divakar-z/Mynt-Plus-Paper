@@ -978,6 +978,11 @@ class AuthProvider extends DefaultChangeNotifier {
           OverlayManager.closeAll();
         }
 
+        // The support session is osTicket's own, with a refresh token good for
+        // 30 days — it does not expire with the trading session, so it has to
+        // be torn down here or it outlives the logout.
+        api.clearSupportSession();
+
         // Cancel any active timers
         if (ConstantName.timer != null) {
           ConstantName.timer!.cancel();

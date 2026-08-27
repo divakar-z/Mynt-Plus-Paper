@@ -1158,9 +1158,28 @@ class _CustomizableSplitHomeScreenState
             builder: (context, ref, _) {
               final sidebarContent = ref.watch(sidebarProvider);
               if (sidebarContent == null) return const SizedBox.shrink();
+              // Width comes from whatever opened the panel. A conversation
+              // needs more room than a column of label/value rows, and the
+              // default is unchanged for everything that does not ask.
+              final width = ref.read(sidebarProvider.notifier).width;
               return Drawer(
-                width: 400,
-                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                width: width,
+                backgroundColor: resolveThemeColor(context,
+                    dark: MyntColors.cardDark, light: MyntColors.card),
+                // The scrim is transparent on purpose, so the page behind stays
+                // readable — which leaves nothing saying the panel sits above
+                // it. A shadow and a left edge do that job instead, and work
+                // whatever colour happens to be behind.
+                elevation: 16,
+                shadowColor: Colors.black.withValues(alpha: 0.35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                  side: BorderSide(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.borderMutedDark,
+                        light: MyntColors.borderMuted),
+                  ),
+                ),
                 child: sidebarContent,
               );
             },

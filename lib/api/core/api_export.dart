@@ -20,6 +20,7 @@ import '../stock_scanner_api.dart';
 import '../stocks_api.dart';
 import '../transcation_api.dart';
 import '../user_profile_api.dart';
+import '../support_client_api.dart';
 import '../version_api.dart';
 import 'api_core.dart';
 
@@ -48,4 +49,5 @@ class ApiExporter
         VersionApi,
         StockScannerApi,
         RupeeCaseApi,
-        JournalNotesApi {}
+        JournalNotesApi,
+        SupportClientApi {}
