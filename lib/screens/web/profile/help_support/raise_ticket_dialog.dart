@@ -30,6 +30,7 @@ Future<void> showRaiseTicketDialog(
   BuildContext context, {
   required WidgetRef ref,
   required String screen,
+  VoidCallback? onViewTickets,
 }) {
   final provider = ref.read(supportTicketProvider);
 
@@ -52,7 +53,8 @@ Future<void> showRaiseTicketDialog(
     // the dialog would silently bin a half-written description — closing has
     // to be something the client meant to do.
     barrierDismissible: false,
-    builder: (dialogContext) => _RaiseTicketDialog(screen: screen),
+    builder: (dialogContext) =>
+        _RaiseTicketDialog(screen: screen, onViewTickets: onViewTickets),
   ).then((_) {
     // Covers every exit: the close button, Done on the success state, and a
     // system back. Clears the text, the attachments, the validation errors and
@@ -63,9 +65,18 @@ Future<void> showRaiseTicketDialog(
 }
 
 class _RaiseTicketDialog extends ConsumerWidget {
-  const _RaiseTicketDialog({required this.screen});
+  const _RaiseTicketDialog({required this.screen, this.onViewTickets});
 
   final String screen;
+
+  /// Where "View my tickets" should take them, or null when they are already
+  /// looking at the list.
+  ///
+  /// Null is the Help and Support screen itself: the table is behind this
+  /// dialog and has already refreshed, so offering to navigate there would
+  /// send someone to the page they are standing on. Raised from the profile
+  /// menu the client could be anywhere, and then the trip is worth offering.
+  final VoidCallback? onViewTickets;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -631,7 +642,8 @@ class _RaiseTicketDialog extends ConsumerWidget {
         ),
         const SizedBox(height: 6),
         Text(
-          "We'll reply by email. Quote this number if you call us about it.",
+          "We'll reply by email. Quote this number if you call us about it. "
+          'You can track this ticket and your past ones in Help and Support.',
           textAlign: TextAlign.center,
           style: MyntWebTextStyles.body(
             context,
@@ -641,10 +653,16 @@ class _RaiseTicketDialog extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 20),
+        // One button, never a dead end. It closes either way; when the client
+        // came from somewhere other than the tickets list it also takes them
+        // there, where the ticket they just raised is at the top.
         MyntPrimaryButton(
-          label: 'Done',
+          label: onViewTickets == null ? 'Done' : 'View my tickets',
           isFullWidth: true,
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () {
+            Navigator.of(context).pop();
+            onViewTickets?.call();
+          },
         ),
       ],
     );

@@ -25,50 +25,15 @@ const bool kJournalNotesUseLocalDev =
 const String kSupportApiBaseOverride =
     String.fromEnvironment('SUPPORT_API_BASE');
 
-/// The app's own signing key for support tokens, as hex.
-///
-/// The app mints its own short-lived JWT rather than asking a backend for one,
-/// so this key has to be present for support to work at all. It is *not* a
-/// key of its own: it is `k1`, the same secret mobile signs with, because the
-/// `app` kid the integration guide describes was never provisioned — a live
-/// exchange with `kid: app` still answers `401 invalid_token`.
-///
-/// A key inside a web bundle is extractable — accepted, per the integration
-/// guide, and carried here the same way the mobile app carries it.
-///
-/// Web is the softer of the two: this lands as a plain string in
-/// `main.dart.js`, which every browser downloads, where the mobile copy is at
-/// least inside a compiled snapshot. **Both apps sign with the same `k1`**, so
-/// whoever lifts it from here can also use it against mobile. Open with the
-/// backend: a separate `kid` for web, so a leak on this side does not reach the
-/// other and web can be rotated on its own.
-///
-/// A key written here is also in git history — rotating it server-side does not
-/// erase this one, so treat a change of key as a change of both.
-///
-/// A build can still substitute another key without touching this file:
-///   flutter build web --dart-define=SUPPORT_APP_KEY=<hex>
-const String kSupportAppKey = String.fromEnvironment(
-  'SUPPORT_APP_KEY',
-  defaultValue:
-      '4a6ed1b2e9c1669f16ef69203793f6dcb8df5252dd14086ab4bcb445544a3b82',
-);
-
-/// Names which key in `CLIENT_SUPPORT_SECRETS` signed the token. Required — a
-/// token with no `kid`, or one the server does not hold, is rejected.
-///
-/// `k1`, **not** the `app` the Flutter quickstart guide tells you to use.
-/// Verified against the live exchange: `app` answers `401 invalid_token`,
-/// `k1` succeeds. The mobile app uses `k1` for the same reason.
-///
-/// Overridable so a rotation is a build flag rather than a release:
-///   --dart-define=SUPPORT_APP_KID=<kid>
-const String kSupportKeyId =
-    String.fromEnvironment('SUPPORT_APP_KID', defaultValue: 'k1');
-
-/// Claim values the server checks exactly; a mismatch is a bare `401`.
-const String kSupportIssuer = 'zebu-trading';
-const String kSupportAudience = 'zebu-support';
+// The app used to carry an HMAC signing key here and mint its own JWT. It no
+// longer does, and must not again: `POST /auth/session` takes the trading
+// session token the app already holds, and osTicket proves the client code
+// against the trading backend's own `validate_session` before issuing anything.
+// Nothing secret ships, so there is nothing in the bundle left to extract.
+//
+// Removed 2026-08-27 with the backend's SUPPORT_AUTH_CHANGE note. The old key
+// stays in this file's git history — treat it as burnt and rotate it
+// server-side rather than assuming its removal here retired it.
 
 class ApiLinks {
 // UAT----

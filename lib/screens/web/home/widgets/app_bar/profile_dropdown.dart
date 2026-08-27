@@ -15,6 +15,7 @@ import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
+import 'package:mynt_plus/screens/web/profile/help_support/raise_ticket_dialog.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/res/web_colors.dart' as web_colors;
 import 'package:mynt_plus/res/global_font_web.dart';
@@ -401,6 +402,12 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
                       ],
                     ),
                   ),
+                  // Raise a ticket from anywhere in the app, without first
+                  // finding Help and Support. Sits opposite the name because
+                  // this row is the only part of the menu that is not a
+                  // MenuButton — putting it in the list below would make it
+                  // read as another destination rather than an action.
+                  _raiseTicketAction(context, iconColor, subtitleColor),
                 ],
               ),
             ),
@@ -664,6 +671,66 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
           ),
         ],
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The raise-a-ticket button in the menu header.
+  ///
+  /// The dropdown is closed *before* the dialog opens, and the dialog is shown
+  /// on [ProfileDropdownMenu.parentContext] rather than this one: this context
+  /// belongs to the overlay that is being dismissed, so a dialog rooted here
+  /// would be torn down with it.
+  Widget _raiseTicketAction(
+      BuildContext context, Color iconColor, Color subtitleColor) {
+    // `material.` prefixed: both Flutter and shadcn export a Tooltip, and this
+    // file imports each of them.
+    return material.Tooltip(
+      message: 'Report an issue',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () {
+            final parent = widget.parentContext;
+            // Deliberately not awaited. `closeOverlay` resolves only once the
+            // overlay finishes closing, and the state that would complete it
+            // is disposed on the way out — so awaiting it hangs and the dialog
+            // never opens. The rest of this file fires it the same way.
+            closeOverlay(context);
+            // Next frame, so the dialog is not inserted while the overlay it
+            // was launched from is still being torn down.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!parent.mounted) return;
+              showRaiseTicketDialog(
+                parent,
+                ref: ref,
+                screen: 'Profile menu',
+                // Raised from the menu, so the client could be on any screen —
+                // offer the trip to the list rather than a bare Done.
+                onViewTickets: () {
+                  widget.onNavigateToScreen?.call(ScreenType.helpSupport);
+                },
+              );
+            });
+          },
+          child: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: resolveThemeColor(
+                context,
+                dark: MyntColors.primaryDark.withValues(alpha: 0.08),
+                light: MyntColors.primary.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Icon(
+              Icons.bug_report_outlined,
+              size: 20,
+              color: iconColor,
             ),
           ),
         ),

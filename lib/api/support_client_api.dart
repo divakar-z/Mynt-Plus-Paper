@@ -1,10 +1,5 @@
-import 'dart:math';
-
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:mynt_plus/api/core/api_link.dart';
-import 'package:mynt_plus/models/profile_model/client_detail_model.dart';
 import 'package:mynt_plus/models/support_ticket_model/support_session.dart';
 import 'package:mynt_plus/models/support_ticket_model/support_ticket.dart';
 import 'package:mynt_plus/models/support_ticket_model/support_ticket_exception.dart';
@@ -18,11 +13,11 @@ import 'user_profile_api.dart';
 /// same osTicket console the helpdesk works in, replacing the phone call where
 /// an agent listens and files the ticket on the client's behalf.
 ///
-/// **Two hops, two credentials.** The client's trading session gets them a
-/// short-lived JWT from the trading backend ([mintSupportToken]); that JWT is
-/// exchanged once for an osTicket session ([exchangeToken]), and everything
-/// after runs on the osTicket access token. The two never mix, which is why the
-/// client never needs an osTicket password.
+/// **Two credentials, never mixed.** The client's trading session buys an
+/// osTicket session once ([signInToSupport]); everything after runs on the
+/// osTicket access token. The client never needs an osTicket password, and the
+/// app carries no signing key of its own — the trading backend vouches for the
+/// client code, so nothing is taken on trust from here.
 ///
 /// Three things here differ from most of this app's API layer:
 ///
@@ -67,166 +62,63 @@ mixin SupportClientApi on ApiCore, UserProfileAPI {
   /// answers a bare `401 invalid_token` that says nothing about why.
   static final RegExp _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
-  /// Builds the short-lived JWT that `/auth/exchange` accepts.
+  /// Signs in to support with the trading session the client already has.
   ///
-  /// Signed in the app rather than fetched from a backend. Four things must be
-  /// exact or the server answers a bare `401 invalid_token` without saying
-  /// which: the issuer, the audience, a lifetime no longer than 120 seconds,
-  /// and a `jti` never seen before.
+  /// Replaces the JWT this app used to mint and sign itself. Nothing secret
+  /// ships now: the client code is *asserted* here and **proven** server-side —
+  /// osTicket calls the trading backend's `validate_session` with the same
+  /// token, so a caller cannot claim to be another client by editing the body.
+  /// That is the whole point of the change, and it is why the old signing key
+  /// could be deleted rather than merely hidden better.
   ///
-  /// The e-mail matters as much as the signature. Verified against the live
-  /// API: an empty or malformed address is rejected exactly like a bad key, so
-  /// it is fetched and checked here rather than read from whatever a provider
-  /// happens to be holding — a profile that has not loaded yet would otherwise
-  /// send an empty string and produce a 401 that looks like a key problem.
-  ///
-  /// Single-use and two minutes old at most, so it is built immediately before
-  /// the exchange and never stored — caching it would guarantee a replay
-  /// rejection on the second use.
-  Future<String> mintSupportToken() async {
-    if (kSupportAppKey.isEmpty) {
-      // A build without the key cannot sign anything. Saying so beats emitting
-      // a token signed with an empty secret and reporting the server's 401.
-      throw SupportTicketException(
-        statusCode: 0,
-        message: 'Support is not available in this build.',
-      );
-    }
-
+  /// One of only two routes that need no support access token. Called once when
+  /// the client opens Support, not per screen — it is rate limited per IP.
+  Future<SupportSession> signInToSupport() async {
     final clientCode = (prefs.clientId ?? '').trim();
-    if (clientCode.isEmpty) {
+    // The same value `api_core` sends as `Authorization` to the trading API.
+    final sessionToken = (prefs.token ?? '').trim();
+    if (clientCode.isEmpty || sessionToken.isEmpty) {
       throw SupportTicketException(
         statusCode: 0,
         message: 'Support is unavailable — please sign in again.',
       );
     }
 
-    final ClientDetailModel detail;
-    try {
-      detail = await getClientDetail();
-    } catch (e) {
-      throw SupportTicketException.network(e);
-    }
+    final data = await _postJson('/auth/session', {
+      'client_id': clientCode,
+      'token': sessionToken,
+      // Display and contact data only, hung off an identity the server has
+      // already verified. Omitted rather than sent blank when unavailable.
+      if ((prefs.clientName ?? '').trim().isNotEmpty)
+        'name': (prefs.clientName ?? '').trim(),
+      if (await _registeredEmail() case final email?) 'email': email,
+    });
 
-    final email = (detail.email ?? '').trim();
-    if (!_emailPattern.hasMatch(email)) {
-      // Nothing the client can do from this screen, but naming the real cause
-      // at least points them somewhere. The server's own answer would be an
-      // undiagnosable 401.
-      throw SupportTicketException(
-        statusCode: 0,
-        message: 'No valid email is registered on your account, so a support '
-            'request cannot be raised. Please update your email in Profile '
-            'first.',
-      );
-    }
-    final name = (detail.cliname ?? '').trim();
-
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final random = Random.secure();
-    final jti = List.generate(16, (_) => random.nextInt(256))
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
-
-    final header = _base64Url(utf8.encode(jsonEncode({
-      'alg': 'HS256',
-      'typ': 'JWT',
-      'kid': kSupportKeyId,
-    })));
-
-    final payload = _base64Url(utf8.encode(jsonEncode({
-      'iss': kSupportIssuer,
-      'aud': kSupportAudience,
-      // The trading client code is the identity. The e-mail below is contact
-      // and display data only — two client codes can share one address, and
-      // the server tags the duplicate rather than merging them.
-      'sub': clientCode,
-      'email': email,
-      // Blank is accepted — the server falls back to the client code — but
-      // sending it means an agent sees a name instead of a code.
-      'name': name.isEmpty ? clientCode : name,
-      'iat': now,
-      // 120 is the server's hard ceiling with no clock-skew leeway, so this
-      // sits under it rather than on it.
-      'exp': now + 90,
-      'jti': jti,
-    })));
-
-    final signature = _base64Url(
-      Hmac(sha256, utf8.encode(kSupportAppKey))
-          .convert(utf8.encode('$header.$payload'))
-          .bytes,
-    );
-
+    final session = SupportSession.fromJson(data);
+    _supportSession = session;
+    // Stamped here rather than by the caller: this is the only place a session
+    // is born, so it is the only place that can be sure whose it is.
     _sessionForClient = clientCode;
-    return '$header.$payload.$signature';
+    return session;
   }
 
-  /// base64url with the padding stripped, as JWT requires.
-  String _base64Url(List<int> bytes) =>
-      base64Url.encode(bytes).replaceAll('=', '');
-
-  /// Trades a mint token for an osTicket support session.
+  /// The client's registered address, or null when there is not a usable one.
   ///
-  /// One of only two routes that need no support access token. Do this once
-  /// when the client opens Support, not on every screen — it is rate limited to
-  /// 100 per minute per IP, which is sized for one exchange per app-open.
-  Future<SupportSession> exchangeToken(String mintToken) async {
+  /// Best effort by design. The address is optional to `/auth/session`, so a
+  /// profile call that fails must not cost the client their support session —
+  /// they can still raise a ticket and read replies in the app either way.
+  ///
+  /// What it does cost is e-mail: with no address on the osTicket record an
+  /// agent's reply never leaves the helpdesk. A placeholder would be worse —
+  /// replies would bounce silently instead of visibly not sending — so an
+  /// unusable address is dropped rather than substituted.
+  Future<String?> _registeredEmail() async {
     try {
-      final data = await _postJson('/auth/exchange', {'token': mintToken});
-      final session = SupportSession.fromJson(data);
-      _supportSession = session;
-      return session;
-    } on SupportTicketException catch (e) {
-      if (e.isMintTokenRejected) _debugDumpRejectedToken(mintToken);
-      rethrow;
-    }
-  }
-
-  /// Prints the claims of a token the server refused.
-  ///
-  /// `401 invalid_token` is deliberately undiagnosable — bad signature, wrong
-  /// issuer, stale clock and a malformed e-mail all look identical. Everything
-  /// needed to tell them apart is in the token we just built, so it is dumped
-  /// rather than left to guesswork.
-  ///
-  /// Debug builds only: these claims identify a client, and a release build has
-  /// no business writing them to a console.
-  void _debugDumpRejectedToken(String token) {
-    if (!kDebugMode) return;
-    try {
-      final parts = token.split('.');
-      if (parts.length != 3) {
-        debugPrint('[support] malformed token: ${parts.length} segments');
-        return;
-      }
-      Map<String, dynamic> decode(String segment) {
-        final padded = segment.padRight((segment.length + 3) ~/ 4 * 4, '=');
-        return Map<String, dynamic>.from(
-          jsonDecode(utf8.decode(base64Url.decode(padded))) as Map,
-        );
-      }
-
-      final header = decode(parts[0]);
-      final claims = decode(parts[1]);
-      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final email = '${claims['email'] ?? ''}';
-      final sub = '${claims['sub'] ?? ''}';
-
-      debugPrint('[support] /auth/exchange rejected the mint token.');
-      debugPrint('[support]   kid      : ${header['kid']}  (server holds k1)');
-      debugPrint('[support]   iss/aud  : ${claims['iss']} / ${claims['aud']}');
-      debugPrint('[support]   sub      : '
-          '${sub.isEmpty ? "EMPTY — this alone causes a 401" : sub}');
-      debugPrint('[support]   email    : '
-          '${email.isEmpty ? "EMPTY — this alone causes a 401" : email}');
-      debugPrint('[support]   lifetime : '
-          '${(claims['exp'] ?? 0) - (claims['iat'] ?? 0)}s (must be <= 120)');
-      debugPrint('[support]   clock    : iat is ${now - (claims['iat'] ?? 0)}s '
-          'behind this device (no skew is allowed)');
-      debugPrint('[support]   key set  : ${kSupportAppKey.isNotEmpty}');
-    } catch (e) {
-      debugPrint('[support] could not decode the rejected token: $e');
+      final detail = await getClientDetail();
+      final email = (detail.email ?? '').trim();
+      return _emailPattern.hasMatch(email) ? email : null;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -313,7 +205,7 @@ mixin SupportClientApi on ApiCore, UserProfileAPI {
         _supportSession = null;
       }
     }
-    return exchangeToken(await mintSupportToken());
+    return signInToSupport();
   }
 
   // --- Endpoints -----------------------------------------------------------
@@ -552,7 +444,7 @@ mixin SupportClientApi on ApiCore, UserProfileAPI {
       session = await refreshSupportSession();
     } on SupportTicketException {
       _supportSession = null;
-      session = await exchangeToken(await mintSupportToken());
+      session = await signInToSupport();
     }
     try {
       return await send(session.accessToken);
