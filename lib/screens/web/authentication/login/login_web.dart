@@ -56,7 +56,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   // Full build/release details — surfaced only in the hover tooltip. Update
   // this single string on each release.
   static const String _appVersionLabel =
-      "Version 3.0.3 Build 1.0.543 Released on 26 Aug 2026";
+      "Version 3.0.3 Build 1.0.544 Released on 26 Aug 2026";
   
   bool _isProcessing = false;
   bool _isInitializing = true; // True until auto-login check completes

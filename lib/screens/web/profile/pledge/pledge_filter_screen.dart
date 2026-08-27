@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import 'package:mynt_plus/provider/ledger_provider.dart';
-import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/screens/web/profile/pledge/pledge_details.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
@@ -394,22 +393,8 @@ class _PledgeFilterState extends State<PledgeFilter> {
     required BuildContext context,
     required dynamic ref,
   }) {
-    final portfolio = ref.read(mfProvider);
-    final isin = value.iSIN?.toString() ?? "";
-    String mfname = "";
-    if (portfolio.mfholdingnew?.data != null && isin.isNotEmpty) {
-      for (var mfData in portfolio.mfholdingnew!.data!) {
-        if (mfData.iSIN == isin) {
-          mfname = mfData.name ?? "";
-          break;
-        }
-      }
-    }
-
-    // Symbol display
-    final String symbolName = value.sERIES == "GR" && mfname.isNotEmpty
-        ? mfname
-        : (value.nSESYMBOL ?? '--');
+    // Symbol display — always NSE_SYMBOL (consistent with mobile).
+    final String symbolName = value.nSESYMBOL ?? '--';
 
     // Calculate quantities based on tab
     int totalQty;
