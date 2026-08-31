@@ -59,6 +59,10 @@ class _RupeeCaseStrategiesSectionState
 
     return _StrategySection(
       title: 'Momentum Investing',
+      logo: _SectionLogo(
+        assetPath: assets.miLogo,
+        semanticsLabel: 'Momentum Investing logo',
+      ),
       description:
           'Explore professionally curated momentum strategies, each backed by 5 '
           'years of rolling historical performance. Browse the results below, '
@@ -168,6 +172,10 @@ class _AlgoStrategiesSectionState extends ConsumerState<AlgoStrategiesSection> {
 
     return _StrategySection(
       title: 'Zebu Algo Strategies',
+      logo: _SectionLogo(
+        assetPath: assets.yuktiLogo,
+        semanticsLabel: 'Zebu Algo (Yukti) logo',
+      ),
       description:
           'Deploy ready-made automated strategies, each back-tested over years '
           'of market history. Explore the baskets below, then start on Zebu '
@@ -249,12 +257,16 @@ class _StrategySection extends StatelessWidget {
     required this.seeAllRoute,
     required this.showSeeAll,
     required this.child,
+    this.logo,
     this.trailingGap = 0,
   });
 
   final String title;
   final String description;
   final String seeAllRoute;
+
+  /// Optional brand logo displayed to the right of the section title.
+  final Widget? logo;
 
   /// The link is hidden until there is data behind it.
   final bool showSeeAll;
@@ -269,34 +281,34 @@ class _StrategySection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── Header: logo top-left, see-all top-right ──
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: MyntWebTextStyles.head(
-                context,
-                darkColor: MyntColors.textPrimaryDark,
-                lightColor: MyntColors.textPrimary,
-                fontWeight: MyntFonts.bold,
+            // Logo + description stacked in a column
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (logo != null) ...[logo!, const SizedBox(width: 14)],
+                  const SizedBox(height: 3),
+                  Text(
+                    description,
+                    style: MyntWebTextStyles.titlesub(
+                      context,
+                      darkColor: MyntColors.textSecondaryDark,
+                      lightColor: MyntColors.textSecondary,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
-            if (showSeeAll) _SeeAllLink(route: seeAllRoute),
+            // See all floated to the top-right
+            if (showSeeAll) ...[const SizedBox(width: 16), _SeeAllLink(route: seeAllRoute)],
           ],
-        ),
-        const SizedBox(height: 6),
-        // Short intro under the title — global para sizing in the muted
-        // secondary colour so it reads as a subtitle.
-        Padding(
-          padding: const EdgeInsets.only(right: 24),
-          child: Text(
-            description,
-            style: MyntWebTextStyles.titlesub(
-              context,
-              darkColor: MyntColors.textSecondaryDark,
-              lightColor: MyntColors.textSecondary,
-            ),
-          ),
         ),
         const SizedBox(height: 16),
         child,
@@ -758,6 +770,36 @@ class _AlgoTradingBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────── section logo ──
+
+/// Renders a brand-logo SVG at its original colours.
+///
+/// No background, border, or colour filter is applied — the artwork is
+/// displayed as-is, scaled to [svgHeight] with width proportional to the
+/// SVG viewBox so neither logo is cropped or distorted.
+class _SectionLogo extends StatelessWidget {
+  const _SectionLogo({
+    required this.assetPath,
+    this.semanticsLabel,
+    this.svgHeight = 48,
+  });
+
+  final String assetPath;
+  final String? semanticsLabel;
+
+  /// Rendered height; width scales proportionally from the SVG viewBox.
+  final double svgHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    return SvgPicture.asset(
+      assetPath,
+      height: svgHeight,
+      semanticsLabel: semanticsLabel,
     );
   }
 }
