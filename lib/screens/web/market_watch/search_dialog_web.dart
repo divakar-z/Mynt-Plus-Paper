@@ -510,6 +510,9 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                     dark: WebColors.textSecondaryDark,
                     light: WebColors.textSecondary,
                   ),
+                ).copyWith(
+                  fontWeight: MyntFonts.medium,
+                  letterSpacing: 0.5,
                 ),
               ),
             ),
@@ -555,6 +558,9 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                     dark: WebColors.textSecondaryDark,
                     light: WebColors.textSecondary,
                   ),
+                ).copyWith(
+                  fontWeight: MyntFonts.medium,
+                  letterSpacing: 0.5,
                 ),
               ),
             ),
