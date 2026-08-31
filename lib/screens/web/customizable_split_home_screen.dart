@@ -154,6 +154,24 @@ Future<void> toggleTickerVisibility() async {
   tickerVisibilityNotifier.value = newValue;
 }
 
+/// Global ValueNotifier for watchlist (market watch) panel visibility.
+/// Reactive updates across the app so the split layout collapses/expands live.
+final watchlistVisibilityNotifier = ValueNotifier<bool>(true);
+
+/// Initialize watchlist visibility from preferences
+void initWatchlistVisibility() {
+  final Preferences pref = locator<Preferences>();
+  watchlistVisibilityNotifier.value = pref.isWatchlistVisible;
+}
+
+/// Toggle watchlist visibility and save to preferences
+Future<void> toggleWatchlistVisibility() async {
+  final Preferences pref = locator<Preferences>();
+  final newValue = !watchlistVisibilityNotifier.value;
+  await pref.setWatchlistVisible(newValue);
+  watchlistVisibilityNotifier.value = newValue;
+}
+
 /// Screen type parameter enum - used for URL routing
 /// Maps to internal ScreenType enum
 enum ScreenTypeParam {
@@ -269,6 +287,11 @@ class _CustomizableSplitHomeScreenState
   final GlobalKey _a11yAnchorKey = GlobalKey();
   OverlayEntry? _a11yOverlay;
 
+  // Measures the watchlist index-strip height so the absolutely-positioned
+  // collapse toggle can center itself on the indices/search seam.
+  final GlobalKey _watchlistIndexStripKey = GlobalKey();
+  double _watchlistIndexStripHeight = 64;
+
   /// Breakpoint below which hamburger menu is shown
   static const double _mobileBreakpoint = 1200.0;
 
@@ -379,6 +402,9 @@ class _CustomizableSplitHomeScreenState
 
     // Initialize ticker visibility from preferences
     initTickerVisibility();
+
+    // Initialize watchlist visibility from preferences
+    initWatchlistVisibility();
 
     // Initialize with default panels
     _initializeDefaultPanels();
@@ -1370,14 +1396,29 @@ class _CustomizableSplitHomeScreenState
       // Watchlist on LEFT, Content on RIGHT
       return Row(
         children: [
-          // Left side: Watchlist (full height)
-          SizedBox(
-            width: watchlistWidth,
-            child: _buildWatchlistPanel(theme, panelIndex: 0),
+          // Left side: Watchlist (full height) — collapsible to a thin rail
+          ValueListenableBuilder<bool>(
+            valueListenable: watchlistVisibilityNotifier,
+            builder: (context, visible, _) {
+              if (!visible) {
+                return _buildWatchlistCollapsedRail(theme, onLeft: true);
+              }
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: watchlistWidth,
+                    child: _buildWatchlistPanel(theme,
+                        panelIndex: 0, onLeft: true),
+                  ),
+                  // Divider
+                  Container(
+                      width: 1,
+                      color: shadcn.Theme.of(context).colorScheme.border),
+                ],
+              );
+            },
           ),
-          // Divider
-          Container(
-              width: 1, color: shadcn.Theme.of(context).colorScheme.border),
           // Right side: AppBar + TextNugget + Ticker + Content
           Expanded(
             child: Column(
@@ -1418,13 +1459,28 @@ class _CustomizableSplitHomeScreenState
               ],
             ),
           ),
-          // Divider
-          Container(
-              width: 1, color: shadcn.Theme.of(context).colorScheme.border),
-          // Right side: Watchlist (full height)
-          SizedBox(
-            width: watchlistWidth,
-            child: _buildWatchlistPanel(theme, panelIndex: 1),
+          // Right side: Watchlist (full height) — collapsible to a thin rail
+          ValueListenableBuilder<bool>(
+            valueListenable: watchlistVisibilityNotifier,
+            builder: (context, visible, _) {
+              if (!visible) {
+                return _buildWatchlistCollapsedRail(theme, onLeft: false);
+              }
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Divider
+                  Container(
+                      width: 1,
+                      color: shadcn.Theme.of(context).colorScheme.border),
+                  SizedBox(
+                    width: watchlistWidth,
+                    child: _buildWatchlistPanel(theme,
+                        panelIndex: 1, onLeft: false),
+                  ),
+                ],
+              );
+            },
           ),
         ],
       );
@@ -1451,33 +1507,181 @@ class _CustomizableSplitHomeScreenState
     return panel.screens.contains(ScreenType.watchlist);
   }
 
-  /// Build watchlist panel (full height) with index slots on top
-  Widget _buildWatchlistPanel(ThemesProvider theme, {required int panelIndex}) {
+  /// Build watchlist panel (full height) with index slots on top.
+  /// [onLeft] controls which edge the collapse arrow points toward.
+  Widget _buildWatchlistPanel(ThemesProvider theme,
+      {required int panelIndex, bool onLeft = true}) {
     return Container(
       color: resolveThemeColor(context,
           dark: MyntColors.backgroundColorDark,
           light: MyntColors.backgroundColor),
-      child: Column(
+      // Stack lets the collapse toggle float (absolutely positioned) over the
+      // header without reflowing the indices row — it stays centered on the
+      // indices/search seam and flush to the panel's outer edge.
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          // Index slots at top of watchlist
-          _buildWatchlistIndexSlots(theme.isDarkMode),
-          // Watchlist content
-          Expanded(
-            child: _getScreenForType(ScreenType.watchlist),
+          Column(
+            children: [
+              // Index slots row (toggle is rendered separately as an overlay).
+              _buildWatchlistIndexSlots(theme.isDarkMode, measure: true),
+              // Watchlist content
+              Expanded(
+                child: _getScreenForType(ScreenType.watchlist),
+              ),
+            ],
+          ),
+          // Absolutely-positioned collapse toggle: vertically centered on the
+          // seam between the index strip and the search bar, hugging the outer
+          // (divider-facing) edge.
+          Positioned(
+            top: _watchlistIndexStripHeight - 30,
+            right: onLeft ? 0 : null,
+            left: onLeft ? null : 0,
+            child: _buildWatchlistCollapseButton(
+              onLeft: onLeft,
+              isDarkMode: theme.isDarkMode,
+            ),
           ),
         ],
       ),
     );
   }
 
-  /// Build index slots for watchlist panel (above search)
-  Widget _buildWatchlistIndexSlots(bool isDarkMode) {
+  Widget _buildWatchlistCollapseButton({
+    required bool onLeft,
+    required bool isDarkMode,
+  }) {
+    final scheme = shadcn.Theme.of(context).colorScheme;
+    const radius = Radius.circular(10);
+    final side = BorderSide(color: scheme.border);
+    final borderRadius = onLeft
+        ? const BorderRadius.only(topLeft: radius, bottomLeft: radius)
+        : const BorderRadius.only(topRight: radius, bottomRight: radius);
+    final border = onLeft
+        ? Border(left: side, top: side, bottom: side)
+        : Border(right: side, top: side, bottom: side);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Tooltip(
+        message: 'Hide watchlist',
+        child: Material(
+          color : const Color(0xFF0037B7),
+          borderRadius: borderRadius,
+          elevation: 1.5,
+          shadowColor: Colors.black.withValues(alpha: 0.18),
+          child: InkWell(
+            onTap: () => toggleWatchlistVisibility(),
+            borderRadius: borderRadius,
+            // hoverColor: scheme.accent,
+            child: Container(
+              width: 28,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: borderRadius,
+                border: border,
+              ),
+              child: Icon(
+                onLeft
+                    ? Icons.keyboard_double_arrow_left
+                    : Icons.keyboard_double_arrow_right,
+                size: 18,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildWatchlistCollapsedRail(ThemesProvider theme,
+      {required bool onLeft}) {
+    final scheme = shadcn.Theme.of(context).colorScheme;
+    final divider = Container(width: 1, color: scheme.border);
+    final rail = Material(
+      color: scheme.muted.withValues(alpha: 0.5),
+      child: InkWell(
+        onTap: () => toggleWatchlistVisibility(),
+        child: SizedBox(
+          width: 36,
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              Tooltip(
+                message: 'Show watchlist',
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color : const Color(0xFF0037B7),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: scheme.border),
+                  ),
+                  child: Icon(
+                    onLeft
+                        ? Icons.keyboard_double_arrow_right
+                        : Icons.keyboard_double_arrow_left,
+                    size: 18,
+                    color : Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: RotatedBox(
+                  quarterTurns: onLeft ? 3 : 1,
+                  child: Center(
+                    child: Text(
+                      'WATCHLIST',
+                      maxLines: 1,
+                      overflow: TextOverflow.clip,
+                      style: TextStyle(
+                        fontSize: 11,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.foreground,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: onLeft ? [rail, divider] : [divider, rail],
+    );
+  }
+
+  /// Build index slots for watchlist panel (above search).
+  /// [measure] attaches the strip-height probe used to position the floating
+  /// collapse toggle (only the watchlist panel needs it, not charts mode).
+  Widget _buildWatchlistIndexSlots(bool isDarkMode, {bool measure = false}) {
     return Consumer(
       builder: (context, ref, _) {
         final indexProvider = ref.watch(indexListProvider);
         final marketWatch = ref.read(marketWatchProvider);
         final theme = ref.watch(themeProvider);
         final indexValues = indexProvider.defaultIndexList?.indValues;
+        if (measure) {
+          // After layout, capture the strip height so the overlaid toggle can
+          // center on the indices/search seam. Cheap: only setState on change.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final box = _watchlistIndexStripKey.currentContext
+                ?.findRenderObject() as RenderBox?;
+            final h = box?.size.height;
+            if (h != null && mounted && (h - _watchlistIndexStripHeight).abs() > 0.5) {
+              setState(() => _watchlistIndexStripHeight = h);
+            }
+          });
+        }
 
         if (indexValues == null || indexValues.isEmpty) {
           return const SizedBox.shrink();
@@ -1489,27 +1693,18 @@ class _CustomizableSplitHomeScreenState
             : indexValues;
 
         return Container(
+          key: measure ? _watchlistIndexStripKey : null,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: resolveThemeColor(context,
                 dark: MyntColors.backgroundColorDark,
                 light: MyntColors.backgroundColor),
-            // border: Border(
-            //   bottom: BorderSide(
-            //     color: isDarkMode
-            //         ? WebDarkColors.divider.withOpacity(0.3)
-            //         : MyntColors.divider.withOpacity(0.2),
-            //     width: 1,
-            //   ),
-            // ),
+            // border: Border(bottom: BorderSide(color: scheme.border)),
           ),
           child: Row(
             children: List.generate(
               displayIndices.length,
               (index) {
-                if (index >= displayIndices.length) {
-                  return const SizedBox.shrink();
-                }
                 final item = displayIndices[index];
                 return Expanded(
                   child: Padding(
