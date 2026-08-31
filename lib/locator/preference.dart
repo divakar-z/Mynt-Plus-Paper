@@ -485,6 +485,13 @@ class Preferences {
 
   bool get isTickerVisible => _prefInstance?.getBool(_isTickerVisible) ?? true;
 
+  // Watchlist (market watch) panel visibility
+  Future setWatchlistVisible(bool isVisible) async =>
+      await _prefInstance!.setBool(_isWatchlistVisible, isVisible);
+
+  bool get isWatchlistVisible =>
+      _prefInstance?.getBool(_isWatchlistVisible) ?? true;
+
   // Saved custom strategies (per-user, stored as JSON string)
   Future setSavedCustomStrategies(String userId, String data) async =>
       await _prefInstance!.setString('${_savedCustomStrategies}_$userId', data);
@@ -710,6 +717,9 @@ const String _isSipDate = "isSipDate";
 
 ////TICKER VISIBILITY
 const String _isTickerVisible = "isTickerVisible";
+
+////WATCHLIST VISIBILITY
+const String _isWatchlistVisible = "isWatchlistVisible";
 
 ////SAVED CUSTOM STRATEGIES
 const String _savedCustomStrategies = "savedCustomStrategies";
