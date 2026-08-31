@@ -7,7 +7,7 @@ import '../../../../res/global_state_text.dart';
 import '../../../../res/res.dart';
 import '../../../../sharedWidget/cust_text_formfield.dart';
 import '../../../provider/mf_provider.dart';
-import '../../Mobile/mutual_fund_old/create_mandate_daialogue.dart';
+import 'create_mandate_dialogue_web.dart';
 
 class TimmerScreenForUPIWeb extends StatefulWidget {
   final dynamic data;

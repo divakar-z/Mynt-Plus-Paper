@@ -588,7 +588,7 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                         ignoring: true,
                         child: MyntSearchTextField(
                           controller: TextEditingController(),
-                          placeholder: 'Search & add',
+                          placeholder: isPreDef == 'Yes' ? 'Search stocks' : 'Search & add',
                           leadingIcon: assets.searchIcon,
                           enabled: false,
                           leadingIconHoverEffect: false,
