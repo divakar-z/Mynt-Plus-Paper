@@ -166,6 +166,8 @@ flutter:
     - shorebird.yaml
     - assets/icon/MYNT_App_Logo_v2.svg
     - assets/scanner/
+    - assets/Yukti.svg
+    - assets/MI.svg
    
     # - assets/gif/
     # - assets/gif/diwali_wish.gif

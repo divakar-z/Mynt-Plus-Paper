@@ -252,6 +252,10 @@ class Assets {
   final String bigphnpay = "assets/icon/paymentIcon/phonepe.svg";
   final String bigpaytm = "assets/icon/paymentIcon/paytm.svg";
 
+  // Brand logos for dashboard strategy sections
+  final String yuktiLogo = "assets/Yukti.svg";
+  final String miLogo = "assets/MI.svg";
+
   // Scanner sentiment candle images
   final String scannerBullish = "assets/scanner/bullish.png";
   final String scannerBearish = "assets/scanner/bearish.png";
