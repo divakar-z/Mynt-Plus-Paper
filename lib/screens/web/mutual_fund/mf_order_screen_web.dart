@@ -16,8 +16,8 @@ import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../sharedWidget/common_text_fields_web.dart';
 import '../../../sharedWidget/snack_bar.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import '../../Mobile/mutual_fund_old/create_mandate_daialogue.dart';
-import '../../Mobile/profile_screen/fund_screen/upi_id_screens/mf_payment_resp_alert.dart';
+import 'create_mandate_dialogue_web.dart';
+import '../profile/fund_screen/upi_id_screens/mf_payment_resp_alert.dart';
 import 'mf_order_bottomsheet_web.dart';
 
 // Utility function to get the appropriate suffix for date numbers
