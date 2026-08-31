@@ -229,8 +229,7 @@ class _searchScripList extends State<SearchScripList> {
                           trailing: widget.isBasket == "Chart||Is" ||
                                   widget.isBasket == "Option||Is" ||
                                   widget.isBasket == "Basket" ||
-                                  searchScrip.isPreDefWLs == "Yes" ||
-                                  searchScrip.scrips.length >= 50
+                                  searchScrip.isPreDefWLs == "Yes"
                               ? const SizedBox(width: 0.2)
                               : Padding(
                                   padding: const EdgeInsets.only(right: 8),
@@ -269,6 +268,13 @@ class _searchScripList extends State<SearchScripList> {
                                                 false,
                                               );
                                             } else {
+                                              if (searchScrip.scrips.length >= 50) {
+                                                final wlTitle = widget.wlName.isNotEmpty
+                                                    ? '${widget.wlName[0].toUpperCase()}${widget.wlName.substring(1)}'
+                                                    : 'Watchlist';
+                                                error(context, "Watchlist \"$wlTitle\" limit reached (50/50 stocks). Please remove stocks to add new ones.");
+                                                return;
+                                              }
                                               await searchScrip.addDelMarketScrip(
                                                 widget.wlName,
                                                 "${stock.exch}|${stock.token}",
@@ -499,8 +505,7 @@ class _searchScripList extends State<SearchScripList> {
                           trailing: widget.isBasket == "Chart||Is" ||
                                   widget.isBasket == "Option||Is" ||
                                   widget.isBasket == "Basket" ||
-                                  searchScrip.isPreDefWLs == "Yes" ||
-                                  searchScrip.scrips.length >= 50
+                                  searchScrip.isPreDefWLs == "Yes"
                               ? const SizedBox(width: 0.2)
                               : Padding(
                                   padding: const EdgeInsets.only(right: 8),
@@ -541,6 +546,13 @@ class _searchScripList extends State<SearchScripList> {
                                                 false,
                                               );
                                             } else {
+                                              if (searchScrip.scrips.length >= 50) {
+                                                final wlTitle = widget.wlName.isNotEmpty
+                                                    ? '${widget.wlName[0].toUpperCase()}${widget.wlName.substring(1)}'
+                                                    : 'Watchlist';
+                                                error(context, "Watchlist \"$wlTitle\" limit reached (50/50 stocks). Please remove stocks to add new ones.");
+                                                return;
+                                              }
                                               await searchScrip
                                                   .addDelMarketScrip(
                                                 widget.wlName,
@@ -775,8 +787,7 @@ print(!searchScrip.exarr.contains('"${scrip.exch}"'));
                   trailing: widget.isBasket == "Chart||Is" ||
                           widget.isBasket == "Option||Is" ||
                           widget.isBasket == "Basket" ||
-                          searchScrip.isPreDefWLs == "Yes" ||
-                          searchScrip.scrips.length >= 50
+                          searchScrip.isPreDefWLs == "Yes"
                       ? const SizedBox(width: 0.2)
                       : Padding(
                           padding: const EdgeInsets.only(right: 8),
@@ -811,6 +822,13 @@ print(!searchScrip.exarr.contains('"${scrip.exch}"'));
                                     false,
                                   );
                                 } else {
+                                  if (searchScrip.scrips.length >= 50) {
+                                    final wlTitle = widget.wlName.isNotEmpty
+                                        ? '${widget.wlName[0].toUpperCase()}${widget.wlName.substring(1)}'
+                                        : 'Watchlist';
+                                    error(context, "Watchlist \"$wlTitle\" limit reached (50/50 stocks). Please remove stocks to add new ones.");
+                                    return;
+                                  }
                                   await searchScrip.isActiveAddBtn(true, index);
                                   await searchScrip.addDelMarketScrip(
                                     widget.wlName,

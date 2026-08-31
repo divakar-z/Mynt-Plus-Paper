@@ -1924,7 +1924,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                           // ]
                           const SizedBox(height: 10),
                           // AMO Alert Banner - shown when market is closed
-                          if (_isMarketClosed && _afterMarketOrder && orderType != "CO - BO") ...[
+                          if (_isMarketClosed && _afterMarketOrder && orderType != "CO - BO" && orderType != "GTT") ...[
                             Container(
                               margin: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1977,7 +1977,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                           CrossAxisAlignment
                                                               .start,
                                                       children: [
-                                                    headerTitleText(
+                                                    headerTitleText( 
                                                         "Frequency", theme),
                                                     const SizedBox(height: 5),
                                                     SizedBox(

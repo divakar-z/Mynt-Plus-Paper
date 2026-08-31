@@ -2,9 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
-import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
-import 'package:mynt_plus/sharedWidget/custom_drag_handler.dart';
 
 class MfPaymentRespAlert extends StatefulWidget {
   final Map<String, dynamic>? upiData;
@@ -27,433 +26,91 @@ class _MfPaymentRespAlertState extends State<MfPaymentRespAlert> {
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
       },
-      child: SafeArea(
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
         child: Consumer(
           builder: (context, ref, child) {
             final theme = ref.watch(themeProvider);
             final mfpro = ref.watch(mfProvider);
+            final condval = widget.conditionval ?? '';
+            final data = widget.upiData;
+
             return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              constraints: const BoxConstraints(maxWidth: 440),
               decoration: BoxDecoration(
-                  color: theme.isDarkMode ? colors.colorBlack : colors.colorWhite,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-
-                   border: Border(
-                                    top: BorderSide(
-                                      color: theme.isDarkMode
-                                          ? colors.textSecondaryDark
-                                              .withOpacity(0.5)
-                                          : colors.colorWhite,
-                                    ),
-                                    left: BorderSide(
-                                      color: theme.isDarkMode
-                                          ? colors.textSecondaryDark
-                                              .withOpacity(0.5)
-                                          : colors.colorWhite,
-                                    ),
-                                    right: BorderSide(
-                                      color: theme.isDarkMode
-                                          ? colors.textSecondaryDark
-                                              .withOpacity(0.5)
-                                          : colors.colorWhite,
-                                    ),
-                                  ),
-
+                color: resolveThemeColor(
+                  context,
+                  dark: MyntColors.backgroundColorDark,
+                  light: MyntColors.backgroundColor,
                 ),
-              child: widget.conditionval == 'timeout' ?
-
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    alignment: Alignment.center,
-                    child: Column(
-                      children: [
-                        const CustomDragHandler(),
-                        Icon(
-
-                               Icons.cancel_rounded,
-                          //
-                          color: theme.isDarkMode ? colors.lossDark : colors.lossLight,
-
-                          size: 70,
-                        ),
-                        const SizedBox(
-                          height: 16,
-                        ),
-                        Text(
-                          "Request timeout",
-                          style: MyntWebTextStyles.title(
-                            context,
-                            darkColor: colors.textPrimaryDark,
-                            lightColor: colors.textPrimaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 5,
-                        ),
-                        Text(
-                          widget.upiData?["status"] == "PAYMENT COMPLETED"
-                              ? "Transaction Success"
-                              : "Transaction fail",
-                          style: MyntWebTextStyles.para(
-                            context,
-                            darkColor: colors.textSecondaryDark,
-                            lightColor: colors.textSecondaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 10,
-                        ),
-                        Text(
-                          "₹${widget.upiData?["OrderVal"] ?? widget.upiData?["InstallmentAmount"]}",
-                          style: webText(
-                            context,
-                            size: 40,
-                            darkColor: colors.textPrimaryDark,
-                            lightColor: colors.textPrimaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 10,
-                        ),
-                        Text(
-                          "${widget.upiData?["datetime"]}",
-                          style: MyntWebTextStyles.para(
-                            context,
-                            darkColor: colors.textSecondaryDark,
-                            lightColor: colors.textSecondaryLight,
-                          ),
-                        ),
-                      ],
-                    ),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: resolveThemeColor(
+                    context,
+                    dark: MyntColors.dividerDark,
+                    light: MyntColors.divider,
                   ),
-                  const SizedBox(height: 16),
-                  if(widget.upiData?["OrderId"] != null || widget.upiData?["OrderId"] != 'null' ||  widget.upiData?["OrderId"] != '')
-                  _dataRow("Order ID", "${widget.upiData?["OrderId"]}", context),
-                  if(widget.upiData?["OrderId"] == null || widget.upiData?["OrderId"] == 'null' || widget.upiData?["OrderId"] == '')
-                  _dataRow("TransNo", "${widget.upiData?["TransNo"]}", context),
-
-                  _dataRow("UPI Transaction ID", "${widget.upiData?["TransNo"]}", context),
-                  _dataRow("Status Description", "Request Timeout reinitiate from orderbook", context),
-                  const SizedBox(height: 16),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: SizedBox(
-                      width: MediaQuery.of(context).size.width,
-                      child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            elevation: 0,
-                            minimumSize: const Size(0, 45),
-                            backgroundColor: theme.isDarkMode
-                                ? colors.primaryDark
-                                : colors.primaryLight,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                          ),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            FocusScope.of(context).unfocus();
-                          },
-                          child: Text(
-                            'Done',
-                            style: MyntWebTextStyles.buttonMd(
-                              context,
-                              color: colors.colorWhite,
-                            ),
-                          )),
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 20,
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: theme.isDarkMode ? 0.4 : 0.08),
+                    blurRadius: 16,
+                    offset: const Offset(0, 8),
                   ),
                 ],
-              ) : (widget.conditionval != '' && widget.conditionval != 'timeout' &&  widget.conditionval != 'reinitiateerror') ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              ),
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    alignment: Alignment.center,
-                    child: Column(
-                      children: [
-                        const CustomDragHandler(),
-                        Icon(
-
-                               Icons.cancel_rounded,
-                          //
-                          color:   theme.isDarkMode ? colors.lossDark : colors.lossLight,
-                          size: 70,
-                        ),
-                        const SizedBox(
-                          height: 16,
-                        ),
-                        Text(
-                          "Payment Not Initiated",
-                          style: MyntWebTextStyles.title(
-                            context,
-                            darkColor: colors.textPrimaryDark,
-                            lightColor: colors.textPrimaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 8,
-                        ),
-                        Text(
-                          "Payment initiate fail",
-                          style: MyntWebTextStyles.para(
-                            context,
-                            darkColor: colors.textSecondaryDark,
-                            lightColor: colors.textSecondaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 10,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  _dataRow("Status Description", "${widget.conditionval}", context),
-                  const SizedBox(height: 16),
+                  // Header / Close Icon
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: SizedBox(
-                      width: MediaQuery.of(context).size.width,
-                      child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            elevation: 0,
-                            minimumSize: const Size(0, 45),
-                            backgroundColor: theme.isDarkMode
-                                ? colors.primaryDark
-                                : colors.primaryLight,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                          ),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            FocusScope.of(context).unfocus();
-                          },
-                          child: Text(
-                            'Done',
-                            style: MyntWebTextStyles.buttonMd(
+                    padding: const EdgeInsets.only(top: 12, right: 12),
+                    child: Align(
+                      alignment: Alignment.topRight,
+                      child: InkWell(
+                        onTap: () {
+                          Navigator.pop(context);
+                          FocusScope.of(context).unfocus();
+                        },
+                        borderRadius: BorderRadius.circular(20),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4.0),
+                          child: Icon(
+                            Icons.close,
+                            size: 20,
+                            color: resolveThemeColor(
                               context,
-                              color: colors.colorWhite,
+                              dark: MyntColors.textSecondaryDark,
+                              light: MyntColors.textSecondary,
                             ),
-                          )),
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 20,
-                  ),
-                ],
-              )
-               :  widget.conditionval == 'reinitiateerror' ?
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    alignment: Alignment.center,
-                    child: Column(
-                      children: [
-                        const CustomDragHandler(),
-                        Icon(
-
-                               Icons.cancel_rounded,
-                          //
-                          color:   theme.isDarkMode ? colors.lossDark : colors.lossLight,
-                          size: 70,
-                        ),
-                        const SizedBox(
-                          height: 16,
-                        ),
-                        Text(
-                          "Payment Not Initiated",
-                          style: MyntWebTextStyles.title(
-                            context,
-                            darkColor: colors.textPrimaryDark,
-                            lightColor: colors.textPrimaryLight,
                           ),
                         ),
-                        const SizedBox(
-                          height: 8,
-                        ),
-                        Text(
-                          "Payment initiate fail",
-                          style: MyntWebTextStyles.para(
-                            context,
-                            darkColor: colors.textSecondaryDark,
-                            lightColor: colors.textSecondaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 10,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 16),
 
-                  _dataRow("Payment type", "${widget.upiData?["type"]}", context),
-                  _dataRow("Status Description", "${widget.upiData?['responsestring'] ?? widget.upiData?['emsg']}", context),
-                  const SizedBox(height: 16),
+                  // Status Icon + Titles
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: SizedBox(
-                      width: MediaQuery.of(context).size.width,
-                      child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            elevation: 0,
-                            minimumSize: const Size(0, 45),
-                            backgroundColor: theme.isDarkMode
-                                ? colors.primaryDark
-                                : colors.primaryLight,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                          ),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            FocusScope.of(context).unfocus();
-                          },
-                          child: Text(
-                            'Done',
-                            style: MyntWebTextStyles.buttonMd(
-                              context,
-                              color: colors.colorWhite,
-                            ),
-                          )),
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: _buildStatusContent(context, theme, mfpro, condval, data),
                   ),
-                  const SizedBox(
-                    height: 20,
-                  ),
-                ],
-              )
-              :
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    alignment: Alignment.center,
-                    child: Column(
-                      children: [
-                        const CustomDragHandler(),
-                        Icon(
-                          widget.upiData?["status"] == "PAYMENT COMPLETED" || widget.upiData?["status"] == "REGISTERED"
-                              ? Icons.check_circle_rounded : widget.upiData?["status"] == "PAYMENT PROCESSING" ?
-                               Icons.schedule : Icons.cancel_rounded,
-                          //
-                          color: widget.upiData?["status"] == "PAYMENT COMPLETED" || widget.upiData?["status"] == "REGISTERED"
-                              ? theme.isDarkMode ? colors.profitDark : colors.profitLight
-                              : widget.upiData?["status"] == "PAYMENT PROCESSING"
-                              ? colors.pending
-                              : theme.isDarkMode ? colors.lossDark : colors.lossLight,
-                          size: 70,
-                        ),
-                        const SizedBox(
-                          height: 16,
-                        ),
-                        Text(
-                          "${widget.upiData?["status"]}",
-                          style: MyntWebTextStyles.title(
-                            context,
-                            darkColor: colors.textPrimaryDark,
-                            lightColor: colors.textPrimaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 5,
-                        ),
-                        if(mfpro.mfOrderTpye != 'SIP')
-                        Text(
-                          widget.upiData?["status"] == "PAYMENT COMPLETED"
-                              ? "Transaction Success" :  widget.upiData?["status"] == "PAYMENT PROCESSING" ?  "Transaction pending"
-                              : "Transaction fail",
-                          style: MyntWebTextStyles.para(
-                            context,
-                            darkColor: colors.textSecondaryDark,
-                            lightColor: colors.textSecondaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 10,
-                        ),
-                        Text(
-                          "₹${widget.upiData?["OrderVal"] ?? widget.upiData?["InstallmentAmount"]}",
-                          style: webText(
-                            context,
-                            size: 40,
-                            darkColor: colors.textPrimaryDark,
-                            lightColor: colors.textPrimaryLight,
-                          ),
-                        ),
-                        const SizedBox(
-                          height: 10,
-                        ),
-                        Text(
-                          "${widget.upiData?["datetime"]}",
-                          style: MyntWebTextStyles.para(
-                            context,
-                            darkColor: colors.textSecondaryDark,
-                            lightColor: colors.textSecondaryLight,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if(mfpro.mfOrderTpye != 'SIP')
-                  _dataRow("Order ID", "${widget.upiData?["OrderId"]}", context),
-                  if(mfpro.mfOrderTpye == 'SIP')
 
-                  _dataRow("TransNo", "${widget.upiData?["OrderId"] ?? widget.upiData?["TransNo"]}", context),
-
-                  _dataRow("UPI Transaction ID", "${widget.upiData?["TransNo"]}", context),
-                  _dataRow("Status Description", "${widget.upiData?['Remarks']}", context),
-                  const SizedBox(height: 16),
+                  // Detail rows
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: SizedBox(
-                      width: MediaQuery.of(context).size.width,
-                      child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            elevation: 0,
-                            minimumSize: const Size(0, 45),
-                            backgroundColor: theme.isDarkMode
-                                ? colors.primaryDark
-                                : colors.primaryLight,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                          ),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            FocusScope.of(context).unfocus();
-                          },
-                          child: Text(
-                            'Done',
-                            style: MyntWebTextStyles.buttonMd(
-                              context,
-                              color: colors.colorWhite,
-                            ),
-                          )),
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: _buildDetails(context, theme, mfpro, condval, data),
                   ),
-                  const SizedBox(
-                    height: 20,
-                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Footer button
+                  _buildFooter(context, theme),
                 ],
-              )
-              ,
+              ),
             );
           },
         ),
@@ -461,42 +118,303 @@ class _MfPaymentRespAlertState extends State<MfPaymentRespAlert> {
     );
   }
 
-  Widget _dataRow(String name, String value, BuildContext context) {
+  Widget _buildStatusContent(
+    BuildContext context,
+    ThemesProvider theme,
+    MFProvider mfpro,
+    String condval,
+    Map<String, dynamic>? data,
+  ) {
+    final IconData icon;
+    final Color iconColor;
+    final String title;
+    final String? subtitle;
+    final String? amount;
+    final String? datetime;
+
+    if (condval == 'timeout') {
+      icon = Icons.cancel_rounded;
+      iconColor = resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss);
+      title = 'Request timeout';
+      subtitle = data?["status"] == "PAYMENT COMPLETED" ? "Transaction Success" : "Transaction fail";
+      final rawAmount = data?["OrderVal"] ?? data?["InstallmentAmount"];
+      amount = (rawAmount != null && rawAmount.toString().isNotEmpty && rawAmount.toString() != 'null')
+          ? "₹$rawAmount"
+          : null;
+      final rawDate = data?["datetime"];
+      datetime = (rawDate != null && rawDate.toString().isNotEmpty && rawDate.toString() != 'null')
+          ? "$rawDate"
+          : null;
+    } else if (condval == 'reinitiateerror' || (condval.isNotEmpty && condval != 'timeout')) {
+      icon = Icons.cancel_rounded;
+      iconColor = resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss);
+      title = 'Payment Not Initiated';
+      subtitle = 'Payment initiate fail';
+      amount = null;
+      datetime = null;
+    } else {
+      // Default — actual payment response
+      final status = (data?["status"] ?? '').toString();
+      final isSuccess = status == "PAYMENT COMPLETED" || status == "REGISTERED";
+      final isProcessing = status == "PAYMENT PROCESSING";
+
+      icon = isSuccess
+          ? Icons.check_circle_rounded
+          : isProcessing
+              ? Icons.schedule
+              : Icons.cancel_rounded;
+      iconColor = isSuccess
+          ? resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit)
+          : isProcessing
+              ? resolveThemeColor(context, dark: MyntColors.warningDark, light: MyntColors.warning)
+              : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss);
+      title = status.isEmpty ? 'Payment Status' : status;
+      subtitle = mfpro.mfOrderTpye != 'SIP'
+          ? (isSuccess
+              ? "Transaction Success"
+              : isProcessing
+                  ? "Transaction pending"
+                  : "Transaction fail")
+          : null;
+      final rawAmount = data?["OrderVal"] ?? data?["InstallmentAmount"];
+      amount = (rawAmount != null && rawAmount.toString().isNotEmpty && rawAmount.toString() != 'null')
+          ? "₹$rawAmount"
+          : null;
+      final rawDate = data?["datetime"];
+      datetime = (rawDate != null && rawDate.toString().isNotEmpty && rawDate.toString() != 'null')
+          ? "$rawDate"
+          : null;
+    }
+
     return Column(
       children: [
-        const SizedBox(height: 12),
+        Icon(icon, color: iconColor, size: 64),
+        const SizedBox(height: 16),
+        Text(
+          title,
+          style: MyntWebTextStyles.title(
+            context,
+            fontWeight: MyntFonts.semiBold,
+            darkColor: MyntColors.textPrimaryDark,
+            lightColor: MyntColors.textPrimary,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        if (subtitle != null && subtitle.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            style: MyntWebTextStyles.para(
+              context,
+              color: resolveThemeColor(
+                context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.textSecondary,
+              ),
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+        if (amount != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            amount,
+            style: MyntWebTextStyles.title(
+              context,
+              fontWeight: MyntFonts.bold,
+              darkColor: MyntColors.textPrimaryDark,
+              lightColor: MyntColors.textPrimary,
+            ).copyWith(fontSize: 28),
+            textAlign: TextAlign.center,
+          ),
+        ],
+        if (datetime != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            datetime,
+            style: MyntWebTextStyles.bodySmall(
+              context,
+              color: resolveThemeColor(
+                context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.textSecondary,
+              ),
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  Widget _buildDetails(
+    BuildContext context,
+    ThemesProvider theme,
+    MFProvider mfpro,
+    String condval,
+    Map<String, dynamic>? data,
+  ) {
+    final rows = <MapEntry<String, String>>[];
+
+    if (condval == 'timeout') {
+      final orderId = data?["OrderId"];
+      final transNo = data?["TransNo"];
+      if (orderId != null && orderId.toString().isNotEmpty && orderId.toString() != 'null') {
+        rows.add(MapEntry("Order ID", "$orderId"));
+      } else if (transNo != null && transNo.toString().isNotEmpty && transNo.toString() != 'null') {
+        rows.add(MapEntry("TransNo", "$transNo"));
+      }
+      if (transNo != null && transNo.toString().isNotEmpty && transNo.toString() != 'null') {
+        rows.add(MapEntry("UPI Transaction ID", "$transNo"));
+      }
+      rows.add(const MapEntry("Status Description", "Request Timeout reinitiate from orderbook"));
+    } else if (condval == 'reinitiateerror') {
+      final pType = data?["type"] ?? data?["paymentType"];
+      if (pType != null && pType.toString().isNotEmpty && pType.toString() != 'null') {
+        rows.add(MapEntry("Payment type", "$pType"));
+      }
+      final statusDesc = data?['responsestring'] ?? data?['emsg'] ?? data?['Remarks'];
+      if (statusDesc != null && statusDesc.toString().isNotEmpty && statusDesc.toString() != 'null') {
+        rows.add(MapEntry("Status Description", "$statusDesc"));
+      } else {
+        rows.add(const MapEntry("Status Description", "Payment initiation failed. Please try again."));
+      }
+    } else if (condval.isNotEmpty && condval != 'timeout') {
+      rows.add(MapEntry("Status Description", condval));
+    } else {
+      // Default payment response
+      final orderId = data?["OrderId"];
+      final transNo = data?["TransNo"];
+      if (mfpro.mfOrderTpye != 'SIP') {
+        if (orderId != null && orderId.toString().isNotEmpty && orderId.toString() != 'null') {
+          rows.add(MapEntry("Order ID", "$orderId"));
+        }
+      } else {
+        final sipTrans = orderId ?? transNo;
+        if (sipTrans != null && sipTrans.toString().isNotEmpty && sipTrans.toString() != 'null') {
+          rows.add(MapEntry("TransNo", "$sipTrans"));
+        }
+      }
+      if (transNo != null && transNo.toString().isNotEmpty && transNo.toString() != 'null') {
+        rows.add(MapEntry("UPI Transaction ID", "$transNo"));
+      }
+      final remarks = data?['Remarks'] ?? data?['responsestring'] ?? data?['emsg'];
+      if (remarks != null && remarks.toString().isNotEmpty && remarks.toString() != 'null') {
+        rows.add(MapEntry("Status Description", "$remarks"));
+      }
+    }
+
+    if (rows.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      children: rows.map((entry) => _dataRow(context, entry.key, entry.value)).toList(),
+    );
+  }
+
+  Widget _dataRow(BuildContext context, String label, String value) {
+    return Column(
+      children: [
+        const SizedBox(height: 10),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              name,
+              label,
               style: MyntWebTextStyles.body(
                 context,
-                darkColor: colors.textSecondaryDark,
-                lightColor: colors.textSecondaryLight,
+                fontWeight: MyntFonts.medium,
+                color: resolveThemeColor(
+                  context,
+                  dark: MyntColors.textSecondaryDark,
+                  light: MyntColors.textSecondary,
+                ),
               ),
             ),
             const SizedBox(width: 16),
             Expanded(
               child: Text(
                 value,
-                textAlign: TextAlign.right,
                 style: MyntWebTextStyles.body(
                   context,
-                  darkColor: colors.textPrimaryDark,
-                  lightColor: colors.textPrimaryLight,
+                  fontWeight: MyntFonts.medium,
+                  darkColor: MyntColors.textPrimaryDark,
+                  lightColor: MyntColors.textPrimary,
                 ),
+                textAlign: TextAlign.right,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         Divider(
-          thickness: 0,
-          color: isDarkMode(context) ? colors.dividerDark : colors.dividerLight,
-        )
+          height: 1,
+          thickness: 0.5,
+          color: resolveThemeColor(
+            context,
+            dark: MyntColors.dividerDark,
+            light: MyntColors.divider,
+          ),
+        ),
       ],
+    );
+  }
+
+  Widget _buildFooter(BuildContext context, ThemesProvider theme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: BoxDecoration(
+        color: resolveThemeColor(
+          context,
+          dark: MyntColors.cardDark.withValues(alpha: 0.5),
+          light: MyntColors.backgroundColor,
+        ),
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(12),
+          bottomRight: Radius.circular(12),
+        ),
+        border: Border(
+          top: BorderSide(
+            color: resolveThemeColor(
+              context,
+              dark: MyntColors.dividerDark,
+              light: MyntColors.divider,
+            ),
+            width: 1,
+          ),
+        ),
+      ),
+      child: SizedBox(
+        width: double.infinity,
+        height: 40,
+        child: ElevatedButton(
+          onPressed: () {
+            Navigator.pop(context);
+            FocusScope.of(context).unfocus();
+          },
+          style: ElevatedButton.styleFrom(
+            elevation: 0,
+            backgroundColor: resolveThemeColor(
+              context,
+              dark: MyntColors.secondary,
+              light: MyntColors.primary,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+          ),
+          child: Text(
+            'Done',
+            style: MyntWebTextStyles.bodySmall(
+              context,
+              fontWeight: MyntFonts.semiBold,
+              color: MyntColors.backgroundColor,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

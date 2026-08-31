@@ -2019,7 +2019,7 @@ class Chart {
             // click (move<=2px → detail popup).
             const ov = this._overlays.find((o) => o.id === hit.overlayId);
             const isDraggable =
-                ov && (ov.kind === 'limit' || ov.kind === 'sl' ||
+                ov && (ov.kind === 'limit' || ov.kind === 'tp' || ov.kind === 'sl' ||
                        ov.kind === 'sl-l' || ov.kind === 'ocoTp' ||
                        ov.kind === 'ocoSl' || ov.kind === 'alert');
             if (isDraggable) {
