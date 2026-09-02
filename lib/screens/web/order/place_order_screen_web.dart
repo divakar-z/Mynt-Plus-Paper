@@ -390,6 +390,45 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   List priceTypes = ["Limit", "Market", "SL Limit", "SL MKT"];
   List<String> validityTypes = ["DAY", "IOC", "EOS"];
+
+  /// True once the user has tapped a validity chip, so the exchange toggle
+  /// stops overriding their choice.
+  bool _validityTouched = false;
+
+  /// The exchange the order will actually go to. Follows the NSE/BSE toggle,
+  /// unlike widget.orderArg.exchange which is fixed when the dialog opens.
+  String get _effectiveExch =>
+      (stockExchangeSelected.exch?.isNotEmpty ?? false)
+          ? stockExchangeSelected.exch!
+          : (widget.scripInfo.exch ?? widget.orderArg.exchange);
+
+  /// Whether the Disclosed Qty field applies at all.
+  ///
+  /// Vendor rules, observed on their screen:
+  ///   NSE / BSE  - allowed on DAY, blocked on IOC
+  ///   MCX        - allowed on DAY, blocked on IOC
+  ///   NFO / BFO  - blocked always
+  ///   NCOM       - blocked always
+  /// Price type is irrelevant: L, M, SL and SLM all behave the same.
+  /// Note MCX is allowed while NCOM is not, so this is a per-exchange list,
+  /// not a "derivatives are blocked" rule. BCOM and CDS are UNCONFIRMED and
+  /// are currently left allowed rather than blocked on a guess.
+  static const List<String> _dscqtyBlockedExch = ["NFO", "BFO", "NCOM"];
+
+  bool get _dscqtyApplies =>
+      !_dscqtyBlockedExch.contains(_effectiveExch) &&
+      validityType != "IOC";
+
+  /// Default validity for [exch]. BSE and BFO use EOS - their term for a day
+  /// order - everything else uses DAY. A saved IOC preference wins on both.
+  String _defaultValidityFor(String exch) {
+    if (isUserOrderPreferenceAvailable &&
+        userOrderPreference['validity'] == 'IOC') {
+      return 'IOC';
+    }
+    return (exch == "BSE" || exch == "BFO") ? "EOS" : "DAY";
+  }
+
   List<String> sipDropdown = ['Daily', 'Weekly', 'Fortnightly', 'Monthly'];
   bool isOco = false;
   bool isGtt = true;
@@ -545,6 +584,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     if (frezQty <= lotSize) return 999999;
     if (_isGTTLotToQty) return frezQty; // Qty mode → units
     return lotSize > 0 ? frezQty ~/ lotSize : frezQty; // Lot mode → lots
+  }
+
+  /// Tick-size check for a GTT price/trigger field.
+ 
+  String? _gttTickError(String value, String fieldName) {
+    if (tik <= 0) return null; // no tick size on this scrip — nothing to check
+    final String text = value.trim();
+    if (text.isEmpty || text == "Market") return null;
+    final double parsed = SafeParse.toDouble(text);
+    if (parsed <= 0) return null;
+   
+    final String rounded = roundOffWithInterval(parsed, tik).toStringAsFixed(2);
+    if (parsed == SafeParse.toDouble(rounded)) return null;
+    return "$fieldName should be multiple of tick size $tik => $rounded";
   }
 
   Map userOrderPreference = {};
@@ -801,13 +854,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       // }
       int sfq = int.tryParse(widget.scripInfo.frzqty?.toString() ?? '1') ?? 1;
 
-      validityType = isUserOrderPreferenceAvailable &&
-              userOrderPreference['validity'] == 'IOC'
-          ? 'IOC'
-          : widget.orderArg.exchange == "BSE" ||
-                  widget.orderArg.exchange == "BFO"
-              ? "EOS"
-              : "DAY";
+      validityType = _defaultValidityFor(widget.orderArg.exchange);
 
       _addValidityAndDisclosedQty = isUserOrderPreferenceAvailable &&
               userOrderPreference['validity'] == 'IOC'
@@ -1390,6 +1437,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 widget.scripInfo.exch = stockExchangeSelected.exch ?? "";
                                                                 widget.scripInfo.token = stockExchangeSelected.token ?? "";
                                                                 widget.scripInfo.tsym = stockExchangeSelected.tsym ?? "";
+                                                                // Validity depends on the exchange, so it has to follow the
+                                                                // toggle. Without this a BSE order reached this way kept DAY
+                                                                // and EOS was never offered, while opening BSE directly gave
+                                                                // EOS - the same order with two different validities.
+                                                                // An explicit choice is kept unless it is no longer offered
+                                                                // (EOS exists only on BSE/BFO).
+                                                                final String newExch = stockExchangeSelected.exch ?? "";
+                                                                final bool eosOffered = newExch == "BSE" || newExch == "BFO";
+                                                                if (!_validityTouched || (validityType == "EOS" && !eosOffered)) {
+                                                                  validityType = _defaultValidityFor(newExch);
+                                                                }
                                                                 _subscribeSelectedStock(context);
                                                               });
                                                               _debouncedMarginUpdate();
@@ -5465,6 +5523,15 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     _addValidityAndDisclosedQty =
                                                                         value ??
                                                                             false;
+                                                                    // Unticking only hid the fields - the values were still
+                                                                    // sent, so an IOC or a disclosed qty set earlier rode
+                                                                    // along invisibly. Hidden now means defaults.
+                                                                    if (!_addValidityAndDisclosedQty) {
+                                                                      _validityTouched = false;
+                                                                      validityType =
+                                                                          _defaultValidityFor(_effectiveExch);
+                                                                      discQtyCtrl.text = "0";
+                                                                    }
                                                                   });
                                                                 },
                                                                 activeColor: colors
@@ -6378,7 +6445,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   int gttLotRounded =
                                                                       (gttFinalQty / lotSize).round() * lotSize;
                                                                   if (gttLotRounded < lotSize) gttLotRounded = lotSize; // never suggest 0
-                                                                  if (gttFinalQty != gttLotRounded &&
+                                                                  // Skip when there is no quantity. An empty field makes
+                                                                  // getGTTFinalQuantity return "0", and the "never suggest 0"
+                                                                  // clamp above then raises gttLotRounded to one lot — so 0 vs 1
+                                                                  // looked like a lot-multiple failure and returned, hiding the
+                                                                  // real "cannot be empty" / "cannot be 0" message below.
+                                                                  if (gttFinalQty > 0 &&
+                                                                      gttFinalQty != gttLotRounded &&
                                                                       widget.scripInfo.exch != 'MCX') {
                                                                     ResponsiveSnackBar.showWarning(context,
                                                                         "Quantity should be multiple of lot size $lotSize => $gttLotRounded");
@@ -6409,12 +6482,31 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     int ocoLotRounded =
                                                                         (ocoFinalQty / lotSize).round() * lotSize;
                                                                     if (ocoLotRounded < lotSize) ocoLotRounded = lotSize; // never suggest 0
-                                                                    if (ocoFinalQty != ocoLotRounded &&
+                                                                    // Skip when there is no quantity — same reason as the main leg.
+                                                                    if (ocoFinalQty > 0 &&
+                                                                        ocoFinalQty != ocoLotRounded &&
                                                                         widget.scripInfo.exch != 'MCX') {
                                                                       ResponsiveSnackBar.showWarning(context,
                                                                           "OCO Quantity should be multiple of lot size $lotSize => $ocoLotRounded");
                                                                       return;
                                                                     }
+                                                                  }
+                                                                  // Tick-size guard — GTT price/trigger fields must be a multiple of
+                                                                  // the scrip's tick size. The regular order path applies this inside
+                                                                  // placeOrder(), which the GTT branch never calls. Kept as an early
+                                                                  // return so the existing validation chain below is untouched.
+                                                                  String? gttTickErr =
+                                                                      _gttTickError(orderInput.val1Ctrl.text, "Target trigger price");
+                                                                  gttTickErr ??= _gttTickError(orderInput.priceCtrl.text, "Price");
+                                                                  if (gttTickErr == null && orderInput.disableGTTCond) {
+                                                                    gttTickErr = _gttTickError(
+                                                                        orderInput.val2Ctrl.text, "Stoploss trigger price");
+                                                                    gttTickErr ??=
+                                                                        _gttTickError(orderInput.ocoPriceCtrl.text, "OCO price");
+                                                                  }
+                                                                  if (gttTickErr != null) {
+                                                                    ResponsiveSnackBar.showWarning(context, gttTickErr);
+                                                                    return;
                                                                   }
                                                                   if (orderInput
                                                                       .disableGTTCond) {
@@ -7529,6 +7621,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                           onPressed: () {
                             setState(() {
                               validityType = validityTypes[index];
+                              // An explicit pick, so the exchange toggle must
+                              // stop overriding it.
+                              _validityTouched = true;
+                              // IOC leaves nothing to disclose - clear any value the
+                              // user typed before switching, so a stale number is not
+                              // carried into the order.
+                              if (validityType == "IOC") discQtyCtrl.text = "0";
                             });
                           },
                           style: ElevatedButton.styleFrom(
@@ -7576,8 +7675,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                       separatorBuilder: (context, index) {
                         return const SizedBox(width: 8);
                       },
-                      itemCount: widget.orderArg.exchange == "BSE" ||
-                              widget.orderArg.exchange == "BFO"
+                      itemCount: _effectiveExch == "BSE" ||
+                              _effectiveExch == "BFO"
                           ? validityTypes.length
                           : 2)),
             ],
@@ -7587,102 +7686,118 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              headerTitleText("Disclosed Qty", theme),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 40,
-                width: 200,
-                child: Semantics(
-                  identifier: "Disclosed Qty",
-                  child: MyntTextField(
-                      backgroundColor: theme.isDarkMode
-                          ? colors.darkGrey
-                          : const Color(0xffF1F3F8),
-                      placeholder: "0",
-                      placeholderStyle: WebTextStyles.formInput(
-                        isDarkTheme: theme.isDarkMode,
-                        color: (theme.isDarkMode
-                            ? MyntColors.textSecondary
-                            : MyntColors.textSecondary).withValues(alpha: 0.5),
+              // Locked on IOC. Greying alone was invisible here - MyntTextField
+              // passes `enabled` to the TextField but does not restyle, so the
+              // field looked identical. Opacity dims label and box together in
+              // both themes, and the caption below says why.
+              Opacity(
+                opacity: _dscqtyApplies ? 1.0 : 0.45,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    headerTitleText("Disclosed Qty", theme),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 40,
+                      width: 200,
+                      child: Semantics(
+                        identifier: "Disclosed Qty",
+                        child: MyntTextField(
+                            // Disclosed quantity has no meaning for IOC: the order
+                            // executes immediately and cancels the remainder, so
+                            // there is nothing left to disclose over time.
+                            enabled: _dscqtyApplies,
+                            backgroundColor: theme.isDarkMode
+                                ? colors.darkGrey
+                                : const Color(0xffF1F3F8),
+                            placeholder: "0",
+                            placeholderStyle: WebTextStyles.formInput(
+                              isDarkTheme: theme.isDarkMode,
+                              color: (theme.isDarkMode
+                                  ? MyntColors.textSecondary
+                                  : MyntColors.textSecondary).withValues(alpha: 0.5),
+                            ),
+                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                            keyboardType: TextInputType.number,
+                            textStyle: WebTextStyles.formInput(
+                              isDarkTheme: theme.isDarkMode,
+                              color: theme.isDarkMode
+                                  ? MyntColors.textPrimaryDark
+                                  : MyntColors.textPrimary,
+                            ),
+                            // prefixIcon: InkWell(
+                            //   onTap: () {
+                            //     setState(() {
+                            //       if (discQtyCtrl
+                            //           .text
+                            //           .isNotEmpty) {
+                            //         if (int.parse(
+                            //                 discQtyCtrl
+                            //                     .text) >
+                            //             0) {
+                            //           discQtyCtrl
+                            //                   .text =
+                            //               (int.parse(discQtyCtrl.text) -
+                            //                       1)
+                            //                   .toString();
+                            //         } else {
+                            //           discQtyCtrl
+                            //                   .text =
+                            //               "0";
+                            //         }
+                            //       } else {
+                            //         discQtyCtrl
+                            //             .text = "0";
+                            //       }
+                            //     });
+                            //   },
+                            //   child: SvgPicture.asset(
+                            //       theme.isDarkMode
+                            //           ? assets
+                            //               .darkCMinus
+                            //           : assets
+                            //               .minusIcon,
+                            //       fit: BoxFit
+                            //           .scaleDown),
+                            // ),
+                            // suffixIcon: InkWell(
+                            //   onTap: () {
+                            //     setState(() {
+                            //       int number =
+                            //           int.parse(
+                            //               discQtyCtrl
+                            //                   .text);
+                            //       if (discQtyCtrl
+                            //           .text
+                            //           .isNotEmpty) {
+                            //         if (number <
+                            //             9999999999) {
+                            //           discQtyCtrl
+                            //                   .text =
+                            //               (int.parse(discQtyCtrl.text) +
+                            //                       1)
+                            //                   .toString();
+                            //         }
+                            //       } else {
+                            //         discQtyCtrl
+                            //             .text = "0";
+                            //       }
+                            //     });
+                            //   },
+                            //   child: SvgPicture.asset(
+                            //       theme.isDarkMode
+                            //           ? assets
+                            //               .darkAdd
+                            //           : assets
+                            //               .addIcon,
+                            //       fit: BoxFit
+                            //           .scaleDown),
+                            // ),
+                            controller: discQtyCtrl,
+                            textAlign: TextAlign.start),
                       ),
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      keyboardType: TextInputType.number,
-                      textStyle: WebTextStyles.formInput(
-                        isDarkTheme: theme.isDarkMode,
-                        color: theme.isDarkMode
-                            ? MyntColors.textPrimaryDark
-                            : MyntColors.textPrimary,
-                      ),
-                      // prefixIcon: InkWell(
-                      //   onTap: () {
-                      //     setState(() {
-                      //       if (discQtyCtrl
-                      //           .text
-                      //           .isNotEmpty) {
-                      //         if (int.parse(
-                      //                 discQtyCtrl
-                      //                     .text) >
-                      //             0) {
-                      //           discQtyCtrl
-                      //                   .text =
-                      //               (int.parse(discQtyCtrl.text) -
-                      //                       1)
-                      //                   .toString();
-                      //         } else {
-                      //           discQtyCtrl
-                      //                   .text =
-                      //               "0";
-                      //         }
-                      //       } else {
-                      //         discQtyCtrl
-                      //             .text = "0";
-                      //       }
-                      //     });
-                      //   },
-                      //   child: SvgPicture.asset(
-                      //       theme.isDarkMode
-                      //           ? assets
-                      //               .darkCMinus
-                      //           : assets
-                      //               .minusIcon,
-                      //       fit: BoxFit
-                      //           .scaleDown),
-                      // ),
-                      // suffixIcon: InkWell(
-                      //   onTap: () {
-                      //     setState(() {
-                      //       int number =
-                      //           int.parse(
-                      //               discQtyCtrl
-                      //                   .text);
-                      //       if (discQtyCtrl
-                      //           .text
-                      //           .isNotEmpty) {
-                      //         if (number <
-                      //             9999999999) {
-                      //           discQtyCtrl
-                      //                   .text =
-                      //               (int.parse(discQtyCtrl.text) +
-                      //                       1)
-                      //                   .toString();
-                      //         }
-                      //       } else {
-                      //         discQtyCtrl
-                      //             .text = "0";
-                      //       }
-                      //     });
-                      //   },
-                      //   child: SvgPicture.asset(
-                      //       theme.isDarkMode
-                      //           ? assets
-                      //               .darkAdd
-                      //           : assets
-                      //               .addIcon,
-                      //       fit: BoxFit
-                      //           .scaleDown),
-                      // ),
-                      controller: discQtyCtrl,
-                      textAlign: TextAlign.start),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -8378,6 +8493,21 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
           }
         }
       }
+      // Disclosed quantity cannot exceed the order quantity. Sits before the
+      // slice/non-slice split so it guards both paths, and runs only when the
+      // section is visible - the field is hidden otherwise. Reached only after
+      // the empty/zero chain has passed, so the qty here is always real.
+      if (_addValidityAndDisclosedQty && _dscqtyApplies) {
+        final int discQty = SafeParse.toInt(discQtyCtrl.text);
+        final int orderQty = widget.scripInfo.exch == 'MCX'
+            ? SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) * lotSize
+            : SafeParse.toInt(getFinalQuantity(qtyCtrl.text));
+        if (discQty > orderQty) {
+          ResponsiveSnackBar.showWarning(context,
+              "Disclosed Qty cannot be greater than Quantity $orderQty");
+          return;
+        }
+      }
       if (!isSliceOrd) {
         bool placeorder = true;
         if (priceType == "Limit" || priceType == "SL Limit") {
@@ -8431,7 +8561,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
               bpprc: orderType == "CO - BO" && _isBracketOrderEnabled
                   ? targetCtrl.text
                   : '',
-              dscqty: discQtyCtrl.text,
+              // F&O and IOC never carry a disclosed qty, whatever is left in
+              // the box, so it is forced to "0" rather than trusted.
+              dscqty: _dscqtyApplies ? discQtyCtrl.text : "0",
               exch: stockExchangeSelected.exch == null ? widget.scripInfo.exch! : stockExchangeSelected.exch??"",
               prc: ordPrice,
               prctype: orderInput.prcType,

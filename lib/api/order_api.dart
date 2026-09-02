@@ -141,6 +141,14 @@ mixin OrderAPI on ApiCore {
         "exch": placeOrderInput.exch,
         "tsym": UrlUtils.encodeParameter(placeOrderInput.tsym),
         "qty": placeOrderInput.qty.replaceAll("-", ""),
+        // Disclosed quantity. This key was missing entirely, so anything the
+        // user typed on Place Order was silently dropped and the order book
+        // came back with dscqty 0. The vendor always sends it - the real
+        // value when set, "0" when not - so match that. Several call sites
+        // pass an empty string, coerced here rather than at each one.
+        "dscqty": placeOrderInput.dscqty.trim().isEmpty
+            ? "0"
+            : placeOrderInput.dscqty.trim(),
         "prc": (placeOrderInput.prctype == 'MKT' ||
                 placeOrderInput.prctype == 'SL-MKT')
             ? '0'

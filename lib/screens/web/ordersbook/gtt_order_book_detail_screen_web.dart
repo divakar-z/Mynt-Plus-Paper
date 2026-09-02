@@ -453,13 +453,18 @@ class _GttOrderBookDetailScreenWebState
               theme,
               _getGttStatusColor(theme),
             ),
-            // Older fields kept just in case but hidden if not needed per design
-            /*
+            // Product was hidden here while Leg 2 still showed it, so a single
+            // GTT never displayed a product at all and an OCO showed one only
+            // for its second leg. Restored to match Leg 2.
             _rowOfInfoData(
               "Product",
               _getProductName(_gttOrder.placeOrderParams?.prd),
               theme,
             ),
+            // Order Type and Price stay hidden per the original design - Leg 2
+            // does not show Order Type either, so surfacing it here would swap
+            // one asymmetry for another.
+            /*
             _rowOfInfoData(
               "Order Type",
               _gttOrder.placeOrderParams?.prctyp ?? '-',
