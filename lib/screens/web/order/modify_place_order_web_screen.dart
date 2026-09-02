@@ -258,6 +258,24 @@ class _ModifyPlaceOrderScreenState
   List<String> validityTypes = ["DAY", "IOC", "EOS"];
   // List<bool> isActiveValidity = [true, false];
 
+  /// Whether the Disclosed Qty field applies at all.
+  ///
+  /// Vendor rules, observed on their screen:
+  ///   NSE / BSE  - allowed on DAY, blocked on IOC
+  ///   MCX        - allowed on DAY, blocked on IOC
+  ///   NFO / BFO  - blocked always
+  ///   NCOM       - blocked always
+  /// Price type is irrelevant: L, M, SL and SLM all behave the same.
+  /// Note MCX is allowed while NCOM is not, so this is a per-exchange list,
+  /// not a "derivatives are blocked" rule. BCOM and CDS are UNCONFIRMED and
+  /// are currently left allowed rather than blocked on a guess.
+  static const List<String> _dscqtyBlockedExch = ["NFO", "BFO", "NCOM"];
+
+  bool get _dscqtyApplies {
+    final String exch = widget.modifyOrderArgs.exch ?? "";
+    return !_dscqtyBlockedExch.contains(exch) && validity != "IOC";
+  }
+
   String prcType = "";
 
   int frezQty = 0;
@@ -1618,6 +1636,16 @@ class _ModifyPlaceOrderScreenState
                                                                     false;
                                                             addValidity =
                                                                 _addValidityAndDisclosedQty;
+                                                            // Unticking only hid the fields - the values were
+                                                            // still sent. On modify, hidden means 'leave these
+                                                            // as the order already has them', NOT an exchange
+                                                            // default, because we are editing an existing order.
+                                                            if (!_addValidityAndDisclosedQty) {
+                                                              validity = (widget.modifyOrderArgs.ret ?? 'DAY')
+                                                                  .toUpperCase();
+                                                              discQtyCtrl.text =
+                                                                  widget.modifyOrderArgs.dscqty ?? "0";
+                                                            }
                                                           });
                                                         },
                                                         activeColor: resolveThemeColor(context,
@@ -3274,13 +3302,38 @@ class _ModifyPlaceOrderScreenState
                 : "Maximum Allowed Quantity $frezQty");
       }
     }
+    // Disclosed quantity cannot exceed the order quantity. Only when the
+    // section is visible; mirrors the Place Order rule. Order qty here is the
+    // typed remainder plus whatever has already filled, as the payload uses.
+    if (placeorder && _addValidityAndDisclosedQty && _dscqtyApplies) {
+      final int discQty = SafeParse.toInt(discQtyCtrl.text);
+      final int filled =
+          SafeParse.toInt(widget.modifyOrderArgs.fillshares ?? "0");
+      final int typed = SafeParse.toInt(qtyCtrl.text);
+      final int orderQty = widget.scripInfo.exch == "MCX"
+          ? (typed + filled) * lotSize
+          : (typed + filled);
+      if (discQty > orderQty) {
+        placeorder = false;
+        ResponsiveSnackBar.showWarning(context,
+            "Disclosed Qty cannot be greater than Quantity $orderQty");
+      }
+    }
     if (placeorder) {
       // Get close notifier before async call
       final closeNotifier = _ModifyPlaceOrderDialogCloseNotifier.of(context);
 
       ref.read(orderProvider).setOrderloader(true);
       ModifyOrderInput input = ModifyOrderInput(
-          dscqty: widget.modifyOrderArgs.dscqty ?? "0",
+          // Was `widget.modifyOrderArgs.dscqty` - the ORIGINAL order value -
+          // so edits to the Disclosed Qty box were silently discarded and the
+          // old number was resent. Send what the user actually typed, with the
+          // same empty-to-"0" coercion the place-order payload uses.
+          // F&O and IOC never carry a disclosed qty, whatever is left in the
+          // box, so it is forced to "0" rather than trusted.
+          dscqty: (!_dscqtyApplies || discQtyCtrl.text.trim().isEmpty)
+              ? "0"
+              : discQtyCtrl.text.trim(),
           token: widget.modifyOrderArgs.token!,
           exch: widget.modifyOrderArgs.exch!,
           mktProt: mktProtCtrl.text.isEmpty
@@ -3387,6 +3440,9 @@ class _ModifyPlaceOrderScreenState
                               onPressed: () {
                                 setState(() {
                                   validity = validityTypes[index];
+                                  // IOC leaves nothing to disclose - clear any value
+                                  // typed before the switch so it is not carried over.
+                                  if (validity == "IOC") discQtyCtrl.text = "0";
                                 });
                               },
                               style: ElevatedButton.styleFrom(
@@ -3432,32 +3488,45 @@ class _ModifyPlaceOrderScreenState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                headerTitleText("Disclosed Qty", theme),
-                const SizedBox(height: 10),
-                SizedBox(
-                  height: 40,
-                  width: 200,
-                  child: MyntTextField(
-                      backgroundColor: theme.isDarkMode
-                          ? colors.darkGrey
-                          : const Color(0xffF1F3F8),
-                      placeholder: "0",
-                      placeholderStyle: WebTextStyles.formInput(
-                        isDarkTheme: theme.isDarkMode,
-                        color: theme.isDarkMode
-                            ? MyntColors.textSecondary
-                            : MyntColors.textSecondary,
-                      ),
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      keyboardType: TextInputType.number,
-                      textStyle: WebTextStyles.formInput(
-                        isDarkTheme: theme.isDarkMode,
-                        color: theme.isDarkMode
-                            ? MyntColors.textPrimaryDark
-                            : MyntColors.textPrimary,
-                      ),
-                      controller: discQtyCtrl,
-                      textAlign: TextAlign.start),
+                // Locked on IOC - the order fills immediately and cancels
+                // the remainder, so there is nothing to disclose. Opacity
+                // dims label and box together; MyntTextField takes `enabled`
+                // but does not restyle, so greying alone was invisible.
+                Opacity(
+                  opacity: _dscqtyApplies ? 1.0 : 0.45,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                    headerTitleText("Disclosed Qty", theme),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 40,
+                      width: 200,
+                      child: MyntTextField(
+                          enabled: _dscqtyApplies,
+                          backgroundColor: theme.isDarkMode
+                              ? colors.darkGrey
+                              : const Color(0xffF1F3F8),
+                          placeholder: "0",
+                          placeholderStyle: WebTextStyles.formInput(
+                            isDarkTheme: theme.isDarkMode,
+                            color: theme.isDarkMode
+                                ? MyntColors.textSecondary
+                                : MyntColors.textSecondary,
+                          ),
+                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                          keyboardType: TextInputType.number,
+                          textStyle: WebTextStyles.formInput(
+                            isDarkTheme: theme.isDarkMode,
+                            color: theme.isDarkMode
+                                ? MyntColors.textPrimaryDark
+                                : MyntColors.textPrimary,
+                          ),
+                          controller: discQtyCtrl,
+                          textAlign: TextAlign.start),
+                    ),
+                    ],
+                  ),
                 ),
               ],
             ),
