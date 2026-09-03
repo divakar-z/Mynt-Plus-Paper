@@ -1213,6 +1213,50 @@ class IPOProvider extends DefaultChangeNotifier {
 
   List ipoCategory = [];
 
+  /// Category code to send for an order that is already in the order book.
+  ///
+  /// The order screens derive their code from [ipoCategoryvalue], which is
+  /// seeded from the IPO's subCategorySettings. A cancel is launched from the
+  /// order book without opening an order screen, so that state is unset here —
+  /// the same derivation is done against the bid's own subcategorysettings
+  /// instead, falling back to the retail category the order screens default to.
+  String orderCategoryCode(IpoOrderBookModel order) {
+    final placed = categoryCode(order.category);
+    if (placed.isNotEmpty) return placed;
+
+    final settings = order.subcategorysettings ?? [];
+    for (final code in const ["IND", "EMP", "SHA", "POL"]) {
+      final allowed = settings
+          .any((s) => s.allowUpi == true && s.subCatCode == code);
+      if (allowed) return code;
+    }
+
+    return "IND";
+  }
+
+  /// Maps a category to the code the IPO order APIs expect. Accepts either the
+  /// dropdown label ("Individual", "HNI", ...) or an already coded value, since
+  /// the order book returns the code it was placed with.
+  String categoryCode(String? category) {
+    switch (category) {
+      case "Individual":
+      case "HNI":
+      case "IND":
+        return "IND";
+      case "Employee":
+      case "EMP":
+        return "EMP";
+      case "Shareholder":
+      case "SHA":
+        return "SHA";
+      case "Policyholder":
+      case "POL":
+        return "POL";
+      default:
+        return "";
+    }
+  }
+
   chngCategoryType(String val) async {
     for (var element in ipoCategory) {
       if (val == element['subCatCode']) {
@@ -1475,15 +1519,15 @@ class IPOProvider extends DefaultChangeNotifier {
     }
   }
 
-  Future getipoperfomance(int year) async {
+  Future getipoperfomance(int year, {bool showLoader = true}) async {
     try {
-      toggleLoadingOn(true);
+      if (showLoader) toggleLoadingOn(true);
       _ipoPerformanceModel = await api.fetchipoperfomance(year);
       notifyListeners();
       return _ipoPerformanceModel;
     } catch (e) {
     } finally {
-      toggleLoadingOn(false);
+      if (showLoader) toggleLoadingOn(false);
     }
   }
 
@@ -1522,6 +1566,25 @@ class IPOProvider extends DefaultChangeNotifier {
       toggleLoadingOn(true);
       await getSmeIpo(showLoader: false);
       await getmainstreamipo(context, showLoader: false);
+    } finally {
+      toggleLoadingOn(false);
+    }
+  }
+
+  /// Initial load for the IPO screen, with a single loader.
+  ///
+  /// Every request here feeds the same screen, so the loader is held on for the
+  /// whole sequence. Letting each call toggle it made the screen show a loader
+  /// once per API call instead of once per screen load.
+  Future loadIpoScreenData(BuildContext context, int year) async {
+    try {
+      toggleLoadingOn(true);
+      await getSmeIpo(showLoader: false);
+      await getmainstreamipo(context, showLoader: false);
+      await getUpcomingIpoModel();
+      await getipoperfomance(year, showLoader: false);
+      mergemainsme();
+      await fetchIpoPreClose();
     } finally {
       toggleLoadingOn(false);
     }

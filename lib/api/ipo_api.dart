@@ -98,7 +98,6 @@ mixin IPOApi on ApiCore {
             ? {"activityType": "cancel"}
             : {"actioncode": "d"}
       ];
-      data.remove('category');
       data.remove('UPI');
       data.remove('company_name');
     }

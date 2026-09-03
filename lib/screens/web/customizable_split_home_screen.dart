@@ -1584,8 +1584,8 @@ class _CustomizableSplitHomeScreenState
               ),
               child: Icon(
                 onLeft
-                    ? Icons.keyboard_double_arrow_left
-                    : Icons.keyboard_double_arrow_right,
+                    ? shadcn.LucideIcons.chevronsLeft
+                    : shadcn.LucideIcons.chevronsRight,
                 size: 18,
                 color: Colors.white,
               ),
@@ -1621,10 +1621,11 @@ class _CustomizableSplitHomeScreenState
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: scheme.border),
                   ),
+                  // Lucide for the same cache reason as the collapse button.
                   child: Icon(
                     onLeft
-                        ? Icons.keyboard_double_arrow_right
-                        : Icons.keyboard_double_arrow_left,
+                        ? shadcn.LucideIcons.chevronsRight
+                        : shadcn.LucideIcons.chevronsLeft,
                     size: 18,
                     color : Colors.white,
                   ),
