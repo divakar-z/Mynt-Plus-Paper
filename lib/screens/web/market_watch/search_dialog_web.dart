@@ -570,58 +570,8 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
     }
 
     // Custom watchlist (< 50 stocks): show subtle count indicator
-    return Container(
-      margin: const EdgeInsets.only(left: 16, right: 16, top: 6, bottom: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            widget.wlName.isNotEmpty
-                ? '${widget.wlName[0].toUpperCase()}${widget.wlName.substring(1)}'
-                : 'Watchlist',
-            style: MyntWebTextStyles.caption(
-              context,
-              color: resolveThemeColor(
-                context,
-                dark: WebColors.textSecondaryDark,
-                light: WebColors.textSecondary,
-              ),
-              fontWeight: MyntFonts.medium,
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: resolveThemeColor(
-                context,
-                dark: WebColors.cardDark,
-                light: WebColors.cardHover,
-              ),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: resolveThemeColor(
-                  context,
-                  dark: WebColors.cardBorderDark,
-                  light: WebColors.cardBorder,
-                ),
-              ),
-            ),
-            child: Text(
-              '$scripCount / 50 stocks',
-              style: MyntWebTextStyles.caption(
-                context,
-                color: resolveThemeColor(
-                  context,
-                  dark: WebColors.textSecondaryDark,
-                  light: WebColors.textSecondary,
-                ),
-                fontWeight: MyntFonts.medium,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    return const SizedBox.shrink();
+
   }
 
   Widget _buildSearchResults(
