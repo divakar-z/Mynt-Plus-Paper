@@ -224,6 +224,8 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
     // Scheme code / min purchase aren't in the Data constructor — set directly.
     d.sCHEMECODE = beta.schemeCode;
     d.minimumPurchaseAmount = beta.minimumPurchaseAmount;
+    d.purchaseAllowed = beta.purchaseAllowed;
+    d.redemptionAllowed = beta.redemptionAllowed;
     return d;
   }
 
@@ -459,8 +461,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
             cellText = pnl.toStringAsFixed(2);
             break;
           case 7: // Chg %
-            final pct =
-                double.tryParse(holding.changeprofitLoss ?? '0') ?? 0.0;
+            final pct = double.tryParse(holding.changeprofitLoss ?? '0') ?? 0.0;
             cellText = '${pct >= 0 ? "+" : ""}${pct.toStringAsFixed(2)}%';
             break;
         }
@@ -561,8 +562,7 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
               ? MyntColors.backgroundColorDark
               : MyntColors.backgroundColor,
           elevation: 0,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           child: SizedBox(
             width: dialogWidth,
             child: MFOrderScreenWeb(mfData: mfItem, isAdditional: true),
@@ -622,8 +622,9 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                 dark: MyntColors.textPrimaryDark,
                 light: MyntColors.textPrimary);
 
-            // Redeem option (only when there are units to redeem)
-            if (units > 0) {
+            // Redeem option — needs units to redeem AND the backend's
+            // Redemption_Allowed gate.
+            if (units > 0 && holding.isRedemptionAllowed) {
               menuItems.add(
                 _buildMenuButton(
                   icon: shadcn.LucideIcons.gift,
@@ -639,20 +640,22 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
               );
             }
 
-            // Add (place order) option
-            menuItems.add(
-              _buildMenuButton(
-                icon: Icons.add,
-                title: 'Add',
-                iconColor: iconColor,
-                textColor: textColor,
-                onPressed: (ctx) {
-                  _closePopover();
-                  _hoveredRowIndex.value = null;
-                  _handleAdd(holding);
-                },
-              ),
-            );
+            // Add (place order) option — gated on Purchase_Allowed.
+            if (holding.isPurchaseAllowed) {
+              menuItems.add(
+                _buildMenuButton(
+                  icon: Icons.add,
+                  title: 'Add',
+                  iconColor: iconColor,
+                  textColor: textColor,
+                  onPressed: (ctx) {
+                    _closePopover();
+                    _hoveredRowIndex.value = null;
+                    _handleAdd(holding);
+                  },
+                ),
+              );
+            }
 
             if (menuItems.isNotEmpty) {
               menuItems.add(const shadcn.MenuDivider());
@@ -986,12 +989,10 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                           children: [
                                             Expanded(
                                               child: Align(
-                                                alignment:
-                                                    Alignment.centerLeft,
+                                                alignment: Alignment.centerLeft,
                                                 child: Tooltip(
-                                                  message:
-                                                      holding.scripName ??
-                                                          'N/A',
+                                                  message: holding.scripName ??
+                                                      'N/A',
                                                   child: Text(
                                                     holding.scripName ?? 'N/A',
                                                     overflow:
@@ -1031,10 +1032,11 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(
-                                                  holding.totalUnits ?? '0') ??
-                                              0.0)
-                                          .toStringAsFixed(4));
+                                      final value = privacy.mask(
+                                          (double.tryParse(holding.totalUnits ??
+                                                      '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1054,10 +1056,11 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(
-                                                  holding.avgNav ?? '0') ??
-                                              0.0)
-                                          .toStringAsFixed(4));
+                                      final value = privacy.mask(
+                                          (double.tryParse(
+                                                      holding.avgNav ?? '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1100,11 +1103,12 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(
-                                                  holding.investedValue ??
-                                                      '0') ??
-                                              0.0)
-                                          .toStringAsFixed(2));
+                                      final value = privacy.mask(
+                                          (double.tryParse(
+                                                      holding.investedValue ??
+                                                          '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1124,11 +1128,12 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(
-                                                  holding.currentValue ??
-                                                      '0') ??
-                                              0.0)
-                                          .toStringAsFixed(2));
+                                      final value = privacy.mask(
+                                          (double.tryParse(
+                                                      holding.currentValue ??
+                                                          '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value,
@@ -1151,8 +1156,8 @@ class _MfDematTableExampleState extends ConsumerState<MfDematTableExample> {
                                       final pnlNum = double.tryParse(
                                               holding.profitLoss ?? '0') ??
                                           0.0;
-                                      final value =
-                                          privacy.mask(pnlNum.toStringAsFixed(2));
+                                      final value = privacy
+                                          .mask(pnlNum.toStringAsFixed(2));
                                       final color = _getCellColor(
                                           privacy.isPrivate ? 0.0 : pnlNum,
                                           context);

@@ -855,8 +855,8 @@ class _MfHoldingsScreenWebState extends ConsumerState<MfHoldingsScreenWeb> {
               // Build menu items
               List<shadcn.MenuItem> menuItems = [];
 
-              // Redeem option - only if has units
-              if (hasUnits) {
+              // Redeem option - needs units AND the Redemption_Allowed gate
+              if (hasUnits && holding.isRedemptionAllowed) {
                 menuItems.add(
                   _buildMenuButton(
                     icon: Icons.currency_exchange,
