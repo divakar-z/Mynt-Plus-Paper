@@ -59,6 +59,7 @@ class _FundamentalsNewSubPageState
   // Guard so we auto-load the first preset only once per mount, even if
   // `fundamentalPresetsProvider` rebuilds (data refresh, etc.).
   bool _didAutoLoadPreset = false;
+  bool _saving = false;
   // Column keys the user has hidden via the Manage Columns checkboxes.
   // Applies to Market Cap, Sector, Industry, and each dynamic filter column.
   final Set<String> _hiddenColumns = {};
@@ -741,23 +742,77 @@ class _FundamentalsNewSubPageState
   /// no dialog is shown. If it's empty, we surface a warning snackbar so the
   /// user knows why the save didn't happen.
   Future<void> _save() async {
+    // Ignore repeat taps while the previous save is still running.
+    if (_saving) return;
     final name = _screenNameCtrl.text.trim();
     if (name.isEmpty) {
       ResponsiveSnackBar.showWarning(
           context, 'Please enter a name');
       return;
     }
-    await locator<ApiExporter>().saveScreen(
-      name: name,
-      filters: _state.filters,
-      treatNullAs: _state.treatNullAs,
-      orderBy: _state.orderBy,
-      orderDir: _state.orderDir,
-      limit: _state.limit,
-    );
-    ref.invalidate(savedScreensProvider);
-    if (mounted) {
-      ResponsiveSnackBar.showSuccess(context, 'Saved "$name"');
+    if (_state.filters.isEmpty) {
+      ResponsiveSnackBar.showWarning(
+          context, 'Add at least one filter before saving');
+      return;
+    }
+    _saving = true;
+    try {
+      // Both lists are awaited instead of read through `asData`: on the first
+      // save of a session (nothing has listened to the providers yet) and on
+      // any save right after the previous one invalidated
+      // `savedScreensProvider`, they sit in the loading state where `asData`
+      // is null — the checks below then ran against an empty list and let a
+      // same-named screen through, which is how duplicates got created.
+      final presets = await _resolveList(fundamentalPresetsProvider);
+      final existing = await _resolveList(savedScreensProvider);
+      if (!mounted) return;
+      // Reject a name that collides with a predefined (preset) screen — those
+      // are read-only, so users can't save over them or reuse their names.
+      final isPreset = presets
+          .any((p) => p.name.trim().toLowerCase() == name.toLowerCase());
+      if (isPreset) {
+        ResponsiveSnackBar.showWarning(
+            context, '"$name" is a predefined screen — choose another name');
+        return;
+      }
+      // Reject a name that already exists (case-insensitive) so saving can't
+      // silently create duplicate screens with the same title.
+      final isDuplicate = existing
+          .any((s) => s.name.trim().toLowerCase() == name.toLowerCase());
+      if (isDuplicate) {
+        ResponsiveSnackBar.showWarning(
+            context, 'A screen named "$name" already exists');
+        return;
+      }
+      await locator<ApiExporter>().saveScreen(
+        name: name,
+        filters: _state.filters,
+        treatNullAs: _state.treatNullAs,
+        orderBy: _state.orderBy,
+        orderDir: _state.orderDir,
+        limit: _state.limit,
+      );
+      ref.invalidate(savedScreensProvider);
+      if (mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Saved "$name"');
+      }
+    } catch (e) {
+      if (mounted) {
+        ResponsiveSnackBar.showError(context, 'Could not save: $e');
+      }
+    } finally {
+      _saving = false;
+    }
+  }
+
+  /// Awaits [p]'s current value, falling back to the last one we saw if the
+  /// fetch fails — a listing blip degrades the name checks instead of
+  /// blocking the save outright.
+  Future<List<T>> _resolveList<T>(FutureProvider<List<T>> p) async {
+    try {
+      return await ref.read(p.future);
+    } catch (_) {
+      return ref.read(p).value ?? <T>[];
     }
   }
 
@@ -2007,13 +2062,15 @@ class _OptionsMenuState extends ConsumerState<_OptionsMenu> {
   }
 
   Future<void> _confirmAndDelete(SavedFundamentalScreen s) async {
-    // The parent state owns delete + snackbar, but we need to close our
-    // popover first so it doesn't sit on top of the confirmation snackbar.
-    _close();
+    // Keep the dropdown open on delete — only loading/selecting a screen
+    // closes it. The parent owns the delete + snackbar; after it invalidates
+    // savedScreensProvider the still-open list rebuilds itself, so we just
+    // nudge the overlay to repaint.
     final parent =
         context.findAncestorStateOfType<_FundamentalsNewSubPageState>();
     if (parent == null) return;
     await parent._deleteSavedScreen(s.id, s.name);
+    _overlay?.markNeedsBuild();
   }
 
   @override

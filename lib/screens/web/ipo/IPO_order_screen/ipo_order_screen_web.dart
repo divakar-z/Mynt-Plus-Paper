@@ -1048,7 +1048,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                   ? TextWidget.captionText(
                       theme: false,
                       text: addIpo[index].qualityerrortext,
-                      color: colors.error,
+                      color: resolveThemeColor(context,
+                      dark: MyntColors.lossDark, light: MyntColors.loss),
                       fw: 0,
                     )
                   : const SizedBox(),
@@ -1059,7 +1060,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                   ? TextWidget.captionText(
                       theme: false,
                       text: addIpo[index].biderrortext,
-                      color: colors.error,
+                      color: resolveThemeColor(context,
+                      dark: MyntColors.lossDark, light: MyntColors.loss),
                       fw: 0,
                     )
                   : const SizedBox(),
