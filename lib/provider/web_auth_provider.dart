@@ -537,8 +537,10 @@ class WebAuthProvider extends ChangeNotifier {
 
   /// Generate a brand-new TOTP secret key (triggered from "Generate New Key" button
   /// shown when no existing key is set up for the user).
-  Future<void> generateNewTotpKey(BuildContext context) async {
-    if (_apiSession == null) return;
+  /// Returns true when a usable key came back, so the caller can report a
+  /// failure instead of leaving the user looking at an unchanged screen.
+  Future<bool> generateNewTotpKey(BuildContext context) async {
+    if (_apiSession == null) return false;
 
     _setLoading(true);
     try {
@@ -555,7 +557,9 @@ class WebAuthProvider extends ChangeNotifier {
         }
       }
       notifyListeners();
+      return _totpData?.isValid == true;
     } catch (e) {
+      return false;
     } finally {
       _setLoading(false);
     }
