@@ -9,9 +9,14 @@ import '../../../../../sharedWidget/functions.dart';
 class IpoOrderDetailsSheetWeb extends ConsumerWidget {
   final IpoOrderBookModel order;
 
+  /// Close orders are cancelled/failed bids, so there is no UPI mandate left to
+  /// pay — the Payment row is hidden for them.
+  final bool isCloseOrder;
+
   const IpoOrderDetailsSheetWeb({
     super.key,
     required this.order,
+    this.isCloseOrder = false,
   });
 
   @override
@@ -43,13 +48,29 @@ class IpoOrderDetailsSheetWeb extends ConsumerWidget {
                 light: MyntColors.loss,
               );
 
-    // TODO: Determine payment status if available in model
-    const paymentText = "Pending";
-    final paymentColor = resolveThemeColor(
-      context,
-      dark: MyntColors.pending, // or appropriate color
-      light: MyntColors.pending,
-    );
+    // Payment status comes from the order book response (`upiPaymentStatus`).
+    // The field is parsed with `.toString()`, so a missing value arrives as the
+    // literal "null" rather than null — treat that as "not yet reported".
+    final String upiPayment = order.upiPaymentStatus?.trim() ?? "";
+    final bool hasPaymentStatus =
+        upiPayment.isNotEmpty && upiPayment.toLowerCase() != "null";
+    final String paymentText = hasPaymentStatus ? upiPayment : "Pending";
+    final bool paymentFailed = hasPaymentStatus &&
+        RegExp(r'fail|reject|expire|decline|cancel')
+            .hasMatch(upiPayment.toLowerCase());
+    final Color paymentColor = !hasPaymentStatus
+        ? MyntColors.pending
+        : paymentFailed
+            ? resolveThemeColor(
+                context,
+                dark: MyntColors.lossDark,
+                light: MyntColors.loss,
+              )
+            : resolveThemeColor(
+                context,
+                dark: MyntColors.profitDark,
+                light: MyntColors.profit,
+              );
 
     return SizedBox.expand(
       child: Column(
@@ -104,8 +125,9 @@ class IpoOrderDetailsSheetWeb extends ConsumerWidget {
                         order.applicationNumber.toString()),
                     _buildDetailRowWithBadge(
                         context, "Order Status", statusText, statusColor),
-                    _buildDetailRowWithBadge(
-                        context, "Payment", paymentText, paymentColor),
+                    if (!isCloseOrder)
+                      _buildDetailRowWithBadge(
+                          context, "Payment", paymentText, paymentColor),
                     _buildDetailRow(
                       context,
                       "App no",
@@ -329,8 +351,7 @@ class IpoOrderDetailsSheetWeb extends ConsumerWidget {
         ...bids.asMap().entries.map((entry) {
           final index = entry.key;
           final bid = entry.value;
-          final isCutOff =
-              order.type == "BSE" ? (bid.cuttoffflag! != "0") : bid.atCutOff!;
+          final isCutOff = bid.isCutOffFor(order.type);
 
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 8.0),
