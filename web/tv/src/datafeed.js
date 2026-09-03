@@ -105,7 +105,7 @@ export default {
 			// type: symbolItem.type,
 			symbols_types: [{ name: "All types", value: "" }],
 			value: symbols["exch"],
-			session: symbols["exch"] == "MCX" ? "0900-2355:23456" : symbols["exch"] == "CDS" ? "0900-1700:23456" : '0915-1530:23456',
+			session: symbols["exch"] == "MCX" ? "0900-2355:23456" : (symbols["exch"] == "CDS" || symbols["exch"] == "BCD") ? "0900-1700:23456" : '0915-1540:23456',
 			timezone: 'Asia/Kolkata',
 			exchange: symbols["exch"],
 			minmov: 1,
