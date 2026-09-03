@@ -246,7 +246,8 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
         onEnter: (_) {
           _hoveredRowIndex.value = rowIndex;
           // Cancel any pending close if re-entering the popover's row
-          if (_activePopoverController != null && _popoverRowIndex == rowIndex) {
+          if (_activePopoverController != null &&
+              _popoverRowIndex == rowIndex) {
             _cancelPopoverCloseTimer();
           }
         },
@@ -269,7 +270,8 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
             final container = Container(
               padding: cellPadding,
               color: isRowHovered
-                  ? resolveThemeColor(context,
+                  ? resolveThemeColor(
+                      context,
                       dark: MyntColors.primaryDark,
                       light: MyntColors.primary,
                     ).withValues(alpha: 0.08)
@@ -506,7 +508,11 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Text(pnlValue, textAlign: TextAlign.end, style: baseStyle, maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(pnlValue,
+              textAlign: TextAlign.end,
+              style: baseStyle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
           Text(
             '$percentValue%',
             textAlign: TextAlign.end,
@@ -613,8 +619,7 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
               ? MyntColors.backgroundColorDark
               : MyntColors.backgroundColor,
           elevation: 0,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           child: SizedBox(
             width: dialogWidth,
             child: MFOrderScreenWeb(mfData: mfItem, isAdditional: true),
@@ -676,8 +681,8 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                 dark: MyntColors.textPrimaryDark,
                 light: MyntColors.textPrimary);
 
-            // Redeem option (only for holdings with units > 0)
-            if (avgQty > 0) {
+            // Redeem option — units to redeem AND the Redemption_Allowed gate.
+            if (avgQty > 0 && holding.isRedemptionAllowed) {
               menuItems.add(
                 _buildMenuButton(
                   icon: shadcn.LucideIcons.gift,
@@ -694,20 +699,22 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
               );
             }
 
-            // Add (place order) option
-            menuItems.add(
-              _buildMenuButton(
-                icon: Icons.add,
-                title: 'Add',
-                iconColor: iconColor,
-                textColor: textColor,
-                onPressed: (ctx) {
-                  _closePopover();
-                  _hoveredRowIndex.value = null;
-                  _handleAdd(holding);
-                },
-              ),
-            );
+            // Add (place order) option — gated on Purchase_Allowed.
+            if (holding.isPurchaseAllowed) {
+              menuItems.add(
+                _buildMenuButton(
+                  icon: Icons.add,
+                  title: 'Add',
+                  iconColor: iconColor,
+                  textColor: textColor,
+                  onPressed: (ctx) {
+                    _closePopover();
+                    _hoveredRowIndex.value = null;
+                    _handleAdd(holding);
+                  },
+                ),
+              );
+            }
 
             // Add divider if we have action items
             if (menuItems.isNotEmpty) {
@@ -767,14 +774,13 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
               color: resolveThemeColor(context,
                   // dark: MyntColors.primary.withValues(alpha: 0.1),
                   // light: MyntColors.primary.withValues(alpha: 0.1)),
-                    dark: MyntColors.textWhite,
+                  dark: MyntColors.textWhite,
                   light: MyntColors.textWhite),
               borderRadius: BorderRadius.circular(4),
               boxShadow: [
                 BoxShadow(
                   color: resolveThemeColor(context,
-                      dark: Colors.transparent,
-                      light: Colors.grey),
+                      dark: Colors.transparent, light: Colors.grey),
                   blurRadius: 2,
                   offset: const Offset(0, 1),
                 ),
@@ -784,8 +790,7 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
               Icons.more_vert,
               size: 16,
               color: resolveThemeColor(context,
-                  dark: MyntColors.textPrimary,
-                  light: MyntColors.textPrimary),
+                  dark: MyntColors.textPrimary, light: MyntColors.textPrimary),
             ),
           ),
         );
@@ -1053,33 +1058,38 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                         height: double.infinity,
                                         // Row layout: text shrinks with ellipsis when buttons appear (no overlay)
                                         child: Row(
-                                            children: [
-                                              // Fund name - Expanded so it shrinks when buttons appear
-                                              Expanded(
-                                                child: Align(
-                                                  alignment: Alignment.centerLeft,
-                                                  child: Tooltip(
-                                                    message: holding.name ?? 'N/A',
-                                                    child: Text(
+                                          children: [
+                                            // Fund name - Expanded so it shrinks when buttons appear
+                                            Expanded(
+                                              child: Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Tooltip(
+                                                  message:
                                                       holding.name ?? 'N/A',
-                                                      overflow: TextOverflow.ellipsis,
-                                                      maxLines: 1,
-                                                      softWrap: false,
-                                                      style: _getTextStyle(context),
-                                                    ),
+                                                  child: Text(
+                                                    holding.name ?? 'N/A',
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    maxLines: 1,
+                                                    softWrap: false,
+                                                    style:
+                                                        _getTextStyle(context),
                                                   ),
                                                 ),
                                               ),
-                                              // 3-dot options menu - appears on hover
-                                              if (isRowHovered ||
-                                                  (_activePopoverController != null &&
-                                                      _popoverRowIndex == index)) ...[
-                                                const SizedBox(width: 8),
-                                                _buildOptionsMenuButton(
-                                                  holding,
-                                                  index,
-                                                  avgQty,
-                                                ),
+                                            ),
+                                            // 3-dot options menu - appears on hover
+                                            if (isRowHovered ||
+                                                (_activePopoverController !=
+                                                        null &&
+                                                    _popoverRowIndex ==
+                                                        index)) ...[
+                                              const SizedBox(width: 8),
+                                              _buildOptionsMenuButton(
+                                                holding,
+                                                index,
+                                                avgQty,
+                                              ),
                                             ],
                                           ],
                                         ),
@@ -1096,10 +1106,17 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(holding.avgQty ?? '0') ?? 0.0).toStringAsFixed(4));
+                                      final value = privacy.mask(
+                                          (double.tryParse(
+                                                      holding.avgQty ?? '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
-                                        child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text(value,
+                                            style: _getTextStyle(context),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
                                       );
                                     }),
                                   ),
@@ -1113,10 +1130,17 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(holding.avgNav ?? '0') ?? 0.0).toStringAsFixed(4));
+                                      final value = privacy.mask(
+                                          (double.tryParse(
+                                                      holding.avgNav ?? '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(4));
                                       return Tooltip(
                                         message: value,
-                                        child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text(value,
+                                            style: _getTextStyle(context),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
                                       );
                                     }),
                                   ),
@@ -1130,10 +1154,16 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(holding.curNav ?? '0') ?? 0.0).toStringAsFixed(4);
+                                      final value = (double.tryParse(
+                                                  holding.curNav ?? '0') ??
+                                              0.0)
+                                          .toStringAsFixed(4);
                                       return Tooltip(
                                         message: value,
-                                        child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text(value,
+                                            style: _getTextStyle(context),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
                                       );
                                     }),
                                   ),
@@ -1147,10 +1177,18 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(holding.investedValue ?? '0') ?? 0.0).toStringAsFixed(2));
+                                      final value = privacy.mask(
+                                          (double.tryParse(
+                                                      holding.investedValue ??
+                                                          '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
-                                        child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text(value,
+                                            style: _getTextStyle(context),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
                                       );
                                     }),
                                   ),
@@ -1164,10 +1202,18 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = privacy.mask((double.tryParse(holding.currentValue ?? '0') ?? 0.0).toStringAsFixed(2));
+                                      final value = privacy.mask(
+                                          (double.tryParse(
+                                                      holding.currentValue ??
+                                                          '0') ??
+                                                  0.0)
+                                              .toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
-                                        child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text(value,
+                                            style: _getTextStyle(context),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
                                       );
                                     }),
                                   ),
@@ -1181,12 +1227,21 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final pnlNum = double.tryParse(holding.profitLoss ?? '0') ?? 0.0;
-                                      final value = privacy.mask(pnlNum.toStringAsFixed(2));
-                                      final color = _getCellColor(privacy.isPrivate ? 0.0 : pnlNum, context);
+                                      final pnlNum = double.tryParse(
+                                              holding.profitLoss ?? '0') ??
+                                          0.0;
+                                      final value = privacy
+                                          .mask(pnlNum.toStringAsFixed(2));
+                                      final color = _getCellColor(
+                                          privacy.isPrivate ? 0.0 : pnlNum,
+                                          context);
                                       return Tooltip(
                                         message: value,
-                                        child: Text(value, style: _getTextStyle(context, color: color), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text(value,
+                                            style: _getTextStyle(context,
+                                                color: color),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
                                       );
                                     }),
                                   ),
@@ -1200,14 +1255,27 @@ class _MfTableExampleState extends ConsumerState<MfTableExample> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final pctNum = double.tryParse(holding.changeprofitLoss ?? '0') ?? 0.0;
+                                      final pctNum = double.tryParse(
+                                              holding.changeprofitLoss ??
+                                                  '0') ??
+                                          0.0;
                                       final displayValue = privacy.isPrivate
                                           ? '$kPrivacyMask%'
                                           : '${pctNum >= 0 ? "+" : ""}${pctNum.toStringAsFixed(2)}%';
-                                      final color = _getCellColor(privacy.isPrivate ? 0.0 : pctNum, context);
+                                      final color = _getCellColor(
+                                          privacy.isPrivate ? 0.0 : pctNum,
+                                          context);
                                       return Tooltip(
                                         message: displayValue,
-                                        child: Text(displayValue, style: _getTextStyle(context, color: color).copyWith(fontSize: 12, fontWeight: FontWeight.w400), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        child: Text(displayValue,
+                                            style: _getTextStyle(context,
+                                                    color: color)
+                                                .copyWith(
+                                                    fontSize: 12,
+                                                    fontWeight:
+                                                        FontWeight.w400),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis),
                                       );
                                     }),
                                   ),

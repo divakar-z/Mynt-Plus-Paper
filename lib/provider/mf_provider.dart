@@ -1661,6 +1661,8 @@ class MFProvider extends DefaultChangeNotifier {
       row.sCHEMECODE = d.schemeCode;
       row.minRedemptionQty = d.minimumRedemptionQty;
       row.minimumPurchaseAmount = d.minimumPurchaseAmount;
+      row.purchaseAllowed = d.purchaseAllowed;
+      row.redemptionAllowed = d.redemptionAllowed;
       rows.add(row);
     }
 

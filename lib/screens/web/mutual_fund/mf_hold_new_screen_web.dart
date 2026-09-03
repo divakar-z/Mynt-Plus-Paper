@@ -1102,7 +1102,8 @@ class _MfHoldNewScreenState extends ConsumerState<MfHoldNewScreenWeb> {
 
               // Build menu items
               final List<shadcn.MenuItem> menuItems = [
-                if (hasUnits)
+                // Needs units AND the backend's Redemption_Allowed gate.
+                if (hasUnits && item.isRedemptionAllowed)
                   _buildMenuButton(
                     icon: Icons.money_off_outlined,
                     label: 'Redeem',
