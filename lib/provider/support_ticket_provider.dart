@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/legacy.dart';
 
 import '../api/core/api_export.dart';
 import '../locator/locator.dart';
+import '../locator/preference.dart';
+import '../models/support_ticket_model/support_html.dart';
 import '../models/support_ticket_model/support_ticket.dart';
 import '../models/support_ticket_model/support_ticket_context.dart';
 import '../models/support_ticket_model/support_ticket_exception.dart';
@@ -59,9 +61,11 @@ class SupportTicketProvider extends DefaultChangeNotifier {
 
   /// Fields the form fills in silently rather than asking for.
   ///
-  ///  * `clientid` — deliberately **not** sent. The requester is identified by
-  ///    the session, so repeating the trading code in a form field only
-  ///    duplicates what the ticket already carries.
+  ///  * `clientid` — the signed-in trading code, taken from [Preferences] and
+  ///    never typed. An agent triaging the queue reads the field on the ticket,
+  ///    not the session behind it, so the code has to be on the ticket itself.
+  ///    (Previously left blank on the reasoning that the session already
+  ///    identified the requester; it reached the desk empty. Mobile fills it.)
   ///  * `products` — General offers exactly one option, so asking is a dead
   ///    choice; it is resolved from the form and sent automatically.
   static const Set<String> _silentFields = {'clientid', 'products'};
@@ -349,7 +353,10 @@ class SupportTicketProvider extends DefaultChangeNotifier {
     notifyListeners();
     try {
       if (text.isNotEmpty) {
-        await api.replyToTicket(id, text);
+        // Same store, same rules as create: HTML in, so the client's line
+        // breaks need converting and their text needs escaping.
+        // await api.replyToTicket(id, text);
+        await api.replyToTicket(id, supportTextToHtml(text));
       }
       for (final file in _replyAttachments) {
         final bytes = file.bytes;
@@ -511,6 +518,9 @@ class SupportTicketProvider extends DefaultChangeNotifier {
 
   /// Resolves the fields the client is never shown.
   ///
+  /// `clientid` is answered from the signed-in session, so the agent opening
+  /// the ticket can see whose account it is without asking.
+  ///
   /// A single-choice field is answered with its only option — General's
   /// `products` is exactly that, and leaving it blank would either fail a
   /// required check or land the ticket unclassified. A field with several
@@ -521,8 +531,19 @@ class SupportTicketProvider extends DefaultChangeNotifier {
       if (!field.editable) continue;
       final name = field.name.toLowerCase();
       if (!_silentFields.contains(name)) continue;
-      // The client code is never echoed back into a form field.
-      if (name == 'clientid') continue;
+      // Was: the client code is never echoed back into a form field.
+      // if (name == 'clientid') continue;
+      //
+      // Now filled from the signed-in session, matching mobile. Never rendered
+      // and never typed, so it cannot be mistyped or pointed at someone else's
+      // account. Sent only when the topic offers a plain editable text field
+      // for it — a locked or choice-backed key is a 422 that would fail the
+      // whole create, and a code is not a valid choice key anyway.
+      if (name == 'clientid') {
+        final code = (locator<Preferences>().clientId ?? '').trim();
+        if (code.isNotEmpty && !field.isChoice) resolved[field.name] = code;
+        continue;
+      }
       final choices = field.choices;
       if (choices != null && choices.length == 1) {
         resolved[field.name] = choices.keys.first;
@@ -762,7 +783,13 @@ class SupportTicketProvider extends DefaultChangeNotifier {
       final ticket = await api.createTicket(
         topicId: _topic!.id,
         subject: subject.text.trim(),
-        message: '${message.text.trim()}\n\n${context.asMessageFooter()}',
+        // The body is stored and rendered as HTML, so the client's own line
+        // breaks need converting too — not just the footer's. Escaped on the
+        // way in, or a description containing `<` is interpreted as markup in
+        // the agent's console instead of being shown as typed.
+        // message: '${message.text.trim()}\n\n${context.asMessageFooter()}',
+        message: '${supportTextToHtml(message.text.trim())}<br><br>'
+            '${context.asMessageFooter()}',
         customFields: {..._resolveSilentFields(), ..._customFieldAnswers},
       );
 
