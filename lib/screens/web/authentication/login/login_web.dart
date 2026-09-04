@@ -22,6 +22,7 @@ import '../../../../provider/thems.dart';
 import '../../../../provider/user_profile_provider.dart';
 import '../../../../provider/version_provider.dart';
 import '../../../../provider/websocket_provider.dart';
+import '../../../../res/app_release.dart';
 import '../../../../res/res.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
@@ -55,12 +56,16 @@ class LoginScreenWeb extends ConsumerStatefulWidget {
 class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   // Short version shown in the login footer. Hovering it reveals the full
   // build/release details (_appVersionLabel) in a tooltip.
-  static const String _appVersionShort = "Version 3.0.3";
+  // static const String _appVersionShort = "Version 3.0.3";
+  static const String _appVersionShort = AppRelease.short;
 
-  // Full build/release details — surfaced only in the hover tooltip. Update
-  // this single string on each release.
-  static const String _appVersionLabel =
-      "Version 3.0.3 Build 1.0.554 Released on 3 Sep 2026";
+  // Full build/release details — surfaced only in the hover tooltip.
+  // static const String _appVersionLabel =
+  //     "Version 3.0.3 Build 1.0.554 Released on 3 Sep 2026";
+  //
+  // Moved to [AppRelease] so support tickets can report the same build this
+  // screen shows. Update the release there, not here.
+  static const String _appVersionLabel = AppRelease.label;
   
   bool _isProcessing = false;
   bool _isInitializing = true; // True until auto-login check completes
@@ -371,7 +376,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
            (auth.totp && (auth.mobileLogin!.msg != null || auth.mobileLogin!.msg == null)))) {
             
         if (mounted) {
-           setState(() {
+           setState(() { 
              _showOtpScreen = true;
              _start = 89;
              resendTime = "01.29";

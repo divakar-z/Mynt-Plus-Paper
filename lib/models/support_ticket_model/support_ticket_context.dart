@@ -1,11 +1,14 @@
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:package_info_plus/package_info_plus.dart';
+import 'package:intl/intl.dart';
+// import 'package:package_info_plus/package_info_plus.dart';
+
+import '../../res/app_release.dart';
 
 /// The diagnostic block sent alongside a ticket.
 ///
-/// None of this is typed by the client. The backend appends it to the ticket
-/// body so the agent sees which screen, which build and which browser without
-/// having to ask — that back-and-forth is most of what makes a phone call slow.
+/// None of this is typed by the client. It is appended to the ticket body so
+/// the agent sees which build, which browser and when, without having to ask —
+/// that back-and-forth is most of what makes a phone call slow.
 ///
 /// Best-effort by design: every field falls back to a placeholder rather than
 /// throwing. A ticket that reaches the desk with an unknown browser is far
@@ -20,9 +23,13 @@ class SupportTicketContext {
   });
 
   /// Where the client was when they hit Raise — e.g. `/orders`.
+  ///
+  /// Captured and kept in [toJson], but no longer printed in the footer: with
+  /// only the Help and Support entry point live it is always the same string.
   final String screen;
 
-  /// The running build, from `pubspec.yaml` via `PackageInfo`.
+  /// The release the client is running, from [AppRelease] — the same identity
+  /// the login screen shows them, e.g. `3.0.3 Build 1.0.554`.
   final String appVersion;
 
   /// Always `web` — this project ships the browser build only. The field
@@ -45,21 +52,29 @@ class SupportTicketContext {
   static Future<SupportTicketContext> capture({required String screen}) async {
     return SupportTicketContext(
       screen: screen,
-      appVersion: await _appVersion(),
+      // Was: the pubspec version via PackageInfo, which reported `1.0.101`
+      // while the login screen and the release notes both said `3.0.3 Build
+      // 1.0.554`. An agent cannot match a client to a build on a number the
+      // client has never seen.
+      // appVersion: await _appVersion(),
+      appVersion: AppRelease.forSupport,
       platform: 'web',
       browser: await _browser(),
-      occurredAt: nowWithOffset(),
+      occurredAt: nowReadable(),
     );
   }
 
-  static Future<String> _appVersion() async {
-    try {
-      final info = await PackageInfo.fromPlatform();
-      return info.version.isEmpty ? 'unknown' : info.version;
-    } catch (_) {
-      return 'unknown';
-    }
-  }
+  // Retired with the switch to [AppRelease]. Kept for the day a build number
+  // is wanted alongside the release name; restore the `package_info_plus`
+  // import above with it.
+  // static Future<String> _appVersion() async {
+  //   try {
+  //     final info = await PackageInfo.fromPlatform();
+  //     return info.version.isEmpty ? 'unknown' : info.version;
+  //   } catch (_) {
+  //     return 'unknown';
+  //   }
+  // }
 
   /// `Chrome 128 / Windows 10/11`, degrading to whatever half could be read.
   ///
@@ -123,36 +138,62 @@ class SupportTicketContext {
     return '';
   }
 
-  /// ISO 8601 in local time *with* the offset.
+  /// Local time an agent can read at a glance, e.g.
+  /// `04 Sep 2026, 09:57 AM (UTC+05:30)`.
   ///
-  /// `DateTime.toIso8601String()` on a local value emits no offset at all, so a
-  /// ticket raised at 15:04 IST would read as 15:04 UTC on the desk — a five
-  /// and a half hour error on exactly the timestamp an agent uses to find the
-  /// event in a log.
-  static String nowWithOffset([DateTime? at]) {
+  /// `dd MMM yyyy` matches how dates are shown everywhere else in Support, so
+  /// the ticket body and the ticket list read the same way.
+  ///
+  /// The offset stays on the end for the reason the ISO form existed: a stamp
+  /// with no offset reads as UTC on the desk, and a ticket raised at 3:04 PM
+  /// IST sends an agent looking five and a half hours away in the logs.
+  static String nowReadable([DateTime? at]) {
     final now = at ?? DateTime.now();
     final offset = now.timeZoneOffset;
     final sign = offset.isNegative ? '-' : '+';
     final minutes = offset.inMinutes.abs();
     final hh = (minutes ~/ 60).toString().padLeft(2, '0');
     final mm = (minutes % 60).toString().padLeft(2, '0');
-    // Trim the milliseconds Dart appends; the desk has no use for them.
-    final stamp = now.toIso8601String().split('.').first;
-    return '$stamp$sign$hh:$mm';
+    final stamp = DateFormat('dd MMM yyyy, hh:mm a').format(now);
+    return '$stamp (UTC$sign$hh:$mm)';
   }
+
+  // Was the machine-readable form. Replaced because the desk reads this, not a
+  // parser — restore if anything ever needs to parse the stamp back.
+  // static String nowWithOffset([DateTime? at]) {
+  //   final now = at ?? DateTime.now();
+  //   final offset = now.timeZoneOffset;
+  //   final sign = offset.isNegative ? '-' : '+';
+  //   final minutes = offset.inMinutes.abs();
+  //   final hh = (minutes ~/ 60).toString().padLeft(2, '0');
+  //   final mm = (minutes % 60).toString().padLeft(2, '0');
+  //   // Trim the milliseconds Dart appends; the desk has no use for them.
+  //   final stamp = now.toIso8601String().split('.').first;
+  //   return '$stamp$sign$hh:$mm';
+  // }
 
   /// The block appended to the ticket body.
   ///
-  /// Plain text, not HTML: the create route stores the body as given and an
-  /// agent reads it in the console. A markup attempt here would either be shown
-  /// as literal tags or stripped, depending on the topic's settings.
+  /// Broken with `<br>`, not `\n`. This install stores and renders bodies as
+  /// HTML, so plain line breaks are whitespace and collapse — the first live
+  /// tickets reached the desk with all four lines run together. Confirmed with
+  /// the backend that the body is accepted as HTML.
+  ///
+  /// Nothing here is client-typed, so none of it needs escaping; the client's
+  /// own description is escaped separately by [supportTextToHtml].
   String asMessageFooter() => [
         '---',
-        'Screen: $screen',
+        // Dropped: the only live entry point is the Help and Support screen
+        // itself, so this always read `/help-support` and told the agent
+        // nothing. [screen] is still captured and still in [toJson] — restore
+        // this line the day the area picker in `report_issue_dialog` goes
+        // live and the value starts varying.
+        // 'Screen: $screen',
         'Version: $appVersion ($platform)',
         'Browser: $browser',
         'Occurred: $occurredAt',
-      ].join('\n');
+        // ].join('\n');   // collapsed to one line once stored as HTML
+      ].join('<br>');
 
   Map<String, dynamic> toJson() => {
         'screen': screen,

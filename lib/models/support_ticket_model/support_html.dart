@@ -1,3 +1,26 @@
+/// Prepares client-typed text for a ticket body.
+///
+/// This install stores and renders bodies as HTML, so a plain line break is
+/// whitespace to it and collapses — a four-line diagnostic footer arrives at
+/// the desk as one run-on line. `<br>` is the only break that survives.
+///
+/// Escaping comes first and is not optional. Without it a description
+/// containing `<` or `&` is interpreted rather than shown, and client text
+/// reaching an agent's console as live markup is a script-injection route into
+/// the helpdesk. `&` is replaced before the angle brackets, or the `&` in the
+/// entities this produces would be escaped a second time.
+///
+/// The reverse trip is [supportHtmlToText], which turns `<br>` back into a
+/// newline and decodes these same entities.
+String supportTextToHtml(String text) {
+  if (text.isEmpty) return '';
+  final escaped = text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+  return escaped.replaceAll(RegExp(r'\r\n|\r|\n'), '<br>');
+}
+
 /// Turns a thread body into plain text.
 ///
 /// Thread bodies come back as **raw stored HTML** — there is no `format` field
