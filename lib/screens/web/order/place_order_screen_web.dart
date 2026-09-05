@@ -600,6 +600,44 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     return "$fieldName should be multiple of tick size $tik => $rounded";
   }
 
+  /// Puts the GTT tab into the state a freshly opened dialog would show for
+  /// this scrip, honouring the user's order preferences.
+  ///
+  /// Called from two places so they can never drift apart: when the GTT tab is
+  /// selected, and after a successful GTT or OCO placement when the sticky
+  /// order window keeps the dialog open. The provider's clearTextField() blanks
+  /// every field and forces the price type back to Limit, which left an
+  /// unusable empty form and threw away a Market preference.
+  void _seedGttFieldsForScrip() {
+    final orderInput = ref.read(ordInputProvider);
+    // Same test as the old `orderInput.prcType == "MKT"`, but read from the
+    // screen's own priceType so it still works after clearTextField() has
+    // wiped the provider's copy.
+    final bool useMarket = priceType == "Market";
+    // MCX qty field accepts a lot count; other exchanges accept the lot size.
+    final String seedQty = widget.scripInfo.exch == "MCX"
+        ? "1"
+        : (widget.orderArg.lotSize ?? "1").replaceAll("-", "");
+
+    // GTT always opens in Qty mode, single leg.
+    isOco = false;
+    _isQtyToAmount = false;
+    _isGTTLotToQty = true;
+
+    if (useMarket) {
+      orderInput.setGTTPriceTypeOrderIsMarket(true);
+      orderInput.chngGTTPriceType("Market");
+      // Qty is seeded here too. The old tab-switch code set it only on the
+      // Limit branch, so a Market preference opened the tab with a blank Qty.
+      orderInput.updatePrcCtrl("Market", seedQty);
+    } else {
+      orderInput.setGTTPriceTypeOrderIsMarket(false);
+      orderInput.updatePrcCtrl("${widget.orderArg.ltp}", seedQty);
+      orderInput.chngGTTPriceType("Limit");
+    }
+    orderInput.disableCondGTT(false);
+  }
+
   Map userOrderPreference = {};
   bool isUserOrderPreferenceAvailable = false;
   final GlobalKey<TooltipState> tooltipKey = GlobalKey<TooltipState>();
@@ -1879,44 +1917,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   priceType, widget.scripInfo.exch ?? "");
                                               _debouncedMarginUpdate();
                                             } else {
-                                              // Reset qty toggles so the GTT tab always opens in Qty mode
-                                              _isQtyToAmount = false;
-                                              _isGTTLotToQty = true;
-                                              // ref.read(ordInputProvider)
-                                              //     .chngInvesType(
-                                              //         widget.scripInfo.seg == "EQT"
-                                              //             ? InvestType.delivery
-                                              //             : InvestType.carryForward,
-                                              //         "GTT");
-                                              if (orderInput.prcType == "MKT") {
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .setGTTPriceTypeOrderIsMarket(true);
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .chngGTTPriceType("Market");
-                                                orderInput.priceCtrl.text = "Market";
-                                              } else {
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .setGTTPriceTypeOrderIsMarket(false);
-                                                // MCX qty field accepts lot count; other exchanges accept the lot-size string.
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .updatePrcCtrl(
-                                                        "${widget.orderArg.ltp}",
-                                                        widget.scripInfo.exch == "MCX"
-                                                            ? "1"
-                                                            : widget.orderArg.lotSize!
-                                                                .replaceAll(
-                                                                    "-", ""));
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .chngGTTPriceType("Limit");
-                                              }
-                                              ref
-                                                  .read(ordInputProvider)
-                                                  .disableCondGTT(false);
+                                              // Seed the GTT tab to its fresh-open state for this scrip.
+                                              _seedGttFieldsForScrip();
                                             }
                                             if (priceType == "Market" ||
                                                 priceType == "SL MKT") {
@@ -6457,7 +6459,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         "Quantity should be multiple of lot size $lotSize => $gttLotRounded");
                                                                     return;
                                                                   }
-                                                                  if (orderInput.disableGTTCond) {
+                                                                  // Branch on the SAME flag the checkbox drives. This used to read
+                                                                  // orderInput.disableGTTCond, a second copy of the same fact kept in sync
+                                                                  // by hand - and clearTextField() resets that copy without touching isOco.
+                                                                  // After placing one OCO the checkbox still showed ticked while the submit
+                                                                  // had silently reverted to single-GTT, so the OCO fields went unvalidated
+                                                                  // and the order went out as a plain GTT (TC_238, TC_239).
+                                                                  if (isOco) {
                                                                     final computedOcoQty = SafeParse.toDouble(
                                                                         getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
                                                                     if (orderInput.ocoQtyCtrl.text.trim().isNotEmpty &&
@@ -6498,7 +6506,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   String? gttTickErr =
                                                                       _gttTickError(orderInput.val1Ctrl.text, "Target trigger price");
                                                                   gttTickErr ??= _gttTickError(orderInput.priceCtrl.text, "Price");
-                                                                  if (gttTickErr == null && orderInput.disableGTTCond) {
+                                                                  if (gttTickErr == null && isOco) {
                                                                     gttTickErr = _gttTickError(
                                                                         orderInput.val2Ctrl.text, "Stoploss trigger price");
                                                                     gttTickErr ??=
@@ -6508,8 +6516,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     ResponsiveSnackBar.showWarning(context, gttTickErr);
                                                                     return;
                                                                   }
-                                                                  if (orderInput
-                                                                      .disableGTTCond) {
+                                                                  if (isOco) {
                                                                     if ((orderInput.val1Ctrl.text.isNotEmpty &&
                                                                             orderInput
                                                                                 .val2Ctrl.text.isNotEmpty &&

@@ -776,7 +776,8 @@ class _GttOrderBookDetailScreenWebState
       }
 
       // Cancel the GTT order using saved provider reference
-      await orderProviderRef.cancelGttOrder(gttOrderId, targetContext);
+      await orderProviderRef.cancelGttOrder(gttOrderId, targetContext,
+          isOco: _gttOrder.placeOrderParamsLeg2 != null);
     } catch (e) {
       final rootCtx = getNavigatorContext();
       if (rootCtx != null && rootCtx.mounted) {
