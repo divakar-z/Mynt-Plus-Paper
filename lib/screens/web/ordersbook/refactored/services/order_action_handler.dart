@@ -334,6 +334,7 @@ class OrderActionHandler {
       await ref.read(orderProvider).cancelGttOrder(
             "${gttOrderData.alId}",
             context,
+            isOco: gttOrderData.placeOrderParamsLeg2 != null,
           );
 
       // Refresh GTT order book after successful cancel

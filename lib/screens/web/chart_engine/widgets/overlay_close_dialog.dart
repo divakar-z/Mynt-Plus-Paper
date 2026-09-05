@@ -548,7 +548,8 @@ Future<void> showOcoCancelDialog({
     ),
   );
   if (ok != true || !context.mounted) return;
-  await ref.read(orderProvider).cancelGttOrder(gtt.alId ?? '', context);
+  await ref.read(orderProvider).cancelGttOrder(gtt.alId ?? '', context,
+      isOco: gtt.placeOrderParamsLeg2 != null);
 }
 
 class _CancelOcoCard extends StatelessWidget {
