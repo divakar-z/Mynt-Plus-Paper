@@ -1524,7 +1524,8 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
       // Cancel the GTT order
       await ref
           .read(orderProvider)
-          .cancelGttOrder(gttOrder.alId ?? '', context);
+          .cancelGttOrder(gttOrder.alId ?? '', context,
+              isOco: gttOrder.placeOrderParamsLeg2 != null);
 
       // Refresh GTT order book after successful cancel
       await ref.read(orderProvider).fetchGTTOrderBook(context, "");

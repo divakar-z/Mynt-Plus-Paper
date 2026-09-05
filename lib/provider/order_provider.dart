@@ -2624,7 +2624,13 @@ class OrderProvider extends DefaultChangeNotifier {
 
       if (_placeGttOrderModel!.stat == "OI created") {
         ConstantName.sessCheck = true;
-        ref.read(ordInputProvider).clearTextField();
+        // Deliberately NOT clearing the form here. With the sticky order
+        // window on the dialog stays open, and clearing left the user staring
+        // at three empty boxes. Delivery and Intraday keep their values in the
+        // same situation, so GTT now behaves the same way. Stale values cannot
+        // leak into a new dialog: place_order_screen_web clears GTT state when
+        // the dialog opens.
+        // ref.read(ordInputProvider).clearTextField();
         await fetchGTTOrderBook(context, "");
 
         if (kIsWeb) {
@@ -2707,8 +2713,12 @@ class OrderProvider extends DefaultChangeNotifier {
     }
   }
 
-  cancelGttOrder(String canId, BuildContext context) async {
+  /// [isOco] only picks the wording. The cancel API takes just an alert id,
+  /// so it cannot tell a single GTT from an OCO - the caller knows and says.
+  cancelGttOrder(String canId, BuildContext context,
+      {bool isOco = false}) async {
     toggleLoadingOn(true);
+    final String label = isOco ? "OCO" : "GTT";
     try {
       _placeGttOrderModel = await api.cancelGTTOrderAPI(canId);
 
@@ -2718,9 +2728,9 @@ class OrderProvider extends DefaultChangeNotifier {
         // Show success message - ResponsiveSnackBar for web, ScaffoldMessenger for mobile
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(
-              context, "GTT Order Cancelled Successfully");
+              context, "$label Order Cancelled Successfully");
         } else {
-          showResponsiveSuccess(context, "GTT Order Cancelled Successfully");
+          showResponsiveSuccess(context, "$label Order Cancelled Successfully");
           Navigator.pop(context);
         }
       } else {
@@ -2735,18 +2745,18 @@ class OrderProvider extends DefaultChangeNotifier {
         // Show warning message - ResponsiveSnackBar for web, ScaffoldMessenger for mobile
         if (kIsWeb) {
           ResponsiveSnackBar.showWarning(
-              context, "Provided GTT Order is not found");
+              context, "Provided $label Order is not found");
         } else {
           showResponsiveWarningMessage(
-              context, "Provided GTT Order is not found");
+              context, "Provided $label Order is not found");
           Navigator.pop(context);
         }
 
         if (kIsWeb) {
           ResponsiveSnackBar.showWarning(
-              context, "Provided GTT Order is not found");
+              context, "Provided $label Order is not found");
         } else {
-          warningMessage(context, "Provided GTT Order is not found");
+          warningMessage(context, "Provided $label Order is not found");
         }
         Navigator.pop(context);
       }
@@ -2768,7 +2778,13 @@ class OrderProvider extends DefaultChangeNotifier {
 
       if (_placeGttOrderModel!.stat == "OI created") {
         ConstantName.sessCheck = true;
-        ref.read(ordInputProvider).clearTextField();
+        // Deliberately NOT clearing the form here. With the sticky order
+        // window on the dialog stays open, and clearing left the user staring
+        // at three empty boxes. Delivery and Intraday keep their values in the
+        // same situation, so GTT now behaves the same way. Stale values cannot
+        // leak into a new dialog: place_order_screen_web clears GTT state when
+        // the dialog opens.
+        // ref.read(ordInputProvider).clearTextField();
         await fetchGTTOrderBook(context, "");
 
         if (kIsWeb) {
