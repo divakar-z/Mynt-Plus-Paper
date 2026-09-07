@@ -377,10 +377,10 @@ class WatchlistOCProvider extends ChangeNotifier {
     final websocket = ref.read(websocketProvider);
     final indexToken = _selectedSymbol.token;
 
-    // Subscribe to index token
+    // Subscribe to index token (touchline feed — option chain only needs LTP)
     websocket.establishConnection(
       channelInput: "${_selectedSymbol.exch}|$indexToken",
-      task: "d",
+      task: "t",
       context: context,
     );
 
@@ -412,7 +412,7 @@ class WatchlistOCProvider extends ChangeNotifier {
       _subscribedOptionTokens = tokens;
       websocket.establishConnection(
         channelInput: tokens.join('#'),
-        task: "d",
+        task: "t",
         context: context,
       );
     }
@@ -427,7 +427,7 @@ class WatchlistOCProvider extends ChangeNotifier {
     final websocket = ref.read(websocketProvider);
     websocket.establishConnection(
       channelInput: _subscribedOptionTokens.join('#'),
-      task: "ud",
+      task: "u",
       context: context,
     );
     _subscribedOptionTokens.clear();

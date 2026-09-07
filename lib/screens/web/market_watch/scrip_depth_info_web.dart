@@ -828,8 +828,17 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                     // before this widget subscribed, snapshot.data would be null
                     final socketDatas = snapshot.data ?? ref.read(websocketProvider).socketDatas;
 
-                    // Update depth data with WebSocket data if available
-                    if (socketDatas.containsKey(regtoken)) {
+                    // Update depth data with WebSocket data if available.
+                    // Only merge when the shared quote object actually belongs to
+                    // the currently-selected scrip. During a symbol switch,
+                    // `regtoken` flips to the new scrip immediately (widget
+                    // rebuild) but `getQuotes` still holds the PREVIOUS scrip
+                    // until its REST quote lands — merging the new scrip's ticks
+                    // into the old object produced a mixed ladder (row 1 from one
+                    // symbol, rows 2-5 from another). Gating on the token keeps
+                    // every render consistent to a single scrip.
+                    if (depthData.token?.toString() == regtoken &&
+                        socketDatas.containsKey(regtoken)) {
                       _processDepthData(depthData, socketDatas[regtoken]);
 
                       if (scripInfo.actDeptBtn == "Overview") {
