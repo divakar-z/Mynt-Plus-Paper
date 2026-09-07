@@ -269,11 +269,12 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
     }
 
     if (!websocket.wsConnected) {
-      // Web uses depth subscription ("d") for all symbols to have depth data ready
+      // Web uses touchline ("t") for general symbols; only the depth panel's
+      // symbol (lastSubscribeDepth) is restored with depth ("d").
       if (ConstantName.lastSubscribe.isNotEmpty) {
         websocket.establishConnection(
             channelInput: ConstantName.lastSubscribe,
-            task: "d",
+            task: "t",
             context: context);
       }
 

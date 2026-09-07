@@ -674,10 +674,11 @@ class _OptionChainRowWebState extends ConsumerState<OptionChainRowWeb> {
             context, 'Removed from your watchlist "${scripData.wlName}"');
       }
     } else {
-      // Add to watchlist - using depth subscription for web
+      // Add to watchlist - touchline for web (watchlist tile only needs LTP;
+      // depth is reserved for the market-depth panel)
       ref.read(websocketProvider).establishConnection(
             channelInput: scripToken,
-            task: "d",
+            task: "t",
             context: context,
           );
 

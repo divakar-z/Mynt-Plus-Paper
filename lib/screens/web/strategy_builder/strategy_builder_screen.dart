@@ -5828,7 +5828,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
     } else {
       ref.read(websocketProvider).establishConnection(
             channelInput: scripToken,
-            task: "d",
+            task: "t",
             context: context,
           );
       final success = await scripData.addDelMarketScrip(

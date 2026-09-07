@@ -355,6 +355,16 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
             }
           });
         }
+
+        // Depth ("d") bypasses the master list and is re-sent only as touchline
+        // above, so an active Overview depth feed would silently stay gone after
+        // a reconnect (the socket's sent-subscription tracking was cleared).
+        // Restore it explicitly from the currently-tracked depth symbol.
+        Future.microtask(() {
+          if (ref.read(websocketProvider).wsConnected) {
+            _restoreDepthSubscription();
+          }
+        });
       }
 
       _lastKnownWsConnected = isNowConnected;
@@ -517,7 +527,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final symbolString = newSymbols.join('#');
 
       wsProvider.connectTouchLine(
-        task: "d",
+        task: "t",
         input: symbolString,
         context: context,
       );
@@ -569,9 +579,9 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         final batchNum = (i ~/ batchSize) + 1;
 
 
-        // Send directly via websocket - using depth subscription for web
+        // Send directly via websocket - touchline for web (depth panel keeps its own "d")
         wsProvider.connectTouchLine(
-          task: "d",
+          task: "t",
           input: batchString,
           context: context,
         );
@@ -585,7 +595,35 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       log('WebSubscriptionManager: Error sending subscriptions from master list: $e');
     }
   }
-  
+
+  /// Re-send the depth ("d") subscription for the currently-active Overview
+  /// scrip after a reconnect. Depth bypasses the master list (it is owned by
+  /// MarketWatchProvider via subscribeToDepthData), so the touchline resend in
+  /// [_sendAllSubscriptionsFromMasterList] does not cover it. Driven by
+  /// currentDepthSymbol, which is null when no depth panel is open, so a closed
+  /// depth panel is never wrongly re-subscribed.
+  void _restoreDepthSubscription() {
+    try {
+      final depthSymbol = ref.read(marketWatchProvider).currentDepthSymbol;
+      if (depthSymbol == null || depthSymbol.isEmpty) return;
+
+      final context = _getValidContext();
+      if (context == null) {
+        log('WebSubscriptionManager: No valid context to restore depth subscription');
+        return;
+      }
+
+      ref.read(websocketProvider).connectTouchLine(
+            task: "d",
+            input: depthSymbol,
+            context: context,
+          );
+      log('WebSubscriptionManager: Restored depth subscription for $depthSymbol');
+    } catch (e) {
+      log('WebSubscriptionManager: Error restoring depth subscription: $e');
+    }
+  }
+
   /// Initialize which subscription type each screen needs
   void _initializeSubscriptionTypes() {
     _screenSubscriptionTypes = {
@@ -800,9 +838,9 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final wsProvider = ref.read(websocketProvider);
       final symbolString = newSymbols.join('#');
 
-      // Use connectTouchLine which properly tracks subscriptions - using depth for web
+      // Use connectTouchLine which properly tracks subscriptions - touchline for web
       wsProvider.connectTouchLine(
-        task: "d",
+        task: "t",
         input: symbolString,
         context: context,
       );
@@ -1088,7 +1126,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final symbolString = symbolsToSubscribe.join('#');
 
       wsProvider.connectTouchLine(
-        task: "d",
+        task: "t",
         input: symbolString,
         context: context,
       );
@@ -1234,9 +1272,9 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final wsProvider = ref.read(websocketProvider);
       final symbolString = symbolsToUnsubscribe.join('#');
 
-      // Use connectTouchLine with unsubscribe depth task for web
+      // Screens subscribe via touchline ("t"), so tear down with "u"
       wsProvider.connectTouchLine(
-        task: "ud", // Unsubscribe depth task
+        task: "u", // Unsubscribe touchline task
         input: symbolString,
         context: context,
       );
@@ -1338,7 +1376,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       try {
         final symbolString = symbolsToUnsubscribe.join('#');
         wsProvider.connectTouchLine(
-          task: "ud",
+          task: "u",
           input: symbolString,
           context: context,
         );
@@ -1358,7 +1396,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       try {
         final symbolString = symbolsToSubscribe.join('#');
         wsProvider.connectTouchLine(
-          task: "d",
+          task: "t",
           input: symbolString,
           context: context,
         );
@@ -1383,10 +1421,16 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
   /// Unsubscribe specific tokens (for option chain, futures symbol changes)
   /// This method checks for protected symbols before unsubscribing
   /// Protected symbols: watchlist, depth, holdings, positions, indices, other active screens
+  ///
+  /// [bypassProtection] skips the protected-symbol filter entirely. Used only by
+  /// the depth teardown when the whole single-stock page is disposed: the depth
+  /// ("d") feed is genuinely no longer displayed anywhere, and a depth "ud"
+  /// does NOT affect the touchline ("t") feed the watchlist/holdings still use.
   Future<void> unsubscribeTokens({
     required Set<String> tokensToCheck,
     required BuildContext context,
     String source = 'unknown',
+    bool bypassProtection = false,
   }) async {
     if (tokensToCheck.isEmpty) {
       return;
@@ -1471,10 +1515,14 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     } catch (e) {
     }
 
-    // Find tokens that can be unsubscribed (not protected)
-    final tokensToUnsubscribe = tokensToCheck.where((token) =>
-      !protectedSymbols.contains(token)
-    ).toSet();
+    // Find tokens that can be unsubscribed (not protected). When the page is
+    // being torn down, bypassProtection releases the depth feed unconditionally
+    // (touchline protections don't apply to a depth "ud").
+    final tokensToUnsubscribe = bypassProtection
+        ? tokensToCheck.toSet()
+        : tokensToCheck.where((token) =>
+            !protectedSymbols.contains(token)
+          ).toSet();
 
     if (tokensToUnsubscribe.isEmpty) {
       return;
@@ -1488,9 +1536,11 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final wsProvider = ref.read(websocketProvider);
       final symbolString = tokensToUnsubscribe.join('#');
 
-      // Use unsubscribe depth task for web
+      // Only the depth panel (source 'depth') subscribes via the depth feed
+      // ("d") and must be torn down with "ud". Every other web source now
+      // subscribes via touchline ("t"), so it unsubscribes with "u".
       wsProvider.connectTouchLine(
-        task: "ud",
+        task: source == 'depth' ? "ud" : "u",
         input: symbolString,
         context: context,
       );
@@ -1705,7 +1755,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
           log('WebSubscriptionManager: Unsubscribing from ${_currentWebSocketSubscriptions.length} symbols');
 
           wsProvider.connectTouchLine(
-            task: "ud", // Unsubscribe depth for web
+            task: "u", // Unsubscribe touchline for web
             input: symbolString,
             context: context,
           );

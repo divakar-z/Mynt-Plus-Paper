@@ -585,8 +585,10 @@ class WebSocketProvider extends ChangeNotifier {
 
     // Cancel subscription timers (state machine handles probe / backoff /
     // channel teardown via the disconnected entry handler).
-    _subscriptionDebounce?.cancel();
-    _subscriptionDebounce = null;
+    for (var timer in _subscriptionDebounces.values) {
+      timer?.cancel();
+    }
+    _subscriptionDebounces.clear();
     for (var timer in _subscriptionTimers.values) {
       timer.cancel();
     }
@@ -656,8 +658,10 @@ class WebSocketProvider extends ChangeNotifier {
       timer.cancel();
     }
     _subscriptionTimers.clear();
-    _subscriptionDebounce?.cancel();
-    _subscriptionDebounce = null;
+    for (var timer in _subscriptionDebounces.values) {
+      timer?.cancel();
+    }
+    _subscriptionDebounces.clear();
 
     // Clear subscription tracking so the next connect re-sends everything.
     _sentSubscriptions.clear();
@@ -1469,7 +1473,20 @@ class WebSocketProvider extends ChangeNotifier {
   // This allows the same symbol to have both touchline and depth subscriptions
   final Set<String> _sentSubscriptions = {};
   Set<String> get sentSubscriptions => Set.from(_sentSubscriptions);
-  Timer? _subscriptionDebounce;
+
+  /// Authoritative check of whether a depth ("d") subscription is actually live
+  /// on the socket for [depthSymbol] (format "EXCH|TOKEN"). This is the truth
+  /// the provider's _depthDataLoaded flag can drift from: a preserveData
+  /// reconnect (tab/panel switch) clears _sentSubscriptions while the provider
+  /// flags stay set, so callers must gate depth re-subscription on this, not on
+  /// their own cached flag.
+  bool hasDepthSubscription(String depthSymbol) =>
+      _sentSubscriptions.contains("d:$depthSymbol");
+  // Per-task debounce timers. Keyed by task ("t" / "d") so a depth ("d")
+  // subscribe queued right after a touchline ("t") batch cannot cancel the
+  // touchline flush — a single shared timer would only ever fire the last
+  // task's batch and silently strand the other task's pending list.
+  final Map<String, Timer?> _subscriptionDebounces = {};
   final Map<String, List<String>> _pendingSubscriptions = {
     't': [],
     'd': [],
@@ -1517,18 +1534,28 @@ class WebSocketProvider extends ChangeNotifier {
           // Not in sent subscriptions - definitely needs subscription
           newSymbols.add(symbol);
         } else {
-          // Already in sent subscriptions - check if socket data exists
+          // Already in sent subscriptions - check if the RELEVANT data exists.
           // Extract token from symbol (format: EXCH|TOKEN)
           final token = symbol.contains('|') ? symbol.split('|')[1] : symbol;
-          final hasSocketData = _socketDatas.containsKey(token) || _socketDatas.containsKey(symbol);
+          final socket = _socketDatas[token] ?? _socketDatas[symbol];
+
+          // For depth ("d") the presence of touchline data is NOT enough — the
+          // touchline feed already carries best bid/ask (bp1/sp1), so checking
+          // bp1 would wrongly conclude "depth present" for a symbol that only
+          // has a touchline subscription (watchlist/holdings/ticker). Check a
+          // level-2 field (bp2) instead: only the depth feed sends bp2..bp5, so
+          // a symbol carrying just touchline must still (re)subscribe for depth,
+          // otherwise the market-depth panel never gets rows 2-5 of the ladder.
+          final hasSocketData = taskKey == "d"
+              ? (socket != null && socket.containsKey('bp2'))
+              : (socket != null);
 
           if (!hasSocketData) {
-            // Socket data was cleared but subscription tracking wasn't updated
-            // Need to resubscribe to get fresh data
+            // Data for THIS task type is missing - resubscribe to get it
             newSymbols.add(symbol);
             resubscribedSymbols.add(symbol);
           } else {
-            // Has both subscription tracking and socket data - skip
+            // Has both subscription tracking and the right socket data - skip
             skippedSymbols.add(symbol);
           }
         }
@@ -1560,8 +1587,9 @@ class WebSocketProvider extends ChangeNotifier {
       _context = context;
 
       // Debounce the subscription to batch multiple rapid calls
-      _subscriptionDebounce?.cancel();
-      _subscriptionDebounce = Timer(const Duration(milliseconds: 200), () {
+      _subscriptionDebounces[taskKey]?.cancel();
+      _subscriptionDebounces[taskKey] =
+          Timer(const Duration(milliseconds: 200), () {
         _sendBatchedSubscriptions(taskKey, context);
       });
 
@@ -1804,7 +1832,9 @@ class WebSocketProvider extends ChangeNotifier {
     _holdStartTime?.cancel();
     _reconnectBackoff?.cancel();
     _debounceTimer?.cancel(); // Cancel debounce timer
-    _subscriptionDebounce?.cancel(); // Cancel subscription debounce timer
+    for (var timer in _subscriptionDebounces.values) {
+      timer?.cancel(); // Cancel per-task subscription debounce timers
+    }
     _throttleTimer?.cancel(); // Cancel throttle timer (330ms)
 
     // Cancel all subscription timers
