@@ -58,6 +58,7 @@ import '../../../provider/stocks_provider.dart';
 import '../../../provider/mf_provider.dart';
 import '../../../provider/web_subscription_manager.dart';
 import '../../../provider/dashboard_provider.dart';
+import 'sharedWidget/build_update_banner.dart';
 import 'profile/Reports/ca_events_screen_web.dart';
 import 'profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
 import 'profile/Reports/client_master_screen_web.dart';
@@ -1212,6 +1213,7 @@ class _CustomizableSplitHomeScreenState
           ),
           body: Column(
             children: [
+              const BuildUpdateBanner(),
               // _buildOldVersionBanner(),
               Expanded(child: _buildNewLayout(theme)),
             ],
