@@ -8,6 +8,7 @@ import '../../../../models/marketwatch_model/get_quotes.dart';
 import '../../../../models/order_book_model/order_book_model.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../provider/thems.dart';
+import '../../../../provider/websocket_provider.dart';
 
 /// ChartScreenWebViews - Renders the shared TradingView iframe.
 ///
@@ -32,6 +33,9 @@ class _ChartScreenWebViewsState extends ConsumerState<ChartScreenWebViews> {
     super.initState();
     // Initialize the shared chart manager (registers iframe if not already)
     webChartManager.initialize();
+    // Bind the shared socket stream so ticks for the charted scrip flow
+    // into the iframe via postMessage (replaces the chart's own WS).
+    webChartManager.bindWebSocket(ref.read(websocketProvider));
   }
 
   @override
