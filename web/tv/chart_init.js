@@ -629,46 +629,32 @@
           symbolName: symbolInfo.name
         };
 
-        // Slot main vs study by matching the sub's resolution to the
-        // chart's currently displayed resolution. Ordering alone is
-        // unreliable: when the user switches interval (e.g. 5m → D), TV
-        // re-subscribes the OLD resolution first (a background series it
-        // still wants to keep warm) and the NEW visible resolution
-        // second. With the prior first-becomes-main heuristic, the
-        // background 1-min sub got slotted as main and the visible 1D
-        // sub fell into studies — pushTick then fed live ticks to an
-        // invisible series and the daily candle stayed frozen on its
-        // open price until the next chart restart.
-        var chartResolution = null;
-        try {
-          var widgetForRes = charts[containerId];
-          if (widgetForRes && widgetForRes.activeChart) {
-            chartResolution = widgetForRes.activeChart().resolution();
-          }
-        } catch (e) { /* widget mid-init */ }
-        var isMain = !chartResolution || resolution === chartResolution;
-
+        // Slotting is bookkeeping for unsubscribeBars (find sub by UID) and a
+        // fallback hint for pushTick — it is NOT the live-tick routing
+        // decision. Do not reintroduce a `resolution === activeChart()
+        // .resolution()` test here: those two values are different things.
+        // resolveSymbol declares intraday_multipliers:["1"], so TradingView
+        // asks this datafeed for the BASE resolution it builds the view from
+        // ("1" for every intraday interval — Interval.letter() is "" for
+        // minutes), while activeChart().resolution() returns the DISPLAYED
+        // interval ("5"). On any intraday chart they never match, the main
+        // series was filed as a study, entry.main stayed null and pushTick
+        // dropped every tick — socket data flowing, chart frozen.
+        //
+        // The first sub bound on an empty entry is the visible series
+        // (subscribeBars' natural call order, and createChart / changeSymbol
+        // both clear `subscriptions` first). Later subs are indicator studies
+        // on other resolutions. pushTick resolves the real target by matching
+        // sub.resolution to the chart's DATAFEED resolution — see there.
         if (!entry) {
-          if (isMain) {
-            subscriptions[containerId] = { main: sub, studies: {} };
-          } else {
-            var initStudies = {};
-            initStudies[subscriberUID] = sub;
-            subscriptions[containerId] = { main: null, studies: initStudies };
-          }
-        } else if (isMain) {
-          // Displaced main (different uid) becomes a study so its eventual
-          // unsubscribeBars still finds and removes it cleanly.
-          if (entry.main && entry.main.subscriberUID !== subscriberUID) {
-            entry.studies = entry.studies || {};
-            entry.studies[entry.main.subscriberUID] = entry.main;
-          }
+          subscriptions[containerId] = { main: sub, studies: {} };
+        } else if (!entry.main) {
           entry.main = sub;
         } else {
           entry.studies = entry.studies || {};
           entry.studies[subscriberUID] = sub;
         }
-        console.log('ScalperCharts: subscribeBars -', containerId, 'res:', resolution, 'uid:', subscriberUID, 'as', isMain ? 'main' : 'study', '(chart res:', chartResolution + ')');
+        console.log('ScalperCharts: subscribeBars -', containerId, 'res:', resolution, 'uid:', subscriberUID);
       },
 
       unsubscribeBars: function (subscriberUID) {
@@ -1098,8 +1084,58 @@
      */
     pushTick: function (containerId, tickData) {
       var entry = subscriptions[containerId];
-      if (!entry || !entry.main || !entry.main.callback) return;
-      var sub = entry.main;
+      if (!entry) return;
+
+      // Pick the sub that matches the chart's underlying DATAFEED resolution.
+      // Pushing to every sub is not an option: feeding 1-minute-bucketed ticks
+      // into a study subscribed on another resolution (e.g. 52-week H/L on
+      // weekly while main is daily) corrupts TV's internal study state and the
+      // next render throws "Cannot read properties of null (reading '1')",
+      // after which the chart is stuck and the socket looks disconnected even
+      // though Dart is still pushing ticks.
+      //
+      // Datafeed resolution is DERIVED from the displayed one, because
+      // resolveSymbol declares intraday_multipliers:["1"] / daily_multipliers:
+      // ["1"]:
+      //   - any intraday view (1, 3, 5, 15, …) → datafeed res is always "1";
+      //     TV aggregates the view from 1-minute bars.
+      //   - 1D / 1W / 1M → TV passes the daily res through to subscribeBars.
+      var displayedRes = null;
+      try {
+        var w = charts[containerId];
+        if (w && w.activeChart) displayedRes = w.activeChart().resolution();
+      } catch (e) { /* widget mid-init */ }
+
+      var targetRes;
+      if (!displayedRes) {
+        targetRes = null; // unknown → fall back to entry.main below
+      } else if (displayedRes === '1D' || displayedRes === 'D'
+              || displayedRes === '1W' || displayedRes === 'W'
+              || displayedRes === '1M' || displayedRes === 'M') {
+        targetRes = (displayedRes.length === 1) ? '1' + displayedRes : displayedRes;
+      } else {
+        targetRes = '1';
+      }
+
+      var sub = null;
+      if (targetRes) {
+        if (entry.main && entry.main.resolution === targetRes && entry.main.callback) {
+          sub = entry.main;
+        } else if (entry.studies) {
+          for (var uid in entry.studies) {
+            var s = entry.studies[uid];
+            if (s && s.resolution === targetRes && s.callback) {
+              sub = s;
+              break;
+            }
+          }
+        }
+      }
+      // Fallback: no resolution-matched sub (custom_resolutions input, or
+      // displayedRes unreadable mid-init) — push to main so the chart still
+      // gets ticks under unusual conditions rather than freezing.
+      if (!sub && entry.main && entry.main.callback) sub = entry.main;
+      if (!sub) return;
 
       var lp = parseFloat(tickData.lp);
       if (isNaN(lp) || lp === 0) return;
@@ -1122,19 +1158,20 @@
       // Parse trade time
       var time = parseLTT(tickData.ltt);
 
-      // Bucket to candle boundary. Daily is special-cased: bucketTime
-      // would return wall-clock + 5.5h, which isn't a day boundary —
-      // TV either drops the bar or paints it at the wrong x-position
-      // (no visible candle for "today" even when the legend tracks
-      // live LP). Snap to today's IST-midnight anchor, or reuse the
-      // lastBar.time when it's already today's running bar.
+      // Bucket to candle boundary. Daily must land on the EOD grid: bars from
+      // EODChartData are stamped at the session time-of-day (09:15 IST /
+      // 03:45Z), NOT midnight, and TV spaces daily bars ~24h apart. An
+      // IST-midnight anchor is only ~14h45m after the last EOD bar (< 24h),
+      // so TV merged today's tick into YESTERDAY's candle. Keep the last
+      // bar's time-of-day and move it onto today's UTC date so it forms a
+      // proper next-day bucket.
       var isDaily = (sub.resolution === '1D' || sub.resolution === 'D');
       if (isDaily) {
-        var istNowMs = Date.now() + 330 * 60000;
-        var todayAnchor = Math.floor(istNowMs / 86400000) * 86400000 - 330 * 60000;
-        time = (sub.lastBar && sub.lastBar.time >= todayAnchor)
-          ? sub.lastBar.time
-          : todayAnchor;
+        var lastT = sub.lastBar ? sub.lastBar.time : null;
+        var eodOffset = (lastT != null)
+          ? (((lastT % 86400000) + 86400000) % 86400000)
+          : 13500000; // 09:15 IST (03:45Z) fallback
+        time = Math.floor(Date.now() / 86400000) * 86400000 + eodOffset;
       } else {
         time = bucketTime(time, sub.resolution, exchange);
       }
@@ -1200,8 +1237,18 @@
       var widget = charts[containerId];
       if (widget) {
         try {
+          // resetData() alone re-requests bars but does NOT invalidate the
+          // datafeed's bar cache, so TV repaints from its stale cache and the
+          // candles that formed while the tab was backgrounded never load
+          // (getBars is never re-hit with to=now). resetCache() must precede
+          // it — it discards cached bars, forcing resetData() to issue a fresh
+          // firstDataRequest getBars that re-pulls TPSeries for the full
+          // session and fills the gap. This is the documented contract:
+          // "Before calling [resetData] the resetCache method should be
+          // called." (IChartWidgetApi.resetData).
+          widget.resetCache();
           widget.activeChart().resetData();
-          console.log('ScalperCharts: resetData -', containerId);
+          console.log('ScalperCharts: resetData (cache+data) -', containerId);
         } catch (e) {
           console.error('ScalperCharts: resetData error -', containerId, e);
         }
