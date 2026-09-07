@@ -13,6 +13,7 @@ import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../sharedWidget/hover_actions_web.dart';
 import '../../../utils/responsive_navigation.dart';
+import '../../../utils/responsive_snackbar.dart';
 import 'options/option_chain_row_web.dart' show StrikeRowData;
 
 /// Option chain row for the watchlist sidebar panel.
@@ -97,6 +98,12 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
 
     final changeColor = _getChangeColor(context, perChange);
 
+    // Watch (not read) so the bookmark icon updates the moment this option is
+    // added to / removed from the current watchlist.
+    final isInWatchlist = ref.watch(marketWatchProvider.select((p) => p.scrips
+        .any((s) =>
+            "${s['exch']}|${s['token']}" == "${option.exch}|${option.token}")));
+
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => _isCallHovered.value = true,
@@ -128,7 +135,10 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
                       ),
                     ],
                   ),
-                  HoverActionsContainer(
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: HoverActionsContainer(
                     isVisible: isHovered,
                     actions: [
                       HoverActionButton.buy(
@@ -139,16 +149,34 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
                         context: context,
                         onPressed: () => _placeOrder(option, false),
                       ),
-                      HoverActionButton(
-                        iconAsset: assets.depthIcon,
-                        color: resolveThemeColor(context,
-                            dark: MyntColors.textPrimary,
-                            light: Colors.black),
-                        backgroundColor: Colors.transparent,
-                        onPressed: () => _openDepth(option),
+                      // Depth button hidden — Chart covers the chart view
+                      // HoverActionButton(
+                      //   iconAsset: assets.depthIcon,
+                      //   color: resolveThemeColor(context,
+                      //       dark: MyntColors.textPrimary,
+                      //       light: Colors.black),
+                      //   backgroundColor: Colors.transparent,
+                      //   onPressed: () => _openDepth(option),
+                      // ),
+                      HoverActionButton.icon(
+                        context: context,
+                        iconAsset: assets.chartnew,
+                        onPressed: () => _handleChartTap(option),
+                      ),
+                      HoverActionButton.icon(
+                        context: context,
+                        iconAsset: isInWatchlist
+                            ? assets.bookmarkIcon
+                            : assets.bookmarkLineIcon,
+                        iconColor: isInWatchlist
+                            ? resolveThemeColor(context,
+                                dark: MyntColors.primaryDark,
+                                light: MyntColors.primary)
+                            : null,
+                        onPressed: () => _handleSaveToWatchlist(option),
                       ),
                     ],
-                  ),
+                  )),
                 ],
               ),
             );
@@ -213,6 +241,12 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
 
     final changeColor = _getChangeColor(context, perChange);
 
+    // Watch (not read) so the bookmark icon updates the moment this option is
+    // added to / removed from the current watchlist.
+    final isInWatchlist = ref.watch(marketWatchProvider.select((p) => p.scrips
+        .any((s) =>
+            "${s['exch']}|${s['token']}" == "${option.exch}|${option.token}")));
+
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => _isPutHovered.value = true,
@@ -244,7 +278,10 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
                       ),
                     ],
                   ),
-                  HoverActionsContainer(
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: HoverActionsContainer(
                     isVisible: isHovered,
                     actions: [
                       HoverActionButton.buy(
@@ -255,16 +292,34 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
                         context: context,
                         onPressed: () => _placeOrder(option, false),
                       ),
-                      HoverActionButton(
-                        iconAsset: assets.depthIcon,
-                        color: resolveThemeColor(context,
-                            dark: MyntColors.textPrimary,
-                            light: Colors.black),
-                        backgroundColor: Colors.transparent,
-                        onPressed: () => _openDepth(option),
+                      // Depth button hidden — Chart covers the chart view
+                      // HoverActionButton(
+                      //   iconAsset: assets.depthIcon,
+                      //   color: resolveThemeColor(context,
+                      //       dark: MyntColors.textPrimary,
+                      //       light: Colors.black),
+                      //   backgroundColor: Colors.transparent,
+                      //   onPressed: () => _openDepth(option),
+                      // ),
+                      HoverActionButton.icon(
+                        context: context,
+                        iconAsset: assets.chartnew,
+                        onPressed: () => _handleChartTap(option),
+                      ),
+                      HoverActionButton.icon(
+                        context: context,
+                        iconAsset: isInWatchlist
+                            ? assets.bookmarkIcon
+                            : assets.bookmarkLineIcon,
+                        iconColor: isInWatchlist
+                            ? resolveThemeColor(context,
+                                dark: MyntColors.primaryDark,
+                                light: MyntColors.primary)
+                            : null,
+                        onPressed: () => _handleSaveToWatchlist(option),
                       ),
                     ],
-                  ),
+                  )),
                 ],
               ),
             );
@@ -419,5 +474,59 @@ class _OCPanelRowState extends ConsumerState<OCPanelRow> {
           token: depthArgs.token,
           tsym: depthArgs.tsym,
         );
+  }
+
+  /// Open this option's chart — reuses the web panel/chart mechanism the
+  /// Depth action uses, but without forcing the depth view.
+  Future<void> _handleChartTap(OptionValues option) async {
+    final marketWatch = ref.read(marketWatchProvider);
+
+    final depthArgs = DepthInputArgs(
+      exch: option.exch.toString(),
+      token: option.token.toString(),
+      tsym: option.tsym.toString(),
+      instname: option.symbol ?? option.tsym.toString(),
+      symbol: option.symbol ?? '',
+      expDate: option.expDate ?? '',
+      option: option.optt ?? '',
+    );
+
+    marketWatch.scripdepthsize(false);
+    marketWatch.openOnChartTab = true;
+    await marketWatch.calldepthApis(context, depthArgs, "");
+  }
+
+  /// Add / remove this option to the currently-selected watchlist.
+  Future<void> _handleSaveToWatchlist(OptionValues option) async {
+    final scripData = ref.read(marketWatchProvider);
+
+    if (scripData.isPreDefWLs == "Yes") {
+      ResponsiveSnackBar.showWarning(
+          context, "This is a pre-defined watchlist that cannot be edited!");
+      return;
+    }
+
+    final scripToken = "${option.exch}|${option.token}";
+    final isCurrentlyInWatchlist = scripData.scrips
+        .any((scrip) => "${scrip['exch']}|${scrip['token']}" == scripToken);
+
+    if (isCurrentlyInWatchlist) {
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, false, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Removed from your watchlist "${scripData.wlName}"');
+      }
+    } else {
+      ref.read(websocketProvider).establishConnection(
+            channelInput: scripToken,
+            task: "d",
+            context: context,
+          );
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, true, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
+      }
+    }
   }
 }

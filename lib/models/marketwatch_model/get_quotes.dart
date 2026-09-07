@@ -1,4 +1,14 @@
+import 'package:mynt_plus/sharedWidget/functions.dart';
+
 class GetQuotes {
+  /// Backend display name from the DerivativeMaster (keyed by exch:token), or
+  /// null when the contract isn't in the master (indices / equities).
+  String? get masterName => DerivativeMaster.nameFor(exch, token);
+
+  /// Backend display name from the DerivativeMaster (keyed by exch:token);
+  /// falls back to the tsym (minus "-EQ") when the contract isn't in the master.
+  String get displayName => masterName ?? (tsym ?? '').replaceAll('-EQ', '');
+
   String? requestTime;
   String? stat;
   String? exch;

@@ -10,10 +10,12 @@ import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/notification_provider.dart';
+import 'package:mynt_plus/provider/privacy_provider.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
+import 'package:mynt_plus/screens/web/profile/help_support/raise_ticket_dialog.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/res/web_colors.dart' as web_colors;
 import 'package:mynt_plus/res/global_font_web.dart';
@@ -22,6 +24,7 @@ import 'package:mynt_plus/routes/web_router.dart';
 import 'package:mynt_plus/screens/web/profile/logged_user_list_web.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' hide Colors;
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn show Theme;
 import 'package:share_plus/share_plus.dart';
 import '../../../customizable_split_home_screen.dart' show ScreenType, tickerVisibilityNotifier, toggleTickerVisibility;
 import '../../../market_watch/tv_chart/chart_iframe_guard.dart';
@@ -198,6 +201,10 @@ class ProfileDropdownMenu extends ConsumerStatefulWidget {
 }
 
 class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
+  // The menu is taller than most screens; it is capped in height and scrolled
+  // with an always-visible scrollbar (same style as the scanner screen).
+  final ScrollController _menuScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -237,6 +244,7 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
 
   @override
   void dispose() {
+    _menuScrollController.dispose();
     // Release chart iframe guard and re-enable iframes
     ChartIframeGuard.release();
     _enableAllChartIframes();
@@ -277,9 +285,68 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
           },
           child: SizedBox(
             width: 300,
-            child: DropdownMenu(
+            child: ConstrainedBox(
+              // Cap the menu height so Logout is always reachable.
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.7,
+              ),
+              child: MenuGroup(
+                regionGroupId: Data.maybeOf<DropdownMenuData>(context)?.key,
+                direction: Axis.vertical,
+                itemPadding: EdgeInsets.zero,
+                onDismissed: () {
+                  closeOverlay(context);
+                },
+                builder: (context, children) {
+                  // One popover card (same ModalContainer surface the stock
+                  // DropdownMenu paints). The first two built items — the
+                  // user header and its divider — stay pinned; everything
+                  // after them scrolls inside the card behind an
+                  // always-visible scrollbar (scanner style).
+                  final shadTheme = shadcn.Theme.of(context);
+                  return ModalContainer(
+                    borderRadius: shadTheme.borderRadiusMd,
+                    filled: true,
+                    fillColor: shadTheme.colorScheme.popover,
+                    borderColor: shadTheme.colorScheme.border,
+                    surfaceBlur: shadTheme.surfaceBlur,
+                    surfaceOpacity: shadTheme.surfaceOpacity,
+                    padding: const EdgeInsets.all(4) * shadTheme.scaling,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        children[0],
+                        children[1],
+                        Flexible(
+                          child: RawScrollbar(
+                            controller: _menuScrollController,
+                            thumbVisibility: true,
+                            thickness: 6,
+                            radius: const Radius.circular(8),
+                            thumbColor: resolveThemeColor(context,
+                                    dark: MyntColors.textSecondaryDark,
+                                    light: MyntColors.textSecondary)
+                                .withValues(alpha: 0.5),
+                            child: SingleChildScrollView(
+                              controller: _menuScrollController,
+                              // Right gutter so content never sits under the
+                              // always-visible scrollbar (same as scanner).
+                              padding: const EdgeInsets.only(right: 10),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: children.sublist(2),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ).normal();
+                },
         children: [
-          // User Profile Header
+          // User Profile Header (pinned above the scrolling items)
           MenuButton(
             // onPressed: (ctx) {
             //   Navigator.pushNamed(widget.parentContext, Routes.myAcc);
@@ -335,6 +402,12 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
                       ],
                     ),
                   ),
+                  // Raise a ticket from anywhere in the app, without first
+                  // finding Help and Support. Sits opposite the name because
+                  // this row is the only part of the menu that is not a
+                  // MenuButton — putting it in the list below would make it
+                  // read as another destination rather than an action.
+                  _raiseTicketAction(context, iconColor, subtitleColor),
                 ],
               ),
             ),
@@ -524,6 +597,13 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
             pref: pref,
           ),
 
+          // Privacy Mode Toggle — masks P&L/holdings/fund values app-wide
+          _buildPrivacyToggleMenuItem(
+            context,
+            iconColor: iconColor,
+            textColor: textColor,
+          ),
+
           // Position PiP Toggle
           if (PipService.isSupported)
             _buildPipToggleMenuItem(
@@ -590,7 +670,68 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
             ),
           ),
         ],
+              ),
+            ),
+          ),
+        ),
       ),
+    );
+  }
+
+  /// The raise-a-ticket button in the menu header.
+  ///
+  /// The dropdown is closed *before* the dialog opens, and the dialog is shown
+  /// on [ProfileDropdownMenu.parentContext] rather than this one: this context
+  /// belongs to the overlay that is being dismissed, so a dialog rooted here
+  /// would be torn down with it.
+  Widget _raiseTicketAction(
+      BuildContext context, Color iconColor, Color subtitleColor) {
+    // `material.` prefixed: both Flutter and shadcn export a Tooltip, and this
+    // file imports each of them.
+    return material.Tooltip(
+      message: 'Report an issue',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () {
+            final parent = widget.parentContext;
+            // Deliberately not awaited. `closeOverlay` resolves only once the
+            // overlay finishes closing, and the state that would complete it
+            // is disposed on the way out — so awaiting it hangs and the dialog
+            // never opens. The rest of this file fires it the same way.
+            closeOverlay(context);
+            // Next frame, so the dialog is not inserted while the overlay it
+            // was launched from is still being torn down.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!parent.mounted) return;
+              showRaiseTicketDialog(
+                parent,
+                ref: ref,
+                screen: 'Profile menu',
+                // Raised from the menu, so the client could be on any screen —
+                // offer the trip to the list rather than a bare Done.
+                onViewTickets: () {
+                  widget.onNavigateToScreen?.call(ScreenType.helpSupport);
+                },
+              );
+            });
+          },
+          child: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: resolveThemeColor(
+                context,
+                dark: MyntColors.primaryDark.withValues(alpha: 0.08),
+                light: MyntColors.primary.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Icon(
+              Icons.bug_report_outlined,
+              size: 20,
+              color: iconColor,
+            ),
           ),
         ),
       ),
@@ -733,6 +874,72 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
                   AnimatedPositioned(
                     duration: const Duration(milliseconds: 200),
                     left: isTickerVisible ? 18 : 2,
+                    top: 2,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  MenuButton _buildPrivacyToggleMenuItem(
+    BuildContext context, {
+    required Color iconColor,
+    required Color textColor,
+  }) {
+    final privacy = ref.watch(privacyProvider);
+    final isPrivate = privacy.isPrivate;
+    return MenuButton(
+      onPressed: (ctx) async {
+        await privacy.toggle();
+        setState(() {}); // Refresh the menu to show updated state
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              isPrivate ? Icons.shield : Icons.shield_outlined,
+              size: 22,
+              color: iconColor,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                'Privacy Mode',
+                style: MyntWebTextStyles.body(
+                  context,
+                  fontWeight: MyntFonts.medium,
+                  color: textColor,
+                ),
+              ),
+            ),
+            Container(
+              width: 36,
+              height: 20,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: isPrivate
+                    ? resolveThemeColor(context,
+                        dark: MyntColors.secondary, light: MyntColors.primary)
+                    : Colors.grey.withValues(alpha: 0.3),
+              ),
+              child: Stack(
+                children: [
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 200),
+                    left: isPrivate ? 18 : 2,
                     top: 2,
                     child: Container(
                       width: 16,

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:flutter/material.dart'
     show
         RefreshIndicator,
@@ -434,11 +436,19 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
           Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
           
           String aInstrument = a is BrokerMessage
-              ? (aParsed?['instrument'] ?? 'N/A')
-              : (a.tsym?.replaceAll("-EQ", "") ?? 'N/A');
+              ? (DerivativeMaster.nameFor(a.exch, a.token) ??
+                  aParsed?['instrument'] ??
+                  'N/A')
+              : (DerivativeMaster.nameFor(a.exch, a.token) ??
+                  a.tsym?.replaceAll("-EQ", "") ??
+                  'N/A');
           String bInstrument = b is BrokerMessage
-              ? (bParsed?['instrument'] ?? 'N/A')
-              : (b.tsym?.replaceAll("-EQ", "") ?? 'N/A');
+              ? (DerivativeMaster.nameFor(b.exch, b.token) ??
+                  bParsed?['instrument'] ??
+                  'N/A')
+              : (DerivativeMaster.nameFor(b.exch, b.token) ??
+                  b.tsym?.replaceAll("-EQ", "") ??
+                  'N/A');
           r = cmp<String>(aInstrument, bInstrument);
           break;
         case 1: // Exchange
@@ -452,8 +462,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
         case 2: // Alert Type
           String aType = '';
           String bType = '';
+          
           if (a is BrokerMessage) {
-            aType = 'TRIGGERED';
+            aType = _resolveTriggeredAlertLabel(a);
           } else {
             switch (a.aiT) {
               case 'LTP_A':
@@ -473,7 +484,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
             }
           }
           if (b is BrokerMessage) {
-            bType = 'TRIGGERED';
+            bType = _resolveTriggeredAlertLabel(b);
           } else {
             switch (b.aiT) {
               case 'LTP_A':
@@ -933,12 +944,12 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
 
     final headerStyle = TextStyle(
       fontSize: fontSize,
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       fontWeight: MyntFonts.semiBold, // w600 for headers
     );
     final cellStyle = TextStyle(
       fontSize: fontSize,
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       fontWeight: MyntFonts.medium, // w500 for data cells
     );
 
@@ -967,11 +978,13 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
         switch (col) {
           case 0: // Instrument
             if (alert is BrokerMessage) {
-              cellText = parsed?['instrument'] ?? 'N/A';
+              cellText = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+                  (parsed?['instrument'] ?? 'N/A');
               final exchange = parsed?['exchange'] ?? '';
               if (exchange.isNotEmpty) cellText += ' $exchange';
             } else {
-              final symbol = (alert.tsym ?? '').replaceAll("-EQ", "").trim();
+              final symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+                  (alert.tsym ?? '').replaceAll("-EQ", "").trim();
               final exchange = alert.exch ?? '';
               cellText = exchange.isNotEmpty ? '$symbol $exchange' : symbol;
             }
@@ -981,7 +994,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
             break;
           case 2: // Alert Type
             if (alert is BrokerMessage) {
-              cellText = 'TRIGGERED';
+              // Use the resolved direction so search / CSV export keeps
+              // the same wording as the rendered cell.
+              cellText = _resolveTriggeredAlertLabel(alert);
             } else {
               switch (alert.aiT) {
                 case 'LTP_A':
@@ -1096,11 +1111,13 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     String symbol = '';
     String exchange = '';
     if (alert is BrokerMessage) {
-      // Use direct fields from API response
-      symbol = alert.tsym?.replaceAll("-EQ", "") ?? '';
+      // Use direct fields from API response; prefer the DerivativeMaster name.
+      symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+          (alert.tsym?.replaceAll("-EQ", "") ?? '');
       exchange = alert.exch ?? '';
     } else {
-      symbol = alert.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+      symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+          (alert.tsym?.replaceAll("-EQ", "") ?? 'N/A');
       exchange = alert.exch ?? '';
     }
 
@@ -1411,18 +1428,38 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     );
   }
 
+ 
+  String _resolveTriggeredAlertLabel(BrokerMessage alert) {
+    final dmsg = (alert.dmsg ?? '').toLowerCase();
+    if (dmsg.isEmpty) return 'TRIGGERED';
+
+    final isPercent = dmsg.contains('%') ||
+        dmsg.contains('percent') ||
+        dmsg.contains('perc') ||
+        dmsg.contains('ch_per');
+
+    final isAbove = RegExp(r'\babove\b').hasMatch(dmsg);
+    final isBelow = RegExp(r'\bbelow\b').hasMatch(dmsg);
+
+    if (isAbove) return isPercent ? 'Perc.Change Above' : 'LTP Above';
+    if (isBelow) return isPercent ? 'Perc.Change Below' : 'LTP Below';
+    return 'TRIGGERED';
+  }
+
   Widget _buildAlertTypeCell(dynamic alert, ThemesProvider theme) {
     String alertType = '';
     Color alertColor;
 
     if (alert is BrokerMessage) {
-      alertType = 'TRIGGERED';
-      // Use global MyntColors with resolveThemeColor for TRIGGERED
-      alertColor = resolveThemeColor(
-        context,
-        dark: MyntColors.profitDark,
-        light: MyntColors.profit,
-      );
+      // Keep the originally-configured direction on the Alert Type column
+      // (only Status flips to TRIGGERED — see _buildStatusCell).
+      alertType = _resolveTriggeredAlertLabel(alert);
+      final isBelowDirection = alertType.endsWith('Below');
+      alertColor = isBelowDirection
+          ? resolveThemeColor(context,
+              dark: MyntColors.lossDark, light: MyntColors.loss)
+          : resolveThemeColor(context,
+              dark: MyntColors.profitDark, light: MyntColors.profit);
     } else {
       switch (alert.aiT) {
         case 'LTP_A':
@@ -1681,7 +1718,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
   }
 
   Future<bool?> _showCancelAlertDialog(AlertPendingModel alert) async {
-    final symbol = alert.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+        (alert.tsym?.replaceAll("-EQ", "") ?? 'N/A');
 
     return showDialog<bool>(
       context: context,

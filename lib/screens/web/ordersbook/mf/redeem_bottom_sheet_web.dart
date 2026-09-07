@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../../provider/thems.dart';
@@ -7,6 +8,7 @@ import '../../../../../res/global_font_web.dart';
 import '../../../../../res/mynt_web_color_styles.dart';
 import '../../../../../sharedWidget/cust_text_formfield.dart';
 import '../../../../../sharedWidget/mynt_loader.dart';
+import '../../../../../sharedWidget/snack_bar.dart';
 
 class RedemptionBottomSheetWeb extends ConsumerStatefulWidget {
   const RedemptionBottomSheetWeb({super.key});
@@ -17,6 +19,10 @@ class RedemptionBottomSheetWeb extends ConsumerStatefulWidget {
 
 class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheetWeb> {
   final TextEditingController _redemptionQtyController = TextEditingController();
+
+  // Client-side validation message shown inline under the quantity field
+  // (team convention: inline for our own checks, toast for API responses).
+  String? _qtyError;
 
   @override
   void initState() {
@@ -184,13 +190,26 @@ class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheet
                 ? MyntColors.inputBgDark
                 : MyntColors.listItemBg,
             onChanged: (value) {
-              // Handle change if needed
+              // Clear the inline error once the user edits the value
+              if (_qtyError != null) {
+                setState(() => _qtyError = null);
+              }
             },
             hintText: 'Enter quantity to redeem',
             hintStyle: WebTextStyles.formInput(
               isDarkTheme: isDark,
             ),
             keyboardType: TextInputType.number,
+            // Digits with at most one decimal point. Rejecting keystroke
+            // style (keeps the previous valid value) — the anchored
+            // allow(RegExp) variant wipes the whole field on a bad key.
+            inputFormate: [
+              TextInputFormatter.withFunction((oldValue, newValue) =>
+                  (newValue.text.isEmpty ||
+                          RegExp(r'^\d*\.?\d*$').hasMatch(newValue.text))
+                      ? newValue
+                      : oldValue),
+            ],
             style: WebTextStyles.formInput(
               isDarkTheme: isDark,
             ),
@@ -199,6 +218,18 @@ class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheet
             autofocus: false,
           ),
         ),
+        // Inline client-side validation error (API errors go to toast)
+        if (_qtyError != null && _qtyError!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              _qtyError!,
+              style: WebTextStyles.sub(
+                isDarkTheme: isDark,
+                color: isDark ? MyntColors.lossDark : MyntColors.loss,
+              ),
+            ),
+          ),
 
         // Redeem Button
         const SizedBox(height: 16),
@@ -269,11 +300,14 @@ class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheet
     }
   }
 
-  void _handleRedemption(dynamic holding, MFProvider mfData) {
+  Future<void> _handleRedemption(dynamic holding, MFProvider mfData) async {
     final redemptionQty = _redemptionQtyController.text.trim();
 
+    // Client-side checks show INLINE under the field (team convention);
+    // only the API's own response is surfaced via toast further below.
     if (redemptionQty.isEmpty) {
-      _showErrorDialog('Please enter redemption quantity');
+      // _showErrorDialog('Please enter redemption quantity');
+      setState(() => _qtyError = 'Please enter redemption quantity');
       return;
     }
 
@@ -281,12 +315,15 @@ class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheet
     final availableQty = double.tryParse(holding.avgQty ?? '0') ?? 0;
 
     if (qty == null || qty <= 0) {
-      _showErrorDialog('Please enter a valid quantity');
+      // _showErrorDialog('Please enter a valid quantity');
+      setState(() => _qtyError = 'Please enter a valid quantity');
       return;
     }
 
     if (qty > availableQty) {
-      _showErrorDialog('Redemption quantity cannot exceed available units');
+      // _showErrorDialog('Redemption quantity cannot exceed available units');
+      setState(() =>
+          _qtyError = 'Redemption quantity cannot exceed available units');
       return;
     }
 
@@ -301,28 +338,61 @@ class _RedemptionBottomSheetWebState extends ConsumerState<RedemptionBottomSheet
 
       if (mfData.checkRedemption(redemptionQty, minRedemptionQty, netUnits, navStr)) {
         final schemeCode = holding.sCHEMECODE ?? 'DefaultScheme';
-        mfData.mfRedemption(context, schemeCode, redemptionQty);
+        await mfData.mfRedemption(context, schemeCode, redemptionQty);
+        // On success mfRedemption pops this sheet; on failure it stays open and
+        // leaves the backend error on redemptionData — surface it as a toast.
+        // NOTE: this API returns its rejection reason in `Remarks` (e.g.
+        // "FAILED: ORDER QTY IS LESS THAN MINIMUM SPECIFIED FOR SCHEME");
+        // `emsg` is not part of this response. Prefer Remarks, fall back to
+        // emsg, and only show the generic contact-support line when the
+        // response carries no reason at all.
+        if (!mounted) return;
+        final res = mfData.redemptionData;
+        if (res?.stat != 'Ok') {
+          final remarks = res?.remarks;
+          final err = res?.emsg;
+          if (remarks != null && remarks.isNotEmpty && remarks != 'null') {
+            warningMessage(context, remarks);
+          } else if (err != null && err.isNotEmpty && err != 'null') {
+            warningMessage(context, err);
+          } else {
+            warningMessage(context,
+                "Unable to process the redemption.\nPlease contact our support team.");
+          }
+        }
       } else {
-        _showErrorDialog('Please check the data you have provided');
+        // Show the provider's SPECIFIC validation message inline (e.g.
+        // "Redemption Qty should not be less than 0.001") instead of the
+        // old generic dialog.
+        // _showErrorDialog('Please check the data you have provided');
+        final providerMsg = mfData.redemptionError;
+        setState(() => _qtyError =
+            (providerMsg != null && providerMsg.isNotEmpty)
+                ? providerMsg
+                : 'Please check the data you have provided');
       }
     } catch (e) {
-      _showErrorDialog('Error processing redemption: ${e.toString()}');
+      // _showErrorDialog('Error processing redemption: ${e.toString()}');
+      setState(
+          () => _qtyError = 'Error processing redemption: ${e.toString()}');
     }
   }
 
-  void _showErrorDialog(String message) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Error'),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
+  // Retired: client-side validation now shows inline under the quantity
+  // field (team convention) instead of this popup dialog.
+  // void _showErrorDialog(String message) {
+  //   showDialog(
+  //     context: context,
+  //     builder: (context) => AlertDialog(
+  //       title: const Text('Error'),
+  //       content: Text(message),
+  //       actions: [
+  //         TextButton(
+  //           onPressed: () => Navigator.of(context).pop(),
+  //           child: const Text('OK'),
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  // }
 }

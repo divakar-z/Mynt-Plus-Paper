@@ -47,6 +47,27 @@ class Data {
   String? minRedemptionQty;
   String? sCHEMECODE;
   String? minimumPurchaseAmount;
+
+  /// Backend gates for the row actions, sent as "Y" / "N".
+  ///
+  /// Absent is treated as ALLOWED so the Add and Redeem actions keep working
+  /// on responses that predate these fields — only an explicit non-"Y" hides
+  /// an action. Flip [_flagAllows] to return false on null if the gate should
+  /// instead default to hidden.
+  String? purchaseAllowed;
+  String? redemptionAllowed;
+
+  bool get isPurchaseAllowed => _flagAllows(purchaseAllowed);
+  bool get isRedemptionAllowed => _flagAllows(redemptionAllowed);
+
+  static bool _flagAllows(String? value) {
+    if (value == null) return true;
+    final v = value.trim();
+    // Older parsers in this file use `.toString()` on a null JSON value, which
+    // yields the literal string "null" — treat that as absent too.
+    if (v.isEmpty || v.toLowerCase() == 'null') return true;
+    return v.toUpperCase() == 'Y';
+  }
   String? aUM;
   String? type;
   String? subType;
@@ -87,6 +108,8 @@ class Data {
 
     minRedemptionQty=json["Minimum_Redemption_Qty"].toString();
     minimumPurchaseAmount=json["Minimum_Purchase_Amount"].toString();
+    purchaseAllowed = json["Purchase_Allowed"]?.toString();
+    redemptionAllowed = json["Redemption_Allowed"]?.toString();
     aUM=json["AUM"].toString();
     type=json["Type"].toString();
     subType=json["SubType"].toString();
@@ -116,6 +139,8 @@ class Data {
     data['Minimum_Redemption_Qty'] = minRedemptionQty;
     data['Scheme_Code'] = sCHEMECODE;
     data['Minimum_Purchase_Amount'] = minimumPurchaseAmount;
+    data['Purchase_Allowed'] = purchaseAllowed;
+    data['Redemption_Allowed'] = redemptionAllowed;
     data['AUM'] = aUM;
     data['Type'] = type;
     data['SubType'] = subType;

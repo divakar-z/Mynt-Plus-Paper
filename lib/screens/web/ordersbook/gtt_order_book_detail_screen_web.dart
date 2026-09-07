@@ -298,7 +298,7 @@ class _GttOrderBookDetailScreenWebState
             children: [
               Flexible(
                 child: Text(
-                  "${_gttOrder.symbol?.replaceAll("-EQ", "").toUpperCase() ?? ''} ${_gttOrder.expDate ?? ''} ${_gttOrder.option ?? ''} ",
+                  "${_gttOrder.displayName} ",
                   style: MyntWebTextStyles.title(
                     context,
                     color: resolveThemeColor(context,
@@ -453,13 +453,18 @@ class _GttOrderBookDetailScreenWebState
               theme,
               _getGttStatusColor(theme),
             ),
-            // Older fields kept just in case but hidden if not needed per design
-            /*
+            // Product was hidden here while Leg 2 still showed it, so a single
+            // GTT never displayed a product at all and an OCO showed one only
+            // for its second leg. Restored to match Leg 2.
             _rowOfInfoData(
               "Product",
               _getProductName(_gttOrder.placeOrderParams?.prd),
               theme,
             ),
+            // Order Type and Price stay hidden per the original design - Leg 2
+            // does not show Order Type either, so surfacing it here would swap
+            // one asymmetry for another.
+            /*
             _rowOfInfoData(
               "Order Type",
               _gttOrder.placeOrderParams?.prctyp ?? '-',
@@ -771,7 +776,8 @@ class _GttOrderBookDetailScreenWebState
       }
 
       // Cancel the GTT order using saved provider reference
-      await orderProviderRef.cancelGttOrder(gttOrderId, targetContext);
+      await orderProviderRef.cancelGttOrder(gttOrderId, targetContext,
+          isOco: _gttOrder.placeOrderParamsLeg2 != null);
     } catch (e) {
       final rootCtx = getNavigatorContext();
       if (rootCtx != null && rootCtx.mounted) {
@@ -783,7 +789,7 @@ class _GttOrderBookDetailScreenWebState
 
   Future<bool?> _showCancelGttOrderDialog(
       ThemesProvider theme, BuildContext targetContext) async {
-    final symbol = _gttOrder.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = _gttOrder.displayName.trim();
 
     return showDialog<bool>(
       context: targetContext,
@@ -883,7 +889,7 @@ class _GttOrderBookDetailScreenWebState
                         child: TextButton(
                           onPressed: () => Navigator.of(dialogContext).pop(true),
                           style: TextButton.styleFrom(
-                            backgroundColor: resolveThemeColor(context,
+                            backgroundColor: resolveThemeColor(dialogContext,
                                 dark: MyntColors.errorDark,
                                 light: MyntColors.tertiary),
                             shape: RoundedRectangleBorder(

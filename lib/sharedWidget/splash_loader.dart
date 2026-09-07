@@ -27,6 +27,7 @@ class CircularLoaderImage extends StatelessWidget {
                 height: 90,
                 child: CircularProgressIndicator(
                   strokeWidth: 5,
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2196F3)),
                 ),
               ),
             ),

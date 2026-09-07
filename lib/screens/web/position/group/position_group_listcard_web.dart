@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 
@@ -26,6 +27,8 @@ class PositionListGrpCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final positions = ref.watch(portfolioProvider);
+    // Privacy Mode: qty, avg price and P&L are masked; LTP stays visible.
+    final privacy = ref.watch(privacyProvider);
 
     // Check both qty and netqty to determine if position is closed
     final rawQty = int.tryParse(groupData['qty']?.toString() ?? '0') ?? 0;
@@ -35,25 +38,28 @@ class PositionListGrpCard extends ConsumerWidget {
     // For MCX, divide qty by lotSize for display
     final exchange = groupData['exch']?.toString() ?? '';
     final lotSize = double.tryParse(groupData['ls']?.toString() ?? '1') ?? 1.0;
-    final qty = exchange == 'MCX' ? (rawQty / lotSize).toInt().toString() : rawQty.toString();
+    final qty = privacy.mask(
+        exchange == 'MCX' ? (rawQty / lotSize).toInt().toString() : rawQty.toString());
 
     // Get PNL and determine its color
-    final pnlValue = positions.isNetPnl
+    final pnlValue = privacy.mask(positions.isNetPnl
         ? "${groupData['profitNloss'] ?? groupData['rpnl']}"
-        : "${groupData['mTm']}";
+        : "${groupData['mTm']}");
 
-    final pnlColor = _getPnlColor(
-        positions.isNetPnl
-            ? (groupData['profitNloss'] ?? groupData['rpnl'])?.toString()
-            : groupData['mTm']?.toString(),
-        context);
+    final pnlColor = privacy.isPrivate
+        ? _getPnlColor("0.00", context)
+        : _getPnlColor(
+            positions.isNetPnl
+                ? (groupData['profitNloss'] ?? groupData['rpnl'])?.toString()
+                : groupData['mTm']?.toString(),
+            context);
 
     // Get average price display value
-    final avgPrice = positions.isDay
+    final avgPrice = privacy.mask(positions.isDay
         ? "${groupData['avgPrc']}"
         : positions.isNetPnl
             ? "${groupData['netupldprc'] ?? groupData['avgPrc']}"
-            : "${groupData['netavgprc'] ?? groupData['avgPrc']}";
+            : "${groupData['netavgprc'] ?? groupData['avgPrc']}");
 
     // Calculate background color for closed positions
     final backgroundColor = isClosedPosition

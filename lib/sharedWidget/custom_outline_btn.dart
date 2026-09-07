@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 
 class CustomOutlineBtn extends StatelessWidget {
   final String label;
@@ -20,7 +20,7 @@ class CustomOutlineBtn extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 7.0),
         child: Text(
           label,
-          style: GoogleFonts.inter(
+          style: dysInter(
               textStyle:
                   textStyle(const Color(0xff0037B7), 14, FontWeight.w600)),
         ),

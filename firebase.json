@@ -12,12 +12,19 @@
   },
   "hosting": {
     "public": "build/web",
+    "predeploy": [
+      "python3 tool/prune_web_fonts.py build/web"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
     ],
     "rewrites": [
+      {
+        "source": "/OAuthlogin/**",
+        "destination": "/lite/index.html"
+      },
       {
         "source": "**",
         "destination": "/index.html"
@@ -111,6 +118,15 @@
           {
             "key": "Cache-Control",
             "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        "source": "chart-engine/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
           }
         ]
       }

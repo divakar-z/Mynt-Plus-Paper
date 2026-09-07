@@ -94,6 +94,11 @@ class WebSocketProvider extends ChangeNotifier {
   final Map<String, Timer> _subscriptionTimers = {};
   final Map<String, dynamic> _socketDatas = {};
   final Map<String, String> _ltpCache = {}; // Cache for last known LTP values
+  // CAS indicative price (`ic`) per token. It's a rare auction-only delta, so
+  // persist the last valid value independently of the volatile _socketDatas
+  // merge (the depth screen reads it via indicativeClose). Scoped per token so
+  // one scrip's value never leaks onto another.
+  final Map<String, String> _indicativeByToken = {};
   Timer? _holdStartTime;
   Timer? _reconnectBackoff; // Add backoff timer
 
@@ -105,6 +110,8 @@ class WebSocketProvider extends ChangeNotifier {
   bool get wsConnected => _wsConnected;
   bool get retryScreen => _retryScreen;
   Map get socketDatas => _socketDatas;
+  /// Last valid CAS indicative price seen for [token] this session, or null.
+  String? indicativeClose(String token) => _indicativeByToken[token];
   bool get reconnectionSuccess => _reconnectionSuccess;
   
   // Get cached LTP for a token. Used by mobile order_book.
@@ -600,6 +607,7 @@ class WebSocketProvider extends ChangeNotifier {
     _pendingSubscriptions['d'] = [];
     _socketDatas.clear();
     _ltpCache.clear();
+    _indicativeByToken.clear();
 
     // Drive a clean teardown via the state machine.
     _transitionTo(SocketState.disconnected);
@@ -664,6 +672,7 @@ class WebSocketProvider extends ChangeNotifier {
       // Full close (logout / re-login): clear everything for fresh state.
       _socketDatas.clear();
       _ltpCache.clear();
+      _indicativeByToken.clear();
       log('Cleared socket data and LTP cache');
     }
 
@@ -932,7 +941,7 @@ class WebSocketProvider extends ChangeNotifier {
     // PERFORMANCE FIX: Increased throttle from 330ms to 500ms for web performance
     // This reduces updates from 3/sec to 2/sec, lowering CPU usage by ~33%
     // For web apps with many widgets, less frequent updates = smoother experience
-    final throttleDuration = kIsWeb ? const Duration(milliseconds: 500) : const Duration(milliseconds: 300);
+    final throttleDuration =  const Duration(milliseconds: 300) ;
     _throttleTimer = Timer(throttleDuration, () {
       if (_hasPendingUpdates) {
         _hasPendingUpdates = false;
@@ -960,6 +969,15 @@ class WebSocketProvider extends ChangeNotifier {
     for (final entry in _pendingSocketUpdates.entries) {
       final token = entry.key;
       final updateData = entry.value;
+
+      // Capture the CAS indicative price (`ic`) — a rare auction-only delta —
+      // per token, retained across frames that omit it (unlike the _socketDatas
+      // merge that the depth screen can miss).
+      final icRaw = updateData['ic'];
+      if (icRaw != null) {
+        final icv = double.tryParse(icRaw.toString());
+        if (icv != null && icv > 0) _indicativeByToken[token] = icRaw.toString();
+      }
 
       // If this is a new token, initialize it
       if (!_socketDatas.containsKey(token)) {
@@ -1171,6 +1189,25 @@ class WebSocketProvider extends ChangeNotifier {
 
     if (status.isEmpty || symbol.isEmpty) return;
 
+    // A rejected place/modify/cancel keeps the order's PRIOR status (OPEN /
+    // TRIGGER_PENDING), so keying off `status` alone would fall through to a
+    // green "success" branch below. The websocket flags a rejection only in
+    // `reporttype` ("Rejected" / "ReplaceRejected" / "CancelRejected") — a
+    // successful and a rejected modify can even share status TRIGGER_PENDING.
+    // So detect the rejection by report type and show it in red.
+    final reportType = res['reporttype']?.toString().toLowerCase() ?? '';
+    if (reportType.contains('reject')) {
+      final rejMsg = reportType.contains('replace')
+          ? 'Modify rejected for $symbol ($exchange)'
+          : '$tranType order for $symbol ($exchange) rejected';
+      if (kIsWeb) {
+        ResponsiveSnackBar.showError(_context!, rejMsg);
+      } else {
+        warningMessage(_context!, rejMsg);
+      }
+      return;
+    }
+
     String message;
 
     switch (status) {
@@ -1199,6 +1236,17 @@ class WebSocketProvider extends ChangeNotifier {
           successMessage(_context!, message);
         }
         break;
+      case 'TRIGGER_PENDING':
+        // An SL order rests in TRIGGER_PENDING after BOTH place and modify, and the
+        // websocket can't distinguish them (both end with a TriggerPending report).
+        // So report the status neutrally, like the vendor, instead of "modified".
+        message = '$tranType order for $symbol ($exchange) is Trigger Pending';
+        if (kIsWeb) {
+          ResponsiveSnackBar.showSuccess(_context!, message);
+        } else {
+          successMessage(_context!, message);
+        }
+        break;
       case 'PENDING':
         // Skip PENDING notification to avoid duplicate with OPEN
         break;
@@ -1206,7 +1254,7 @@ class WebSocketProvider extends ChangeNotifier {
         // Skip CANCELED notification - cancel action already shows success snackbar
         break;
       default:
-        // For other statuses like TRIGGER_PENDING, etc.
+        // For other statuses, etc.
         if (status.isNotEmpty) {
           message = '$tranType order for $symbol ($exchange): $status';
           if (kIsWeb) {

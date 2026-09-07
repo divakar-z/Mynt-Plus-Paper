@@ -978,6 +978,11 @@ class AuthProvider extends DefaultChangeNotifier {
           OverlayManager.closeAll();
         }
 
+        // The support session is osTicket's own, with a refresh token good for
+        // 30 days — it does not expire with the trading session, so it has to
+        // be torn down here or it outlives the logout.
+        api.clearSupportSession();
+
         // Cancel any active timers
         if (ConstantName.timer != null) {
           ConstantName.timer!.cancel();
@@ -2025,7 +2030,15 @@ class AuthProvider extends DefaultChangeNotifier {
                   ref.read(stocksProvide).fetchCAevents(),
                 ];
                 Future.wait(marketFutures); // Don't await - let it run in background
-                
+
+                // User detail carries the entitled exchanges (exarr); load it
+                // first, then fetch the derivative contract master for only those
+                // exchanges. One-time, resolves contract names across all screens.
+                Future.microtask(() async {
+                  await ref.read(userProfileProvider).fetchUserDetail(context);
+                  ref.read(marketWatchProvider).fetchDerivativeMaster();
+                });
+
                 // Batch 3: Order data (load in background)
                 // Only fetch order book on login — trade book and GTT are lazy-loaded when user opens those tabs
                 Future.microtask(() {
@@ -2046,13 +2059,13 @@ class AuthProvider extends DefaultChangeNotifier {
                 // }
                   ref.read(transcationProvider).fetchc(context);
                   ref.read(fundProvider).fetchFunds(context);
-                  ref.read(fundProvider).fetchPledgeDetails();
+                  // ref.read(fundProvider).fetchPledgeDetails();
                 });
                 
                 // Batch 6: Profile and other data (load in background)
+                // (fetchUserDetail moved up so exarr is ready for the master fetch)
                 Future.microtask(() {
                   ref.read(userProfileProvider).getProfileimage();
-                  ref.read(userProfileProvider).fetchUserDetail(context);
                   ref.read(ledgerProvider).setterfornullallSwitch = null;
                 });
                 
@@ -2280,11 +2293,7 @@ class AuthProvider extends DefaultChangeNotifier {
 
   setIposAPicalls(BuildContext context) async {
     // await ref.read(ipoProvide).getDashboardIpos();
-    await ref.read(ipoProvide).fetchAllOpenIpos(context);
-    await ref.read(ipoProvide).getUpcomingIpoModel();
-    await ref.read(ipoProvide).getipoperfomance(currentYear);
-    await ref.read(ipoProvide).mergemainsme();
-    await ref.read(ipoProvide).fetchIpoPreClose();
+    await ref.read(ipoProvide).loadIpoScreenData(context, currentYear);
   }
 
   setmfapicalls(context) async {

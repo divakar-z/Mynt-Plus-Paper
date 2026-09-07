@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/res/global_font_web.dart';
@@ -169,10 +170,8 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
   // Calculate profit and loss values
   void _updateProfitLossValues() {
     final ltp = double.tryParse(_exchTsym.lp ?? "0.0") ?? 0.0;
-    final qty = _holdingData.currentQty ?? 0;
-    // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-    final int t1Qty = int.parse(_holdingData.npoadt1qty ?? "0");
-    final int totalQty = qty + t1Qty;
+    // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+    final int totalQty = _holdingData.currentQty ?? 0;
     final avgPrice = double.tryParse(_holdingData.upldprc ?? "0.0") ?? 0.0;
 
     if (ltp > 0 && totalQty > 0 && avgPrice > 0) {
@@ -308,7 +307,7 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
             Row(
               children: [
                 Text(
-                  "${_exchTsym.tsym?.replaceAll("-EQ", "") ?? ''} ${_exchTsym.expDate ?? ''} ${_exchTsym.option ?? ''} ",
+                  "${_exchTsym.displayName} ",
                   style: WebTextStyles.dialogTitle(
                     isDarkTheme: theme.isDarkMode,
                     color: theme.isDarkMode ? WebDarkColors.textPrimary : WebColors.textSecondary,
@@ -585,8 +584,7 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
                   ),
                   _buildInfoRow(
                     "Current Value",
-                    ((int.parse("${_holdingData.currentQty ?? 0}") +
-                                int.parse(_holdingData.npoadt1qty ?? "0")) *
+                    (int.parse("${_holdingData.currentQty ?? 0}") *
                             double.parse(_exchTsym.lp?.toString() ?? "0.0"))
                         .toStringAsFixed(2),
                     theme,
@@ -595,7 +593,7 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
                       int.parse(_holdingData.npoadt1qty ?? "0") > 0) ...[
                     _buildInfoRow(
                       "T1 Qty",
-                      "${int.parse(_holdingData.btstqty ?? "0") + int.parse(_holdingData.npoadt1qty ?? "0")}",
+                      "${math.max(int.parse(_holdingData.btstqty ?? "0"), int.parse(_holdingData.npoadt1qty ?? "0"))}",
                       theme,
                     ),
                   ],

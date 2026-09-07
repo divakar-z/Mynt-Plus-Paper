@@ -280,7 +280,7 @@ Future fetchgenerateapikey(BuildContext context, String month, String apistatus)
     required List<String> userIds,
   }) async {
     try {
-      _generateApikeyNew = await api.submitApiKeyNew(
+      final res = await api.submitApiKeyNew(
         appKey: appKey,
         secretCode: secretCode,
         redirectUrl: redirectUrl,
@@ -288,9 +288,15 @@ Future fetchgenerateapikey(BuildContext context, String month, String apistatus)
         ipAddresses: ipAddresses,
         userIds: userIds,
       );
-      
-      notifyListeners();
-        return _generateApikeyNew;
+
+      // Only overwrite existing data if the update succeeded.
+      // If it failed (stat != 'Ok'), keep existing fields (secretCode, etc.) intact.
+      if (res.stat == "Ok") {
+        _generateApikeyNew = res;
+        notifyListeners();
+      }
+
+      return res;
     } catch (e) {
       rethrow;
     }

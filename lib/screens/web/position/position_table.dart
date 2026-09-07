@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import '../../../utils/rupee_convert_format.dart';
 import 'package:flutter/material.dart'
     show
@@ -65,6 +66,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import '../../../models/portfolio_model/position_book_model.dart';
 import '../../../res/res.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../res/mynt_web_text_styles.dart';
@@ -218,6 +220,10 @@ class _PositionTableState extends ConsumerState<PositionTable> {
 
   // Helper method to format instrument display text (without exchange - exchange shown separately)
   String _formatInstrumentText(PositionBookModel position) {
+    // Priority 0: backend display name from the DerivativeMaster (derivatives).
+    final master = position.masterName;
+    if (master != null && master.isNotEmpty) return master;
+
     // Priority 1: Use dname (display name) if available
     if (position.dname != null && position.dname!.isNotEmpty) {
       return position.dname!.replaceAll("-EQ", "").trim();
@@ -523,9 +529,20 @@ class _PositionTableState extends ConsumerState<PositionTable> {
     final searchQuery = widget.searchQuery?.toLowerCase().trim() ?? '';
     if (searchQuery.isNotEmpty) {
       filtered = filtered.where((position) {
-        final symbol = position.symbol?.toLowerCase() ?? '';
-        final exch = position.exch?.toLowerCase() ?? '';
-        return symbol.contains(searchQuery) || exch.contains(searchQuery);
+        // Match the displayed contract name (master/dname/tsym) and its
+        // parsed parts so expiry ("JUL", "24 JUL 26") and strike/option
+        // ("270 CE") searches work, not just the underlying symbol.
+        final searchable = [
+          position.masterName,
+          position.dname,
+          position.tsym,
+          position.symbol,
+          position.expDate,
+          position.option,
+          position.exch,
+        ];
+        return searchable.any(
+            (field) => (field ?? '').toLowerCase().contains(searchQuery));
       }).toList();
     }
 
@@ -545,8 +562,10 @@ class _PositionTableState extends ConsumerState<PositionTable> {
             comparison = (a.sPrdtAli ?? '').compareTo(b.sPrdtAli ?? '');
             break;
           case 2: // Instrument
-            comparison = '${a.symbol ?? ''} ${a.exch ?? ''}'
-                .compareTo('${b.symbol ?? ''} ${b.exch ?? ''}');
+            // Compare the displayed contract name (master/dname/tsym) — the
+            // parsed symbol alone ties for every contract of one underlying.
+            comparison = _formatInstrumentText(a)
+                .compareTo(_formatInstrumentText(b));
             break;
           case 3: // Qty
             comparison = (int.tryParse(a.qty ?? '0') ?? 0)
@@ -612,7 +631,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
   Map<int, double> _calculateMinWidths(
       List<PositionBookModel> positions, BuildContext context) {
     // Use fixed font size for measurement (table text is not responsive, only buttons are)
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 16.0; // Reduced from 24.0 for tighter layout
     const sortIconWidth = 24.0;
 
@@ -667,7 +686,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
 
             // Measure exchange with smaller font (fixed 12px, matches rendering)
             final exchangeStyle =
-                const TextStyle(fontSize: 12, fontFamily: 'Geist');
+                TextStyle(fontSize: 12, fontFamily: dyslexiaFontOr('Geist'));
             final exchangeWidth = exchangeText.isNotEmpty
                 ? _measureTextWidth(exchangeText, exchangeStyle)
                 : 0.0;
@@ -1115,7 +1134,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
             context, position, theme, isClosed, isRowHovered, positionBook,
             rowIndex: rowIndex);
       case 'Qty':
-        final formattedQty = _formatPositionQty(position);
+        // Privacy Mode: qty (with its long/short sign and colour) is hidden.
+        final privacy = ref.watch(privacyProvider);
+        final formattedQty = privacy.mask(_formatPositionQty(position));
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1127,12 +1148,15 @@ class _PositionTableState extends ConsumerState<PositionTable> {
               style: _getTextStyle(context,
                   color: isClosed
                       ? textColor
-                      : _getQtyColor(formattedQty, context)),
+                      : (privacy.isPrivate
+                          ? _getCellColor(0.0, context)
+                          : _getQtyColor(formattedQty, context))),
             ),
           ),
         );
       case 'Act Avg':
-        final avgValue = position.avgPrc ?? '0.00';
+        final avgValue =
+            ref.watch(privacyProvider).mask(position.avgPrc ?? '0.00');
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1162,8 +1186,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
         );
       case 'P&L':
         // Just display provider value - positionCal() already calculates correctly
+        final pnlPrivacy = ref.watch(privacyProvider);
         final pnlValue = position.profitNloss ?? '0.00';
-        final displayPnl = pnlValue.toIndianFormat();
+        final displayPnl = pnlPrivacy.mask(pnlValue.toIndianFormat());
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1173,7 +1198,11 @@ class _PositionTableState extends ConsumerState<PositionTable> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: _getTextStyle(context,
-                  color: _getCellColor(double.tryParse(pnlValue) ?? 0.0, context)),
+                  color: _getCellColor(
+                      pnlPrivacy.isPrivate
+                          ? 0.0
+                          : (double.tryParse(pnlValue) ?? 0.0),
+                      context)),
             ),
           ),
         );
@@ -1290,7 +1319,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                 );
               } else if (isLastColumn) {
                 // Show total P&L value
-                final displayTotal = totalPnl.toIndianFormat();
+                final privacy = ref.watch(privacyProvider);
+                final displayTotal = privacy.mask(totalPnl.toIndianFormat());
                 cellContent = Align(
                   alignment: Alignment.centerRight,
                   child: Tooltip(
@@ -1300,7 +1330,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: _getTextStyle(context,
-                          color: _getCellColor(totalPnl, context)).copyWith(
+                          color: _getCellColor(
+                              privacy.isPrivate ? 0.0 : totalPnl,
+                              context)).copyWith(
                         fontWeight: MyntFonts.semiBold,
                       ),
                     ),

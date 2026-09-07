@@ -37,8 +37,13 @@ import 'package:mynt_plus/screens/web/profile/profile_details_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/nominee_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/form_download_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/profile_section_screen_web.dart';
+import 'package:mynt_plus/screens/web/chart_engine/chart_engine_shell_screen.dart';
 
 import '../../../../../models/marketwatch_model/get_quotes.dart';
+import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart'
+    show ScannerSubPage;
+import 'package:mynt_plus/screens/web/scanner/scanner_shell_screen.dart';
+import 'package:mynt_plus/screens/web/orderflow/orderflow_shell_screen.dart';
 
 class PanelContentBuilder {
   final DepthInputArgs? optionChainArgs;
@@ -46,6 +51,7 @@ class PanelContentBuilder {
   final int? tradeActionTabIndex;
   final Map<ScreenType, bool> screenLoadingStates;
   final VoidCallback? onBack;
+  final ScannerSubPage? initialScannerSubPage;
 
   PanelContentBuilder({
     this.optionChainArgs,
@@ -53,6 +59,7 @@ class PanelContentBuilder {
     this.tradeActionTabIndex,
     required this.screenLoadingStates,
     this.onBack,
+    this.initialScannerSubPage,
   });
 
   Widget getScreenForType(ScreenType type) {
@@ -177,6 +184,8 @@ class PanelContentBuilder {
         return const SizedBox.shrink();
       case ScreenType.scalper:
         return const SizedBox.shrink();
+      case ScreenType.charts:
+        return const ChartEngineShellScreen();
       case ScreenType.tradingViewWebHook:
         return const WebHookTradingViewScreen();
       case ScreenType.refer:
@@ -215,6 +224,10 @@ class PanelContentBuilder {
         return FormDownloadScreenWeb(onBack: onBack);
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: onBack);
+      case ScreenType.scanner:
+        return ScannerShellScreen(initialSubPage: initialScannerSubPage);
+      case ScreenType.orderflow:
+        return const OrderflowShellScreen();
     }
   }
 }

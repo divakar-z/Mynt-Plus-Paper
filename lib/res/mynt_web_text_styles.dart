@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+import '../provider/accessibility_provider.dart';
 import 'responsive_extensions.dart';
 
 /// ===============================================================
 /// FONT SYSTEM – single source of truth
 /// ===============================================================
 class MyntFonts {
-  static const String fontFamily = 'Geist';
+  // Resolved from the accessibility provider so the Dyslexia Support toggle
+  // swaps every text style to OpenDyslexic. Kept as a getter (not a const)
+  // because the value changes at runtime.
+  static String get fontFamily => uiFontFamily;
 
   // HEADERS
   static const double hero = 20;

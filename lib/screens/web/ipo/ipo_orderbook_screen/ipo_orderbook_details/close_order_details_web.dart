@@ -157,9 +157,7 @@ class _IpoCloseOrderDetailsState extends ConsumerState<IpoCloseOrderDetails> {
                 widget.ipoclose.bidDetail!.length,
                 (index) {
                   final bid = widget.ipoclose.bidDetail![index];
-                  final isCutOff = widget.ipoclose.type == "BSE"
-                      ? (bid.cuttoffflag! != "0")
-                      : bid.atCutOff!;
+                  final isCutOff = bid.isCutOffFor(widget.ipoclose.type);
                   return DataRow(
                     cells: [
                       DataCell(

@@ -47,6 +47,17 @@ class ScalperScreenWeb extends ConsumerStatefulWidget {
 class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
   bool _isInitialized = false;
   bool _hasLoadedOptionChain = false;
+
+  /// Symbol+expiry key of a chain load that already came back empty/failed.
+  /// build() auto-triggers _loadOptionChain whenever _hasLoadedOptionChain is
+  /// false, so without this a failing chain (e.g. a 400 from a wrong exchange)
+  /// would re-fire the request on every notifyListeners forever. A user action
+  /// (tab switch, symbol/expiry change, refresh) clears it and retries.
+  String? _failedOptionChainKey;
+
+  /// Guards against overlapping _loadOptionChain calls (build's post-frame
+  /// callback can fire again while the previous request is still in flight).
+  bool _optionChainLoadInFlight = false;
   bool _isPlacingShortcutOrder = false;
   int _switchGeneration = 0;
   final GlobalKey _expiryButtonKey = GlobalKey();
@@ -125,14 +136,15 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     // Fetch initial quotes for ALL indices via API first (for immediate display)
     await scalper.fetchAllIndicesQuotes(context);
 
-    // Subscribe to ALL indices for LTP display (depth subscription for live updates)
+    // Subscribe to ALL indices for LTP display (touchline subscription for live
+    // updates — the tabs render LTP/change only, no book)
     final allIndicesTokens = ScalperProvider.indices
         .map((idx) => "${idx.exch}|${idx.token}")
         .join('#');
 
     websocket.establishConnection(
       channelInput: allIndicesTokens,
-      task: "d",
+      task: "t",
       context: context,
     );
 
@@ -175,24 +187,71 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     );
   }
 
+  /// Identifies a specific chain request (symbol + expiry). Used to remember
+  /// which request already failed so it isn't retried in a loop.
+  String _optionChainKey(ScalperProvider scalper) {
+    final index = scalper.selectedIndex;
+    return '${index.exch}|${index.token}|${scalper.selectedExpiry?.exd ?? ''}';
+  }
+
+  /// Clear the loaded/failed markers so the next load actually runs.
+  /// Call from user-initiated actions (tab switch, symbol change, refresh).
+  void _resetOptionChainLoad() {
+    _hasLoadedOptionChain = false;
+    _failedOptionChainKey = null;
+  }
+
   Future<void> _loadOptionChain() async {
-    if (_hasLoadedOptionChain) return;
+    if (_hasLoadedOptionChain || _optionChainLoadInFlight) return;
 
     final scalper = ref.read(scalperProvider);
     if (scalper.selectedExpiry == null) {
       return;
     }
 
+    // Don't re-issue a request that already failed for this exact symbol+expiry.
+    final key = _optionChainKey(scalper);
+    if (_failedOptionChainKey == key) return;
 
-    await scalper.loadOptionChain(context);
+    _optionChainLoadInFlight = true;
+    try {
+      await scalper.loadOptionChain(context);
+    } finally {
+      _optionChainLoadInFlight = false;
+    }
+
+    if (!mounted) return;
 
     // Only mark as loaded if we actually got data (prevents retry block on failure/cancellation)
     if (scalper.callOptions.isNotEmpty || scalper.putOptions.isNotEmpty) {
       _hasLoadedOptionChain = true;
+      _failedOptionChainKey = null;
 
       // Subscribe to option chain tokens for live updates
       await scalper.subscribeToWebSocket(context);
+    } else if (_optionChainKey(scalper) == key) {
+      // Empty result for the request we made (not a stale/superseded one):
+      // remember it and stop, otherwise build() would re-fire it endlessly.
+      _failedOptionChainKey = key;
+      final err = scalper.optionChainError;
+      if (err != null && err.isNotEmpty) {
+        ResponsiveSnackBar.showError(context, err);
+      }
     }
+  }
+
+  /// Release the option-chain subscriptions.
+  ///
+  /// MUST run here and not in `dispose()`. `dispose()` executes while the
+  /// element is being unmounted, where `ref.read` is no longer reliable — the
+  /// unsubscribe silently never reached the socket and the whole chain kept
+  /// streaming after the scalper was closed. `deactivate()` fires when the
+  /// widget leaves the tree while the element is still mounted, so `ref` and
+  /// `context` are both valid.
+  @override
+  void deactivate() {
+    ref.read(scalperProvider).unsubscribeFromWebSocket(context);
+    super.deactivate();
   }
 
   @override
@@ -203,7 +262,8 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     _searchController.dispose();
     _removeSearchOverlay();
     _removeExpiryOverlay();
-    ref.read(scalperProvider).unsubscribeFromWebSocket(context);
+    // Subscriptions were released in deactivate() — see the note there.
+
     // Only fully reset charts when NOT embedded.
     // When embedded (in split home screen), the widget gets unmounted/remounted
     // on screen switches. Keeping symbol state lets the factory callback
@@ -267,9 +327,16 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
       }
     }
 
-    // Load option chain if not yet loaded and expiry is available
-    if (!_hasLoadedOptionChain && scalper.selectedExpiry != null && !scalper.isLoadingOptionChain) {
+    // Load option chain if not yet loaded and expiry is available.
+    // Skip when this exact symbol+expiry already failed — otherwise every
+    // notifyListeners would re-fire the request (endless API calls on a 400).
+    if (!_hasLoadedOptionChain &&
+        !_optionChainLoadInFlight &&
+        scalper.selectedExpiry != null &&
+        !scalper.isLoadingOptionChain &&
+        _failedOptionChainKey != _optionChainKey(scalper)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
         _loadOptionChain();
       });
     }
@@ -535,7 +602,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
               onTap: () async {
                 if (ref.read(scalperProvider).selectedIndexType == index) return;
                 final gen = ++_switchGeneration;
-                _hasLoadedOptionChain = false;
+                _resetOptionChainLoad();
 
                 // setSelectedIndex sets _selectedIndexType synchronously before
                 // the async loadIndexData. Start the chart change immediately
@@ -574,7 +641,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
                 onTap: () async {
                   if (ref.read(scalperProvider).selectedIndexType == 3) return;
                   final gen = ++_switchGeneration;
-                  _hasLoadedOptionChain = false;
+                  _resetOptionChainLoad();
                   final loadFuture = ref.read(scalperProvider).selectCustomIndex(context);
                   _updateIndexChart();
                   await loadFuture;
@@ -614,7 +681,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
               // (current strikes are preserved via the manager's cached symbols).
               scalperChartManager.recreateAllCharts();
 
-              _hasLoadedOptionChain = false;
+              _resetOptionChainLoad();
               await _loadOptionChain();
               // Re-apply preference-based strikes (user may have manually changed them)
               if (mounted) {
@@ -958,7 +1025,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     _removeSearchOverlay();
 
     final gen = ++_switchGeneration;
-    _hasLoadedOptionChain = false;
+    _resetOptionChainLoad();
     final scalper = ref.read(scalperProvider);
     await scalper.setSelectedSymbol(symbol, context);
     if (_switchGeneration != gen) return;
@@ -981,7 +1048,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     if (scalper.customIndex != null) {
       ref.read(websocketProvider).establishConnection(
         channelInput: "${scalper.customIndex!.exch}|${scalper.customIndex!.token}",
-        task: "d",
+        task: "t",
         context: context,
       );
     }
@@ -1103,7 +1170,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
                               child: InkWell(
                                 onTap: () async {
                                   _removeExpiryOverlay();
-                                  _hasLoadedOptionChain = false;
+                                  _resetOptionChainLoad();
                                   await ref
                                       .read(scalperProvider)
                                       .setSelectedExpiry(exp, context);
@@ -1319,7 +1386,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     // (same flow as tapping a tab — updates charts + option chain)
     if (newSymbolIndex != null && mounted) {
       final gen = ++_switchGeneration;
-      _hasLoadedOptionChain = false;
+      _resetOptionChainLoad();
 
       final loadFuture = ref.read(scalperProvider).setSelectedIndex(newSymbolIndex, context);
       _updateIndexChart();

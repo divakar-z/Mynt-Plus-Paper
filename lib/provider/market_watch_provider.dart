@@ -71,6 +71,11 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   ];
   String _actDeptBtn = "Overview";
   String get actDeptBtn => _actDeptBtn;
+
+  // When true, the next ChartWithDepthWeb panel that opens lands on the Chart
+  // tab (index 1) instead of its default. Set by the watchlist option-chain
+  // "Chart" action; consumed (reset) by ChartWithDepthWeb once it switches.
+  bool openOnChartTab = false;
   final List<Tab> _scipOverViewTab = [
     const Tab(text: "Overview"),
     const Tab(text: "Chart")
@@ -459,6 +464,29 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// Loads the derivative contract master into the DerivativeMaster cache
+  /// ("EXCH:token" -> ready display name), for only the derivative exchanges the
+  /// user is entitled to (from userDetail.exarr). Background, non-blocking;
+  /// failures are swallowed so login is never affected.
+  Future<void> fetchDerivativeMaster() async {
+    try {
+      // Cash equity exchanges (NSE/BSE) hold no derivatives and, sent as parent
+      // codes, expand to the whole family. Skip only those and send every other
+      // segment the user is entitled to (F&O, commodity, currency) from exarr.
+      const cashExch = {'NSE', 'BSE'};
+      final exarr = ref.read(userProfileProvider).userDetailModel?.exarr ?? [];
+      var exchanges = exarr.where((e) => !cashExch.contains(e)).toList();
+      // Fallback so it never fetches an empty list (e.g. user detail not ready).
+      if (exchanges.isEmpty) exchanges = ['NFO', 'BFO', 'MCX'];
+      final data = await api.getDerivativeMaster(exchanges: exchanges);
+      DerivativeMaster.setAll(data);
+      debugPrint(
+          '[DerivativeMaster] loaded ${data.length} contracts for $exchanges');
+    } catch (e) {
+      debugPrint('[DerivativeMaster] fetch error: $e');
+    }
+  }
+
   // Save current page index to SharedPreferences
   Future<void> _saveCurrentPageIndex() async {
     try {
@@ -513,6 +541,9 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     try {
       _exarr = [];
       _pendingWatchlists.clear();
+      // Reset the derivative-master cache so the next account starts clean and
+      // never reads the previous session's fetched set.
+      DerivativeMaster.clear();
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('pending_watchlists');
     } catch (e) {
@@ -891,26 +922,28 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     try {
       final depthSymbol = _currentDepthSymbol!;
 
-      // Clear tracking first to prevent race conditions
+      // Clear tracking first so the protective check in WebSubscriptionManager
+      // does not see this symbol as "currentDepthSymbol" and block its own ud.
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
 
-      // Only send unsubscribe if context is available and valid
       if (context != null && context.mounted) {
         try {
-          await ref.read(websocketProvider).establishConnection(
-                channelInput: depthSymbol,
-                task: "ud", // Unsubscribe depth task
+          // Route through WebSubscriptionManager so the ud is skipped when the
+          // symbol is still needed by the watchlist / holdings / positions /
+          // indices / ticker. The watchlist itself subscribes via task "d" —
+          // the same channel as depth — so an unprotected ud would also kill
+          // the watchlist's LTP feed for that scrip.
+          await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
+                tokensToCheck: {depthSymbol},
                 context: context,
+                source: 'depth',
               );
         } catch (e) {
           // If unsubscribe fails, it's okay - we've already cleared tracking
         }
-      } else {
-        // Context not available, but we've cleared tracking
       }
     } catch (e) {
-      // Ensure tracking is cleared even on error
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
     }
@@ -1502,6 +1535,7 @@ getOptionawait(String exch, String token) {
         token: token,
         tsym: tsym,
         isDarkMode: isDarkMode,
+        decorativeName: DerivativeMaster.nameFor(exch, token),
       );
     } else {
       await ConstantName.chartwebViewController!.evaluateJavascript(
@@ -1731,7 +1765,10 @@ getOptionawait(String exch, String token) {
       if (_marketWatchlist!.stat == "Ok") {
         ConstantName.sessCheck = true;
         if (_marketWatchlist!.values!.isEmpty) {
-          _marketWatchlist!.values!.add("My");
+          // Default custom watchlist name for new users (when backend
+          // returns an empty list). Renamed from "My" → "My Watchlist"
+          // for clarity per tester feedback (TC discussion).
+          _marketWatchlist!.values!.add("My Watchlist");
         } else {
           _marketWatchlist!.values!.sort((a, b) => a.compareTo(b));
 
@@ -1864,7 +1901,8 @@ getOptionawait(String exch, String token) {
               List<String> splitVal = element.dname!.split(" ");
 
               element.symbol = splitVal[0];
-              element.expDate = "${splitVal[1]} ${splitVal[2]}";
+              // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+              element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
               element.option = splitVal.length > 4
                   ? "${splitVal[3]} ${splitVal[4]}"
                   : splitVal[3];
@@ -2110,7 +2148,9 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _scripInfoModel!.dname!.split(" ");
 
             _scripInfoModel!.symbol = splitVal[0];
-            _scripInfoModel!.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+            _scripInfoModel!.expDate =
+                bfoExpiryWithYear(splitVal, _scripInfoModel!.tsym);
             _scripInfoModel!.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2164,7 +2204,8 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _getQuotes.cname!.split(" ");
 
             _getQuotes.symbol = splitVal[0];
-            _getQuotes.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep cname's day+month, append the year from the tsym. (TC_440)
+            _getQuotes.expDate = bfoExpiryWithYear(splitVal, _getQuotes.tsym);
             _getQuotes.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2255,7 +2296,8 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _getQuotes.cname!.split(" ");
 
             _getQuotes.symbol = splitVal[0];
-            _getQuotes.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep cname's day+month, append the year from the tsym. (TC_440)
+            _getQuotes.expDate = bfoExpiryWithYear(splitVal, _getQuotes.tsym);
             _getQuotes.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2436,10 +2478,17 @@ getOptionawait(String exch, String token) {
             if (exch == "BFO" && dname != null) {
               final splitVal = dname.split(" ");
               val.symbol = splitVal[0];
-              val.expDate = "${splitVal[1]} ${splitVal[2]}";
-              val.option = splitVal.length > 4
-                  ? "${splitVal[3]} ${splitVal[4]}"
-                  : splitVal[3];
+              // BFO: keep dname's day+month, append the year from the tsym —
+              // same helper as every other BFO branch. (TC_440)
+              val.expDate = bfoExpiryWithYear(splitVal, tsym);
+              // Search sends BFO futures as "... FUT 0" (empty strike slot); drop
+              // the "0" so it reads just "FUT". Options keep type + strike. (FUT0)
+              val.option = (splitVal.length > 3 &&
+                      splitVal[3].toUpperCase() == "FUT")
+                  ? "FUT"
+                  : (splitVal.length > 4
+                      ? "${splitVal[3]} ${splitVal[4]}"
+                      : splitVal[3]);
             } else {
               final spilitSymbol = spilitTsym(value: tsym ?? "");
               val.symbol = spilitSymbol["symbol"];
@@ -2495,6 +2544,37 @@ getOptionawait(String exch, String token) {
     }
   }
 
+  // Normalises an expiry string to the expiry-list format "DD-MON-YYYY"
+  // (e.g. "14 JUL 26" -> "14-JUL-2026"), so a selected contract's expiry can be
+  // matched against the option expiry list regardless of separators / year length.
+  String _normalizeExpiry(String e) {
+    final parts = e.trim().toUpperCase().split(RegExp(r'[\s\-]+'));
+    if (parts.length != 3) return e.trim().toUpperCase();
+    final day = parts[0].padLeft(2, '0');
+    final mon = parts[1];
+    var yr = parts[2];
+    if (yr.length == 2) yr = '20$yr';
+    return '$day-$mon-$yr';
+  }
+
+  // When the option chain is opened from a specific option contract, returns
+  // that contract's expiry (in the expiry-list format) so the chain opens on the
+  // selected contract's expiry instead of the nearest. Returns null for
+  // indices/stocks (no own expiry), for expiries not in the list, or when the
+  // current quote isn't this token (guards against a stale quote from another
+  // scrip, so only a genuine contract-open is ever affected). (TC_408)
+  String? _matchedContractExpiry(String token) {
+    if (_getQuotes.token?.toString() != token) return null;
+    final raw = _getQuotes.expDate;
+    if (raw == null || raw.trim().isEmpty) return null;
+    final target = _normalizeExpiry(raw);
+    for (final e in (_optExp ?? [])) {
+      final exd = e.exd;
+      if (exd != null && _normalizeExpiry(exd) == target) return exd;
+    }
+    return null;
+  }
+
   // Fetching data from the api and stored in a variable
 
   Future fetchLinkeScrip(
@@ -2524,6 +2604,18 @@ getOptionawait(String exch, String token) {
 
           _optionExch = storeQuotes[token]?['l']['optionExch'];
           _selectedTradeSym = storeQuotes[token]?['l']['selectedTradeSym'];
+          // If opened from a specific option contract, prefer that contract's
+          // expiry over the nearest and re-derive its exch/tradeSym (TC_408).
+          final matchedExp = _matchedContractExpiry(token);
+          if (matchedExp != null) {
+            _selectedExpDate = matchedExp;
+            for (var i = 0; i < _optExp!.length; i++) {
+              if (_selectedExpDate == _optExp![i].exd) {
+                _optionExch = _optExp![i].exch;
+                _selectedTradeSym = _optExp![i].tsym;
+              }
+            }
+          }
         }
         if (_fut!.isNotEmpty) {
           _futToken = "${_fut![0].token}";
@@ -2596,6 +2688,11 @@ getOptionawait(String exch, String token) {
 
             // print("########### $_sortedDate");
             _selectedExpDate = _sortedDate[0];
+            // If opened from a specific option contract, default the expiry to
+            // that contract's expiry instead of the nearest (TC_408). Falls back
+            // to nearest for indices/stocks or unknown expiries.
+            final matchedExp = _matchedContractExpiry(token);
+            if (matchedExp != null) _selectedExpDate = matchedExp;
             for (var i = 0; i < _optExp!.length; i++) {
               if (_selectedExpDate == _optExp![i].exd) {
                 _optionExch = _optExp![i].exch;
@@ -3649,9 +3746,9 @@ getOptionawait(String exch, String token) {
           try {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             if (kIsWeb) {
-              ResponsiveSnackBar.showSuccess(context, "Scrip order was changed");
+              ResponsiveSnackBar.showSuccess(context, "Stocks reordered successfully.");
             } else {
-              successMessage(context, "Scrip order was changed");
+              successMessage(context, "Stocks reordered successfully.");
             }
           } catch (e) {
             if (e.toString().contains("widget was disposed") ||
@@ -3667,14 +3764,14 @@ getOptionawait(String exch, String token) {
               ResponsiveSnackBar.showSuccess(
                   context,
                   isAdd
-                      ? "Scrip was added to watchlist $wlName"
-                      : "Scrip was removed from watchlist $wlName");
+                      ? 'Stock added to your watchlist "$wlName"'
+                      : 'Stock removed from your watchlist "$wlName"');
             } else {
               successMessage(
                   context,
                   isAdd
-                      ? "Scrip was added to watchlist $wlName"
-                      : "Scrip was removed from watchlist $wlName");
+                      ? 'Stock added to your watchlist "$wlName"'
+                      : 'Stock removed from your watchlist "$wlName"');
             }
           } catch (e) {
             if (e.toString().contains("widget was disposed") ||
@@ -3685,7 +3782,7 @@ getOptionawait(String exch, String token) {
         if (isEdit && isOptionStike) {
           try {
             Fluttertoast.showToast(
-                msg: "Scrip was added to watchlist $wlName",
+                msg: 'Stock added to your watchlist "$wlName"',
                 timeInSecForIosWeb: 2,
                 backgroundColor: colors.colorBlack,
                 textColor: colors.colorWhite,
@@ -3702,11 +3799,15 @@ getOptionawait(String exch, String token) {
         }
       } else if (_addDeleteScripModel!.emsg ==
           "Invalid Input : At least one stock must remain in the Market Watch.") {
+        // Backend `emsg` above is left untouched — it's the exact vendor
+        // error string we're matching against. User-facing toast below uses
+        // friendlier wording per the test-case feedback (TC_17).
         // _delScripQty = 1;
         if (kIsWeb) {
-          ResponsiveSnackBar.showError(context, "At least one stock must remain in the Market Watch.");
+          ResponsiveSnackBar.showError(
+              context, "You need at least one stock in your watchlist");
         } else {
-          error(context, "At least one stock must remain in the Market Watch.");
+          error(context, "You need at least one stock in your watchlist");
         }
       }
       return false;
@@ -4068,14 +4169,44 @@ getOptionawait(String exch, String token) {
     // Force UI update
     notifyListeners();
 
-    // Update the backend in the background
-    _updateBackendSortOrderNonBlocking(wlName, context);
+    // Update the backend in the background. Pass an action-specific toast
+    // message so the user sees what they actually did (e.g. "Sorted by name
+    // (A-Z)") instead of a generic "Stock order was changed" — clearer UX
+    // and distinguishes a sort from a drag-drop reorder.
+    _updateBackendSortOrderNonBlocking(
+      wlName,
+      context,
+      toastMessage: _sortToastMessage(sorting),
+    );
+  }
+
+  // Maps a sort key (as stored in _sortByWL) to a human-friendly toast
+  // message. Returns the generic "Stock order was changed" for any unknown
+  // value (defensive — keeps drag-drop and any other reorder paths working).
+  String _sortToastMessage(String sortKey) {
+    switch (sortKey) {
+      case "Scrip - A to Z":
+        return "Sorted by name (A-Z)";
+      case "Scrip - Z to A":
+        return "Sorted by name (Z-A)";
+      case "Price - Low to High":
+        return "Sorted by price (Low to High)";
+      case "Price - High to Low":
+        return "Sorted by price (High to Low)";
+      case "Per.Chng - High to Low":
+        return "Sorted by % change (High to Low)";
+      case "Per.Chng - Low to High":
+        return "Sorted by % change (Low to High)";
+      default:
+        return "Stock order was changed";
+    }
   }
 
   // Non-blocking backend update to avoid UI stutters
-  void _updateBackendSortOrderNonBlocking(String wlName, BuildContext context) {
+  void _updateBackendSortOrderNonBlocking(String wlName, BuildContext context,
+      {String toastMessage = "Stock order was changed"}) {
     Future.delayed(const Duration(milliseconds: 500), () {
-      _updateBackendSortOrder(wlName, context);
+      _updateBackendSortOrder(wlName, context, toastMessage: toastMessage);
     });
   }
 
@@ -4102,8 +4233,13 @@ getOptionawait(String exch, String token) {
     }
   }
 
-  // Helper method to update the backend without blocking UI
-  void _updateBackendSortOrder(String wlName, BuildContext context) {
+  // Helper method to update the backend without blocking UI.
+  // Uses the dedicated ReorderMWScrips endpoint — a single atomic call that
+  // takes the full ordered list and updates positions on the backend.
+  // Replaces the older delete-all + add-all flow that always tripped the
+  // "at least 1 stock must remain" rule on the delete step.
+  void _updateBackendSortOrder(String wlName, BuildContext context,
+      {String toastMessage = "Stock order was changed"}) {
     // Use a longer delay to ensure UI has fully updated before backend operations
     Future.delayed(const Duration(milliseconds: 300), () async {
       try {
@@ -4116,17 +4252,32 @@ getOptionawait(String exch, String token) {
           return;
         }
 
-        // First step: Delete all scrips (but only from backend, not UI)
-        final deleteResult = await addDelMarketScrip(
-            wlName, "$scripTokens#", context, false, true, true, false,
-            showSnackBar: false);
+        await api.getReorderMWScrips(
+          wlname: wlName,
+          scripToken: "$scripTokens#",
+        );
 
-        // Second step: Add all scrips back in the new order (only to backend)
-        if (deleteResult) {
-          await addDelMarketScrip(
-              wlName, "$scripTokens#", context, true, true, true, false,
-              showSnackBar: false);
+        // Sync the local scrip-data cache with the new order. Without this,
+        // any later changeWLScrip / restoreFromCache call (e.g. after a
+        // browser tab return triggers the WS reconnect resubscribe chain)
+        // would re-hydrate _scrips from the stale cached JSON and silently
+        // revert the order.
+        _marketWatchScripData[wlName] = jsonEncode(_scrips);
 
+        // Toast wording is set by the caller — sort actions get an
+        // action-specific message (e.g. "Sorted by name (A-Z)"), while
+        // drag-drop reorder uses the default "Stock order was changed".
+        if (context.mounted) {
+          try {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            if (kIsWeb) {
+              ResponsiveSnackBar.showSuccess(context, toastMessage);
+            } else {
+              successMessage(context, toastMessage);
+            }
+          } catch (_) {
+            // Widget may have been disposed during the delay — ignore.
+          }
         }
       } catch (e) {
         // Silently handle errors in the background operation
@@ -4532,26 +4683,41 @@ getOptionawait(String exch, String token) {
     if (newI > oldI) {
       newI -= 1;
     }
-    String addInput = "";
-    String deleteInput = "";
 
     final element = _scrips.removeAt(oldI);
-    deleteInput = "${element['exch']}|${element['token']}#";
-    for (var elementa in _scrips) {
-      deleteInput += "${elementa['exch']}|${elementa['token']}#";
-    }
-
     _scrips.insert(newI, element);
 
-    await addDelMarketScrip(
-        wlName, deleteInput, context, false, true, true, false);
-
+   
+    String addInput = "";
     for (var elements in _scrips) {
       addInput += "${elements['exch']}|${elements['token']}#";
     }
+    try {
+      await api.getReorderMWScrips(
+        wlname: wlName,
+        scripToken: addInput,
+      );
+      // Sync the local scrip-data cache with the new order so a later
+      // changeWLScrip/restoreFromCache (e.g. from the WS reconnect chain
+      // after a browser tab return) doesn't silently revert the order.
+      _marketWatchScripData[wlName] = jsonEncode(_scrips);
 
-    await addDelMarketScrip(
-        wlName, addInput, context, true, true, false, false);
+      // Restore the success toast that the old delete-then-add flow used
+      // to show via addDelMarketScrip's isReOrder branch.
+      if (context.mounted) {
+        try {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          if (kIsWeb) {
+            ResponsiveSnackBar.showSuccess(context, "Stocks reordered successfully.");
+          } else {
+            successMessage(context, "Stocks reordered successfully.");
+          }
+        } catch (_) {}
+      }
+    } catch (_) {
+      // Silently swallow — reorder is best-effort; the UI already reflects
+      // the new order and the backend remains consistent with the old order.
+    }
 
     // Reset sorting after reordering to maintain natural order
     await _resetSortPreference();
@@ -4656,19 +4822,19 @@ getOptionawait(String exch, String token) {
         // Close the dialog
         Navigator.of(context).pop();
 
-        // Small delay to ensure dialog pop completes, then add Order Book tab and switch to Alerts
+       
         Future.delayed(const Duration(milliseconds: 200), () {
           if (kIsWeb && WebNavigationHelper.isAvailable) {
-            // Navigate to Order Book in web panel using WebNavigationHelper
+            // Navigate to Order Book in web panel
             WebNavigationHelper.navigateTo("orderBook");
 
-            // Additional delay to ensure Order Book screen loads, then switch to Alerts tab within it
+          
             Future.delayed(const Duration(milliseconds: 300), () {
-              ref.read(orderProvider).changeTabIndex(5, context);
+              ref.read(orderProvider).setSelectedTabSilent(6);
             });
           } else {
             // Fallback for non-web platforms
-            ref.read(orderProvider).changeTabIndex(5, context);
+            ref.read(orderProvider).setSelectedTabSilent(6);
           }
         });
       } else if (_setAlertModel!.stat! == "Not_Ok" &&
@@ -4862,10 +5028,10 @@ getOptionawait(String exch, String token) {
         }
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         } else {
           successMessage(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         }
         notifyListeners();
         return;
@@ -4903,10 +5069,10 @@ getOptionawait(String exch, String token) {
         }
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         } else {
           successMessage(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         }
         notifyListeners();
       } else if (_watchlistRenameModel!.stat == "Not_Ok") {

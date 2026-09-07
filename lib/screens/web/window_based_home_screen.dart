@@ -13,6 +13,8 @@ import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/screens/web/market_watch/tv_chart/webview_chart.dart';
 // import 'package:mynt_plus/screens/web/chart/web_chart_overlay.dart'; // Commented out - using panel chart only
 import 'package:mynt_plus/screens/web/ordersbook/order_book_screen_web.dart';
+import 'package:mynt_plus/screens/web/scanner/scanner_shell_screen.dart';
+import 'package:mynt_plus/screens/web/orderflow/orderflow_shell_screen.dart';
 import 'package:mynt_plus/screens/web/funds/secure_fund_web.dart';
 import '../../../locator/constant.dart';
 import '../../../locator/locator.dart';
@@ -64,6 +66,8 @@ import 'portfolio_analysis_web.dart';
 import 'market_watch/options/option_chain_ss_web.dart';
 import '../Mobile/desk_reports/pledge_unpledge_screen.dart';
 import 'mutual_fund/mf_main_screen_web.dart';
+import 'all_strategies_screen_web.dart';
+import 'all_algo_strategies_screen_web.dart';
 import 'mutual_fund/mf_all_best_funds_web.dart';
 import 'mutual_fund/mf_top_category_list_web.dart';
 import 'mutual_fund/mf_nfo_screen_web.dart';
@@ -472,6 +476,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return const SizedBox.shrink(); // Strategy Builder opens as separate route
       case ScreenType.scalper:
         return const ScalperScreenWeb(embedded: true);
+      case ScreenType.charts:
+        return const SizedBox.shrink();
       case ScreenType.tradingViewWebHook:
         return const WebHookTradingViewScreen();
       case ScreenType.basketDashboard:
@@ -517,6 +523,14 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return FormDownloadScreenWeb(onBack: () => _showScreenInWindow(ScreenType.myAccount));
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: () => _showScreenInWindow(ScreenType.myAccount));
+      case ScreenType.scanner:
+        return const ScannerShellScreen();
+      case ScreenType.orderflow:
+        return const OrderflowShellScreen();
+      case ScreenType.curatedStrategies:
+        return const AllStrategiesScreenWeb();
+      case ScreenType.allAlgoStrategies:
+        return const AllAlgoStrategiesScreenWeb();
     }
   }
 
@@ -582,6 +596,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Strategy Builder';
       case ScreenType.scalper:
         return 'Scalper';
+      case ScreenType.charts:
+        return 'Charts';
       case ScreenType.tradingViewWebHook:
         return 'WebHook';
       case ScreenType.basketDashboard:
@@ -626,6 +642,14 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.scanner:
+        return 'Scanner';
+      case ScreenType.orderflow:
+        return 'Orderflow';
+      case ScreenType.curatedStrategies:
+        return 'Strategies';
+      case ScreenType.allAlgoStrategies:
+        return 'Algo Strategies';
     }
   }
 

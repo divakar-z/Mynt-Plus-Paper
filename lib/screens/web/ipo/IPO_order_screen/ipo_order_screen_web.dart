@@ -164,6 +164,34 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
   String get biddingEndDate =>
       isSME ? (ipoData.biddingEndDate ?? "") : (ipoData.biddingEndDate ?? "");
 
+  bool get isCutOffAllowed {
+    final settings = ipoData.subCategorySettings as List?;
+    if (settings == null || settings.isEmpty) return true;
+    final type = (ipoData.type ?? "").toString();
+    bool matches(dynamic s) {
+      switch (selectedChip) {
+        case "Individual":
+          return s.subCatCode == "IND" &&
+              (type == "BSE" || s.caCode == "RETAIL");
+        case "HNI":
+          return s.subCatCode == "IND" && s.caCode == "NIB";
+        case "Employee":
+          return s.subCatCode == "EMP";
+        case "Shareholder":
+          return s.subCatCode == "SHA";
+        case "Policyholder":
+          return s.subCatCode == "POL";
+        default:
+          return false;
+      }
+    }
+
+    for (final s in settings) {
+      if (matches(s)) return s.allowCutOff ?? true;
+    }
+    return true;
+  }
+
   @override
   void initState() {
     setState(() {
@@ -778,47 +806,49 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                         ? colors.textPrimaryDark
                         : colors.textPrimaryLight,
                   ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(
-                            bottom:
-                                2), // Minor adjustment for checkbox alignment
-                        child: SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: Checkbox(
-                            value: addIpo[index].isChecked,
-                            onChanged: (val) {
-                              if (isSME) {
-                                ipo.smecutoffprice(addIpo[index], ipoData);
-                              } else {
-                                ipo.cutoffprice(addIpo[index], ipoData);
-                              }
-                              setState(() {
-                                _updateProviderState(ipo);
-                              });
-                            },
-                            activeColor: theme.isDarkMode
-                                ? MyntColors.primaryDark
-                                : MyntColors.primary,
-                            side: theme.isDarkMode
-                                ? const BorderSide(color: Color(0xFF6E7681), width: 1.5)
-                                : null,
+                  if (isCutOffAllowed)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(
+                              bottom:
+                                  2), // Minor adjustment for checkbox alignment
+                          child: SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: Checkbox(
+                              value: addIpo[index].isChecked,
+                              onChanged: (val) {
+                                if (isSME) {
+                                  ipo.smecutoffprice(addIpo[index], ipoData);
+                                } else {
+                                  ipo.cutoffprice(addIpo[index], ipoData);
+                                }
+                                setState(() {
+                                  _updateProviderState(ipo);
+                                });
+                              },
+                              activeColor: theme.isDarkMode
+                                  ? MyntColors.primaryDark
+                                  : MyntColors.primary,
+                              side: theme.isDarkMode
+                                  ? const BorderSide(
+                                      color: Color(0xFF6E7681), width: 1.5)
+                                  : null,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      TextWidget.paraText(
-                        text: "Cut-off",
-                        theme: theme.isDarkMode,
-                        color: theme.isDarkMode
-                            ? colors.textSecondaryDark
-                            : colors.textSecondaryLight,
-                      ),
-                    ],
-                  ),
+                        const SizedBox(width: 4),
+                        TextWidget.paraText(
+                          text: "Cut-off",
+                          theme: theme.isDarkMode,
+                          color: theme.isDarkMode
+                              ? colors.textSecondaryDark
+                              : colors.textSecondaryLight,
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -1018,7 +1048,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                   ? TextWidget.captionText(
                       theme: false,
                       text: addIpo[index].qualityerrortext,
-                      color: colors.error,
+                      color: resolveThemeColor(context,
+                      dark: MyntColors.lossDark, light: MyntColors.loss),
                       fw: 0,
                     )
                   : const SizedBox(),
@@ -1029,7 +1060,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                   ? TextWidget.captionText(
                       theme: false,
                       text: addIpo[index].biderrortext,
-                      color: colors.error,
+                      color: resolveThemeColor(context,
+                      dark: MyntColors.lossDark, light: MyntColors.loss),
                       fw: 0,
                     )
                   : const SizedBox(),

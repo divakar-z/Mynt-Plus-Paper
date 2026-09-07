@@ -10,7 +10,7 @@ import '../../../../../res/mynt_web_color_styles.dart';
 import '../../../../../res/mynt_web_text_styles.dart';
 import '../../../../../sharedWidget/payment_loader.dart';
 import '../../../../../sharedWidget/snack_bar.dart';
-import '../../Mobile/profile_screen/fund_screen/upi_id_screens/mf_payment_resp_alert.dart';
+import '../profile/fund_screen/upi_id_screens/mf_payment_resp_alert.dart';
 
 class MfUPIProcessingScreenWeb extends ConsumerStatefulWidget {
   const MfUPIProcessingScreenWeb({super.key, this.data});

@@ -240,6 +240,46 @@ class WebAuthProvider extends ChangeNotifier {
     return false;
   }
 
+  /// URL token-based auto-login (app.mynt.in/?uid=..&token=..).
+  ///
+  /// Validates (uid, token) against the backend and commits a session ONLY on
+  /// success. Returns true if logged in (navigation to home is triggered).
+  /// Returns false for an invalid/expired token WITHOUT modifying any stored
+  /// pref — so a wrong link can never overwrite or log out the current user.
+  Future<bool> tryUrlAutoLogin(
+      BuildContext context, String uid, String token) async {
+    _setLoading(true);
+    try {
+      final result =
+          await WebAuthApi.validateSession(clientId: uid, apiSession: token);
+
+      if (result != null && result['stat'] == 'Ok') {
+        // Validated — now (and only now) replace any existing session. Start
+        // clean so a new user never inherits the previous user's prefs.
+        await pref.clearUserSession();
+        await pref.setClientId(uid);
+        await pref.setClientSession(token);
+        if (result['uname'] != null) {
+          await pref.setClientName(result['uname']);
+        }
+        await pref.setLogout(false);
+        await pref.setMobileLogin(true);
+
+        if (context.mounted) {
+          await ref.read(authProvider).initialLoadMethods(context, "");
+        }
+        return true;
+      }
+
+      // Invalid/expired link — touch nothing; existing session stays intact.
+      return false;
+    } catch (e) {
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
   /// Web Login - Submit login credentials
   Future<bool> submitWebLogin(BuildContext context) async {
     if (!validateLogin() || !validatePassword()) {
@@ -310,6 +350,8 @@ class WebAuthProvider extends ChangeNotifier {
         mobileOrClientId: loginController.text.trim().toUpperCase(),
         source: _source,
         context: context,
+        // TOTP-setup flow → tell the backend this OTP is for TOTP setup.
+        isTotp: _topflow,
       );
 
       if (result != null && (result['stat'] == 'Ok' || (result['msg'] != null && result['msg'].toString().toLowerCase().contains('otp')))) {
@@ -399,6 +441,17 @@ class WebAuthProvider extends ChangeNotifier {
           }
           notifyListeners();
           return false;
+        } else if (errorMsg.contains('invalid user')) {
+          // OAuth: the account being logged in doesn't own the app key, so the
+          // backend rejects with "Invalid User". Show that real reason as a toast,
+          // NOT a misleading "Invalid TOTP" — the emsg ("Invalid Input : Invalid
+          // User") would otherwise be swallowed by the 'invalid input' check below.
+          // Strip the "Invalid Input :" prefix and show just "Invalid User".
+          _otpError = null;
+          if (context.mounted) {
+            final reason = _mobileOtp!.emsg!.split(':').last.trim();
+            ResponsiveSnackBar.showError(context, reason);
+          }
         } else if (errorMsg.contains('otp not valid') || errorMsg.contains('invalid otp') || errorMsg.contains('invalid input')) {
           // API error → toaster only (consistent with login flow)
           _otpError = null;
@@ -484,8 +537,10 @@ class WebAuthProvider extends ChangeNotifier {
 
   /// Generate a brand-new TOTP secret key (triggered from "Generate New Key" button
   /// shown when no existing key is set up for the user).
-  Future<void> generateNewTotpKey(BuildContext context) async {
-    if (_apiSession == null) return;
+  /// Returns true when a usable key came back, so the caller can report a
+  /// failure instead of leaving the user looking at an unchanged screen.
+  Future<bool> generateNewTotpKey(BuildContext context) async {
+    if (_apiSession == null) return false;
 
     _setLoading(true);
     try {
@@ -502,7 +557,9 @@ class WebAuthProvider extends ChangeNotifier {
         }
       }
       notifyListeners();
+      return _totpData?.isValid == true;
     } catch (e) {
+      return false;
     } finally {
       _setLoading(false);
     }
@@ -653,9 +710,39 @@ class WebAuthProvider extends ChangeNotifier {
     }
   }
 
+  /// The OAuth app key when the login is happening inside the OAuth flow — i.e.
+  /// the current URL carries a client_id. Null for normal logins.
+  String? get _oauthClientId {
+    final id = (Uri.base.queryParameters['client_id'] ?? '').trim();
+    return id.isEmpty ? null : id;
+  }
+
+  /// OAuth-flow login success: store the returned session under the OAuth-only
+  /// keys (leaving the main web session — clientId/clientSession — untouched)
+  /// and route back to the authorize screen. No full app load: we're authorising
+  /// a partner, not entering the trading app, so the main session must survive.
+  Future<void> _handleOAuthLoginSuccess(
+      BuildContext context, String token) async {
+    final clientId = _oauthClientId;
+    if (clientId == null) return;
+    await pref.setOauthSession(token);
+    if (context.mounted) {
+      context.go(
+        '${WebRoutes.oauthAuthorize}?client_id=${Uri.encodeQueryComponent(clientId)}',
+      );
+    }
+  }
+
   /// Handle successful login (direct login without OTP)
   Future<void> _handleLoginSuccess(BuildContext context) async {
     if (_mobileLogin == null) return;
+
+    // OAuth flow: keep this session out of the main web session and bounce back
+    // to the authorize screen instead of loading the trading app.
+    if (_oauthClientId != null) {
+      await _handleOAuthLoginSuccess(context, _mobileLogin!.apitoken ?? '');
+      return;
+    }
 
     await pref.setClientId(_mobileLogin!.clientid ?? '');
     await pref.setClientMob(_mobileLogin!.mobile ?? '');
@@ -675,6 +762,13 @@ class WebAuthProvider extends ChangeNotifier {
   /// Handle successful OTP verification
   Future<void> _handleOtpSuccess(BuildContext context) async {
     if (_mobileOtp == null) return;
+
+    // OAuth flow: store under the OAuth-only session keys and return to the
+    // authorize screen, leaving the main web session untouched.
+    if (_oauthClientId != null) {
+      await _handleOAuthLoginSuccess(context, _mobileOtp!.apitoken ?? '');
+      return;
+    }
 
     await pref.setClientId(_mobileOtp!.clientid ?? '');
     await pref.setClientMob(_mobileOtp!.mobile ?? '');

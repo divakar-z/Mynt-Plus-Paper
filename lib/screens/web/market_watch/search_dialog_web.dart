@@ -23,6 +23,7 @@ import '../../../sharedWidget/common_search_fields_web.dart';
 import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../utils/responsive_navigation.dart';
+import '../../../utils/responsive_snackbar.dart';
 import 'tv_chart/chart_iframe_guard.dart';
 
 class SearchDialogWeb extends ConsumerStatefulWidget {
@@ -316,8 +317,12 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                 autofocus: true,
                                 inputFormatters: [
                                   UpperCaseTextFormatter(),
-                                  FilteringTextInputFormatter.deny(
-                                      RegExp('[π£•₹€℅™∆√¶/.,]'))
+                                  FilteringTextInputFormatter.allow(
+                                      RegExp(r'[a-zA-Z0-9& \-]')),
+                                  TextInputFormatter.withFunction((oldValue, newValue) {
+                                    if (newValue.text.startsWith(' ')) return oldValue;
+                                    return newValue;
+                                  }),
                                 ],
                                 // Note: Search is handled by _textController.addListener with debounce
                                 // No onChanged here to avoid duplicate API calls
@@ -340,6 +345,9 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                       // const SizedBox(height: 10),
                       // Always show tabs and content area
                       _buildSearchTabs(ref, theme),
+
+                      // Watchlist notice or stock limit banner
+                      _buildWatchlistStatusBanner(searchScrip, theme),
 
                       // Search Results or No Data
                       Expanded(
@@ -445,6 +453,127 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
     );
   }
 
+  Widget _buildWatchlistStatusBanner(
+      MarketWatchProvider searchScrip, ThemesProvider theme) {
+    if (widget.isBasket == "Basket" ||
+        widget.isBasket == "Chart||Is" ||
+        widget.isBasket == "Option||Is") {
+      return const SizedBox.shrink();
+    }
+
+    final isPreDef = searchScrip.isPreDefWLs == "Yes";
+    final scripCount = searchScrip.scrips.length;
+    final isFull = scripCount >= 50;
+
+    const noticeColor = Color(0xFFff4d00);
+
+    if (isPreDef) {
+      String displayName = widget.wlName;
+      if (displayName == 'Nifty50') displayName = 'Nifty 50';
+      if (displayName == 'Niftybank') displayName = 'Nifty Bank';
+      if (displayName.isNotEmpty &&
+          displayName != 'Nifty 50' &&
+          displayName != 'Nifty Bank') {
+        displayName =
+            '${displayName[0].toUpperCase()}${displayName.substring(1)}';
+      }
+
+      return Container(
+        margin: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: resolveThemeColor(
+            context,
+            dark: noticeColor.withOpacity(0.12),
+            light: noticeColor.withOpacity(0.08),
+          ),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: noticeColor.withOpacity(0.35),
+          ),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.info_outline,
+              size: 16,
+              color: noticeColor,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '“$displayName” is a predefined watchlist. Stocks can’t be added or removed from this watchlist.',
+                style: MyntWebTextStyles.para(
+                  context,
+                  color: resolveThemeColor(
+                    context,
+                    dark: WebColors.textSecondaryDark,
+                    light: WebColors.textSecondary,
+                  ),
+                ).copyWith(
+                  fontWeight: MyntFonts.medium,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final wlTitle = widget.wlName.isNotEmpty
+        ? '${widget.wlName[0].toUpperCase()}${widget.wlName.substring(1)}'
+        : 'Watchlist';
+
+    if (isFull) {
+      return Container(
+        margin: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: resolveThemeColor(
+            context,
+            dark: noticeColor.withOpacity(0.12),
+            light: noticeColor.withOpacity(0.08),
+          ),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: noticeColor.withOpacity(0.45),
+          ),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.warning_amber_rounded,
+              size: 16,
+              color: noticeColor,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Watchlist “$wlTitle” has reached its limit (50/50 stocks). Remove a stock to add a new one.',
+                style: MyntWebTextStyles.para(
+                  context,
+                  color: resolveThemeColor(
+                    context,
+                    dark: WebColors.textSecondaryDark,
+                    light: WebColors.textSecondary,
+                  ),
+                ).copyWith(
+                  fontWeight: MyntFonts.medium,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Custom watchlist (< 50 stocks): show subtle count indicator
+    return const SizedBox.shrink();
+
+  }
+
   Widget _buildSearchResults(
       MarketWatchProvider searchScrip, ThemesProvider theme) {
     if (searchScrip.allSearchScrip?.isEmpty ?? true) {
@@ -452,12 +581,17 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
         child: Padding(
           padding: const EdgeInsets.all(20.0),
           child: NoDataFoundWeb(
-            title: _searchValue.isNotEmpty
-                ? "No Results Found"
-                : "Start Searching",
-            subtitle: _searchValue.isNotEmpty
-                ? "No stocks match your search \"$_searchValue\"."
-                : "Type to search for stocks, indices, or options.",
+            
+            title: _searchValue.length < 3
+                ? "Start Searching"
+                : "No Results Found",
+            subtitle: _searchValue.isEmpty
+                ? "Type to search for stocks, indices, or options."
+                : _searchValue.length < 3
+                    ? "Type at least 3 characters to see results"
+                    : "No stocks match your search \"$_searchValue\".",
+           
+            secondaryEnabled: false,
           ),
         ),
       );
@@ -587,9 +721,11 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
                                   Text(
-                                    "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
-                                        .replaceAll("-EQ", "")
-                                        .toUpperCase(),
+                                    (scrip.masterName?.isNotEmpty == true)
+                                        ? scrip.masterName!
+                                        : "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
+                                            .replaceAll("-EQ", "")
+                                            .toUpperCase(),
                                     style: MyntWebTextStyles.symbol(
                                       context,
                                       color: resolveThemeColor(
@@ -599,7 +735,8 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                       ),
                                     ),
                                   ),
-                                  if (scrip.option != null &&
+                                  if (scrip.masterName == null &&
+                                      scrip.option != null &&
                                       scrip.option.toString().isNotEmpty)
                                     Padding(
                                       padding: const EdgeInsets.only(left: 4),
@@ -615,7 +752,8 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                         ),
                                       ),
                                     ),
-                                  if (scrip.expDate != null &&
+                                  if (scrip.masterName == null &&
+                                      scrip.expDate != null &&
                                       scrip.expDate.toString().isNotEmpty)
                                     Padding(
                                       padding: const EdgeInsets.only(left: 4),
@@ -782,108 +920,137 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                         if (widget.isBasket != "Basket" &&
                             widget.isBasket != "Chart||Is" &&
                             widget.isBasket != "Option||Is" &&
-                            searchScrip.isPreDefWLs != "Yes" &&
-                            searchScrip.scrips.length < 50)
+                            searchScrip.isPreDefWLs != "Yes")
                           Builder(
                             builder: (context) {
                               // Use exarr from marketWatchProvider (already available during search)
                               // This avoids waiting for userProfileProvider.userDetailModel API call
                               // Note: searchScrip.exarr contains quoted strings like '"NSE"'
                               final isSegmentActive = searchScrip.exarr.contains('"${scrip.exch}"');
+                              final isAdded = searchScrip.isAdded != null &&
+                                  index < searchScrip.isAdded!.length &&
+                                  searchScrip.isAdded![index];
+                              final isWatchlistFull = searchScrip.scrips.length >= 50;
 
-                              return Material(
-                                color: Colors.transparent,
-                                shape: const CircleBorder(),
-                                child: InkWell(
-                                  customBorder: const CircleBorder(),
-                                  splashColor: Colors.grey.withOpacity(0.2),
-                                  highlightColor: Colors.grey.withOpacity(0.1),
-                                  onTap: () async {
-                                    if (!isSegmentActive) {
-                                      showResponsiveErrorMessage(
-                                          context, "Segment is not active.");
-                                    } else {
-                                      if (searchScrip.isAdded![index]) {
-                                        await searchScrip.isActiveAddBtn(
-                                            false, index);
-                                        await searchScrip.addDelMarketScrip(
-                                          widget.wlName,
-                                          "${scrip.exch}|${scrip.token}",
-                                          context,
-                                          false,
-                                          false,
-                                          false,
-                                          false,
-                                        );
+                              return Tooltip(
+                                message: !isSegmentActive
+                                    ? "Segment is not active"
+                                    : isAdded
+                                        ? "Remove from watchlist"
+                                        : isWatchlistFull
+                                            ? "Watchlist full (50/50)"
+                                            : "Add to watchlist",
+                                child: Material(
+                                  color: Colors.transparent,
+                                  shape: const CircleBorder(),
+                                  child: InkWell(
+                                    customBorder: const CircleBorder(),
+                                    splashColor: Colors.grey.withOpacity(0.2),
+                                    highlightColor: Colors.grey.withOpacity(0.1),
+                                    onTap: () async {
+                                      if (!isSegmentActive) {
+                                        showResponsiveErrorMessage(
+                                            context, "Segment is not active.");
                                       } else {
-                                        await searchScrip.isActiveAddBtn(
-                                            true, index);
-                                        await searchScrip.addDelMarketScrip(
-                                          widget.wlName,
-                                          "${scrip.exch}|${scrip.token}",
-                                          context,
-                                          true,
-                                          false,
-                                          false,
-                                          false,
-                                        );
-
-                                        try {
-                                          final currentSort = ref
-                                              .read(marketWatchProvider)
-                                              .sortByWL;
-
-                                          if (currentSort.isNotEmpty) {
-                                            await ref
-                                                .read(marketWatchProvider)
-                                                .filterMWScrip(
-                                                  sorting: currentSort,
-                                                  wlName: widget.wlName,
-                                                  context: context,
-                                                );
+                                        if (isAdded) {
+                                          await searchScrip.isActiveAddBtn(
+                                              false, index);
+                                          await searchScrip.addDelMarketScrip(
+                                            widget.wlName,
+                                            "${scrip.exch}|${scrip.token}",
+                                            context,
+                                            false,
+                                            false,
+                                            false,
+                                            false,
+                                          );
+                                        } else {
+                                          if (isWatchlistFull) {
+                                            final wlTitle = widget.wlName.isNotEmpty
+                                                ? '${widget.wlName[0].toUpperCase()}${widget.wlName.substring(1)}'
+                                                : 'Watchlist';
+                                            ResponsiveSnackBar.showWarning(
+                                              context,
+                                              'Watchlist "$wlTitle" limit reached (50/50 stocks). Please remove stocks to add new ones.',
+                                            );
+                                            return;
                                           }
 
-                                          scripisAscending = !scripisAscending;
-                                          pref.setMWScrip(scripisAscending);
+                                          await searchScrip.isActiveAddBtn(
+                                              true, index);
+                                          await searchScrip.addDelMarketScrip(
+                                            widget.wlName,
+                                            "${scrip.exch}|${scrip.token}",
+                                            context,
+                                            true,
+                                            false,
+                                            false,
+                                            false,
+                                          );
 
-                                          pricepisAscending = !pricepisAscending;
-                                          pref.setMWPrice(pricepisAscending);
+                                          try {
+                                            final currentSort = ref
+                                                .read(marketWatchProvider)
+                                                .sortByWL;
 
-                                          perchangisAscending =
-                                              !perchangisAscending;
-                                          pref.setMWPerchnage(perchangisAscending);
-                                        } catch (e) {
+                                            if (currentSort.isNotEmpty) {
+                                              await ref
+                                                  .read(marketWatchProvider)
+                                                  .filterMWScrip(
+                                                    sorting: currentSort,
+                                                    wlName: widget.wlName,
+                                                    context: context,
+                                                  );
+                                            }
+
+                                            scripisAscending = !scripisAscending;
+                                            pref.setMWScrip(scripisAscending);
+
+                                            pricepisAscending = !pricepisAscending;
+                                            pref.setMWPrice(pricepisAscending);
+
+                                            perchangisAscending =
+                                                !perchangisAscending;
+                                            pref.setMWPerchnage(perchangisAscending);
+                                          } catch (e) {
+                                          }
                                         }
                                       }
-                                    }
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(7),
-                                    child: !isSegmentActive
-                                        ? SvgPicture.asset(
-                                            assets.dInfo,
-                                            color: Colors.red,
-                                            height: 18,
-                                            width: 18,
-                                          )
-                                        : SvgPicture.asset(
-                                            searchScrip.isAdded![index]
-                                                ? assets.bookmarkIcon
-                                                : assets.bookmarkedIcon,
-                                            color: searchScrip.isAdded![index]
-                                                ? resolveThemeColor(
-                                                    context,
-                                                    dark: WebColors.primaryDark,
-                                                    light: WebColors.primary,
-                                                  )
-                                                : resolveThemeColor(
-                                                    context,
-                                                    dark: WebColors.iconDark,
-                                                    light: WebColors.icon,
-                                                  ),
-                                            height: 18,
-                                            width: 18,
-                                          ),
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(7),
+                                      child: !isSegmentActive
+                                          ? SvgPicture.asset(
+                                              assets.dInfo,
+                                              color: Colors.red,
+                                              height: 18,
+                                              width: 18,
+                                            )
+                                          : SvgPicture.asset(
+                                              isAdded
+                                                  ? assets.bookmarkIcon
+                                                  : assets.bookmarkedIcon,
+                                              color: isAdded
+                                                  ? resolveThemeColor(
+                                                      context,
+                                                      dark: WebColors.primaryDark,
+                                                      light: WebColors.primary,
+                                                    )
+                                                  : isWatchlistFull
+                                                      ? resolveThemeColor(
+                                                          context,
+                                                          dark: WebColors.iconDark.withOpacity(0.35),
+                                                          light: WebColors.icon.withOpacity(0.35),
+                                                        )
+                                                      : resolveThemeColor(
+                                                          context,
+                                                          dark: WebColors.iconDark,
+                                                          light: WebColors.icon,
+                                                        ),
+                                              height: 18,
+                                              width: 18,
+                                            ),
+                                    ),
                                   ),
                                 ),
                               );

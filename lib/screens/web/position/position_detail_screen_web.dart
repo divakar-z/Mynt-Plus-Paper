@@ -8,6 +8,7 @@ import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/portfolio_model/position_book_model.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/websocket_provider.dart';
 import '../../../res/mynt_web_text_styles.dart';
@@ -313,6 +314,10 @@ class _PositionDetailScreenWebState
 
   // Helper method to format instrument display text (same logic as position_table.dart)
   String _formatInstrumentText() {
+    // Priority 0: backend display name from the DerivativeMaster (derivatives).
+    final master = _positionData.masterName;
+    if (master != null && master.isNotEmpty) return master;
+
     // Priority 1: Use dname (display name) if available
     if (_positionData.dname != null && _positionData.dname!.isNotEmpty) {
       return _positionData.dname!.replaceAll("-EQ", "").trim();
@@ -617,12 +622,15 @@ class _PositionDetailScreenWebState
 
   Widget _buildDetailsSection(
       ThemesProvider theme, PortfolioProvider positions) {
-    final pnlValue = positions.isNetPnl
+    // Privacy Mode: every position value here is masked (Product stays).
+    // Masked strings parse to 0 in _getPnLColor, so the colour goes neutral.
+    final privacy = ref.watch(privacyProvider);
+    final pnlValue = privacy.mask(positions.isNetPnl
         ? (_positionData.profitNloss ?? _positionData.rpnl ?? "0.00")
-        : (_positionData.mTm ?? "0.00");
+        : (_positionData.mTm ?? "0.00"));
     final pnlColor = _getPnLColor(pnlValue);
 
-    final mtmValue = _positionData.mTm ?? "0.00";
+    final mtmValue = privacy.mask(_positionData.mTm ?? "0.00");
     final mtmColor = _getPnLColor(mtmValue);
 
     return Column(
@@ -661,7 +669,8 @@ class _PositionDetailScreenWebState
         _rowOfInfoData(
           "Net Qty",
           Text(
-            "${(int.tryParse(_positionData.netqty?.toString() ?? '0') ?? 0) ~/ (_positionData.exch == 'MCX' ? (int.tryParse(_positionData.ls?.toString() ?? '1') ?? 1) : 1)}",
+            privacy.mask(
+                "${(int.tryParse(_positionData.netqty?.toString() ?? '0') ?? 0) ~/ (_positionData.exch == 'MCX' ? (int.tryParse(_positionData.ls?.toString() ?? '1') ?? 1) : 1)}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -670,7 +679,7 @@ class _PositionDetailScreenWebState
         _rowOfInfoData(
           "Avg Price",
           Text(
-            "${_positionData.netupldprc ?? 0.00}",
+            privacy.mask("${_positionData.netupldprc ?? 0.00}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -679,17 +688,18 @@ class _PositionDetailScreenWebState
           _rowOfInfoData(
           "Actual Avg Price",
           Text(
-            "${_positionData.upldprc ?? 0.00}",
+            privacy.mask("${_positionData.upldprc ?? 0.00}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
           theme,
         ),
-       
+
         _rowOfInfoData(
           "Buy Qty ( Day / CF )",
           Text(
-            "${(int.tryParse(_positionData.daybuyqty?.toString() ?? '0') ?? 0) ~/ (_positionData.exch == 'MCX' ? (int.tryParse(_positionData.ls?.toString() ?? '1') ?? 1) : 1)} / ${_positionData.cfbuyqty ?? 0}",
+            privacy.mask(
+                "${(int.tryParse(_positionData.daybuyqty?.toString() ?? '0') ?? 0) ~/ (_positionData.exch == 'MCX' ? (int.tryParse(_positionData.ls?.toString() ?? '1') ?? 1) : 1)} / ${_positionData.cfbuyqty ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -698,7 +708,8 @@ class _PositionDetailScreenWebState
         _rowOfInfoData(
           "Sell Qty ( Day / CF )",
           Text(
-            "${(int.tryParse(_positionData.daysellqty?.toString() ?? '0') ?? 0) ~/ (_positionData.exch == 'MCX' ? (int.tryParse(_positionData.ls?.toString() ?? '1') ?? 1) : 1)} / ${_positionData.cfsellqty ?? 0}",
+            privacy.mask(
+                "${(int.tryParse(_positionData.daysellqty?.toString() ?? '0') ?? 0) ~/ (_positionData.exch == 'MCX' ? (int.tryParse(_positionData.ls?.toString() ?? '1') ?? 1) : 1)} / ${_positionData.cfsellqty ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -707,7 +718,8 @@ class _PositionDetailScreenWebState
         _rowOfInfoData(
           "Buy Avg prc ( Day / CF )",
           Text(
-            "${_positionData.daybuyavgprc ?? 0.00} / ${_positionData.cfbuyavgprc ?? 0.00}",
+            privacy.mask(
+                "${_positionData.daybuyavgprc ?? 0.00} / ${_positionData.cfbuyavgprc ?? 0.00}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -716,17 +728,19 @@ class _PositionDetailScreenWebState
         _rowOfInfoData(
           "Sell Avg prc ( Day / CF )",
           Text(
-            "${_positionData.daysellavgprc ?? 0.00} / ${_positionData.cfsellavgprc ?? 0.00}",
+            privacy.mask(
+                "${_positionData.daysellavgprc ?? 0.00} / ${_positionData.cfsellavgprc ?? 0.00}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
           theme,
         ),
-      
+
         _rowOfInfoData(
           "Buy / Sell Value",
           Text(
-            "${_positionData.daybuyamt ?? '0.00'} / ${_positionData.daysellamt ?? '0.00'}",
+            privacy.mask(
+                "${_positionData.daybuyamt ?? '0.00'} / ${_positionData.daysellamt ?? '0.00'}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),

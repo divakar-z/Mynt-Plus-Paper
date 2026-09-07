@@ -2,7 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/models/bonds_model/bonds_order_book_model.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/screens/Mobile/bonds/bonds_orderbook_screen/bond_cancel_alert/bonds_cancel_alert.dart';
@@ -188,7 +188,7 @@ class BondsOpenOrderDetailsWeb extends ConsumerWidget {
 
   static TextStyle _textStyle(
       Color color, double fontSize, FontWeight fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
       textStyle: TextStyle(
         fontWeight: fWeight,
         color: color,

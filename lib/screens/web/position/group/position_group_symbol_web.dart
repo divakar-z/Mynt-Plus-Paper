@@ -12,6 +12,7 @@ import '../../../../provider/auth_provider.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../provider/order_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/assets.dart';
 import '../../../../res/mynt_web_text_styles.dart';
@@ -488,7 +489,11 @@ class GroupTileHeader extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final value = isNetPnl ? totPnl : totMtm;
+    // Privacy Mode: the aggregated group P&L is masked and its colour
+    // neutralized ("0.00" is passed so _getPnlColor lands on the grey branch).
+    final privacy = ref.watch(privacyProvider);
+    final rawValue = isNetPnl ? totPnl : totMtm;
+    final value = privacy.mask(rawValue);
 
     return Expanded(
       child: Row(
@@ -555,7 +560,8 @@ class GroupTileHeader extends ConsumerWidget {
             value,
             style: MyntWebTextStyles.title(
               context,
-              color: _getPnlColor(value, context),
+              color: _getPnlColor(
+                  privacy.isPrivate ? "0.00" : rawValue, context),
               fontWeight: MyntFonts.medium,
             ),
           ),
@@ -953,7 +959,8 @@ class GroupAnalyseButton extends ConsumerWidget {
                 if (position.exch == "BFO" && position.dname != null && position.dname != "null") {
                   List<String> splitVal = position.dname!.split(" ");
                   symbol = splitVal[0];
-                  expDate = "${splitVal[1]} ${splitVal[2]}";
+                  // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+                  expDate = bfoExpiryWithYear(splitVal, position.tsym);
                 } else {
                   Map spilitSymbol = spilitTsym(value: "${position.tsym}");
                   symbol = "${spilitSymbol["symbol"]}";

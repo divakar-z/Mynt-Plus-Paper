@@ -5,7 +5,7 @@ import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/res/global_state_text.dart';
 import 'package:mynt_plus/sharedWidget/list_divider.dart';
-import '../../Mobile/mutual_fund_old/create_mandate_daialogue.dart';
+import 'create_mandate_dialogue_web.dart';
 import '../../../../provider/thems.dart';
 
 class MandateSelectionScreenWeb extends StatefulWidget {

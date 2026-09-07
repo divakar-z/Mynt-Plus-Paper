@@ -63,6 +63,7 @@ import 'package:flutter/material.dart'
         ValueNotifier,
         ValueListenableBuilder;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn
     hide Colors, Tooltip;
@@ -243,7 +244,22 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
 
     final List<GttOrderBookModel> gttOrders;
     if (showTriggered) {
-      gttOrders = orderBook.triggeredGttOrders ?? [];
+      // Triggered orders come from a separate lazily-fetched list that
+      // searchOrders doesn't cover, so filter here at build time — always
+      // fresh even when the fetch completes mid-search.
+      final triggered = orderBook.triggeredGttOrders ?? [];
+      gttOrders = (searchQuery.isNotEmpty && isGttOrdersTab)
+          ? triggered
+              .where((e) => orderBook.contractMatches(searchQuery, [
+                    e.masterName,
+                    e.tsym,
+                    e.symbol,
+                    e.expDate,
+                    e.option,
+                    e.exch,
+                  ]))
+              .toList()
+          : triggered;
     } else {
       gttOrders = (searchQuery.isNotEmpty && isGttOrdersTab)
           ? (orderBook.gttOrderBookSearch ?? [])
@@ -269,9 +285,9 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
           final availableWidth = constraints.maxWidth;
 
           // Step 1: Start with minimum widths (content-based, no wasted space)
-          // 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+          // 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
           final columnWidths = <int, double>{};
-          for (int i = 0; i < 7; i++) {
+          for (int i = 0; i < 8; i++) {
             columnWidths[i] = minWidths[i] ?? 100.0;
           }
 
@@ -280,7 +296,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
               .fold<double>(0.0, (sum, width) => sum + width);
 
           // Step 3: If there's extra space, distribute it proportionally
-          // 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+          // 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
           if (totalMinWidth < availableWidth) {
             final extraSpace = availableWidth - totalMinWidth;
 
@@ -291,13 +307,13 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             final growthFactors = <int, double>{};
             double totalGrowthFactor = 0.0;
 
-            for (int i = 0; i < 7; i++) {
+            for (int i = 0; i < 8; i++) {
               if (i == 1) {
                 // Instrument
                 growthFactors[i] = instrumentGrowthFactor;
                 totalGrowthFactor += instrumentGrowthFactor;
-              } else if (i == 0 || i == 2 || i == 6) {
-                // Created on, Type, Status
+              } else if (i == 0 || i == 2 || i == 3 || i == 7) {
+                // Created on, Product, Type, Status
                 growthFactors[i] = textGrowthFactor;
                 totalGrowthFactor += textGrowthFactor;
               } else {
@@ -308,7 +324,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             }
 
             if (totalGrowthFactor > 0) {
-              for (int i = 0; i < 7; i++) {
+              for (int i = 0; i < 8; i++) {
                 if (growthFactors[i]! > 0) {
                   final extraForThisColumn =
                       (extraSpace * growthFactors[i]!) / totalGrowthFactor;
@@ -325,7 +341,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
           Widget buildTableContent() {
             return Column(
               children: [
-                // Fixed Header - 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+                // Fixed Header - 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
                 shadcn.Table(
                   columnWidths: {
                     0: shadcn.FixedTableSize(columnWidths[0]!),
@@ -342,16 +358,17 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                       cells: [
                         buildHeaderCell('Created on', 0),
                         buildHeaderCell('Instrument', 1),
-                        buildHeaderCell('Type', 2),
-                        buildHeaderCell('Trigger', 3, true),
-                        buildHeaderCell('LTP', 4, true),
-                        buildHeaderCell('Qty.', 5, true),
-                        buildHeaderCell('Status', 6,true),
+                        buildHeaderCell('Product', 2),
+                        buildHeaderCell('Type', 3),
+                        buildHeaderCell('Trigger', 4, true),
+                        buildHeaderCell('LTP', 5, true),
+                        buildHeaderCell('Qty.', 6, true),
+                        buildHeaderCell('Status', 7,true),
                       ],
                     ),
                   ],
                 ),
-                // Scrollable Body - 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+                // Scrollable Body - 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
                 Expanded(
                   child: sortedOrders.isEmpty
                       ? (orderBook.loading
@@ -360,15 +377,15 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                               child: Padding(
                                 padding: const EdgeInsets.all(16.0),
                                 child: NoDataFoundWeb(
-                                  title: showTriggered
-                                      ? "No Triggered GTT Orders"
-                                      : (searchQuery.isNotEmpty
-                                          ? "No GTT Orders Found"
+                                  title: searchQuery.isNotEmpty
+                                      ? "No GTT Orders Found"
+                                      : (showTriggered
+                                          ? "No Triggered GTT Orders"
                                           : "No GTT Orders"),
-                                  subtitle: showTriggered
-                                      ? "You don't have any triggered GTT orders yet."
-                                      : (searchQuery.isNotEmpty
-                                          ? "No GTT orders match your search \"$searchQuery\"."
+                                  subtitle: searchQuery.isNotEmpty
+                                      ? "No GTT orders match your search \"$searchQuery\"."
+                                      : (showTriggered
+                                          ? "You don't have any triggered GTT orders yet."
                                           : "You don't have any GTT orders yet."),
                                   primaryEnabled: false,
                                   secondaryEnabled: false,
@@ -434,17 +451,27 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                                           },
                                         ),
                                       ),
-                                      // Type (SINGLE/OCO + BUY/SELL badges)
+                                      // Product
                                       buildCellWithHover(
                                         rowIndex: index,
                                         columnIndex: 2,
+                                        onTap: () => _showGttOrderDetail(gttOrder),
+                                        child: Text(
+                                          _productLabel(gttOrder),
+                                          style: _getTextStyle(context),
+                                        ),
+                                      ),
+                                      // Type (SINGLE/OCO + BUY/SELL badges)
+                                      buildCellWithHover(
+                                        rowIndex: index,
+                                        columnIndex: 3,
                                         onTap: () => _showGttOrderDetail(gttOrder),
                                         child: _buildTypeCell(gttOrder),
                                       ),
                                       // Trigger (with percentage)
                                       buildCellWithHover(
                                         rowIndex: index,
-                                        columnIndex: 3,
+                                        columnIndex: 4,
                                         alignRight: true,
                                         onTap: () => _showGttOrderDetail(gttOrder),
                                         child: _buildTriggerCell(gttOrder),
@@ -452,7 +479,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                                       // LTP
                                       buildCellWithHover(
                                         rowIndex: index,
-                                        columnIndex: 4,
+                                        columnIndex: 5,
                                         alignRight: true,
                                         onTap: () => _showGttOrderDetail(gttOrder),
                                         child: _buildLTPCell(gttOrder, theme),
@@ -460,7 +487,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                                       // Qty.
                                       buildCellWithHover(
                                         rowIndex: index,
-                                        columnIndex: 5,
+                                        columnIndex: 6,
                                         alignRight: true,
                                         onTap: () => _showGttOrderDetail(gttOrder),
                                         child: Text(
@@ -471,7 +498,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                                       // Status
                                       buildCellWithHover(
                                         rowIndex: index,
-                                        columnIndex: 6,
+                                        columnIndex: 7,
                                         alignRight: true,
                                         onTap: () => _showGttOrderDetail(gttOrder),
                                         child: _buildStatusCell(gttOrder, theme),
@@ -579,7 +606,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
   }
 
   // Builds a cell with hover detection
-  // 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+  // 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
   shadcn.TableCell buildCellWithHover({
     required Widget child,
     required int rowIndex,
@@ -589,7 +616,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
   }) {
     final isFirstColumn = columnIndex == 0; // Created on column
     final isInstrumentColumn = columnIndex == 1; // Instrument column
-    final isLastColumn = columnIndex == 6; // Status column (7 columns, index 6)
+    final isLastColumn = columnIndex == 7; // Status column (8 columns, index 7)
 
     // Match the cell padding logic
     EdgeInsets cellPadding;
@@ -651,11 +678,11 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
   }
 
   // Builds a sortable header cell
-  // 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+  // 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
   shadcn.TableCell buildHeaderCell(String label, int columnIndex,
       [bool alignRight = false]) {
     final isFirstColumn = columnIndex == 0; // Created on column
-    final isLastColumn = columnIndex == 6; // Status column (7 columns, index 6)
+    final isLastColumn = columnIndex == 7; // Status column (8 columns, index 7)
 
     // Match the cell padding logic
     EdgeInsets headerPadding;
@@ -738,17 +765,18 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
   }
 
   // Calculate minimum column widths dynamically
-  // 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+  // 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
   Map<int, double> _calculateMinWidths(
       List<GttOrderBookModel> gttOrders, BuildContext context) {
     // Use fixed font size for measurement (table text is not responsive, only buttons are)
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 24.0;
     const sortIconWidth = 24.0;
 
     final headers = [
       'Created on',
       'Instrument',
+      'Product',
       'Type',
       'Trigger',
       'LTP',
@@ -769,12 +797,13 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             cellText = _formatCreatedDate(order);
             break;
           case 1: // Instrument
-            final symbol = (order.tsym ?? '').replaceAll("-EQ", "").trim();
+            final symbol =
+                order.masterName ?? (order.tsym ?? '').replaceAll("-EQ", "").trim();
             final exchange = order.exch ?? '';
             final exchangeText = exchange.isNotEmpty ? ' $exchange' : '';
             final symbolWidth = _measureTextWidth(symbol, textStyle);
             final exchangeStyle =
-                const TextStyle(fontSize: 10, fontFamily: 'Geist');
+                TextStyle(fontSize: 10, fontFamily: dyslexiaFontOr('Geist'));
             final exchangeWidth = exchangeText.isNotEmpty
                 ? _measureTextWidth(exchangeText, exchangeStyle)
                 : 0.0;
@@ -785,19 +814,22 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
               maxWidth = totalWidth;
             }
             continue;
-          case 2: // Type (SINGLE / BUY or OCO / SELL format)
+          case 2: // Product
+            cellText = _productLabel(order);
+            break;
+          case 3: // Type (SINGLE / BUY or OCO / SELL format)
             cellText = 'SINGLE / SELL'; // Approximate width
             break;
-          case 3: // Trigger (with percentage)
+          case 4: // Trigger (with percentage)
             cellText = '${order.d ?? '0.00'} 100%';
             break;
-          case 4: // LTP
+          case 5: // LTP
             cellText = CellFormatters.getValidLTPForGtt(order);
             break;
-          case 5: // Qty.
+          case 6: // Qty.
             cellText = (order.qty ?? 0).toString();
             break;
-          case 6: // Status
+          case 7: // Status
             cellText = CellFormatters.getGttStatusText(
                 order.gttOrderCurrentStatus?.toUpperCase() ?? '');
             break;
@@ -831,7 +863,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
     return textPainter.width;
   }
 
-  // Sort GTT orders based on 7 columns: Created on, Instrument, Type, Trigger, LTP, Qty., Status
+  // Sort GTT orders based on 8 columns: Created on, Instrument, Product, Type, Trigger, LTP, Qty., Status
   List<GttOrderBookModel> _getSortedGttOrders(List<GttOrderBookModel> orders) {
     if (_sortColumnIndex == null) return orders;
 
@@ -852,7 +884,10 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             comparison = (a.exch ?? '').compareTo(b.exch ?? '');
           }
           break;
-        case 2: // Type - compare order type (SINGLE/OCO) then side (BUY/SELL)
+        case 2: // Product
+          comparison = _productLabel(a).compareTo(_productLabel(b));
+          break;
+        case 3: // Type - compare order type (SINGLE/OCO) then side (BUY/SELL)
           final aIsOco = a.placeOrderParamsLeg2 != null;
           final bIsOco = b.placeOrderParamsLeg2 != null;
           comparison = aIsOco.toString().compareTo(bIsOco.toString());
@@ -860,20 +895,20 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
             comparison = (a.trantype ?? '').compareTo(b.trantype ?? '');
           }
           break;
-        case 3: // Trigger - numeric comparison
+        case 4: // Trigger - numeric comparison
           final aTrigger = double.tryParse(a.d ?? '0') ?? 0.0;
           final bTrigger = double.tryParse(b.d ?? '0') ?? 0.0;
           comparison = aTrigger.compareTo(bTrigger);
           break;
-        case 4: // LTP - numeric comparison
+        case 5: // LTP - numeric comparison
           final aLtp = double.tryParse(a.ltp ?? '0') ?? 0.0;
           final bLtp = double.tryParse(b.ltp ?? '0') ?? 0.0;
           comparison = aLtp.compareTo(bLtp);
           break;
-        case 5: // Qty.
+        case 6: // Qty.
           comparison = (a.qty ?? 0).compareTo(b.qty ?? 0);
           break;
-        case 6: // Status
+        case 7: // Status
           comparison = (a.gttOrderCurrentStatus ?? '')
               .compareTo(b.gttOrderCurrentStatus ?? '');
           break;
@@ -891,8 +926,9 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
     final status = gttOrder.gttOrderCurrentStatus?.toUpperCase() ?? '';
     final isPending = status == 'PENDING' || status == 'TRIGGER_PENDING';
     final uniqueId = '${gttOrder.alId ?? ''}_${gttOrder.tsym ?? ''}';
-    // Format instrument: remove "-EQ" and show symbol + exchange separately
-    final symbol = gttOrder.tsym ?? '';
+    // Format instrument: prefer the backend display name (DerivativeMaster) for
+    // derivatives, else the tsym; remove "-EQ" and show exchange separately.
+    final symbol = gttOrder.masterName ?? (gttOrder.tsym ?? '');
     final displayText = symbol.replaceAll("-EQ", "").trim();
 
     return GestureDetector(
@@ -1256,6 +1292,22 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
     }
   }
 
+  /// Product of the order the GTT will fire. Taken from the FIRST leg: an OCO
+  /// carries a product per leg, but both are set from the same selection when
+  /// the order is placed, so leg 1 represents the row.
+  String _productLabel(GttOrderBookModel gttOrder) {
+    switch (gttOrder.placeOrderParams?.prd) {
+      case "C":
+        return "CNC";
+      case "I":
+        return "MIS";
+      case "M":
+        return "NRML";
+      default:
+        return "-";
+    }
+  }
+
   Widget _buildStatusCell(GttOrderBookModel gttOrder, ThemesProvider theme) {
     final status = gttOrder.gttOrderCurrentStatus?.toUpperCase() ?? '';
     final statusText = CellFormatters.getGttStatusText(status);
@@ -1472,7 +1524,8 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
       // Cancel the GTT order
       await ref
           .read(orderProvider)
-          .cancelGttOrder(gttOrder.alId ?? '', context);
+          .cancelGttOrder(gttOrder.alId ?? '', context,
+              isOco: gttOrder.placeOrderParamsLeg2 != null);
 
       // Refresh GTT order book after successful cancel
       await ref.read(orderProvider).fetchGTTOrderBook(context, "");
@@ -1488,7 +1541,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
 
   Future<bool?> _showCancelGttOrderDialog(
       GttOrderBookModel gttOrderData) async {
-    final symbol = gttOrderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = gttOrderData.displayName.trim();
 
     return showDialog<bool>(
       context: context,

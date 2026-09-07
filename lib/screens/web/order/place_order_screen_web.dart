@@ -39,6 +39,8 @@ import 'package:mynt_plus/screens/web/funds/fund_screen_web.dart';
 import 'orderscreen_header_web.dart';
 import 'slice_order_sheet_web.dart';
 import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import 'package:mynt_plus/sharedWidget/custom_widget_button.dart';
 import 'package:mynt_plus/sharedWidget/enums.dart';
 import 'package:mynt_plus/sharedWidget/functions.dart';
@@ -59,6 +61,33 @@ import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:mynt_plus/utils/overlay_manager.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
+
+
+/// Rejects a keystroke that would make a numeric field invalid, keeping the
+/// last valid value instead of clearing it. Empty is always allowed so the
+/// user can still backspace the field clear. Replaces the earlier anchored
+/// `FilteringTextInputFormatter.allow(RegExp(r'^...$'))`, which wiped the whole
+/// field on any non-matching input (a letter, or a 3rd decimal digit) and then
+/// fired a spurious "cannot be empty" warning.
+TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
+    TextInputFormatter.withFunction((oldValue, newValue) =>
+        (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
+            ? newValue
+            : oldValue);
+
+// (former doc) Capped a digits-only quantity field at 1 crore (10,000,000) by
+// rejecting any keystroke/paste above the limit and keeping the last valid value.
+// _maxQtyLimit() reverted 2026-07-27 — typed-value cap was incomplete: in Amount
+// and Lot modes it guards the wrong unit, and mode toggles set the field
+// programmatically so the formatter never runs. To be replaced by a guard on the
+// final computed quantity at each submit path. Kept commented for reference.
+// TextInputFormatter _maxQtyLimit() =>
+//     TextInputFormatter.withFunction((oldValue, newValue) {
+//       if (newValue.text.isEmpty) return newValue;
+//       final v = int.tryParse(newValue.text);
+//       return (v != null && v <= 10000000) ? newValue : oldValue;
+//     });
+
 
 // InheritedWidget to pass close callback to child widgets
 class _PlaceOrderDialogCloseNotifier extends InheritedWidget {
@@ -137,6 +166,40 @@ class PlaceOrderScreenWeb extends ConsumerStatefulWidget {
   /// Static method to show a dialog on top of the place order overlay
   /// This ensures dialogs appear above the draggable order screen
   /// Dialog only closes when user explicitly clicks close (not on outside tap)
+  // Chart-iframe kill switch for overlays created from this static context —
+  // same pattern as the instance methods used by the draggable window.
+  static void _disableChartIframesForOverlay() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement &&
+            iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'none';
+          iframe.style.cursor = 'default';
+        }
+      }
+      html.document.body?.style.cursor = 'default';
+    } catch (e) {
+      // DOM access can fail during teardown — ignore
+    }
+  }
+
+  static void _enableChartIframesForOverlay() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement &&
+            iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'auto';
+          iframe.style.cursor = '';
+        }
+      }
+      html.document.body?.style.cursor = '';
+    } catch (e) {
+      // DOM access can fail during teardown — ignore
+    }
+  }
+
   static void showDialogOverlay({
     required BuildContext context,
     required Widget Function(BuildContext context, VoidCallback closeDialog) builder,
@@ -169,27 +232,43 @@ class PlaceOrderScreenWeb extends ConsumerStatefulWidget {
         // Entry might already be removed
       }
       _currentDialogOverlayEntry = null;
+      ChartIframeGuard.release();
+      _enableChartIframesForOverlay();
     }
 
     dialogOverlayEntry = OverlayEntry(
       builder: (overlayContext) => Material(
         color: Colors.transparent,
-        child: Stack(
-          children: [
-            // Barrier - does not dismiss on tap
-            Positioned.fill(
-              child: Container(color: barrierColor),
+        // Full-screen interceptor: the modal barrier blocks Flutter widgets,
+        // but the chart iframe lives in the browser layer and still receives
+        // mouse events — the interceptor stops the crosshair bleeding through.
+        child: PointerInterceptor(
+          child: MouseRegion(
+            cursor: SystemMouseCursors.basic,
+            // The place-order window's onExit re-enables the iframes when the
+            // mouse travels from the window to this dialog — keep re-disabling
+            // while the modal is up.
+            onHover: (_) => _disableChartIframesForOverlay(),
+            child: Stack(
+              children: [
+                // Barrier - does not dismiss on tap
+                Positioned.fill(
+                  child: Container(color: barrierColor),
+                ),
+                // Dialog content
+                Center(
+                  child: builder(overlayContext, closeDialog),
+                ),
+              ],
             ),
-            // Dialog content
-            Center(
-              child: builder(overlayContext, closeDialog),
-            ),
-          ],
+          ),
         ),
       ),
     );
 
     _currentDialogOverlayEntry = dialogOverlayEntry;
+    ChartIframeGuard.acquire();
+    _disableChartIframesForOverlay();
     overlay.insert(dialogOverlayEntry);
   }
 
@@ -311,6 +390,45 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   List priceTypes = ["Limit", "Market", "SL Limit", "SL MKT"];
   List<String> validityTypes = ["DAY", "IOC", "EOS"];
+
+  /// True once the user has tapped a validity chip, so the exchange toggle
+  /// stops overriding their choice.
+  bool _validityTouched = false;
+
+  /// The exchange the order will actually go to. Follows the NSE/BSE toggle,
+  /// unlike widget.orderArg.exchange which is fixed when the dialog opens.
+  String get _effectiveExch =>
+      (stockExchangeSelected.exch?.isNotEmpty ?? false)
+          ? stockExchangeSelected.exch!
+          : (widget.scripInfo.exch ?? widget.orderArg.exchange);
+
+  /// Whether the Disclosed Qty field applies at all.
+  ///
+  /// Vendor rules, observed on their screen:
+  ///   NSE / BSE  - allowed on DAY, blocked on IOC
+  ///   MCX        - allowed on DAY, blocked on IOC
+  ///   NFO / BFO  - blocked always
+  ///   NCOM       - blocked always
+  /// Price type is irrelevant: L, M, SL and SLM all behave the same.
+  /// Note MCX is allowed while NCOM is not, so this is a per-exchange list,
+  /// not a "derivatives are blocked" rule. BCOM and CDS are UNCONFIRMED and
+  /// are currently left allowed rather than blocked on a guess.
+  static const List<String> _dscqtyBlockedExch = ["NFO", "BFO", "NCOM"];
+
+  bool get _dscqtyApplies =>
+      !_dscqtyBlockedExch.contains(_effectiveExch) &&
+      validityType != "IOC";
+
+  /// Default validity for [exch]. BSE and BFO use EOS - their term for a day
+  /// order - everything else uses DAY. A saved IOC preference wins on both.
+  String _defaultValidityFor(String exch) {
+    if (isUserOrderPreferenceAvailable &&
+        userOrderPreference['validity'] == 'IOC') {
+      return 'IOC';
+    }
+    return (exch == "BSE" || exch == "BFO") ? "EOS" : "DAY";
+  }
+
   List<String> sipDropdown = ['Daily', 'Weekly', 'Fortnightly', 'Monthly'];
   bool isOco = false;
   bool isGtt = true;
@@ -452,11 +570,81 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     return SafeParse.toInt(getGTTFinalQuantity(value).trim()) > cap;
   }
 
+  /// GTT freeze cap expressed in the qty field's OWN units, so the +/- buttons
+  /// can compare directly against `qtyCtrl.text`. GTT has NO slicing, so the
+  /// cap is a single freeze qty (`frezQty`), NOT the sliced max.
+  ///   - Qty mode (`_isGTTLotToQty`)  → units (frezQty)
+  ///   - Lot mode (`!_isGTTLotToQty`) → lots  (frezQty ~/ lotSize)
+  ///   - MCX (field is always lots)   → lots  (frezQty)
+  /// Returns a large sentinel (999999) when the scrip has no real freeze limit.
+  int _gttCapInFieldUnits() {
+    if (widget.scripInfo.exch == "MCX") {
+      return frezQty <= 1 ? 999999 : frezQty;
+    }
+    if (frezQty <= lotSize) return 999999;
+    if (_isGTTLotToQty) return frezQty; // Qty mode → units
+    return lotSize > 0 ? frezQty ~/ lotSize : frezQty; // Lot mode → lots
+  }
+
+  /// Tick-size check for a GTT price/trigger field.
+ 
+  String? _gttTickError(String value, String fieldName) {
+    if (tik <= 0) return null; // no tick size on this scrip — nothing to check
+    final String text = value.trim();
+    if (text.isEmpty || text == "Market") return null;
+    final double parsed = SafeParse.toDouble(text);
+    if (parsed <= 0) return null;
+   
+    final String rounded = roundOffWithInterval(parsed, tik).toStringAsFixed(2);
+    if (parsed == SafeParse.toDouble(rounded)) return null;
+    return "$fieldName should be multiple of tick size $tik => $rounded";
+  }
+
+  /// Puts the GTT tab into the state a freshly opened dialog would show for
+  /// this scrip, honouring the user's order preferences.
+  ///
+  /// Called from two places so they can never drift apart: when the GTT tab is
+  /// selected, and after a successful GTT or OCO placement when the sticky
+  /// order window keeps the dialog open. The provider's clearTextField() blanks
+  /// every field and forces the price type back to Limit, which left an
+  /// unusable empty form and threw away a Market preference.
+  void _seedGttFieldsForScrip() {
+    final orderInput = ref.read(ordInputProvider);
+    // Same test as the old `orderInput.prcType == "MKT"`, but read from the
+    // screen's own priceType so it still works after clearTextField() has
+    // wiped the provider's copy.
+    final bool useMarket = priceType == "Market";
+    // MCX qty field accepts a lot count; other exchanges accept the lot size.
+    final String seedQty = widget.scripInfo.exch == "MCX"
+        ? "1"
+        : (widget.orderArg.lotSize ?? "1").replaceAll("-", "");
+
+    // GTT always opens in Qty mode, single leg.
+    isOco = false;
+    _isQtyToAmount = false;
+    _isGTTLotToQty = true;
+
+    if (useMarket) {
+      orderInput.setGTTPriceTypeOrderIsMarket(true);
+      orderInput.chngGTTPriceType("Market");
+      // Qty is seeded here too. The old tab-switch code set it only on the
+      // Limit branch, so a Market preference opened the tab with a blank Qty.
+      orderInput.updatePrcCtrl("Market", seedQty);
+    } else {
+      orderInput.setGTTPriceTypeOrderIsMarket(false);
+      orderInput.updatePrcCtrl("${widget.orderArg.ltp}", seedQty);
+      orderInput.chngGTTPriceType("Limit");
+    }
+    orderInput.disableCondGTT(false);
+  }
+
   Map userOrderPreference = {};
   bool isUserOrderPreferenceAvailable = false;
   final GlobalKey<TooltipState> tooltipKey = GlobalKey<TooltipState>();
 
-  bool isAdvancedOptionClicked = false;
+  // The former "Advance" show/hide toggle was removed — the advanced fields
+  // (Stoploss / AMO / Validity & Disclosed Qty) are now always visible.
+  // bool isAdvancedOptionClicked = false;
   bool _isMarketOrder = false;
   bool _isQtyToAmount = false;
   bool _isLotToQty = true;
@@ -619,8 +807,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 : 'Limit';
 
     _isMarketOrder = ["Market", "SL MKT"].contains(priceType);
-    _isStoplossOrder =
-        isAdvancedOptionClicked = ["SL Limit", "SL MKT"].contains(priceType);
+    // _isStoplossOrder =
+    //     isAdvancedOptionClicked = ["SL Limit", "SL MKT"].contains(priceType);
+    _isStoplossOrder = ["SL Limit", "SL MKT"].contains(priceType);
 
     priceTypes = [
       {
@@ -703,21 +892,15 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       // }
       int sfq = int.tryParse(widget.scripInfo.frzqty?.toString() ?? '1') ?? 1;
 
-      validityType = isUserOrderPreferenceAvailable &&
-              userOrderPreference['validity'] == 'IOC'
-          ? 'IOC'
-          : widget.orderArg.exchange == "BSE" ||
-                  widget.orderArg.exchange == "BFO"
-              ? "EOS"
-              : "DAY";
+      validityType = _defaultValidityFor(widget.orderArg.exchange);
 
       _addValidityAndDisclosedQty = isUserOrderPreferenceAvailable &&
               userOrderPreference['validity'] == 'IOC'
           ? true
           : false;
-      isAdvancedOptionClicked = !isAdvancedOptionClicked
-          ? _addValidityAndDisclosedQty
-          : isAdvancedOptionClicked;
+      // isAdvancedOptionClicked = !isAdvancedOptionClicked
+      //     ? _addValidityAndDisclosedQty
+      //     : isAdvancedOptionClicked;
 
       lotSize = SafeParse.toInt(widget.scripInfo.ls);
 
@@ -797,7 +980,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
               : false;
 
       if (orderRawValue['amo'] == "Yes") {
-          isAdvancedOptionClicked = true;
+          // isAdvancedOptionClicked = true;
           _afterMarketOrder = true;
         }else{
            _afterMarketOrder = false;
@@ -835,29 +1018,27 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                   5)
               .toString();
 
-      // **FIX FOR BASKET EDIT**: Auto-expand advanced section and set states based on order data
+      // **FIX FOR BASKET EDIT**: set states based on order data (the advanced
+      // section is always visible now, so no auto-expand is needed)
       if (widget.isBasket == "BasketEdit") {
         final rawPrctyp = orderRawValue['prctyp'] ?? orderRawValue['prctype'];
-        // Auto-expand advanced section for stop-loss orders
         if (["SL-LMT", "SL-MKT"].contains(rawPrctyp)) {
           _isStoplossOrder = true;
-          isAdvancedOptionClicked = true;
+          // isAdvancedOptionClicked = true;
         }
 
         // Set market order state
         _isMarketOrder = ["MKT", "SL-MKT"].contains(rawPrctyp);
 
-        // Auto-expand for IOC validity or disclosed quantity
         if (orderRawValue['ret']?.toUpperCase() == 'IOC' ||
             (orderRawValue['dscqty'] != null &&
                 SafeParse.toInt(orderRawValue['dscqty']) > 0)) {
-          isAdvancedOptionClicked = true;
+          // isAdvancedOptionClicked = true;
           _addValidityAndDisclosedQty = true;
         }
 
-        // Auto-expand for AMO orders
         if (orderRawValue['amo'] == "Yes") {
-          isAdvancedOptionClicked = true;
+          // isAdvancedOptionClicked = true;
           _afterMarketOrder = true;
         }
 
@@ -879,12 +1060,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
           }
 
           // Auto-expand if bracket order has stop-loss or target values
-          if ((orderRawValue['blprc'] != null &&
-                  orderRawValue['blprc'] != "0") ||
-              (orderRawValue['bpprc'] != null &&
-                  orderRawValue['bpprc'] != "0")) {
-            isAdvancedOptionClicked = true;
-          }
+          // if ((orderRawValue['blprc'] != null &&
+          //         orderRawValue['blprc'] != "0") ||
+          //     (orderRawValue['bpprc'] != null &&
+          //         orderRawValue['bpprc'] != "0")) {
+          //   isAdvancedOptionClicked = true;
+          // }
         }
       }
     }
@@ -910,7 +1091,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     _isMarketClosed = _checkMarketClosed();
     if (_isMarketClosed && !checkRawValue && orderType != "CO - BO") {
       _afterMarketOrder = true;
-      isAdvancedOptionClicked = true; // Auto-expand advanced section
+      // isAdvancedOptionClicked = true; // Auto-expand advanced section
     }
 
     ref.read(orderProvider).setDOrderloader(false);
@@ -959,6 +1140,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     final currentTime = TimeOfDay.fromDateTime(now);
     final currentMinutes = currentTime.hour * 60 + currentTime.minute;
 
+    // AMO window carries past midnight: keep flagging AMO until 02:00 IST
+    // for every exchange (the minute counter resets at midnight, so this has
+    // to be checked before the per-exchange close times below).
+    const amoOvernightEnd = 2 * 60; // 02:00
+    if (currentMinutes < amoOvernightEnd) return true;
+
     final exchange = widget.scripInfo.exch;
 
     // MCX closes at 11:30 PM
@@ -983,7 +1170,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   void openFunds(String pageis, BuildContext context) {
     if (WebNavigationHelper.isAvailable) {
+      // TC_471: close the Place Order overlay when navigating to the Funds screen.
+      final closeNotifier = _PlaceOrderDialogCloseNotifier.of(context);
       WebNavigationHelper.navigateTo(Routes.fundscreen);
+      closeNotifier?.onClose();
     }
   }
 
@@ -1155,16 +1345,21 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                       mainAxisAlignment:
                                           MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Column(
+                                        Flexible(
+                                          child: Column(
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
                                             Padding(
                                               padding: const EdgeInsets.only(
                                                   bottom: 4.0),
-                                              child: Row(children: [
+                                              child: Wrap(
+                                                  crossAxisAlignment:
+                                                      WrapCrossAlignment.center,
+                                                  runSpacing: 2,
+                                                  children: [
                                                 Text(
-                                                  "${widget.scripInfo.symbol!.replaceAll("-EQ", "")} ",
+                                                  "${widget.scripInfo.masterName ?? widget.scripInfo.symbol!.replaceAll("-EQ", "")} ",
                                                   style: WebTextStyles.title(
                                                     isDarkTheme:
                                                         theme.isDarkMode,
@@ -1189,8 +1384,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                 //         FontWeight.w400),
                                                 //     overflow: TextOverflow.ellipsis,
                                                 //     maxLines: 1),
-                                                if (widget.scripInfo.expDate!
-                                                    .isNotEmpty)
+                                                if (widget.scripInfo.masterName ==
+                                                        null &&
+                                                    widget.scripInfo.expDate!
+                                                        .isNotEmpty)
                                                   Text(
                                                     " ${widget.scripInfo.expDate} ",
                                                     style: WebTextStyles.title(
@@ -1217,8 +1414,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                 //             : colors.colorBlack,
                                                 //         14,
                                                 //         FontWeight.w400)),
-                                                if (widget.scripInfo.option!
-                                                    .isNotEmpty)
+                                                if (widget.scripInfo.masterName ==
+                                                        null &&
+                                                    widget.scripInfo.option!
+                                                        .isNotEmpty)
                                                   Text(
                                                     widget.scripInfo.option!,
                                                     style: WebTextStyles.sub(
@@ -1276,6 +1475,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 widget.scripInfo.exch = stockExchangeSelected.exch ?? "";
                                                                 widget.scripInfo.token = stockExchangeSelected.token ?? "";
                                                                 widget.scripInfo.tsym = stockExchangeSelected.tsym ?? "";
+                                                                // Validity depends on the exchange, so it has to follow the
+                                                                // toggle. Without this a BSE order reached this way kept DAY
+                                                                // and EOS was never offered, while opening BSE directly gave
+                                                                // EOS - the same order with two different validities.
+                                                                // An explicit choice is kept unless it is no longer offered
+                                                                // (EOS exists only on BSE/BFO).
+                                                                final String newExch = stockExchangeSelected.exch ?? "";
+                                                                final bool eosOffered = newExch == "BSE" || newExch == "BFO";
+                                                                if (!_validityTouched || (validityType == "EOS" && !eosOffered)) {
+                                                                  validityType = _defaultValidityFor(newExch);
+                                                                }
                                                                 _subscribeSelectedStock(context);
                                                               });
                                                               _debouncedMarginUpdate();
@@ -1307,27 +1517,45 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   ),
                                                 ),
                                               ),
-                                              ]else...[
-                                                Text(
-                                                  " ${stockExchangeSelected.exch ?? widget.scripInfo.exch}",
-                                                  style: WebTextStyles.para(
-                                                    isDarkTheme:
-                                                        theme.isDarkMode,
-                                                    color: resolveThemeColor(context,
-                                                        dark:
-                                                            MyntColors.textPrimaryDark,
-                                                        light: MyntColors.textPrimary),
-                                                    fontWeight: WebFonts.medium,
-                                                  ),
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  maxLines: 1,
-                                                ),
-                                            ],
+                                              ],
                                               ]),
                                             ),
                                             Row(
                                               children: [
+                                                if (!(_isStock &&
+                                                    _stockExchangesList
+                                                        .isNotEmpty &&
+                                                    (orderType == "Delivery" ||
+                                                        orderType ==
+                                                            "Intraday" ||
+                                                        orderType ==
+                                                            "CO - BO")))
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            right: 6),
+                                                    child: Text(
+                                                      "${stockExchangeSelected.exch ?? widget.scripInfo.exch}",
+                                                      style:
+                                                          WebTextStyles.para(
+                                                        isDarkTheme:
+                                                            theme.isDarkMode,
+                                                        color:
+                                                            resolveThemeColor(
+                                                          context,
+                                                          dark: MyntColors
+                                                              .textPrimaryDark,
+                                                          light: MyntColors
+                                                              .textPrimary,
+                                                        ),
+                                                        fontWeight:
+                                                            WebFonts.medium,
+                                                      ),
+                                                      overflow: TextOverflow
+                                                          .ellipsis,
+                                                      maxLines: 1,
+                                                    ),
+                                                  ),
                                                 OrderScreenHeaderWeb(
                                                   headerData: stockExchangeSelected.exch == null ? widget.orderArg : selectedStockSubscribe,
                                                 ),
@@ -1335,7 +1563,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                             ),
                                             
                                           ],
-                                        ),
+                                        )),
                                            // NSE/BSE Exchange Switch
                                             
                                         // const SizedBox(width: 12),
@@ -1689,44 +1917,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   priceType, widget.scripInfo.exch ?? "");
                                               _debouncedMarginUpdate();
                                             } else {
-                                              // Reset qty toggles so the GTT tab always opens in Qty mode
-                                              _isQtyToAmount = false;
-                                              _isGTTLotToQty = true;
-                                              // ref.read(ordInputProvider)
-                                              //     .chngInvesType(
-                                              //         widget.scripInfo.seg == "EQT"
-                                              //             ? InvestType.delivery
-                                              //             : InvestType.carryForward,
-                                              //         "GTT");
-                                              if (orderInput.prcType == "MKT") {
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .setGTTPriceTypeOrderIsMarket(true);
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .chngGTTPriceType("Market");
-                                                orderInput.priceCtrl.text = "Market";
-                                              } else {
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .setGTTPriceTypeOrderIsMarket(false);
-                                                // MCX qty field accepts lot count; other exchanges accept the lot-size string.
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .updatePrcCtrl(
-                                                        "${widget.orderArg.ltp}",
-                                                        widget.scripInfo.exch == "MCX"
-                                                            ? "1"
-                                                            : widget.orderArg.lotSize!
-                                                                .replaceAll(
-                                                                    "-", ""));
-                                                ref
-                                                    .read(ordInputProvider)
-                                                    .chngGTTPriceType("Limit");
-                                              }
-                                              ref
-                                                  .read(ordInputProvider)
-                                                  .disableCondGTT(false);
+                                              // Seed the GTT tab to its fresh-open state for this scrip.
+                                              _seedGttFieldsForScrip();
                                             }
                                             if (priceType == "Market" ||
                                                 priceType == "SL MKT") {
@@ -1792,7 +1984,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                           // ]
                           const SizedBox(height: 10),
                           // AMO Alert Banner - shown when market is closed
-                          if (_isMarketClosed && _afterMarketOrder && orderType != "CO - BO") ...[
+                          if (_isMarketClosed && _afterMarketOrder && orderType != "CO - BO" && orderType != "GTT") ...[
                             Container(
                               margin: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1845,7 +2037,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                           CrossAxisAlignment
                                                               .start,
                                                       children: [
-                                                    headerTitleText(
+                                                    headerTitleText( 
                                                         "Frequency", theme),
                                                     const SizedBox(height: 5),
                                                     SizedBox(
@@ -2250,8 +2442,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                     'trigger_price_input',
                                                 child: MyntTextField(
                                                     inputFormatters: [
-                                                      FilteringTextInputFormatter
-                                                          .allow(RegExp(
+                                                      _rejectIfNoMatch(RegExp(
                                                               r'^\d*\.?\d{0,2}$'))
                                                     ],
                                                     backgroundColor: theme.isDarkMode
@@ -2451,7 +2642,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   light: MyntColors.textSecondary)
                                                                   .withValues(alpha: 0.5),
                                                             ),
-                                                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                                            inputFormatters: [FilteringTextInputFormatter.digitsOnly /*, _maxQtyLimit() reverted 2026-07-27 */],
                                                             keyboardType: TextInputType.number,
                                                             textStyle: WebTextStyles.formInput(
                                                               isDarkTheme: theme.isDarkMode,
@@ -2469,6 +2660,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     ? ((currentValue / multiplayer).floor()) * multiplayer
                                                                     : multiplayer;
 
+                                                                  // GTT has no slicing — snap an over-cap value down to
+                                                                  // the GTT cap so - lands on the cap (like +) instead of
+                                                                  // an over-cap boundary (Qty -> units, Lot -> lots).
+                                                                  final int gttCap = _gttCapInFieldUnits();
+                                                                  if (adjustedQty > gttCap) {
+                                                                    adjustedQty = gttCap;
+                                                                  }
+
                                                                   if (_isGTTLotToQty) {
                                                                     if (currentValue != adjustedQty) {
                                                                       orderInput.qtyCtrl.text = adjustedQty.toString();
@@ -2478,12 +2677,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       orderInput.qtyCtrl.text = "$multiplayer";
                                                                     }
                                                                   } else {
-                                                                    if (currentValue > 1) {
+                                                                    if (currentValue > gttCap) {
+                                                                      orderInput.qtyCtrl.text = gttCap.toString();
+                                                                    } else if (currentValue > 1) {
                                                                       orderInput.qtyCtrl.text = (currentValue - 1).toString();
                                                                     } else {
                                                                       orderInput.qtyCtrl.text = "1";
                                                                     }
                                                                   }
+                                                                  // Collapse cursor to end so the value isn't left
+                                                                  // fully selected (grey highlight) after +/-.
+                                                                  orderInput.qtyCtrl.selection = TextSelection.collapsed(offset: orderInput.qtyCtrl.text.length);
                                                                 });
                                                               },
                                                               child: Icon(
@@ -2497,12 +2701,25 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 setState(() {
                                                                   String input = orderInput.qtyCtrl.text;
                                                                   int currentValue = int.tryParse(input) ?? 0;
+                                                                  // + snaps a non-lot-multiple qty UP to the next lot
+                                                                  // multiple (ceil) so clicking + always increases
+                                                                  // (e.g. lot 65: 1690 -> 1755, not down).
                                                                   int adjustedQty = currentValue >= multiplayer
-                                                                    ? ((currentValue / multiplayer).floor()) * multiplayer
+                                                                    ? ((currentValue / multiplayer).ceil()) * multiplayer
                                                                     : multiplayer;
 
-                                                                  bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                  bool withinLimit = hasNoFreezeLimit || currentValue < frezQtyOrderSliceMaxLimit * frezQty;
+                                                                  // GTT has NO slicing — the cap is a single freeze qty
+                                                                  // (frezQty), NOT the sliced max. _gttCapInFieldUnits()
+                                                                  // returns the cap in the field's units (Qty -> units,
+                                                                  // Lot -> lots), matching _gttFreezeCapMessage().
+                                                                  final int gttCap = _gttCapInFieldUnits();
+                                                                  final bool hasNoFreezeLimit = gttCap >= 999999;
+                                                                  // Cap the snapped-up qty at the GTT max so + never
+                                                                  // overshoots (e.g. 1756 -> 1755, not 1820).
+                                                                  if (adjustedQty > gttCap) {
+                                                                    adjustedQty = gttCap;
+                                                                  }
+                                                                  bool withinLimit = currentValue < gttCap;
 
                                                                   if (_isGTTLotToQty) {
                                                                     if (currentValue != adjustedQty) {
@@ -2512,24 +2729,25 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     } else if (input.isEmpty) {
                                                                       orderInput.qtyCtrl.text = "$multiplayer";
                                                                     } else if (!hasNoFreezeLimit) {
-                                                                      ResponsiveSnackBar.showWarning(context,
-                                                                        "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                      ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                     }
                                                                   } else {
-                                                                    bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                    int maxAllowedLots = hasNoFreezeLimit
-                                                                      ? 999999
-                                                                      : (frezQtyOrderSliceMaxLimit * frezQty) ~/ lotSize;
+                                                                    int maxAllowedLots = gttCap;
 
                                                                     if (input.isEmpty) {
                                                                       orderInput.qtyCtrl.text = "1";
                                                                     } else if (currentValue < maxAllowedLots) {
                                                                       orderInput.qtyCtrl.text = (currentValue + 1).toString();
+                                                                    } else if (currentValue > maxAllowedLots) {
+                                                                      // over max → snap down to the max (like Qty mode)
+                                                                      orderInput.qtyCtrl.text = maxAllowedLots.toString();
                                                                     } else {
-                                                                      ResponsiveSnackBar.showWarning(context,
-                                                                        "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                      ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                     }
                                                                   }
+                                                                  // Collapse cursor to end so the value isn't left
+                                                                  // fully selected (grey highlight) after +/-.
+                                                                  orderInput.qtyCtrl.selection = TextSelection.collapsed(offset: orderInput.qtyCtrl.text.length);
                                                                 });
                                                               },
                                                               child: Icon(
@@ -2564,10 +2782,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   _showDebouncedWarning(
                                                                       "Minimum Allowed Amount should be greater than $ltp");
                                                                 } else {
-                                                                  bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                  if (!hasNoFreezeLimit && number > frezQtyOrderSliceMaxLimit * frezQty) {
-                                                                    _showDebouncedWarning(
-                                                                        "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                  // GTT has no slicing — validate the typed value against
+                                                                  // the single-freeze cap so an over-limit qty warns the
+                                                                  // moment it is typed (same "1755" message as submit).
+                                                                  if (_gttExceedsCap(newValue)) {
+                                                                    _showDebouncedWarning(_gttFreezeCapMessage());
                                                                   } else {
                                                                     _cancelPendingWarning();
                                                                   }
@@ -2610,6 +2829,22 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                       ),
                                                     ),
                                                   if (!_isGTTLotToQty && (widget.scripInfo.exch == "NFO" || widget.scripInfo.exch == "BFO"))
+                                                    Padding(
+                                                      padding: const EdgeInsets.only(top: 4),
+                                                      child: Text(
+                                                        "Qty : ${(int.tryParse(orderInput.qtyCtrl.text) ?? 0) * lotSize}",
+                                                        style: WebTextStyles.para(
+                                                          isDarkTheme: theme.isDarkMode,
+                                                          color: resolveThemeColor(context,
+                                                            dark: MyntColors.textSecondaryDark,
+                                                            light: MyntColors.textSecondary),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  // MCX field is always in lots (no Lot/Qty toggle) — show the
+                                                  // actual quantity underneath, same as the submitted qty
+                                                  // (lots × lot size, matching getGTTFinalQuantity).
+                                                  if (widget.scripInfo.exch == "MCX")
                                                     Padding(
                                                       padding: const EdgeInsets.only(top: 4),
                                                       child: Text(
@@ -2665,8 +2900,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         child:
                                                             MyntTextField(
                                                                 inputFormatters: [
-                                                              FilteringTextInputFormatter
-                                                                  .allow(RegExp(
+                                                              _rejectIfNoMatch(RegExp(
                                                                       r'^\d*\.?\d{0,2}$'))
                                                             ],
                                                                 backgroundColor: theme
@@ -3058,8 +3292,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                       'stoploss_trigger_price',
                                                   child: MyntTextField(
                                                       inputFormatters: [
-                                                        FilteringTextInputFormatter
-                                                            .allow(RegExp(
+                                                        _rejectIfNoMatch(RegExp(
                                                                 r'^\d*\.?\d{0,2}$'))
                                                       ],
                                                       backgroundColor:
@@ -3244,7 +3477,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     : MyntColors
                                                                         .textSecondary).withValues(alpha: 0.5),
                                                               ),
-                                                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                                              inputFormatters: [FilteringTextInputFormatter.digitsOnly /*, _maxQtyLimit() reverted 2026-07-27 */],
                                                               keyboardType: TextInputType.number,
                                                               textStyle: WebTextStyles.formInput(
                                                                 isDarkTheme: theme
@@ -3265,6 +3498,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       ? ((currentValue / multiplayer).floor()) * multiplayer
                                                                       : multiplayer;
 
+                                                                    // GTT-OCO has no slicing — snap an over-cap value down
+                                                                    // to the GTT cap so - lands on the cap (like +) instead
+                                                                    // of an over-cap boundary (Qty -> units, Lot -> lots).
+                                                                    final int gttCap = _gttCapInFieldUnits();
+                                                                    if (adjustedQty > gttCap) {
+                                                                      adjustedQty = gttCap;
+                                                                    }
+
                                                                     if (_isGTTLotToQty) {
                                                                       if (currentValue != adjustedQty) {
                                                                         orderInput.ocoQtyCtrl.text = adjustedQty.toString();
@@ -3274,12 +3515,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         orderInput.ocoQtyCtrl.text = "$multiplayer";
                                                                       }
                                                                     } else {
-                                                                      if (currentValue > 1) {
+                                                                      if (currentValue > gttCap) {
+                                                                        orderInput.ocoQtyCtrl.text = gttCap.toString();
+                                                                      } else if (currentValue > 1) {
                                                                         orderInput.ocoQtyCtrl.text = (currentValue - 1).toString();
                                                                       } else {
                                                                         orderInput.ocoQtyCtrl.text = "1";
                                                                       }
                                                                     }
+                                                                    // Collapse cursor to end so the value isn't left
+                                                                    // fully selected (grey highlight) after +/-.
+                                                                    orderInput.ocoQtyCtrl.selection = TextSelection.collapsed(offset: orderInput.ocoQtyCtrl.text.length);
                                                                   });
                                                                 },
                                                                 child: Icon(
@@ -3293,12 +3539,24 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   setState(() {
                                                                     String input = orderInput.ocoQtyCtrl.text;
                                                                     int currentValue = int.tryParse(input) ?? 0;
+                                                                    // + snaps a non-lot-multiple qty UP to the next lot
+                                                                    // multiple (ceil) so clicking + always increases.
                                                                     int adjustedQty = currentValue >= multiplayer
-                                                                      ? ((currentValue / multiplayer).floor()) * multiplayer
+                                                                      ? ((currentValue / multiplayer).ceil()) * multiplayer
                                                                       : multiplayer;
 
-                                                                    bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                    bool withinLimit = hasNoFreezeLimit || currentValue < frezQtyOrderSliceMaxLimit * frezQty;
+                                                                    // GTT-OCO has NO slicing — cap is a single freeze qty
+                                                                    // (frezQty), NOT the sliced max. _gttCapInFieldUnits()
+                                                                    // returns the cap in the field's units (Qty -> units,
+                                                                    // Lot -> lots), matching _gttFreezeCapMessage().
+                                                                    final int gttCap = _gttCapInFieldUnits();
+                                                                    final bool hasNoFreezeLimit = gttCap >= 999999;
+                                                                    // Cap the snapped-up qty at the GTT max so + never
+                                                                    // overshoots (e.g. 1756 -> 1755, not 1820).
+                                                                    if (adjustedQty > gttCap) {
+                                                                      adjustedQty = gttCap;
+                                                                    }
+                                                                    bool withinLimit = currentValue < gttCap;
 
                                                                     if (_isGTTLotToQty) {
                                                                       if (currentValue != adjustedQty) {
@@ -3308,24 +3566,25 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       } else if (input.isEmpty) {
                                                                         orderInput.ocoQtyCtrl.text = "$multiplayer";
                                                                       } else if (!hasNoFreezeLimit) {
-                                                                        ResponsiveSnackBar.showWarning(context,
-                                                                          "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                        ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                       }
                                                                     } else {
-                                                                      bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                      int maxAllowedLots = hasNoFreezeLimit
-                                                                        ? 999999
-                                                                        : (frezQtyOrderSliceMaxLimit * frezQty) ~/ lotSize;
+                                                                      int maxAllowedLots = gttCap;
 
                                                                       if (input.isEmpty) {
                                                                         orderInput.ocoQtyCtrl.text = "1";
                                                                       } else if (currentValue < maxAllowedLots) {
                                                                         orderInput.ocoQtyCtrl.text = (currentValue + 1).toString();
+                                                                      } else if (currentValue > maxAllowedLots) {
+                                                                        // over max → snap down to the max (like Qty mode)
+                                                                        orderInput.ocoQtyCtrl.text = maxAllowedLots.toString();
                                                                       } else {
-                                                                        ResponsiveSnackBar.showWarning(context,
-                                                                          "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                        ResponsiveSnackBar.showWarning(context, _gttFreezeCapMessage());
                                                                       }
                                                                     }
+                                                                    // Collapse cursor to end so the value isn't left
+                                                                    // fully selected (grey highlight) after +/-.
+                                                                    orderInput.ocoQtyCtrl.selection = TextSelection.collapsed(offset: orderInput.ocoQtyCtrl.text.length);
                                                                   });
                                                                 },
                                                                 child: Icon(
@@ -3360,10 +3619,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     _showDebouncedWarning(
                                                                         "Minimum Allowed Amount should be greater than $ltp");
                                                                   } else {
-                                                                    bool hasNoFreezeLimit = frezQty <= lotSize;
-                                                                    if (!hasNoFreezeLimit && number > frezQtyOrderSliceMaxLimit * frezQty) {
-                                                                      _showDebouncedWarning(
-                                                                          "Maximum Allowed Quantity $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQtyOrderSliceMaxLimit * frezQty}");
+                                                                    // GTT-OCO has no slicing — validate against the single-
+                                                                    // freeze cap so an over-limit qty warns as it is typed.
+                                                                    if (_gttExceedsCap(newValue)) {
+                                                                      _showDebouncedWarning(_gttFreezeCapMessage());
                                                                     } else {
                                                                       _cancelPendingWarning();
                                                                     }
@@ -3406,6 +3665,22 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         ),
                                                       ),
                                                     if (!_isGTTLotToQty && (widget.scripInfo.exch == "NFO" || widget.scripInfo.exch == "BFO"))
+                                                      Padding(
+                                                        padding: const EdgeInsets.only(top: 4),
+                                                        child: Text(
+                                                          "Qty : ${(int.tryParse(orderInput.ocoQtyCtrl.text) ?? 0) * lotSize}",
+                                                          style: WebTextStyles.para(
+                                                            isDarkTheme: theme.isDarkMode,
+                                                            color: resolveThemeColor(context,
+                                                              dark: MyntColors.textSecondaryDark,
+                                                              light: MyntColors.textSecondary),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    // MCX field is always in lots (no Lot/Qty toggle) — show the
+                                                    // actual quantity underneath, same as the submitted qty
+                                                    // (lots × lot size, matching getGTTFinalQuantity).
+                                                    if (widget.scripInfo.exch == "MCX")
                                                       Padding(
                                                         padding: const EdgeInsets.only(top: 4),
                                                         child: Text(
@@ -3462,8 +3737,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                           child:
                                                               MyntTextField(
                                                                   inputFormatters: [
-                                                                FilteringTextInputFormatter
-                                                                    .allow(RegExp(
+                                                                _rejectIfNoMatch(RegExp(
                                                                         r'^\d*\.?\d{0,2}$'))
                                                               ],
                                                                   backgroundColor: theme.isDarkMode
@@ -4412,7 +4686,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         ),
                                                         inputFormatters: [
                                                           FilteringTextInputFormatter
-                                                              .digitsOnly
+                                                              .digitsOnly,
+                                                          // _maxQtyLimit(), // reverted 2026-07-27
                                                         ],
                                                         keyboardType:
                                                             TextInputType
@@ -4448,7 +4723,21 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           : multiplayer;
 
                                                                       if (_isLotToQty) {
-                                                                        // Qty mode: decrement by Lot size
+                                                                        // Qty mode: decrement by Lot size. Snap the
+                                                                        // floored value down to the max when the typed
+                                                                        // qty is over the freeze limit, so - lands on the
+                                                                        // max (like +) instead of an over-max boundary
+                                                                        // (e.g. 79000 -> 70200, not 78975).
+                                                                        // MCX stores frezQty in LOTS, so its "no cap"
+                                                                        // test is frezQty <= 1 (see initState).
+                                                                        bool hasNoFreezeLimit =
+                                                                            widget.scripInfo.exch == "MCX"
+                                                                                ? frezQty <= 1
+                                                                                : frezQty <= lotSize;
+                                                                        if (!hasNoFreezeLimit &&
+                                                                            adjustedQty > frezQtyOrderSliceMaxLimit * frezQty) {
+                                                                          adjustedQty = frezQtyOrderSliceMaxLimit * frezQty;
+                                                                        }
                                                                         if (currentValue !=
                                                                             adjustedQty) {
                                                                           qtyCtrl.text =
@@ -4463,8 +4752,19 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               "$multiplayer";
                                                                         }
                                                                       } else {
-                                                                        // Lot mode: decrement by 1
-                                                                        if (currentValue >
+                                                                        // Lot mode: snap an over-max value down to the
+                                                                        // max first (consistent with Qty mode and the +
+                                                                        // button), otherwise decrement by 1.
+                                                                        bool hasNoFreezeLimit =
+                                                                            frezQty <= lotSize;
+                                                                        int maxAllowedLots = hasNoFreezeLimit
+                                                                            ? 999999
+                                                                            : (frezQtyOrderSliceMaxLimit * frezQty) ~/
+                                                                                lotSize;
+                                                                        if (currentValue > maxAllowedLots) {
+                                                                          qtyCtrl.text =
+                                                                              maxAllowedLots.toString();
+                                                                        } else if (currentValue >
                                                                             1) {
                                                                           qtyCtrl.text =
                                                                               (currentValue - 1).toString();
@@ -4499,16 +4799,26 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       int currentValue =
                                                                           int.tryParse(input) ??
                                                                               0;
+                                                                      // + snaps a non-lot-multiple qty UP to the next
+                                                                      // lot multiple (ceil) so + always increases.
                                                                       int adjustedQty = currentValue >=
                                                                               multiplayer
-                                                                          ? ((currentValue / multiplayer).floor()) *
+                                                                          ? ((currentValue / multiplayer).ceil()) *
                                                                               multiplayer
                                                                           : multiplayer;
 
-                                                                      bool
-                                                                          hasNoFreezeLimit =
-                                                                          frezQty <=
-                                                                              lotSize;
+                                                                      // MCX stores frezQty in LOTS, so its "no cap"
+                                                                      // test is frezQty <= 1 (see initState).
+                                                                      bool hasNoFreezeLimit =
+                                                                          widget.scripInfo.exch == "MCX"
+                                                                              ? frezQty <= 1
+                                                                              : frezQty <= lotSize;
+                                                                      // Cap the snapped-up qty at the max so + never
+                                                                      // overshoots the freeze limit (e.g. 70201 -> 70200).
+                                                                      if (!hasNoFreezeLimit &&
+                                                                          adjustedQty > frezQtyOrderSliceMaxLimit * frezQty) {
+                                                                        adjustedQty = frezQtyOrderSliceMaxLimit * frezQty;
+                                                                      }
                                                                       bool
                                                                           withinLimit =
                                                                           hasNoFreezeLimit ||
@@ -4554,6 +4864,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             maxAllowedLots) {
                                                                           qtyCtrl.text =
                                                                               (currentValue + 1).toString();
+                                                                        } else if (currentValue >
+                                                                            maxAllowedLots) {
+                                                                          // over max → snap to max (like Qty mode)
+                                                                          qtyCtrl.text =
+                                                                              maxAllowedLots.toString();
                                                                         } else {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -4584,9 +4899,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 ? (_isQtyToAmount
                                                                     ? 'Amount'
                                                                     : 'Quantity')
-                                                                : (_isLotToQty
-                                                                    ? 'Quantity'
-                                                                    : 'Lot');
+                                                                : widget.scripInfo.exch == "MCX"
+                                                                    ? 'Lot'
+                                                                    : (_isLotToQty
+                                                                        ? 'Quantity'
+                                                                        : 'Lot');
                                                             _showDebouncedWarning(
                                                                 "$fieldName cannot be ${value == "0" ? '0' : 'empty'}");
                                                                 _marginUpdateDebounceTimer?.cancel();
@@ -4625,14 +4942,19 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                               _showDebouncedWarning(
                                                                   "Minimum Allowed Amount should be greater than $ltp");
                                                             } else {
-                                                              bool
-                                                                  hasNoFreezeLimit =
-                                                                  frezQty <=
-                                                                      lotSize;
+                                                              // MCX stores frezQty in LOTS and its field is lots, so
+                                                              // its "no cap" test is frezQty <= 1 and the value is the
+                                                              // raw lots; NFO/BFO caps are in units.
+                                                              bool hasNoFreezeLimit =
+                                                                  widget.scripInfo.exch == "MCX"
+                                                                      ? frezQty <= 1
+                                                                      : frezQty <= lotSize;
                                                               final int valueInUnits =
-                                                                  (!_isStock && !_isLotToQty)
-                                                                      ? number * lotSize
-                                                                      : number;
+                                                                  widget.scripInfo.exch == "MCX"
+                                                                      ? (int.tryParse(newValue) ?? 0)
+                                                                      : ((!_isStock && !_isLotToQty)
+                                                                          ? number * lotSize
+                                                                          : number);
                                                               if (!hasNoFreezeLimit &&
                                                                   valueInUnits >
                                                                       frezQtyOrderSliceMaxLimit *
@@ -4698,6 +5020,58 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                               top: 4),
                                                       child: Text(
                                                         "Lot : ${((int.tryParse(qtyCtrl.text) ?? 0) / lotSize).ceil()}",
+                                                        style:
+                                                            WebTextStyles.para(
+                                                          isDarkTheme:
+                                                              theme.isDarkMode,
+                                                          color: theme
+                                                                  .isDarkMode
+                                                              ? MyntColors
+                                                                  .textPrimaryDark
+                                                              : MyntColors
+                                                                  .textSecondary,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  if (!_isLotToQty &&
+                                                      (widget.scripInfo.exch ==
+                                                              "NFO" ||
+                                                          widget.scripInfo
+                                                                  .exch ==
+                                                              "BFO"))
+                                                    Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                              top: 4),
+                                                      child: Text(
+                                                        "Qty : ${(int.tryParse(qtyCtrl.text) ?? 0) * lotSize}",
+                                                        style:
+                                                            WebTextStyles.para(
+                                                          isDarkTheme:
+                                                              theme.isDarkMode,
+                                                          color: theme
+                                                                  .isDarkMode
+                                                              ? MyntColors
+                                                                  .textPrimaryDark
+                                                              : MyntColors
+                                                                  .textSecondary,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  // MCX field is always in lots
+                                                  // (no Lot/Qty toggle) — show
+                                                  // the actual quantity below,
+                                                  // matching the submitted qty
+                                                  // (lots × lot size, as the
+                                                  // MCX payload multiplies).
+                                                  if (widget.scripInfo.exch ==
+                                                      "MCX")
+                                                    Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                              top: 4),
+                                                      child: Text(
+                                                        "Qty : ${(int.tryParse(qtyCtrl.text) ?? 0) * lotSize}",
                                                         style:
                                                             WebTextStyles.para(
                                                           isDarkTheme:
@@ -4787,8 +5161,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         child:
                                                             MyntTextField(
                                                                 inputFormatters: [
-                                                              FilteringTextInputFormatter
-                                                                  .allow(RegExp(
+                                                              _rejectIfNoMatch(RegExp(
                                                                       r'^\d*\.?\d{0,2}$'))
                                                             ],
                                                                 backgroundColor: theme
@@ -4920,88 +5293,76 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                       ],
 
                                       // if (orderType == "Delivery" || orderType == "Intraday" || orderType == "MTF" || orderType == "CO - BO") ...[
-                                      // Advance Option section
+                                      // Advanced options — always visible (the
+                                      // former "Advance" show/hide toggle was
+                                      // removed by design; its code is kept
+                                      // commented below for easy rollback).
                                       const SizedBox(height: 10),
                                       Column(
                                         children: [
-                                          Center(
-                                            child: SizedBox(
-                                              width: 150,
-                                              child: TextButton(
-                                                style: TextButton.styleFrom(
-                                                  shape:
-                                                      const RoundedRectangleBorder(),
-                                                  padding:
-                                                      const EdgeInsets.all(0),
-                                                  backgroundColor: Colors.transparent,
-                                                  foregroundColor: Colors.transparent,
-                                                  elevation: 0.0,
-                                                  minimumSize:
-                                                      const Size(0, 30),
-                                                  side: BorderSide.none,
-                                                ),
-                                                onPressed: () {
-                                                  setState(() {
-                                                    if (!_isStoplossOrder &&
-                                                        !_afterMarketOrder &&
-                                                        !_addValidityAndDisclosedQty) {
-                                                      isAdvancedOptionClicked =
-                                                          !isAdvancedOptionClicked;
-                                                    }
-                                                    updatePriceType();
-                                                  });
-                                                },
-                                                child: Container(
-                                                  color: resolveThemeColor(context,
-                                                      dark: MyntColors.backgroundColorDark,
-                                                      light: MyntColors.backgroundColor), // To make the full width tappable
-                                                  height: 40,
-                                                  child: Center(
-                                                    child: Row(
-                                                      mainAxisSize:
-                                                          MainAxisSize.min,
-                                                      children: [
-                                                        Text('Advance',
-                                                            style: WebTextStyles
-                                                                .sub(
-                                                              isDarkTheme: theme
-                                                                  .isDarkMode,
-                                                              color: theme
-                                                                      .isDarkMode
-                                                                  ? MyntColors
-                                                                      .primaryDark
-                                                                  : MyntColors
-                                                                      .primary,
-                                                              fontWeight:
-                                                                  WebFonts
-                                                                      .semiBold,
-                                                            )),
-                                                        Padding(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .only(
-                                                                  left: 4),
-                                                          child: Icon(
-                                                            isAdvancedOptionClicked
-                                                                ? Icons
-                                                                    .keyboard_arrow_up
-                                                                : Icons
-                                                                    .keyboard_arrow_down,
-                                                            color: theme
-                                                                    .isDarkMode
-                                                                ? MyntColors.primaryDark : MyntColors.primary,
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          Visibility(
-                                            visible: isAdvancedOptionClicked,
-                                            child: Column(
+                                          // Center(
+                                          //   child: SizedBox(
+                                          //     width: 150,
+                                          //     child: TextButton(
+                                          //       style: TextButton.styleFrom(
+                                          //         shape: const RoundedRectangleBorder(),
+                                          //         padding: const EdgeInsets.all(0),
+                                          //         backgroundColor: Colors.transparent,
+                                          //         foregroundColor: Colors.transparent,
+                                          //         elevation: 0.0,
+                                          //         minimumSize: const Size(0, 30),
+                                          //         side: BorderSide.none,
+                                          //       ),
+                                          //       onPressed: () {
+                                          //         setState(() {
+                                          //           if (!_isStoplossOrder &&
+                                          //               !_afterMarketOrder &&
+                                          //               !_addValidityAndDisclosedQty) {
+                                          //             isAdvancedOptionClicked =
+                                          //                 !isAdvancedOptionClicked;
+                                          //           }
+                                          //           updatePriceType();
+                                          //         });
+                                          //       },
+                                          //       child: Container(
+                                          //         color: resolveThemeColor(context,
+                                          //             dark: MyntColors.backgroundColorDark,
+                                          //             light: MyntColors.backgroundColor), // To make the full width tappable
+                                          //         height: 40,
+                                          //         child: Center(
+                                          //           child: Row(
+                                          //             mainAxisSize: MainAxisSize.min,
+                                          //             children: [
+                                          //               Text('Advance',
+                                          //                   style: WebTextStyles.sub(
+                                          //                     isDarkTheme: theme.isDarkMode,
+                                          //                     color: theme.isDarkMode
+                                          //                         ? MyntColors.primaryDark
+                                          //                         : MyntColors.primary,
+                                          //                     fontWeight: WebFonts.semiBold,
+                                          //                   )),
+                                          //               Padding(
+                                          //                 padding: const EdgeInsets.only(left: 4),
+                                          //                 child: Icon(
+                                          //                   isAdvancedOptionClicked
+                                          //                       ? Icons.keyboard_arrow_up
+                                          //                       : Icons.keyboard_arrow_down,
+                                          //                   color: theme.isDarkMode
+                                          //                       ? MyntColors.primaryDark
+                                          //                       : MyntColors.primary,
+                                          //                 ),
+                                          //               ),
+                                          //             ],
+                                          //           ),
+                                          //         ),
+                                          //       ),
+                                          //     ),
+                                          //   ),
+                                          // ),
+                                          // Visibility(
+                                          //   visible: isAdvancedOptionClicked,
+                                          //   child:
+                                          Column(
                                               children: [
                                                 Divider(
                                                         color: theme.isDarkMode
@@ -5164,6 +5525,15 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     _addValidityAndDisclosedQty =
                                                                         value ??
                                                                             false;
+                                                                    // Unticking only hid the fields - the values were still
+                                                                    // sent, so an IOC or a disclosed qty set earlier rode
+                                                                    // along invisibly. Hidden now means defaults.
+                                                                    if (!_addValidityAndDisclosedQty) {
+                                                                      _validityTouched = false;
+                                                                      validityType =
+                                                                          _defaultValidityFor(_effectiveExch);
+                                                                      discQtyCtrl.text = "0";
+                                                                    }
                                                                   });
                                                                 },
                                                                 activeColor: colors
@@ -5269,7 +5639,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                 //         : 100)
                                               ],
                                             ),
-                                          ),
+                                          // ), // ← closer of the former Visibility
                                         ],
                                       ),
                                       // ],
@@ -6054,11 +6424,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       getGTTFinalQuantity(orderInput.qtyCtrl.text));
                                                                   if (orderInput.qtyCtrl.text.trim().isNotEmpty &&
                                                                       computedQty <= 0) {
+                                                                    String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
                                                                         _isStock && _isQtyToAmount
                                                                             ? "Minimum Allowed Amount should be greater than ${widget.orderArg.ltp}"
-                                                                            : "Quantity cannot be 0");
+                                                                            : "$qtyFieldName cannot be 0");
                                                                     return;
                                                                   }
                                                                   // Freeze qty cap guard — GTT has no slicing, so block any qty
@@ -6068,16 +6439,43 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         context, _gttFreezeCapMessage());
                                                                     return;
                                                                   }
-                                                                  if (orderInput.disableGTTCond) {
+                                                                  // Lot-multiple guard — GTT final qty must be a whole
+                                                                  // number of lots (mirrors the regular order path;
+                                                                  // Qty mode can otherwise type a non-multiple like 18).
+                                                                  final int gttFinalQty = SafeParse.toInt(
+                                                                      getGTTFinalQuantity(orderInput.qtyCtrl.text));
+                                                                  int gttLotRounded =
+                                                                      (gttFinalQty / lotSize).round() * lotSize;
+                                                                  if (gttLotRounded < lotSize) gttLotRounded = lotSize; // never suggest 0
+                                                                  // Skip when there is no quantity. An empty field makes
+                                                                  // getGTTFinalQuantity return "0", and the "never suggest 0"
+                                                                  // clamp above then raises gttLotRounded to one lot — so 0 vs 1
+                                                                  // looked like a lot-multiple failure and returned, hiding the
+                                                                  // real "cannot be empty" / "cannot be 0" message below.
+                                                                  if (gttFinalQty > 0 &&
+                                                                      gttFinalQty != gttLotRounded &&
+                                                                      widget.scripInfo.exch != 'MCX') {
+                                                                    ResponsiveSnackBar.showWarning(context,
+                                                                        "Quantity should be multiple of lot size $lotSize => $gttLotRounded");
+                                                                    return;
+                                                                  }
+                                                                  // Branch on the SAME flag the checkbox drives. This used to read
+                                                                  // orderInput.disableGTTCond, a second copy of the same fact kept in sync
+                                                                  // by hand - and clearTextField() resets that copy without touching isOco.
+                                                                  // After placing one OCO the checkbox still showed ticked while the submit
+                                                                  // had silently reverted to single-GTT, so the OCO fields went unvalidated
+                                                                  // and the order went out as a plain GTT (TC_238, TC_239).
+                                                                  if (isOco) {
                                                                     final computedOcoQty = SafeParse.toDouble(
                                                                         getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
                                                                     if (orderInput.ocoQtyCtrl.text.trim().isNotEmpty &&
                                                                         computedOcoQty <= 0) {
+                                                                      String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           _isStock && _isQtyToAmount
                                                                               ? "Minimum Allowed Amount should be greater than ${widget.orderArg.ltp}"
-                                                                              : "Quantity cannot be 0");
+                                                                              : "OCO $ocoQtyFieldName cannot be 0");
                                                                       return;
                                                                     }
                                                                     // OCO leg freeze qty cap guard (no slicing in GTT)
@@ -6086,9 +6484,39 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           context, _gttFreezeCapMessage());
                                                                       return;
                                                                     }
+                                                                    // OCO leg lot-multiple guard (same as the main GTT leg)
+                                                                    final int ocoFinalQty = SafeParse.toInt(
+                                                                        getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
+                                                                    int ocoLotRounded =
+                                                                        (ocoFinalQty / lotSize).round() * lotSize;
+                                                                    if (ocoLotRounded < lotSize) ocoLotRounded = lotSize; // never suggest 0
+                                                                    // Skip when there is no quantity — same reason as the main leg.
+                                                                    if (ocoFinalQty > 0 &&
+                                                                        ocoFinalQty != ocoLotRounded &&
+                                                                        widget.scripInfo.exch != 'MCX') {
+                                                                      ResponsiveSnackBar.showWarning(context,
+                                                                          "OCO Quantity should be multiple of lot size $lotSize => $ocoLotRounded");
+                                                                      return;
+                                                                    }
                                                                   }
-                                                                  if (orderInput
-                                                                      .disableGTTCond) {
+                                                                  // Tick-size guard — GTT price/trigger fields must be a multiple of
+                                                                  // the scrip's tick size. The regular order path applies this inside
+                                                                  // placeOrder(), which the GTT branch never calls. Kept as an early
+                                                                  // return so the existing validation chain below is untouched.
+                                                                  String? gttTickErr =
+                                                                      _gttTickError(orderInput.val1Ctrl.text, "Target trigger price");
+                                                                  gttTickErr ??= _gttTickError(orderInput.priceCtrl.text, "Price");
+                                                                  if (gttTickErr == null && isOco) {
+                                                                    gttTickErr = _gttTickError(
+                                                                        orderInput.val2Ctrl.text, "Stoploss trigger price");
+                                                                    gttTickErr ??=
+                                                                        _gttTickError(orderInput.ocoPriceCtrl.text, "OCO price");
+                                                                  }
+                                                                  if (gttTickErr != null) {
+                                                                    ResponsiveSnackBar.showWarning(context, gttTickErr);
+                                                                    return;
+                                                                  }
+                                                                  if (isOco) {
                                                                     if ((orderInput.val1Ctrl.text.isNotEmpty &&
                                                                             orderInput
                                                                                 .val2Ctrl.text.isNotEmpty &&
@@ -6403,8 +6831,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "Price cannot be empty");
-                                                                      } else if (SafeParse.toDouble(orderInput.priceCtrl.text) <=
-                                                                          0) {
+                                                                      } else if (orderInput.priceCtrl.text != "Market" &&
+                                                                          double.tryParse(orderInput.priceCtrl.text) !=
+                                                                              null &&
+                                                                          SafeParse.toDouble(orderInput.priceCtrl.text) <=
+                                                                              0) {
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "Price cannot be 0");
@@ -6412,7 +6843,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .val2Ctrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        ResponsiveSnackBar.showWarning(
+                                                                        ResponsiveSnackBar.showWarning( 
                                                                             context,
                                                                             "Stoploss trigger price cannot be empty");
                                                                       } else if (SafeParse.toDouble(orderInput
@@ -6480,7 +6911,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         frezQty *
                                                                             frezQtyOrderSliceMaxLimit;
                                                                   });
-                                                                  if (getFinalQuantity(qtyCtrl.text)
+                                                                  if (qtyCtrl.text
                                                                           .trim()
                                                                           .isEmpty ||
                                                                       priceCtrl.text
@@ -6497,12 +6928,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 : "Lot");
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
-                                                                        getFinalQuantity(qtyCtrl.text).isEmpty
+                                                                        qtyCtrl.text.trim().isEmpty
                                                                             ? "$fieldName cannot be empty"
                                                                             : "Price cannot be empty");
                                                                   } else if ((getFinalQuantity(qtyCtrl.text).trim()) == "0" ||
-                                                                      priceCtrl.text.trim() ==
-                                                                          "0") {
+                                                                      // Limit orders only: a 0/0.00 limit price must be blocked
+                                                                      // (Market/SL-MKT carry "Market" here, so leave them out).
+                                                                      ((priceType == "Limit" || priceType == "SL Limit") &&
+                                                                          SafeParse.toDouble(priceCtrl.text) <= 0)) {
                                                                     String fieldName = (_isStock)
                                                                         ? (_isQtyToAmount
                                                                             ? "Amount"
@@ -6545,8 +6978,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     if (triggerPriceCtrl
                                                                             .text
                                                                             .isEmpty ||
-                                                                        triggerPriceCtrl.text ==
-                                                                            "0") {
+                                                                        SafeParse.toDouble(triggerPriceCtrl.text) <=
+                                                                            0) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           triggerPriceCtrl.text.isEmpty
@@ -6573,7 +7006,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             }
                                                                           }
                                                                         } else {
-                                                                          if (_hasValidCircuitBreakerValues &&
+                                                                          if (SafeParse.toDouble(triggerPriceCtrl.text) <
+                                                                              SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                            ResponsiveSnackBar.showWarning(context,
+                                                                                "Trigger should be greater than LTP");
+                                                                          } else if (_hasValidCircuitBreakerValues &&
                                                                               SafeParse.toDouble(triggerPriceCtrl.text) < SafeParse.toDouble(widget.scripInfo.lc)) {
                                                                             ResponsiveSnackBar.showWarning(context,
                                                                                 "Trigger cannot be lesser than lower circuit limit of ${widget.scripInfo.lc}");
@@ -6612,7 +7049,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             }
                                                                           }
                                                                         } else {
-                                                                          if (_hasValidCircuitBreakerValues &&
+                                                                          if (SafeParse.toDouble(triggerPriceCtrl.text) >
+                                                                              SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                            ResponsiveSnackBar.showWarning(context,
+                                                                                "Trigger should be lesser than LTP");
+                                                                          } else if (_hasValidCircuitBreakerValues &&
                                                                               SafeParse.toDouble(triggerPriceCtrl.text) > SafeParse.toDouble(widget.scripInfo.uc)) {
                                                                             ResponsiveSnackBar.showWarning(context,
                                                                                 "Trigger cannot be greater than upper circuit limit of ${widget.scripInfo.uc ?? 0.00}");
@@ -6636,11 +7077,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                   } else if (_isCoverOrderEnabled &&
                                                                       orderType == "CO - BO" &&
                                                                       (priceType == "Limit" || priceType == "Market")) {
-                                                                    if (stopLossCtrl
-                                                                            .text
-                                                                            .isEmpty ||
-                                                                        stopLossCtrl.text ==
-                                                                            "0") {
+                                                                    if (stopLossCtrl.text.isEmpty ||
+                                                                        SafeParse.toDouble(stopLossCtrl.text) <= 0) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           stopLossCtrl.text.isEmpty
@@ -6653,7 +7091,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 SafeParse.toDouble(widget.scripInfo.lc)) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
-                                                                              "Price(Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) Stoploss cannot be lower than ${widget.scripInfo.lc}");
+                                                                              "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
                                                                         } else {
                                                                           if ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) > frezQty &&
                                                                               widget.scripInfo.frzqty != null)) {
@@ -6674,7 +7112,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 SafeParse.toDouble(widget.scripInfo.uc)) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
-                                                                              "Price(Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text))}) Stoploss cannot be greater than ${widget.scripInfo.uc}");
+                                                                              "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
                                                                         } else {
                                                                           if ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) > frezQty &&
                                                                               widget.scripInfo.frzqty != null)) {
@@ -6713,11 +7151,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 "0") ??
                                                                             0;
 
-                                                                    if (stopLossCtrl
-                                                                            .text
-                                                                            .isEmpty ||
-                                                                        stopLossCtrl.text ==
-                                                                            "0") {
+                                                                    if (stopLossCtrl.text.isEmpty ||
+                                                                        SafeParse.toDouble(stopLossCtrl.text) <= 0) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           stopLossCtrl.text.isEmpty
@@ -6729,17 +7164,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                             lc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price(Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) Stoploss cannot be lower than ${widget.scripInfo.lc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
                                                                     } else if (!isBuy! &&
                                                                         (userOrderPrice +
                                                                                 userStopLoss) >
                                                                             uc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price(Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text))}) Stoploss cannot be greater than ${widget.scripInfo.uc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
                                                                     } else if ((triggerPriceCtrl.text.isEmpty ||
-                                                                            triggerPriceCtrl.text ==
-                                                                                "0") &&
+                                                                            SafeParse.toDouble(triggerPriceCtrl.text) <=
+                                                                                0) &&
                                                                         priceType ==
                                                                             "SL Limit") {
                                                                       ResponsiveSnackBar.showWarning(
@@ -6750,6 +7185,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     } else {
                                                                       if (isBuy!) {
                                                                         if (userTriggerPrice <
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be greater than LTP");
+                                                                        } else if (userTriggerPrice <
                                                                             lc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -6780,6 +7220,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         }
                                                                       } else {
                                                                         if (userTriggerPrice >
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be lesser than LTP");
+                                                                        } else if (userTriggerPrice >
                                                                             uc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -6852,7 +7297,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 .scripInfo.lc)) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price(Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) Stoploss cannot be lower than ${widget.scripInfo.lc}");
+                                                                          "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
                                                                     } else if (!isBuy! &&
                                                                         _hasValidCircuitBreakerValues &&
                                                                         (SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)) >
@@ -6860,7 +7305,21 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 .scripInfo.uc)) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price(Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text))}) Stoploss cannot be greater than ${widget.scripInfo.uc}");
+                                                                          "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                                    } else if (isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (SafeParse.toDouble(ordPrice) + SafeParse.toDouble(targetCtrl.text)) >
+                                                                            SafeParse.toDouble(widget.scripInfo.uc)) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price + Target = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc}");
+                                                                    } else if (!isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (SafeParse.toDouble(ordPrice) - SafeParse.toDouble(targetCtrl.text)) <
+                                                                            SafeParse.toDouble(widget.scripInfo.lc)) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price - Target = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc}");
                                                                     } else if (trailingTicksCtrl
                                                                             .text
                                                                             .isNotEmpty &&
@@ -6924,20 +7383,39 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           "${stopLossCtrl.text.isEmpty ? "Stoploss" : "Target"} cannot be empty");
+                                                                    } else if (SafeParse.toDouble(stopLossCtrl.text) <= 0 ||
+                                                                        SafeParse.toDouble(targetCtrl.text) <= 0) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "${SafeParse.toDouble(targetCtrl.text) <= 0 ? "Target" : "Stoploss"} cannot be 0");
                                                                     } else if (isBuy! &&
                                                                         (userOrderPrice -
                                                                                 userStopLoss) <
                                                                             lc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price(Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}) Stoploss cannot be lower than ${widget.scripInfo.lc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price - Stoploss = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
                                                                     } else if (!isBuy! &&
                                                                         (userOrderPrice +
                                                                                 userStopLoss) >
                                                                             uc) {
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
-                                                                          "Price(Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text))}) Stoploss cannot be greater than ${widget.scripInfo.uc ?? 0.00}");
+                                                                          "Invalid Stoploss: Price (Order price + Stoploss = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(stopLossCtrl.text)).toStringAsFixed(2)}). Stoploss cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
+                                                                    } else if (isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (userOrderPrice + SafeParse.toDouble(targetCtrl.text)) >
+                                                                            uc) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price + Target = ${(SafeParse.toDouble(ordPrice) + SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be greater than Upper Circuit Limit ${widget.scripInfo.uc ?? 0.00}");
+                                                                    } else if (!isBuy! &&
+                                                                        _hasValidCircuitBreakerValues &&
+                                                                        (userOrderPrice - SafeParse.toDouble(targetCtrl.text)) <
+                                                                            lc) {
+                                                                      ResponsiveSnackBar.showWarning(
+                                                                          context,
+                                                                          "Invalid Target: Price (Order price - Target = ${(SafeParse.toDouble(ordPrice) - SafeParse.toDouble(targetCtrl.text)).toStringAsFixed(2)}). Target cannot be lower than Lower Circuit Limit ${widget.scripInfo.lc ?? 0.00}");
                                                                     } else if (triggerPriceCtrl
                                                                             .text
                                                                             .isEmpty &&
@@ -6949,6 +7427,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                     } else {
                                                                       if (isBuy!) {
                                                                         if (userTriggerPrice <
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be greater than LTP");
+                                                                        } else if (userTriggerPrice <
                                                                             lc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -6979,6 +7462,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         }
                                                                       } else {
                                                                         if (userTriggerPrice >
+                                                                            SafeParse.toDouble(widget.orderArg.ltp)) {
+                                                                          ResponsiveSnackBar.showWarning(
+                                                                              context,
+                                                                              "Trigger should be lesser than LTP");
+                                                                        } else if (userTriggerPrice >
                                                                             uc) {
                                                                           ResponsiveSnackBar.showWarning(
                                                                               context,
@@ -7140,6 +7628,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                           onPressed: () {
                             setState(() {
                               validityType = validityTypes[index];
+                              // An explicit pick, so the exchange toggle must
+                              // stop overriding it.
+                              _validityTouched = true;
+                              // IOC leaves nothing to disclose - clear any value the
+                              // user typed before switching, so a stale number is not
+                              // carried into the order.
+                              if (validityType == "IOC") discQtyCtrl.text = "0";
                             });
                           },
                           style: ElevatedButton.styleFrom(
@@ -7187,8 +7682,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                       separatorBuilder: (context, index) {
                         return const SizedBox(width: 8);
                       },
-                      itemCount: widget.orderArg.exchange == "BSE" ||
-                              widget.orderArg.exchange == "BFO"
+                      itemCount: _effectiveExch == "BSE" ||
+                              _effectiveExch == "BFO"
                           ? validityTypes.length
                           : 2)),
             ],
@@ -7198,102 +7693,118 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              headerTitleText("Disclosed Qty", theme),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 40,
-                width: 200,
-                child: Semantics(
-                  identifier: "Disclosed Qty",
-                  child: MyntTextField(
-                      backgroundColor: theme.isDarkMode
-                          ? colors.darkGrey
-                          : const Color(0xffF1F3F8),
-                      placeholder: "0",
-                      placeholderStyle: WebTextStyles.formInput(
-                        isDarkTheme: theme.isDarkMode,
-                        color: (theme.isDarkMode
-                            ? MyntColors.textSecondary
-                            : MyntColors.textSecondary).withValues(alpha: 0.5),
+              // Locked on IOC. Greying alone was invisible here - MyntTextField
+              // passes `enabled` to the TextField but does not restyle, so the
+              // field looked identical. Opacity dims label and box together in
+              // both themes, and the caption below says why.
+              Opacity(
+                opacity: _dscqtyApplies ? 1.0 : 0.45,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    headerTitleText("Disclosed Qty", theme),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 40,
+                      width: 200,
+                      child: Semantics(
+                        identifier: "Disclosed Qty",
+                        child: MyntTextField(
+                            // Disclosed quantity has no meaning for IOC: the order
+                            // executes immediately and cancels the remainder, so
+                            // there is nothing left to disclose over time.
+                            enabled: _dscqtyApplies,
+                            backgroundColor: theme.isDarkMode
+                                ? colors.darkGrey
+                                : const Color(0xffF1F3F8),
+                            placeholder: "0",
+                            placeholderStyle: WebTextStyles.formInput(
+                              isDarkTheme: theme.isDarkMode,
+                              color: (theme.isDarkMode
+                                  ? MyntColors.textSecondary
+                                  : MyntColors.textSecondary).withValues(alpha: 0.5),
+                            ),
+                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                            keyboardType: TextInputType.number,
+                            textStyle: WebTextStyles.formInput(
+                              isDarkTheme: theme.isDarkMode,
+                              color: theme.isDarkMode
+                                  ? MyntColors.textPrimaryDark
+                                  : MyntColors.textPrimary,
+                            ),
+                            // prefixIcon: InkWell(
+                            //   onTap: () {
+                            //     setState(() {
+                            //       if (discQtyCtrl
+                            //           .text
+                            //           .isNotEmpty) {
+                            //         if (int.parse(
+                            //                 discQtyCtrl
+                            //                     .text) >
+                            //             0) {
+                            //           discQtyCtrl
+                            //                   .text =
+                            //               (int.parse(discQtyCtrl.text) -
+                            //                       1)
+                            //                   .toString();
+                            //         } else {
+                            //           discQtyCtrl
+                            //                   .text =
+                            //               "0";
+                            //         }
+                            //       } else {
+                            //         discQtyCtrl
+                            //             .text = "0";
+                            //       }
+                            //     });
+                            //   },
+                            //   child: SvgPicture.asset(
+                            //       theme.isDarkMode
+                            //           ? assets
+                            //               .darkCMinus
+                            //           : assets
+                            //               .minusIcon,
+                            //       fit: BoxFit
+                            //           .scaleDown),
+                            // ),
+                            // suffixIcon: InkWell(
+                            //   onTap: () {
+                            //     setState(() {
+                            //       int number =
+                            //           int.parse(
+                            //               discQtyCtrl
+                            //                   .text);
+                            //       if (discQtyCtrl
+                            //           .text
+                            //           .isNotEmpty) {
+                            //         if (number <
+                            //             9999999999) {
+                            //           discQtyCtrl
+                            //                   .text =
+                            //               (int.parse(discQtyCtrl.text) +
+                            //                       1)
+                            //                   .toString();
+                            //         }
+                            //       } else {
+                            //         discQtyCtrl
+                            //             .text = "0";
+                            //       }
+                            //     });
+                            //   },
+                            //   child: SvgPicture.asset(
+                            //       theme.isDarkMode
+                            //           ? assets
+                            //               .darkAdd
+                            //           : assets
+                            //               .addIcon,
+                            //       fit: BoxFit
+                            //           .scaleDown),
+                            // ),
+                            controller: discQtyCtrl,
+                            textAlign: TextAlign.start),
                       ),
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      keyboardType: TextInputType.number,
-                      textStyle: WebTextStyles.formInput(
-                        isDarkTheme: theme.isDarkMode,
-                        color: theme.isDarkMode
-                            ? MyntColors.textPrimaryDark
-                            : MyntColors.textPrimary,
-                      ),
-                      // prefixIcon: InkWell(
-                      //   onTap: () {
-                      //     setState(() {
-                      //       if (discQtyCtrl
-                      //           .text
-                      //           .isNotEmpty) {
-                      //         if (int.parse(
-                      //                 discQtyCtrl
-                      //                     .text) >
-                      //             0) {
-                      //           discQtyCtrl
-                      //                   .text =
-                      //               (int.parse(discQtyCtrl.text) -
-                      //                       1)
-                      //                   .toString();
-                      //         } else {
-                      //           discQtyCtrl
-                      //                   .text =
-                      //               "0";
-                      //         }
-                      //       } else {
-                      //         discQtyCtrl
-                      //             .text = "0";
-                      //       }
-                      //     });
-                      //   },
-                      //   child: SvgPicture.asset(
-                      //       theme.isDarkMode
-                      //           ? assets
-                      //               .darkCMinus
-                      //           : assets
-                      //               .minusIcon,
-                      //       fit: BoxFit
-                      //           .scaleDown),
-                      // ),
-                      // suffixIcon: InkWell(
-                      //   onTap: () {
-                      //     setState(() {
-                      //       int number =
-                      //           int.parse(
-                      //               discQtyCtrl
-                      //                   .text);
-                      //       if (discQtyCtrl
-                      //           .text
-                      //           .isNotEmpty) {
-                      //         if (number <
-                      //             9999999999) {
-                      //           discQtyCtrl
-                      //                   .text =
-                      //               (int.parse(discQtyCtrl.text) +
-                      //                       1)
-                      //                   .toString();
-                      //         }
-                      //       } else {
-                      //         discQtyCtrl
-                      //             .text = "0";
-                      //       }
-                      //     });
-                      //   },
-                      //   child: SvgPicture.asset(
-                      //       theme.isDarkMode
-                      //           ? assets
-                      //               .darkAdd
-                      //           : assets
-                      //               .addIcon,
-                      //       fit: BoxFit
-                      //           .scaleDown),
-                      // ),
-                      controller: discQtyCtrl,
-                      textAlign: TextAlign.start),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -7328,7 +7839,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                     identifier: "Stoploss Trigger",
                     child: MyntTextField(
                         inputFormatters: [
-                          FilteringTextInputFormatter.allow(
+                          _rejectIfNoMatch(
                               RegExp(r'^\d*\.?\d{0,2}$'))
                         ],
                         backgroundColor: theme.isDarkMode
@@ -7418,7 +7929,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 identifier: "Bracket Target Input",
                 child: MyntTextField(
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(
+                      _rejectIfNoMatch(
                           RegExp(r'^\d*\.?\d{0,2}$'))
                     ],
                     backgroundColor: theme.isDarkMode
@@ -7494,7 +8005,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 identifier: "Stoploss cover sl",
                 child: MyntTextField(
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(
+                      _rejectIfNoMatch(
                           RegExp(r'^\d*\.?\d{0,2}$'))
                     ],
                     backgroundColor: theme.isDarkMode
@@ -7567,7 +8078,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 identifier: "Trailing SL Input",
                 child: MyntTextField(
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(
+                      _rejectIfNoMatch(
                           RegExp(r'^\d*\.?\d{0,2}$'))
                     ],
                     backgroundColor: theme.isDarkMode
@@ -7595,10 +8106,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                               "Trailing SL should be in multiples of tick size: $tickSize");
                         }
                       }
-                      if (value.isEmpty) {
-                        ResponsiveSnackBar.showWarning(
-                            context, "Trailing SL cannot be empty");
-                      }
+                      // Trailing SL is optional — clearing it must not warn "cannot be empty".
+                      // if (value.isEmpty) {
+                      //   ResponsiveSnackBar.showWarning(
+                      //       context, "Trailing SL cannot be empty");
+                      // }
                     },
                     placeholderStyle: WebTextStyles.formInput(
                       isDarkTheme: theme.isDarkMode,
@@ -7653,224 +8165,201 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                         return StatefulBuilder(
                           builder: (BuildContext context,
                               StateSetter dialogSetState) {
-                            return AlertDialog(
-                              backgroundColor: resolveThemeColor(context,
-                                  dark: MyntColors.cardDark,
-                                  light: const Color(0xFFF1F3F8)),
-                              titlePadding: const EdgeInsets.only(
-                                  left: 4, right: 4, top: 0, bottom: 0),
-                              shape: const RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.all(Radius.circular(8))),
-                              scrollable: true,
-                              contentPadding: const EdgeInsets.only(
-                                left: 16, right: 16, bottom: 10, top: 0,
-                              ),
-                              actionsPadding: const EdgeInsets.only(
-                                  bottom: 16, right: 16, left: 16, top: 8),
-                              insetPadding: const EdgeInsets.symmetric(
-                                  horizontal: 30, vertical: 12),
-                              title: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  Material(
-                                    color: Colors.transparent,
-                                    shape: const CircleBorder(),
-                                    child: InkWell(
-                                      onTap: () async {
-                                        await Future.delayed(
-                                            const Duration(milliseconds: 150));
-                                        closeDialog();
-                                      },
-                                      borderRadius: BorderRadius.circular(20),
-                                      splashColor: theme.isDarkMode ? colors.splashColorDark : colors.splashColorLight,
-                                      highlightColor: theme.isDarkMode ? colors.splashColorDark : colors.splashColorLight,
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(6.0),
-                                        child: Icon(
-                                          Icons.close_rounded,
-                                          size: 22,
-                                          color: resolveThemeColor(context,
-                                              dark: MyntColors.textSecondaryDark,
-                                              light: MyntColors.textSecondary),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              content: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Enter Market Protection',
-                                      textAlign: TextAlign.start,
-                                      style: WebTextStyles.formLabel(
-                                        isDarkTheme: theme.isDarkMode,
-                                        color: resolveThemeColor(context,
-                                            dark: MyntColors.textPrimaryDark,
-                                            light: MyntColors.textPrimary),
-                                      )),
-                                  const SizedBox(height: 10),
-                                  Semantics(
-                                    identifier: "Market Protection % Input",
-                                    child: MyntTextField(
-                                      backgroundColor: theme.isDarkMode
-                                          ? colors.darkGrey
-                                          : const Color(0xffF1F3F8),
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.allow(
-                                          RegExp(r'^(0|[1-9][0-9]{0,19})$'),
-                                        ),
-                                      ],
-                                      onChanged: (value) {
-                                        dialogSetState(() {
-                                          if (value.isEmpty) {
-                                            mktProtErrorText =
-                                                "Market Protection cannot be empty";
-                                          } else {
-                                            int intValue =
-                                                int.tryParse(value) ?? 0;
-
-                                            if (intValue > 20) {
-                                              // force value back to 20
-                                              mktProtDialogCtrl.text = "20";
-                                              mktProtDialogCtrl.selection =
-                                                  TextSelection.fromPosition(
-                                                TextPosition(
-                                                    offset: mktProtDialogCtrl
-                                                        .text.length),
-                                              );
-                                              mktProtErrorText =
-                                                  "Cannot enter greater than 20%";
-                                            } else if (intValue < 1) {
-                                              mktProtErrorText =
-                                                  "Cannot enter less than 1%";
-                                            } else {
-                                              mktProtErrorText = "";
-                                            }
-                                          }
-                                        });
-                                      },
-                                      keyboardType: TextInputType.number,
-                                      textStyle: WebTextStyles.title(
-                                        isDarkTheme: theme.isDarkMode,
-                                        color: theme.isDarkMode
-                                            ? MyntColors.textPrimaryDark
-                                            : MyntColors.textPrimary,
-                                      ),
-                                      controller: mktProtDialogCtrl,
-                                      leadingWidget: Container(
-                                        margin: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                            borderRadius:
-                                                BorderRadius.circular(20),
-                                            color: theme.isDarkMode
-                                                ? const Color(0xff555555)
-                                                : MyntColors.backgroundColor),
-                                        child: SvgPicture.asset(
-                                            color: theme.isDarkMode
-                                                ? MyntColors.textPrimaryDark
-                                                : MyntColors.icon,
-                                            assets.precentIcon,
-                                            fit: BoxFit.scaleDown),
-                                      ),
-                                      textAlign: TextAlign.start,
-                                      placeholder: "Add Market Protection %",
-                                      placeholderStyle: WebTextStyles.formLabel(
-                                        isDarkTheme: theme.isDarkMode,
-                                        color: (theme.isDarkMode
-                                                ? MyntColors.textSecondaryDark
-                                                : MyntColors.textSecondary)
-                                            .withValues(alpha: 0.5),
-                                      ),
-                                    ),
-                                  ),
-                                  if (mktProtErrorText.isNotEmpty)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 8.0),
-                                      child: Semantics(
-                                        identifier:
-                                            "Market Protection % Error Text",
-                                        child: Text(
-                                          mktProtErrorText,
-                                          style: WebTextStyles.para(
-                                            isDarkTheme: theme.isDarkMode,
-                                            color: theme.isDarkMode
-                                                ? MyntColors.errorDark
-                                                : MyntColors.loss,
+                            return shadcn.Card(
+                              borderRadius: BorderRadius.circular(8),
+                              padding: EdgeInsets.zero,
+                              child: SizedBox(
+                                width: 420,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Header
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 8),
+                                      decoration: BoxDecoration(
+                                        border: Border(
+                                          bottom: BorderSide(
+                                            color: shadcn.Theme.of(context)
+                                                .colorScheme
+                                                .border,
                                           ),
                                         ),
                                       ),
-                                      //  Text(
-                                      //   mktProtErrorText,
-                                      //   style: TextStyle(
-                                      //     color: Colors.red,
-                                      //     fontSize: 12,
-                                      //   ),
-                                      // ),
-                                    ),
-                                ],
-                              ),
-                              actions: [
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton(
-                                    onPressed: () {
-                                      if (mktProtDialogCtrl.text.isEmpty) {
-                                        dialogSetState(() {
-                                          mktProtErrorText =
-                                              "Market Protection cannot be empty";
-                                        });
-                                        return;
-                                      }
-
-                                      double intValue = double.tryParse(
-                                              mktProtDialogCtrl.text) ??
-                                          0;
-                                      if (intValue > 20 || intValue < 1) {
-                                        return;
-                                      }
-
-                                      updatePriceType();
-                                      setState(() {
-                                        mktProtCtrl.text =
-                                            mktProtDialogCtrl.text;
-                                        mktProtErrorText = "";
-                                      });
-                                      closeDialog();
-                                    },
-                                    style: OutlinedButton.styleFrom(
-                                      minimumSize:
-                                          const Size(0, 45), // width, height
-                                      side: BorderSide(
-                                          color: resolveThemeColor(context,
-                                              dark: MyntColors.cardBorderDark,
-                                              light: colors.btnOutlinedBorder)),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(5),
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text('Enter Market Protection',
+                                              style: MyntWebTextStyles.title(
+                                                context,
+                                                color: resolveThemeColor(context,
+                                                    dark: MyntColors
+                                                        .textPrimaryDark,
+                                                    light:
+                                                        MyntColors.textPrimary),
+                                                fontWeight: MyntFonts.medium,
+                                              )),
+                                          MyntCloseButton(
+                                            onPressed: () async {
+                                              await Future.delayed(
+                                                  const Duration(
+                                                      milliseconds: 150));
+                                              closeDialog();
+                                            },
+                                          ),
+                                        ],
                                       ),
-                                      backgroundColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
                                     ),
-                                    child: Text("Ok",
-                                        style: WebTextStyles.buttonMd(
-                                          isDarkTheme: theme.isDarkMode,
-                                          color: Colors.white,
-                                          fontWeight: WebFonts.semiBold,
-                                        )),
-                                  ),
-                                ),
+                                    // Content
+                                    Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text('Market Protection %',
+                                              style: MyntWebTextStyles.body(
+                                                context,
+                                                fontWeight: MyntFonts.semiBold,
+                                                darkColor:
+                                                    MyntColors.textPrimaryDark,
+                                                lightColor:
+                                                    MyntColors.textPrimary,
+                                              )),
+                                          const SizedBox(height: 10),
+                                          Semantics(
+                                            identifier:
+                                                "Market Protection % Input",
+                                            child: MyntFormTextField(
+                                              controller: mktProtDialogCtrl,
+                                              height: 40,
+                                              placeholder:
+                                                  "Add Market Protection %",
+                                              keyboardType:
+                                                  TextInputType.number,
+                                              inputFormatters: [
+                                                _rejectIfNoMatch(
+                                                  RegExp(
+                                                      r'^(0|[1-9][0-9]{0,19})$'),
+                                                ),
+                                              ],
+                                              leadingWidget: Container(
+                                                margin:
+                                                    const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            20),
+                                                    color: theme.isDarkMode
+                                                        ? const Color(
+                                                            0xff555555)
+                                                        : MyntColors
+                                                            .backgroundColor),
+                                                child: SvgPicture.asset(
+                                                    color: theme.isDarkMode
+                                                        ? MyntColors
+                                                            .textPrimaryDark
+                                                        : MyntColors.icon,
+                                                    assets.precentIcon,
+                                                    fit: BoxFit.scaleDown),
+                                              ),
+                                              onChanged: (value) {
+                                                dialogSetState(() {
+                                                  if (value.isEmpty) {
+                                                    mktProtErrorText =
+                                                        "Market Protection cannot be empty";
+                                                  } else {
+                                                    int intValue =
+                                                        int.tryParse(value) ??
+                                                            0;
 
-                                // TextButton(
-                                //   onPressed: () => Navigator.of(context).pop(),
-                                //   child: const Text('Cancel'),
-                                // ),
-                                // TextButton(
-                                //   onPressed: () {
-                                //     Navigator.of(context).pop();
-                                //   },
-                                //   child: const Text('OK'),
-                                // ),
-                              ],
+                                                    if (intValue > 20) {
+                                                      // force value back to 20
+                                                      mktProtDialogCtrl.text =
+                                                          "20";
+                                                      mktProtDialogCtrl
+                                                              .selection =
+                                                          TextSelection
+                                                              .fromPosition(
+                                                        TextPosition(
+                                                            offset:
+                                                                mktProtDialogCtrl
+                                                                    .text
+                                                                    .length),
+                                                      );
+                                                      mktProtErrorText =
+                                                          "Market Protection must be between 1% and 20%";
+                                                    } else if (intValue < 1) {
+                                                      mktProtErrorText =
+                                                          "Market Protection must be between 1% and 20%";
+                                                    } else {
+                                                      mktProtErrorText = "";
+                                                    }
+                                                  }
+                                                });
+                                              },
+                                            ),
+                                          ),
+                                          if (mktProtErrorText.isNotEmpty) ...[
+                                            const SizedBox(height: 8),
+                                            Semantics(
+                                              identifier:
+                                                  "Market Protection % Error Text",
+                                              child: Text(
+                                                mktProtErrorText,
+                                                style:
+                                                    MyntWebTextStyles.caption(
+                                                  context,
+                                                  fontWeight: MyntFonts.medium,
+                                                  color: resolveThemeColor(
+                                                      context,
+                                                      dark:
+                                                          MyntColors.errorDark,
+                                                      light: MyntColors.loss),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                          const SizedBox(height: 20),
+                                          MyntPrimaryButton(
+                                            label: 'Ok',
+                                            isFullWidth: true,
+                                            onPressed: () {
+                                              if (mktProtDialogCtrl
+                                                  .text.isEmpty) {
+                                                dialogSetState(() {
+                                                  mktProtErrorText =
+                                                      "Market Protection cannot be empty";
+                                                });
+                                                return;
+                                              }
+
+                                              double intValue =
+                                                  double.tryParse(
+                                                          mktProtDialogCtrl
+                                                              .text) ??
+                                                      0;
+                                              if (intValue > 20 ||
+                                                  intValue < 1) {
+                                                return;
+                                              }
+
+                                              updatePriceType();
+                                              setState(() {
+                                                mktProtCtrl.text =
+                                                    mktProtDialogCtrl.text;
+                                                mktProtErrorText = "";
+                                              });
+                                              closeDialog();
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             );
                           },
                         );
@@ -7985,6 +8474,47 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       // Only close basket dialog when editing existing basket script
       addBasketScrip(orderInput, bsktName, false);
     } else {
+      // TC_300.4: CO/BO Stoploss (in Rs) and BO Target (in Rs) must be a
+      // multiple of the tick size — same rule Price/Trigger already follow.
+      // Placed before the slice/non-slice split so it guards both paths.
+      // CO has Stoploss only; BO has both Stoploss and Target.
+      if (orderType == "CO - BO") {
+        final String slR =
+            roundOffWithInterval(SafeParse.toDouble(stopLossCtrl.text), tik)
+                .toStringAsFixed(2);
+        if (stopLossCtrl.text.isNotEmpty &&
+            SafeParse.toDouble(stopLossCtrl.text) != SafeParse.toDouble(slR)) {
+          ResponsiveSnackBar.showWarning(
+              context, "Stoploss should be multiple of tick size $tik => $slR");
+          return;
+        }
+        if (_isBracketOrderEnabled) {
+          final String tgtR =
+              roundOffWithInterval(SafeParse.toDouble(targetCtrl.text), tik)
+                  .toStringAsFixed(2);
+          if (targetCtrl.text.isNotEmpty &&
+              SafeParse.toDouble(targetCtrl.text) != SafeParse.toDouble(tgtR)) {
+            ResponsiveSnackBar.showWarning(context,
+                "Target should be multiple of tick size $tik => $tgtR");
+            return;
+          }
+        }
+      }
+      // Disclosed quantity cannot exceed the order quantity. Sits before the
+      // slice/non-slice split so it guards both paths, and runs only when the
+      // section is visible - the field is hidden otherwise. Reached only after
+      // the empty/zero chain has passed, so the qty here is always real.
+      if (_addValidityAndDisclosedQty && _dscqtyApplies) {
+        final int discQty = SafeParse.toInt(discQtyCtrl.text);
+        final int orderQty = widget.scripInfo.exch == 'MCX'
+            ? SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) * lotSize
+            : SafeParse.toInt(getFinalQuantity(qtyCtrl.text));
+        if (discQty > orderQty) {
+          ResponsiveSnackBar.showWarning(context,
+              "Disclosed Qty cannot be greater than Quantity $orderQty");
+          return;
+        }
+      }
       if (!isSliceOrd) {
         bool placeorder = true;
         if (priceType == "Limit" || priceType == "SL Limit") {
@@ -8008,6 +8538,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
         }
         int q = ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) / lotSize).round() *
             lotSize);
+        if (q < lotSize) q = lotSize; // never suggest 0 — minimum is one lot
         if (SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) != q &&
             widget.scripInfo.exch != 'MCX') {
           placeorder = false;
@@ -8021,7 +8552,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                 SafeParse.toDouble(mktProtCtrl.text.toString()) < 1)) {
           placeorder = false;
           ResponsiveSnackBar.showWarning(
-              context, "Market Protection between 1% to 20%");
+              context, "Market Protection must be between 1% and 20%");
         }
         if (!isSecu) {
           placeorder = false;
@@ -8037,7 +8568,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
               bpprc: orderType == "CO - BO" && _isBracketOrderEnabled
                   ? targetCtrl.text
                   : '',
-              dscqty: discQtyCtrl.text,
+              // F&O and IOC never carry a disclosed qty, whatever is left in
+              // the box, so it is forced to "0" rather than trusted.
+              dscqty: _dscqtyApplies ? discQtyCtrl.text : "0",
               exch: stockExchangeSelected.exch == null ? widget.scripInfo.exch! : stockExchangeSelected.exch??"",
               prc: ordPrice,
               prctype: orderInput.prcType,
@@ -8082,16 +8615,38 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       } else {
         int q = ((SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) / lotSize).round() *
             lotSize);
+        if (q < lotSize) q = lotSize; // never suggest 0 — minimum is one lot
         if (SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) != q &&
             widget.scripInfo.exch != 'MCX') {
           ResponsiveSnackBar.showWarning(context,
               "Quantity should be multiple of lot size $lotSize => $q");
+        } else if ((priceType == "Limit" || priceType == "SL Limit") &&
+            SafeParse.toDouble(priceCtrl.text) !=
+                SafeParse.toDouble(
+                    roundOffWithInterval(SafeParse.toDouble(priceCtrl.text), tik)
+                        .toStringAsFixed(2))) {
+          ResponsiveSnackBar.showWarning(context,
+              "Price should be multiple of tick size $tik => ${roundOffWithInterval(SafeParse.toDouble(priceCtrl.text), tik).toStringAsFixed(2)}");
+        } else if ((priceType == "SL Limit" || priceType == "SL MKT") &&
+            SafeParse.toDouble(triggerPriceCtrl.text) !=
+                SafeParse.toDouble(roundOffWithInterval(
+                        SafeParse.toDouble(triggerPriceCtrl.text), tik)
+                    .toStringAsFixed(2))) {
+          ResponsiveSnackBar.showWarning(context,
+              "Trigger should be multiple of tick size $tik => ${roundOffWithInterval(SafeParse.toDouble(triggerPriceCtrl.text), tik).toStringAsFixed(2)}");
         } else if (frezQtyOrderSliceMaxLimit < quantity) {
           ResponsiveSnackBar.showWarning(context,
               "Quantity can only be split into a maximum of $frezQtyOrderSliceMaxLimit slice. (Ex: $frezQty x $frezQtyOrderSliceMaxLimit = ${frezQty * frezQtyOrderSliceMaxLimit})");
         } else if (!isSecu) {
           _showSurveillanceBottomSheet(orderInput, isSliceOrd, theme);
         } else {
+          // Capture the parent-close (sticky-gated) so the slice flow can close
+          // the Place Order window after the slices are placed successfully.
+          final sliceParentCloseNotifier =
+              _PlaceOrderDialogCloseNotifier.of(context);
+          final bool sliceStickyOrderWindow =
+              userOrderPreference['stickysrc'] == "True" ||
+                  userOrderPreference['stickysrc'] == true;
           SliceOrderSheetWeb.showAsOverlay(
             context: context,
             scripInfo: widget.scripInfo,
@@ -8111,6 +8666,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
             triggerPriceCtrl: triggerPriceCtrl,
             mktProtCtrl: mktProtCtrl,
             isBracketOrderEnabled: _isBracketOrderEnabled,
+            onParentClose: () {
+              if (!sliceStickyOrderWindow &&
+                  sliceParentCloseNotifier != null &&
+                  mounted) {
+                sliceParentCloseNotifier.onClose();
+              }
+            },
           );
         }
       }

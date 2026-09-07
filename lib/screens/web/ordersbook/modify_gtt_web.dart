@@ -26,6 +26,19 @@ import 'package:pointer_interceptor/pointer_interceptor.dart';
 import '../market_watch/tv_chart/chart_iframe_guard.dart';
 import '../../../utils/overlay_manager.dart';
 
+
+/// Rejects a keystroke that would make a numeric field invalid, keeping the
+/// last valid value instead of clearing it. Empty is always allowed so the
+/// user can still backspace the field clear. Replaces the earlier anchored
+/// allow-filter, which wiped the whole field on any non-matching input
+/// (a letter, or a second decimal point) and then fired a spurious warning.
+TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
+    TextInputFormatter.withFunction((oldValue, newValue) =>
+        (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
+            ? newValue
+            : oldValue);
+
+
 // InheritedWidget to pass close callback to child widgets
 class _ModifyGttDialogCloseNotifier extends InheritedWidget {
   final VoidCallback onClose;
@@ -187,6 +200,88 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
       return "Maximum Allowed Lots: ${frezQty ~/ lotSize}";
     }
     return "Maximum Allowed Quantity $frezQty";
+  }
+
+  /// Tick-size check for a GTT price/trigger field.
+  
+  String? _gttTickError(String value, String fieldName) {
+    if (tik <= 0) return null; // no tick size on this scrip — nothing to check
+    final String text = value.trim();
+    if (text.isEmpty || text == "Market") return null;
+    final double parsed = SafeParse.toDouble(text);
+    if (parsed <= 0) return null;
+    final String rounded = roundOffWithInterval(parsed, tik).toStringAsFixed(2);
+    if (parsed == SafeParse.toDouble(rounded)) return null;
+    return "$fieldName should be multiple of tick size $tik => $rounded";
+  }
+
+  /// Field label for the quantity box. MCX holds a lot COUNT; everything
+  /// else holds units.
+  String _qtyFieldLabel({bool isOcoLeg = false}) =>
+      "${isOcoLeg ? "OCO " : ""}${widget.gttOrderBook.exch == "MCX" ? "Lot" : "Quantity"}";
+
+  /// Empty / zero check for a price or trigger field.
+  ///
+  /// Market is a real value for an MKT leg, not a zero - without this skip it
+  /// parses to 0 and every Market GTT becomes impossible to modify.
+  String? _gttPriceFieldError(String value, String fieldName) {
+    final String text = value.trim();
+    if (text.isEmpty) return "$fieldName cannot be empty";
+    if (text == "Market") return null;
+    if (SafeParse.toDouble(text) > 0) return null;
+    return "$fieldName cannot be 0";
+  }
+
+  /// Lot-multiple check ONLY.
+  ///
+  /// Returns null for empty and non-positive values so it can run as an early
+  /// guard without stealing their messages. The Place Order GTT branch had it
+  /// the other way round and reported a bogus "multiple of lot size 1 => 1"
+  /// on a blank field (TC_114) - do not make this fire on empty.
+  ///
+  /// MCX is skipped: its field holds a lot count, so it is a whole number of
+  /// lots by construction.
+  String? _gttLotError(String value, {bool isOcoLeg = false}) {
+    if (widget.gttOrderBook.exch == "MCX" || lotSize <= 0) return null;
+    final int parsed = int.tryParse(value.trim()) ?? 0;
+    if (parsed <= 0) return null;
+    int rounded = (parsed / lotSize).round() * lotSize;
+    if (rounded < lotSize) rounded = lotSize; // never suggest 0
+    if (parsed == rounded) return null;
+    return "${_qtyFieldLabel(isOcoLeg: isOcoLeg)} should be multiple of lot size $lotSize => $rounded";
+  }
+
+  /// Empty / zero / freeze-cap / lot-multiple check for a quantity field.
+  String? _gttQtyFieldError(String value, {bool isOcoLeg = false}) {
+    final String text = value.trim();
+    final String label = _qtyFieldLabel(isOcoLeg: isOcoLeg);
+    if (text.isEmpty) return "$label cannot be empty";
+    if ((int.tryParse(text) ?? 0) <= 0) return "$label cannot be 0";
+    if (_exceedsFreezeCap(text)) return _gttFreezeCapMessage();
+    return _gttLotError(text, isOcoLeg: isOcoLeg);
+  }
+
+  /// Diagnostic chain for the gate else branch.
+  ///
+  /// Walks the fields in the SAME order the Place Order GTT chain reports
+  /// them - target trigger, quantity, price, then the OCO leg - and returns
+  /// the first problem, so both screens name the same field for the same
+  /// input. Falls back to the original generic text if nothing is found.
+  String _gttFieldError(OrderInputProvider o, {required bool isOco}) {
+    String? e = _gttPriceFieldError(o.val1Ctrl.text, "Target trigger price");
+    if (e != null) return e;
+    e = _gttQtyFieldError(o.qtyCtrl.text);
+    if (e != null) return e;
+    e = _gttPriceFieldError(o.priceCtrl.text, "Price");
+    if (e != null) return e;
+    if (!isOco) return "Enter all Input fields";
+    e = _gttPriceFieldError(o.val2Ctrl.text, "Stoploss trigger price");
+    if (e != null) return e;
+    e = _gttQtyFieldError(o.ocoQtyCtrl.text, isOcoLeg: true);
+    if (e != null) return e;
+    e = _gttPriceFieldError(o.ocoPriceCtrl.text, "OCO price");
+    if (e != null) return e;
+    return "Enter all Input fields";
   }
 
   bool get _isStockExch =>
@@ -433,6 +528,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     final expDate = widget.gttOrderBook.expDate ?? widget.scripInfo.expDate ?? '';
     final option = widget.gttOrderBook.option ?? widget.scripInfo.option ?? '';
     final exchange = widget.gttOrderBook.exch ?? widget.scripInfo.exch ?? '';
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = widget.gttOrderBook.masterName ?? widget.scripInfo.masterName;
 
     final ltp = currentLtp ?? widget.gttOrderBook.ltp ?? widget.gttOrderBook.prc ?? '0.00';
     final change = currentChange ?? widget.gttOrderBook.change ?? '0.00';
@@ -459,7 +556,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                   child: Row(
                     children: [
                       Text(
-                        "$symbol $expDate $option ",
+                        "${master ?? "$symbol $expDate $option"} ",
                         style: WebTextStyles.title(
                           isDarkTheme: theme.isDarkMode,
                           color: theme.isDarkMode ? MyntColors.textPrimaryDark : MyntColors.textPrimary,
@@ -617,52 +714,59 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
           ),
         ),
         const SizedBox(height: 10),
-        SizedBox(
-          height: 40,
-          width: 200,
-          child: MyntTextField(
-         backgroundColor: theme.isDarkMode
-                                                            ? colors.darkGrey
-                                                            : const Color(
-                                                                0xffF1F3F8),
-            onChanged: (value) {
-              double inputPrice = double.tryParse(value) ?? 0;
+        // Arrow-key stepping — the Price / OCO Price fields already have
+        // this; the two trigger fields were missing it, so up/down did
+        // nothing on them (Place Order GTT wires all four).
+        Focus(
+          onKeyEvent: (node, event) =>
+              _handlePriceArrowKey(event, orderInput.val1Ctrl),
+          child: SizedBox(
+            height: 40,
+            width: 200,
+            child: MyntTextField(
+           backgroundColor: theme.isDarkMode
+                                                              ? colors.darkGrey
+                                                              : const Color(
+                                                                  0xffF1F3F8),
+              onChanged: (value) {
+                double inputPrice = double.tryParse(value) ?? 0;
 
-              if (value.isNotEmpty && inputPrice > 0) {
-                final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
-                if (!regex.hasMatch(value)) {
-                  orderInput.val1Ctrl.text = value.substring(0, value.length - 1);
-                  orderInput.val1Ctrl.selection = TextSelection.collapsed(
-                    offset: orderInput.val1Ctrl.text.length,
+                if (value.isNotEmpty && inputPrice > 0) {
+                  final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
+                  if (!regex.hasMatch(value)) {
+                    orderInput.val1Ctrl.text = value.substring(0, value.length - 1);
+                    orderInput.val1Ctrl.selection = TextSelection.collapsed(
+                      offset: orderInput.val1Ctrl.text.length,
+                    );
+                  }
+                }
+                if (value.isEmpty || inputPrice <= 0) {
+                  showResponsiveWarningMessage(
+                    context,
+                    "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
                   );
                 }
-              }
-              if (value.isEmpty || inputPrice <= 0) {
-                showResponsiveWarningMessage(
-                  context,
-                  "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
-                );
-              }
-            },
-            placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
-          placeholderStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textSecondary
-                                    : MyntColors.textSecondary,
-                              ),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
-            ],
-          textStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textPrimaryDark
-                                    : MyntColors.textPrimary,
-                              ),
-            controller: orderInput.val1Ctrl,
-            textAlign: TextAlign.start,
+              },
+              placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
+            placeholderStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textSecondary
+                                      : MyntColors.textSecondary,
+                                ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
+              ],
+            textStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textPrimaryDark
+                                      : MyntColors.textPrimary,
+                                ),
+              controller: orderInput.val1Ctrl,
+              textAlign: TextAlign.start,
+            ),
           ),
         ),
       ],
@@ -748,6 +852,26 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                 ),
               ),
               ),
+              // MCX field is in lots — show the actual quantity underneath,
+              // kept live via the controller listener. Uses the SAME
+              // _lotsToActualQty conversion as the submit payload, so the
+              // shown qty always matches what gets placed.
+              if (widget.scripInfo.exch == "MCX")
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: orderInput.qtyCtrl,
+                  builder: (context, value, _) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      "Qty : ${_lotsToActualQty(value.text)}",
+                      style: WebTextStyles.para(
+                        isDarkTheme: theme.isDarkMode,
+                        color: theme.isDarkMode
+                            ? MyntColors.textSecondaryDark
+                            : MyntColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -773,10 +897,19 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                         orderInput.actPrcType == "SL MKT") {
                       orderInput.priceCtrl.text = "Market";
                     } else {
+                      // A leg saved as MKT stores prc "0.00" - a real string,
+                      // not null - so the `??` below never fell through to LTP
+                      // and the box showed 0.00. Treat a non-positive stored
+                      // price as absent and seed from LTP, as Place Order does.
+                      // A leg saved as LMT still restores its own price.
+                      final String storedPrc =
+                          widget.gttOrderBook.placeOrderParams?.prc ?? "";
                       orderInput.priceCtrl.text =
-                          widget.gttOrderBook.placeOrderParams?.prc ??
-                              currentLtp ??
-                              "0.00";
+                          SafeParse.toDouble(storedPrc) > 0
+                              ? storedPrc
+                              : (currentLtp ??
+                                  widget.gttOrderBook.ltp ??
+                                  "0.00");
                     }
                   });
                 },
@@ -834,7 +967,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     : MyntColors.textPrimary,
                               ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   readOnly: orderInput.actPrcType == "Limit" ||
                       orderInput.actPrcType == "SL Limit"
@@ -866,52 +999,59 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
           ),
         ),
         const SizedBox(height: 10),
-        SizedBox(
-          height: 40,
-          width: 200,
-          child: MyntTextField(
-            backgroundColor: theme.isDarkMode
-                                                            ? colors.darkGrey
-                                                            : const Color(
-                                                                0xffF1F3F8),
-            onChanged: (value) {
-              double inputPrice = double.tryParse(value) ?? 0;
+        // Arrow-key stepping — the Price / OCO Price fields already have
+        // this; the two trigger fields were missing it, so up/down did
+        // nothing on them (Place Order GTT wires all four).
+        Focus(
+          onKeyEvent: (node, event) =>
+              _handlePriceArrowKey(event, orderInput.val2Ctrl),
+          child: SizedBox(
+            height: 40,
+            width: 200,
+            child: MyntTextField(
+              backgroundColor: theme.isDarkMode
+                                                              ? colors.darkGrey
+                                                              : const Color(
+                                                                  0xffF1F3F8),
+              onChanged: (value) {
+                double inputPrice = double.tryParse(value) ?? 0;
 
-              if (value.isNotEmpty && inputPrice > 0) {
-                final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
-                if (!regex.hasMatch(value)) {
-                  orderInput.val2Ctrl.text = value.substring(0, value.length - 1);
-                  orderInput.val2Ctrl.selection = TextSelection.collapsed(
-                    offset: orderInput.val2Ctrl.text.length,
+                if (value.isNotEmpty && inputPrice > 0) {
+                  final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
+                  if (!regex.hasMatch(value)) {
+                    orderInput.val2Ctrl.text = value.substring(0, value.length - 1);
+                    orderInput.val2Ctrl.selection = TextSelection.collapsed(
+                      offset: orderInput.val2Ctrl.text.length,
+                    );
+                  }
+                }
+                if (value.isEmpty || inputPrice <= 0) {
+                  showResponsiveWarningMessage(
+                    context,
+                    "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
                   );
                 }
-              }
-              if (value.isEmpty || inputPrice <= 0) {
-                showResponsiveWarningMessage(
-                  context,
-                  "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
-                );
-              }
-            },
-            placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
-           placeholderStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textSecondary
-                                    : MyntColors.textSecondary,
-                              ),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
-            ],
-            textStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textPrimaryDark
-                                    : MyntColors.textPrimary,
-                              ),
-            controller: orderInput.val2Ctrl,
-            textAlign: TextAlign.start,
+              },
+              placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
+             placeholderStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textSecondary
+                                      : MyntColors.textSecondary,
+                                ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
+              ],
+              textStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textPrimaryDark
+                                      : MyntColors.textPrimary,
+                                ),
+              controller: orderInput.val2Ctrl,
+              textAlign: TextAlign.start,
+            ),
           ),
         ),
       ],
@@ -997,6 +1137,25 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                 ),
               ),
               ),
+              // MCX field is in lots — show the actual quantity underneath,
+              // kept live via the controller listener (same conversion as the
+              // submit payload).
+              if (widget.scripInfo.exch == "MCX")
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: orderInput.ocoQtyCtrl,
+                  builder: (context, value, _) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      "Qty : ${_lotsToActualQty(value.text)}",
+                      style: WebTextStyles.para(
+                        isDarkTheme: theme.isDarkMode,
+                        color: theme.isDarkMode
+                            ? MyntColors.textSecondaryDark
+                            : MyntColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -1022,10 +1181,19 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                         orderInput.actOcoPrcType == "SL MKT") {
                       orderInput.ocoPriceCtrl.text = "Market";
                     } else {
+                      // The OCO leg saved as MKT stores prc "0.00" - a real string,
+                      // not null - so the `??` below never fell through to LTP
+                      // and the box showed 0.00. Treat a non-positive stored
+                      // price as absent and seed from LTP, as Place Order does.
+                      // The OCO leg saved as LMT still restores its own price.
+                      final String storedOcoPrc =
+                          widget.gttOrderBook.placeOrderParamsLeg2?.prc ?? "";
                       orderInput.ocoPriceCtrl.text =
-                          widget.gttOrderBook.placeOrderParamsLeg2?.prc ??
-                              currentLtp ??
-                              "0.00";
+                          SafeParse.toDouble(storedOcoPrc) > 0
+                              ? storedOcoPrc
+                              : (currentLtp ??
+                                  widget.gttOrderBook.ltp ??
+                                  "0.00");
                     }
                   });
                 },
@@ -1075,7 +1243,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     : MyntColors.textPrimary,
                               ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   readOnly: orderInput.actOcoPrcType == "Limit" ||
                       orderInput.actOcoPrcType == "SL Limit"
@@ -1178,13 +1346,51 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                               context, _gttFreezeCapMessage());
                           return;
                         }
+                        // Lot-multiple guard - runs before the gate, as Place Order GTT does,
+                        // because the gate itself does not test lot multiples. Returns null for
+                        // empty/zero so it can never steal their messages (TC_114).
+                        String? gttLotErr = _gttLotError(orderInput.qtyCtrl.text);
+                        if (gttLotErr == null && orderInput.disableGTTCond) {
+                          gttLotErr =
+                              _gttLotError(orderInput.ocoQtyCtrl.text, isOcoLeg: true);
+                        }
+                        if (gttLotErr != null) {
+                          showResponsiveWarningMessage(context, gttLotErr);
+                          return;
+                        }
+                        // Tick-size guard — trigger/price must be a multiple of the scrip's
+                        // tick size, matching the Place Order GTT path. Early return so the
+                        // existing validation chain below is untouched.
+                        String? gttTickErr =
+                            _gttTickError(orderInput.val1Ctrl.text, "Target trigger price");
+                        gttTickErr ??= _gttTickError(orderInput.priceCtrl.text, "Price");
+                        if (gttTickErr == null && orderInput.disableGTTCond) {
+                          gttTickErr = _gttTickError(
+                              orderInput.val2Ctrl.text, "Stoploss trigger price");
+                          gttTickErr ??=
+                              _gttTickError(orderInput.ocoPriceCtrl.text, "OCO price");
+                        }
+                        if (gttTickErr != null) {
+                          showResponsiveWarningMessage(context, gttTickErr);
+                          return;
+                        }
                         if (orderInput.disableGTTCond) {
+                          // Gate - every field present AND positive, mirroring the Place Order
+                          // GTT gate. Market is a real price for an MKT leg, not a zero.
                           if ((orderInput.val1Ctrl.text.isNotEmpty &&
                                   orderInput.val2Ctrl.text.isNotEmpty &&
                                   orderInput.priceCtrl.text.isNotEmpty &&
                                   orderInput.ocoPriceCtrl.text.isNotEmpty &&
                                   orderInput.ocoQtyCtrl.text.isNotEmpty) &&
-                              orderInput.qtyCtrl.text.isNotEmpty) {
+                              orderInput.qtyCtrl.text.isNotEmpty &&
+                              SafeParse.toDouble(orderInput.val1Ctrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.val2Ctrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.qtyCtrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.ocoQtyCtrl.text) > 0 &&
+                              (orderInput.priceCtrl.text == "Market" ||
+                                  SafeParse.toDouble(orderInput.priceCtrl.text) > 0) &&
+                              (orderInput.ocoPriceCtrl.text == "Market" ||
+                                  SafeParse.toDouble(orderInput.ocoPriceCtrl.text) > 0)) {
                             double ltp = SafeParse.toDouble(currentLtp ?? widget.gttOrderBook.ltp);
                             double val1 = SafeParse.toDouble(orderInput.val1Ctrl.text);
                             double val2 = SafeParse.toDouble(orderInput.val2Ctrl.text);
@@ -1211,12 +1417,19 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                               showResponsiveWarningMessage(context, ocoErrorMsg);
                             }
                           } else {
-                            showResponsiveWarningMessage(context, "Enter all Input fields");
+                            showResponsiveWarningMessage(
+                                context, _gttFieldError(orderInput, isOco: true));
                           }
                         } else {
+                          // Gate - every field present AND positive, mirroring the Place Order
+                          // GTT gate. Market is a real price for an MKT leg, not a zero.
                           if ((orderInput.val1Ctrl.text.isNotEmpty &&
                                   orderInput.priceCtrl.text.isNotEmpty) &&
-                              orderInput.qtyCtrl.text.isNotEmpty) {
+                              orderInput.qtyCtrl.text.isNotEmpty &&
+                              SafeParse.toDouble(orderInput.val1Ctrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.qtyCtrl.text) > 0 &&
+                              (orderInput.priceCtrl.text == "Market" ||
+                                  SafeParse.toDouble(orderInput.priceCtrl.text) > 0)) {
                             double ltp = SafeParse.toDouble(currentLtp ?? widget.gttOrderBook.ltp);
                             double val1 = SafeParse.toDouble(orderInput.val1Ctrl.text);
 
@@ -1236,7 +1449,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                               );
                             }
                           } else {
-                            showResponsiveWarningMessage(context, "Enter all Input fields");
+                            showResponsiveWarningMessage(
+                                context, _gttFieldError(orderInput, isOco: false));
                           }
                         }
                       },

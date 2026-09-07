@@ -366,7 +366,7 @@ class _CloseOrdersTableState extends ConsumerState<CloseOrdersTable> {
               ),
             ],
           ),
-          child: IpoOrderDetailsSheetWeb(order: order),
+          child: IpoOrderDetailsSheetWeb(order: order, isCloseOrder: true),
         );
       },
       position: shadcn.OverlayPosition.end,

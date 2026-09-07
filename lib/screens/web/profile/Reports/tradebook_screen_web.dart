@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 
+import '../../../../locator/locator.dart';
+import '../../../../locator/preference.dart';
 import '../../../../models/desk_reports_model/tradebook_model.dart';
 import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/thems.dart';
@@ -15,6 +17,8 @@ import '../../../../sharedWidget/common_search_fields_web.dart';
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/scroll_to_load_mixin.dart';
+import '../../../../sharedWidget/snack_bar.dart';
+import 'tradebook_download_helper.dart';
 
 class TradebookScreenWeb extends ConsumerStatefulWidget {
   final VoidCallback? onBack;
@@ -159,8 +163,16 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
         int compareResult = 0;
         switch (_sortColumnIndex) {
           case 0: // Trade Date
-            compareResult =
-                (a.tRADEDATE ?? '').compareTo(b.tRADEDATE ?? '');
+            final aDate = _tryParseTradeDate(a.tRADEDATE);
+            final bDate = _tryParseTradeDate(b.tRADEDATE);
+            if (aDate != null && bDate != null) {
+              compareResult = aDate.compareTo(bDate);
+            } else if (aDate == null && bDate == null) {
+              compareResult =
+                  (a.tRADEDATE ?? '').compareTo(b.tRADEDATE ?? '');
+            } else {
+              compareResult = aDate == null ? 1 : -1;
+            }
             break;
           case 1: // Exchange
             compareResult =
@@ -190,8 +202,8 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
                     .compareTo(double.tryParse(b.showamt ?? '0') ?? 0);
             break;
           case 7: // Trade No
-            compareResult =
-                (a.tRADENUMBER ?? '').compareTo(b.tRADENUMBER ?? '');
+            compareResult = (int.tryParse(a.tRADENUMBER ?? '') ?? 0)
+                .compareTo(int.tryParse(b.tRADENUMBER ?? '') ?? 0);
             break;
         }
         return _sortAscending ? compareResult : -compareResult;
@@ -307,6 +319,86 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
     );
   }
 
+  /// PDF / Excel download menu. Exports the same filtered + sorted list the
+  /// table is showing, for the currently selected date range.
+  Widget _buildDownloadButton(BuildContext context) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.download,
+          size: 20,
+          color: resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary)),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      tooltip: 'Download',
+      color: resolveThemeColor(context,
+          dark: MyntColors.cardDark, light: MyntColors.card),
+      onSelected: (value) {
+        final ledger = ref.read(ledgerProvider);
+        final trades = _getFilteredAndSortedList(ledger.tradebookdata);
+
+        if (trades.isEmpty) {
+          warningMessage(context, 'No data to download');
+          return;
+        }
+
+        final pref = locator<Preferences>();
+        final clientId = pref.clientId ?? '';
+        final clientName = pref.clientName ?? '';
+        final dateRange =
+            '${DateFormat('dd/MM/yyyy').format(_startDate)} to ${DateFormat('dd/MM/yyyy').format(_endDate)}';
+
+        if (value == 'pdf') {
+          TradebookDownloadHelper.downloadPdf(
+            trades: trades,
+            clientId: clientId,
+            clientName: clientName,
+            dateRange: dateRange,
+          );
+        } else if (value == 'excel') {
+          TradebookDownloadHelper.downloadExcel(
+            trades: trades,
+            clientId: clientId,
+            clientName: clientName,
+            dateRange: dateRange,
+          );
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'pdf',
+          child: Row(
+            children: [
+              Icon(Icons.picture_as_pdf, size: 18, color: Colors.red[700]),
+              const SizedBox(width: 8),
+              Text('Download PDF',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'excel',
+          child: Row(
+            children: [
+              Icon(Icons.table_chart, size: 18, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              Text('Download Excel',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildHeader(
       BuildContext context, ThemesProvider theme, int tradeCount) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -354,16 +446,10 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
           // ),
           SizedBox(width: isSmallScreen ? 8 : 12),
           // Download button
-          // _buildIconButton(
-          //   icon: Icons.download,
-          //   tooltip: 'Download',
-          //   onTap: () {
-          //     // Download functionality
-          //   },
-          // ),
-          // const SizedBox(width: 8),
+          _buildDownloadButton(context),
+          const SizedBox(width: 8),
           // Filter button
-        
+
           // Date range button
           InkWell(
             onTap: _toggleDatePicker,
@@ -912,6 +998,15 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
+  DateTime? _tryParseTradeDate(String? value) {
+    if (value == null || value.isEmpty) return null;
+    try {
+      return DateFormat('dd-MM-yyyy').parseStrict(value);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // Text style helpers
   Widget _buildScripCell(BuildContext context, Trades trade) {
     final scripName = trade.sCRIPNAME ?? '--';
@@ -1026,10 +1121,8 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
     );
   }
 
-  // Build data cell with hover
   shadcn.TableCell _buildDataCell({
     required Widget child,
-    required int rowIndex,
     required int columnIndex,
     bool alignRight = false,
   }) {
@@ -1057,27 +1150,114 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
           ),
         ),
       ),
-      child: MouseRegion(
-        onEnter: (_) => _hoveredRowIndex.value = rowIndex,
-        onExit: (_) => _hoveredRowIndex.value = null,
-        child: ValueListenableBuilder<int?>(
-          valueListenable: _hoveredRowIndex,
-          builder: (context, hoveredIndex, _) {
-            final isRowHovered = hoveredIndex == rowIndex;
-            return Container(
-              padding: cellPadding,
-              color: isRowHovered
-                  ? resolveThemeColor(
-                      context,
-                      dark: MyntColors.primaryDark,
-                      light: MyntColors.primary,
-                    ).withValues(alpha: 0.08)
-                  : null,
-              alignment: alignRight ? Alignment.topRight : null,
-              child: child,
-            );
-          },
-        ),
+      child: Container(
+        padding: cellPadding,
+        alignment: alignRight ? Alignment.topRight : null,
+        child: child,
+      ),
+    );
+  }
+
+  // Row-level hover: a single MouseRegion + ValueListenableBuilder per row
+  // (not per cell). Keeps hover repaints O(rows) instead of O(rows * 8).
+  Widget _buildHoverableRow(
+    BuildContext context,
+    int rowIndex,
+    Trades trade,
+    Map<int, shadcn.FixedTableSize> columnWidths,
+  ) {
+    return MouseRegion(
+      onEnter: (_) => _hoveredRowIndex.value = rowIndex,
+      onExit: (_) {
+        if (_hoveredRowIndex.value == rowIndex) {
+          _hoveredRowIndex.value = null;
+        }
+      },
+      child: ValueListenableBuilder<int?>(
+        valueListenable: _hoveredRowIndex,
+        builder: (context, hoveredIndex, _) {
+          final isRowHovered = hoveredIndex == rowIndex;
+          return Container(
+            color: isRowHovered
+                ? resolveThemeColor(
+                    context,
+                    dark: MyntColors.primaryDark,
+                    light: MyntColors.primary,
+                  ).withValues(alpha: 0.08)
+                : null,
+            child: shadcn.Table(
+              defaultRowHeight: const shadcn.FixedTableSize(52),
+              columnWidths: columnWidths,
+              rows: [
+                shadcn.TableRow(
+                  cells: [
+                    _buildDataCell(
+                      columnIndex: 0,
+                      child: Text(
+                        trade.tRADEDATE ?? '--',
+                        style: _getTextStyle(context),
+                      ),
+                    ),
+                    _buildDataCell(
+                      columnIndex: 1,
+                      child: Text(
+                        trade.cOMPANYCODE ?? '--',
+                        style: _getTextStyle(context),
+                      ),
+                    ),
+                    _buildDataCell(
+                      columnIndex: 2,
+                      child: _buildScripCell(context, trade),
+                    ),
+                    _buildDataCell(
+                      columnIndex: 3,
+                      child: Text(
+                        trade.showtype ?? '--',
+                        style: _getTextStyle(
+                          context,
+                          color:
+                              _getTradeTypeColor(context, trade.showtype),
+                        ),
+                      ),
+                    ),
+                    _buildDataCell(
+                      columnIndex: 4,
+                      alignRight: true,
+                      child: Text(
+                        trade.showqnt ?? '--',
+                        style: _getTextStyle(context),
+                      ),
+                    ),
+                    _buildDataCell(
+                      columnIndex: 5,
+                      alignRight: true,
+                      child: Text(
+                        '₹${_formatPrice(trade.showprice)}',
+                        style: _getTextStyle(context),
+                      ),
+                    ),
+                    _buildDataCell(
+                      columnIndex: 6,
+                      alignRight: true,
+                      child: Text(
+                        '₹${_formatPrice(trade.showamt)}',
+                        style: _getTextStyle(context),
+                      ),
+                    ),
+                    _buildDataCell(
+                      columnIndex: 7,
+                      alignRight: true,
+                      child: Text(
+                        trade.tRADENUMBER ?? '--',
+                        style: _getTextStyle(context),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -1145,135 +1325,49 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
                       // Scrollable Body
                       Expanded(
                         child: hasData
-                            ? SingleChildScrollView(
-                                controller: _tableScrollController,
-                                child: Column(
-                                  children: [
-                                    shadcn.Table(
-                                      defaultRowHeight:
-                                          const shadcn.FixedTableSize(52),
-                                      columnWidths: columnWidths,
-                                      rows: [
-                                        ...sortedList
-                                            .take(displayedItemCount)
-                                            .toList()
-                                            .asMap()
-                                            .entries
-                                            .map((entry) {
-                                          final index = entry.key;
-                                          final trade = entry.value;
-
-                                          return shadcn.TableRow(
-                                            cells: [
-                                              // Trade Date
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 0,
-                                                child: Text(
-                                                  trade.tRADEDATE ?? '--',
-                                                  style:
-                                                      _getTextStyle(context),
-                                                ),
+                            ? Builder(
+                                builder: (context) {
+                                  final visibleCount = sortedList.length <
+                                          displayedItemCount
+                                      ? sortedList.length
+                                      : displayedItemCount;
+                                  final hasMore = displayedItemCount <
+                                      sortedList.length;
+                                  return SizedBox(
+                                    width: totalWidth,
+                                    child: ListView.builder(
+                                      controller: _tableScrollController,
+                                      itemCount:
+                                          visibleCount + (hasMore ? 1 : 0),
+                                      itemBuilder: (context, index) {
+                                      if (index == visibleCount) {
+                                        return Padding(
+                                          padding:
+                                              const EdgeInsets.all(16.0),
+                                          child: Center(
+                                            child: SizedBox(
+                                              width: 24,
+                                              height: 24,
+                                              child:
+                                                  CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Theme.of(context)
+                                                    .primaryColor,
                                               ),
-                                              // Exchange
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 1,
-                                                child: Text(
-                                                  trade.cOMPANYCODE ?? '--',
-                                                  style:
-                                                      _getTextStyle(context),
-                                                ),
-                                              ),
-                                              // Scrip
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 2,
-                                                child: _buildScripCell(context, trade),
-                                              ),
-                                              // Trade Type
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 3,
-                                                child: Text(
-                                                  trade.showtype ?? '--',
-                                                  style: _getTextStyle(
-                                                    context,
-                                                    color: _getTradeTypeColor(
-                                                        context,
-                                                        trade.showtype),
-                                                  ),
-                                                ),
-                                              ),
-                                              // Quantity
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 4,
-                                                alignRight: true,
-                                                child: Text(
-                                                  trade.showqnt ?? '--',
-                                                  style:
-                                                      _getTextStyle(context),
-                                                ),
-                                              ),
-                                              // Price
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 5,
-                                                alignRight: true,
-                                                child: Text(
-                                                  '₹${_formatPrice(trade.showprice)}',
-                                                  style:
-                                                      _getTextStyle(context),
-                                                ),
-                                              ),
-                                              // Amount
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 6,
-                                                alignRight: true,
-                                                child: Text(
-                                                  '₹${_formatPrice(trade.showamt)}',
-                                                  style:
-                                                      _getTextStyle(context),
-                                                ),
-                                              ),
-                                              // Trade No
-                                              _buildDataCell(
-                                                rowIndex: index,
-                                                columnIndex: 7,
-                                                alignRight: true,
-                                                child: Text(
-                                                  trade.tRADENUMBER ?? '--',
-                                                  style:
-                                                      _getTextStyle(context),
-                                                ),
-                                              ),
-                                            ],
-                                          );
-                                        }),
-                                      ],
-                                    ),
-                                    // Loading indicator
-                                    if (displayedItemCount <
-                                        sortedList.length)
-                                      Padding(
-                                        padding: const EdgeInsets.all(16.0),
-                                        child: Center(
-                                          child: SizedBox(
-                                            width: 24,
-                                            height: 24,
-                                            child:
-                                                CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Theme.of(context)
-                                                  .primaryColor,
                                             ),
                                           ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
+                                        );
+                                      }
+                                      return _buildHoverableRow(
+                                        context,
+                                        index,
+                                        sortedList[index],
+                                        columnWidths,
+                                      );
+                                    },
+                                    ),
+                                  );
+                                },
                               )
                             : const Center(
                                 child: NoDataFound(

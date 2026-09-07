@@ -568,8 +568,8 @@ class _OptionChainPutRowState extends ConsumerState<_OptionChainPutRow> {
         false, // Set isOptionStike to false to prevent provider's Fluttertoast
       );
       if (success && mounted) {
-        ResponsiveSnackBar.showInfo(
-            context, 'Removed from ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(
+            context, 'Removed from your watchlist "${scripData.wlName}"');
         setState(() {});
       }
     } else {
@@ -590,7 +590,7 @@ class _OptionChainPutRowState extends ConsumerState<_OptionChainPutRow> {
         false, // Set isOptionStike to prevent provider's Fluttertoast
       );
       if (success && mounted) {
-        ResponsiveSnackBar.showSuccess(context, 'Added to ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
         setState(() {});
       }
     }

@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart' hide Colors;
 import 'package:flutter/material.dart' as material show showDialog;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/res/global_font_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/market_watch_provider.dart';
@@ -321,6 +323,10 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
     String token,
     bool isRowHovered,
   ) {
+    // Privacy Mode: position data (qty, avg, invested, current, P&L) is
+    // masked; market data (LTP, Day %) stays visible.
+    final privacy = ref.watch(privacyProvider);
+
     switch (column) {
       case 'Instrument':
         return _buildInstrumentCell(holding, exchTsym, uniqueId, isRowHovered);
@@ -328,7 +334,7 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
       case 'Net Qty':
         final qty = holding.currentQty ?? 0;
         // T1 qty: npoadt1qty for Non-POA clients, btstqty for POA clients
-        final t1Qty = int.parse(holding.npoadt1qty ?? "0") + int.parse(holding.btstqty ?? "0");
+        final t1Qty = math.max(int.parse(holding.npoadt1qty ?? "0"), int.parse(holding.btstqty ?? "0"));
         final qtyText = qty > 0 ? '+$qty' : '$qty';
         return Row(
           mainAxisSize: MainAxisSize.min,
@@ -342,7 +348,7 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
-                  'T1: $t1Qty',
+                  privacy.mask('$t1Qty', prefix: 'T1: '),
                   style: WebTextStyles.custom(
                     fontSize: 10,
                     isDarkTheme: true,
@@ -354,11 +360,13 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
               const SizedBox(width: 4),
             ],
             Text(
-              qtyText,
+              privacy.isPrivate ? kPrivacyMask : qtyText,
               style: WebTextStyles.custom(
                 fontSize: 13,
                 isDarkTheme: true,
-                color: _getQtyColor(qty),
+                color: privacy.isPrivate
+                    ? ShadcnDarkColors.neutral
+                    : _getQtyColor(qty),
                 fontWeight: WebFonts.medium,
               ),
               textAlign: TextAlign.right,
@@ -370,10 +378,11 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
         final avgPrc = holding.avgPrc != null && holding.avgPrc!.isNotEmpty
             ? holding.avgPrc!
             : '0.00';
-        return Text(avgPrc, textAlign: TextAlign.right);
+        return Text(privacy.mask(avgPrc), textAlign: TextAlign.right);
 
       case 'Invested':
-        return Text(holding.invested ?? '0.00', textAlign: TextAlign.right);
+        return Text(privacy.mask(holding.invested ?? '0.00'),
+            textAlign: TextAlign.right);
 
       // Dynamic columns with WebSocket updates
       case 'LTP':
@@ -387,11 +396,11 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
 
       case 'Current Value':
         if (token.isEmpty) {
-          return Text(holding.currentValue ?? '0.00',
+          return Text(privacy.mask(holding.currentValue ?? '0.00'),
               textAlign: TextAlign.right);
         }
-        // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-        final int curValTotalQty = (holding.currentQty ?? 0) + int.parse(holding.npoadt1qty ?? "0");
+        // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+        final int curValTotalQty = (holding.currentQty ?? 0);
         return _CurrentValueCell(
           token: token,
           qty: curValTotalQty,
@@ -409,7 +418,9 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
 
       case 'Day %':
         if (token.isEmpty) {
-          return _buildColoredText('${exchTsym?.perChange ?? '0.00'}%');
+          // Market data — not masked in Privacy Mode.
+          return _buildColoredText('${exchTsym?.perChange ?? '0.00'}%',
+              maskable: false);
         }
         return _DayPercentCell(
           token: token,
@@ -420,8 +431,8 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
         if (token.isEmpty) {
           return _buildColoredText(exchTsym?.profitNloss ?? '0.00');
         }
-        // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-        final int pnlTotalQty = (holding.currentQty ?? 0) + int.parse(holding.npoadt1qty ?? "0");
+        // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+        final int pnlTotalQty = (holding.currentQty ?? 0);
         return _OverallPnLCell(
           token: token,
           qty: pnlTotalQty,
@@ -573,13 +584,18 @@ class _HoldingsTableShadcnState extends ConsumerState<HoldingsTableShadcn> {
   }
 
   /// Helper: Build colored text for P&L values
-  Widget _buildColoredText(String value) {
+  Widget _buildColoredText(String value, {bool maskable = true}) {
+    final privacy = ref.watch(privacyProvider);
+    final isMasked = maskable && privacy.isPrivate;
+    final displayValue = isMasked
+        ? (value.endsWith('%') ? '$kPrivacyMask%' : kPrivacyMask)
+        : value;
     return Text(
-      value,
+      displayValue,
       style: WebTextStyles.custom(
         fontSize: 13,
         isDarkTheme: true,
-        color: _getValueColor(value),
+        color: isMasked ? ShadcnDarkColors.neutral : _getValueColor(value),
         fontWeight: WebFonts.medium,
       ),
       textAlign: TextAlign.right,
@@ -1106,7 +1122,8 @@ class _CurrentValueCellState extends ConsumerState<_CurrentValueCell> {
 
   @override
   Widget build(BuildContext context) {
-    return Text(currentValue, textAlign: TextAlign.right);
+    final privacy = ref.watch(privacyProvider);
+    return Text(privacy.mask(currentValue), textAlign: TextAlign.right);
   }
 }
 
@@ -1158,12 +1175,15 @@ class _DayPnLCellState extends ConsumerState<_DayPnLCell> {
 
   @override
   Widget build(BuildContext context) {
+    final privacy = ref.watch(privacyProvider);
     return Text(
-      dayPnL,
+      privacy.mask(dayPnL),
       style: WebTextStyles.custom(
         fontSize: 13,
         isDarkTheme: true,
-        color: _getValueColor(dayPnL),
+        color: privacy.isPrivate
+            ? ShadcnDarkColors.neutral
+            : _getValueColor(dayPnL),
         fontWeight: WebFonts.medium,
       ),
       textAlign: TextAlign.right,
@@ -1295,12 +1315,15 @@ class _OverallPnLCellState extends ConsumerState<_OverallPnLCell> {
 
   @override
   Widget build(BuildContext context) {
+    final privacy = ref.watch(privacyProvider);
     return Text(
-      overallPnL,
+      privacy.mask(overallPnL),
       style: WebTextStyles.custom(
         fontSize: 13,
         isDarkTheme: true,
-        color: _getValueColor(overallPnL),
+        color: privacy.isPrivate
+            ? ShadcnDarkColors.neutral
+            : _getValueColor(overallPnL),
         fontWeight: WebFonts.medium,
       ),
       textAlign: TextAlign.right,
@@ -1366,12 +1389,15 @@ class _OverallPercentCellState extends ConsumerState<_OverallPercentCell> {
 
   @override
   Widget build(BuildContext context) {
+    final privacy = ref.watch(privacyProvider);
     return Text(
-      '$overallPercent%',
+      privacy.mask(overallPercent, suffix: '%'),
       style: WebTextStyles.custom(
         fontSize: 13,
         isDarkTheme: true,
-        color: _getValueColor(overallPercent),
+        color: privacy.isPrivate
+            ? ShadcnDarkColors.neutral
+            : _getValueColor(overallPercent),
         fontWeight: WebFonts.medium,
       ),
       textAlign: TextAlign.right,

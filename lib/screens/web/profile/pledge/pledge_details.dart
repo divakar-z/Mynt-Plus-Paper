@@ -13,6 +13,7 @@ import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../sharedWidget/cust_text_formfield.dart';
 import '../../../../sharedWidget/mynt_loader.dart';
+import '../../../../sharedWidget/snack_bar.dart';
 // import '../../../../sharedWidget/custom_drag_handler.dart';
 
 class PledgeDeytails extends StatefulWidget {
@@ -223,20 +224,59 @@ class _PledgeDeytails extends State<PledgeDeytails> {
             .toList();
       }
 
+      // A locked segment may only be auto-applied when it is an actual
+      // eligible + enabled choice for THIS scrip. Otherwise a carried-over
+      // lock (e.g. "Commodities" from a previous stock) would be planted on a
+      // stock that doesn't support it and slip past the submit gate.
+      final lockedSegmentSelectable =
+          dropdownItems.any((i) => i.value == lockedSegment && i.isEnabled);
+
+      // One source of truth for "is the value this scrip currently holds a
+      // real, allowed choice" — not merely "non-null".
+      final currentSegmentValid = dropdownItems
+          .any((i) => i.value == widget.data.segmentselect && i.isEnabled);
+
       if (!_didAutoSelectSegment && ledgerdata.screenpledge == 'pledge') {
+        _didAutoSelectSegment = true;
         final current = widget.data.segmentselect?.toString() ?? '';
-        if (hasLock && (current.isEmpty || current == 'null')) {
-          _didAutoSelectSegment = true;
+        if (hasLock &&
+            lockedSegmentSelectable &&
+            (current.isEmpty || current == 'null')) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
               ledgerdata.changesegval(lockedSegment, widget.data);
             }
           });
-        } else {
-          _didAutoSelectSegment = true;
+        } else if (hasLock &&
+            !lockedSegmentSelectable &&
+            current.isNotEmpty &&
+            current != 'null') {
+          // Kill carry-over: a stale/ineligible value from a previous stock.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ledgerdata.changesegval('null', widget.data);
+            }
+          });
         }
       }
 
+
+      final bool isPledgeMode = ledgerdata.screenpledge == 'pledge';
+      final bool qtyValid = ledgerdata.pledgesubtn != false;
+      final bool hasSelectableSegment =
+          dropdownItems.any((i) => i.isEnabled);
+      // Fully valid → allowed to actually submit.
+      final bool canSubmit =
+          isPledgeMode ? (qtyValid && currentSegmentValid) : qtyValid;
+      // Keep the button tappable (only to prompt the user) when the single
+      // thing missing is the segment choice and a segment can actually be
+      // picked. When the qty is invalid or no segment is selectable, the
+      // button is fully disabled and not tappable.
+      final bool allowSubmitTap = canSubmit ||
+          (isPledgeMode &&
+              qtyValid &&
+              !currentSegmentValid &&
+              hasSelectableSegment);
 
       return WillPopScope(
         onWillPop: () async {
@@ -279,19 +319,22 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                       ),
                                     ),
                                   ),
-                                  GestureDetector(
-                                    onTap: () {
-                                      if (ledgerdata.listforpledge == []) {
-                                        ledgerdata.changesegvaldummy('');
-                                      }
-                                      Navigator.pop(context);
-                                    },
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(4.0),
-                                      child: Icon(
-                                        Icons.close,
-                                        size: 22,
-                                        color: resolveThemeColor(context, dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary),
+                                  MouseRegion(
+                                    cursor: SystemMouseCursors.click,
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        if (ledgerdata.listforpledge == []) {
+                                          ledgerdata.changesegvaldummy('');
+                                        }
+                                        Navigator.pop(context);
+                                      },
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(4.0),
+                                        child: Icon(
+                                          Icons.close,
+                                          size: 22,
+                                          color: resolveThemeColor(context, dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary),
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -662,6 +705,20 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                               ),
                             ),
                           ),
+                          if (hasLock && !lockedSegmentSelectable) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'This stock does not support $lockedSegment. To pledge it, submit a separate pledge request for its own segment.',
+                              maxLines: 4,
+                              overflow: TextOverflow.ellipsis,
+                              style: MyntWebTextStyles.para(
+                                context,
+                                darkColor: MyntColors.lossDark,
+                                lightColor: MyntColors.loss,
+                                fontWeight: MyntFonts.medium,
+                              ),
+                            ),
+                          ],
                         ],
                         ledgerdata.dayforpledgeunpledge == 'Saturday' ||
                                 ledgerdata.dayforpledgeunpledge == 'Sunday'
@@ -692,29 +749,23 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                   style: ElevatedButton.styleFrom(
                                       elevation: 0,
                                       shadowColor: Colors.transparent,
-                                      backgroundColor: ((ledgerdata.screenpledge == 'unpledge' &&
-                                                  (ledgerdata.pledgesubtn ==
-                                                      false)) ||
-                                              (ledgerdata.screenpledge == 'pledge' &&
-                                                  (ledgerdata.pledgesubtn == false ||
-                                                      widget.data.segmentselect.toString() ==
-                                                          "null")))
+                                      backgroundColor: !canSubmit
                                           ? resolveThemeColor(context, dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted)
                                           : resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
                                       shape: RoundedRectangleBorder(
                                           borderRadius:
                                               BorderRadius.circular(4))),
-                                  onPressed: () {
-                                    if ((ledgerdata.screenpledge ==
-                                                'pledge' &&
-                                            (widget.data.segmentselect !=
-                                                    'null' &&
-                                                ledgerdata.pledgesubtn !=
-                                                    false)) ||
-                                        (ledgerdata.screenpledge ==
-                                                'unpledge' &&
-                                            (ledgerdata.pledgesubtn !=
-                                                false))) {
+                                  onPressed: !allowSubmitTap
+                                      ? null
+                                      : () {
+                                    // Reachable-but-invalid only means: pledge
+                                    // qty is fine but no segment is chosen yet.
+                                    if (!canSubmit) {
+                                      warningMessage(context,
+                                          'Please select a segment to pledge');
+                                      return;
+                                    }
+                                    {
                                       if (ledgerdata.screenpledge ==
                                           'pledge') {
                                         ledgerdata.dummypledgeval(
@@ -730,7 +781,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                             ledgerdata.segmentvalue,
                                             widget.data.nSESYMBOL.toString(),
                                             widget.data.iSIN.toString(),
-                                            widget.data.aMOUNT.toString(),
+                                            ((double.tryParse(widget.data.sCRIPVALUE?.toString() ?? '0') ?? 0) *
+                                                    (double.tryParse(ledgerdata.selectnetpledge.text) ?? 0))
+                                                .toStringAsFixed(2),
                                             ledgerdata.selectnetpledge.text,
                                             widget.data.nET.toString(),
                                             "pledge",
@@ -748,7 +801,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                             ledgerdata.segmentvalue,
                                             widget.data.nSESYMBOL.toString(),
                                             widget.data.iSIN.toString(),
-                                            widget.data.aMOUNT.toString(),
+                                            ((double.tryParse(widget.data.sCRIPVALUE?.toString() ?? '0') ?? 0) *
+                                                    (double.tryParse(ledgerdata.selectnetpledge.text) ?? 0))
+                                                .toStringAsFixed(2),
                                             ledgerdata.selectnetpledge.text,
                                             widget.data.nET.toString(),
                                             "unpledge",

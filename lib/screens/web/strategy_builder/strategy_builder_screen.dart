@@ -6,6 +6,9 @@ import 'package:mynt_plus/models/marketwatch_model/opt_chain_model.dart';
 import 'package:mynt_plus/provider/strategy_builder_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
+import 'package:mynt_plus/provider/market_watch_provider.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
+import 'package:mynt_plus/models/marketwatch_model/get_quotes.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 
@@ -34,6 +37,193 @@ class _PayoffTooltipState {
 }
 
 /// Strategy Builder Screen - Full screen strategy builder with payoff analysis
+/// Renders a metric label, optionally followed by a tappable info (i) icon.
+/// Used to attach the Margin Info dialog to the MARGIN label only.
+Widget _labelWithInfo(
+    BuildContext context, Widget label, VoidCallback? onInfoTap) {
+  if (onInfoTap == null) return label;
+  return Row(
+    children: [
+      Flexible(child: label),
+      const SizedBox(width: 3),
+      InkWell(
+        onTap: onInfoTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Icon(Icons.info_outline, size: 16, color:  resolveThemeColor(
+                                                context,
+                                                dark:
+                                                    MyntColors.textPrimaryDark,
+                                                light: MyntColors.textPrimary,
+                                              ),),
+      ),
+    ],
+  );
+}
+
+/// Margin Info dialog — shows the SPAN-based margin breakdown for the current
+/// basket: each leg's own margin, their total, the combined margin, and the
+/// benefit (total - combined). Opened from the info icon next to the MARGIN
+/// label. (UI only)
+void showMarginInfoDialog(BuildContext context, bool isDark) {
+  final provider = ProviderScope.containerOf(context, listen: false)
+      .read(strategyBuilderProvider);
+  // Fire the SpanCalc calculation; the dialog watches the provider for results.
+  provider.calculateMarginBenefit();
+
+  final titleColor = isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack;
+  final bodyColor =
+      isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary;
+  final profitColor = isDark ? MyntColors.profitDark : MyntColors.profit;
+
+  String money(double d) => d.toIndianRupee();
+
+  Widget valueRow(String label, String value,
+          {Color? valueColor, bool strong = false, bool indent = false}) =>
+      Padding(
+        padding: EdgeInsets.fromLTRB( 0, 5, 0, 5),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                style: MyntWebTextStyles.para(context,
+                    color: strong ? titleColor : bodyColor,
+                    fontWeight: strong ? MyntFonts.semiBold : MyntFonts.medium),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              value,
+              style: MyntWebTextStyles.body(context,
+                  color: valueColor ?? titleColor,
+                  fontWeight: MyntFonts.semiBold),
+            ),
+          ],
+        ),
+      );
+
+  final Widget content = Consumer(
+    builder: (context, ref, _) {
+      final p = ref.watch(strategyBuilderProvider);
+
+      if (p.isCalcMarginBenefit) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(vertical: 30),
+          child: Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+          ),
+        );
+      }
+
+      if (p.marginBenefitError != null) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Text(
+            p.marginBenefitError!,
+            style: MyntWebTextStyles.para(context, color: bodyColor),
+          ),
+        );
+      }
+
+      final r = p.marginBenefitResult;
+      if (r == null) return const SizedBox.shrink();
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+         
+          for (final leg in r.legs)
+            valueRow(leg.name, money(leg.margin), indent: true),
+          const Divider(height: 10),
+          valueRow('Total', money(r.sumIndividual), strong: true),
+          const Divider(height: 10),
+          valueRow('As a single strategy', money(r.combined), strong: false),
+          // const SizedBox(height: 10),
+          valueRow('Margin benefit', money(r.benefit),
+              strong: false, valueColor: profitColor),
+        ],
+      );
+    },
+  );
+
+  showDialog(
+    context: context,
+    barrierColor: Colors.black54,
+    builder: (ctx) => Center(
+      child: Material(
+        color: Colors.transparent,
+        child: shadcn.Card(
+          borderRadius: BorderRadius.circular(8),
+          padding: EdgeInsets.zero,
+          child: Container(
+            width: 400,
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.75,
+            ),
+            decoration: BoxDecoration(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.dialogDark, light: MyntColors.dialog),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: shadcn.Theme.of(context).colorScheme.border,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Margin Info',
+                        style: MyntWebTextStyles.title(
+                          context,
+                          color: resolveThemeColor(
+                            context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      MyntCloseButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                ),
+                // Content
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: content,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class StrategyBuilderScreenWeb extends ConsumerStatefulWidget {
   const StrategyBuilderScreenWeb({super.key});
 
@@ -367,14 +557,15 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
               ),
               const SizedBox(width: 12),
               _buildMetricItemSmall(context, 'MARGIN', provider.totalMargin, null, isDark),
-              const SizedBox(width: 12),
-              _buildMetricItemSmall(
-                context,
-                'MARGIN BENEFIT',
-                provider.marginBenefit,
-                isDark ? MyntColors.profitDark : MyntColors.profit,
-                isDark,
-              ),
+              // MARGIN BENEFIT hidden
+              // const SizedBox(width: 12),
+              // _buildMetricItemSmall(
+              //   context,
+              //   'MARGIN BENEFIT',
+              //   provider.marginBenefit,
+              //   isDark ? MyntColors.profitDark : MyntColors.profit,
+              //   isDark,
+              // ),
             ],
           ),
           const SizedBox(height: 8),
@@ -436,13 +627,20 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ),
             ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 2),
           valueWidget ?? Text(
@@ -3048,7 +3246,8 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
                   isDark,
                 ),
                 _buildMetricItem(context, 'MARGIN', provider.totalMargin, null, isDark),
-                _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
+                // MARGIN BENEFIT hidden
+                // _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
               ],
             ),
             const SizedBox(height: 12),
@@ -3084,13 +3283,20 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ).copyWith(fontSize: 11),
+            ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 4),
           valueWidget ?? Text(
@@ -4731,11 +4937,12 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
             ],
           ),
           const SizedBox(height: 8),
-          // Row 2: MARGIN BENEFIT, POP, REWARD/RISK, BREAKEVEN
+          // Row 2: POP, REWARD/RISK, BREAKEVEN (MARGIN BENEFIT hidden)
           Row(
             children: [
-              _buildMetricItemNarrow(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
-              const SizedBox(width: 8),
+              // MARGIN BENEFIT hidden
+              // _buildMetricItemNarrow(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
+              // const SizedBox(width: 8),
               _buildMetricItemNarrow(context, 'POP', '${provider.metrics.popPercent.toStringAsFixed(0)}%', null, isDark),
               const SizedBox(width: 8),
               _buildMetricItemNarrow(context, 'REWARD/RISK', provider.metrics.riskRewardRatio, null, isDark),
@@ -4789,13 +4996,20 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ).copyWith(fontSize: 11),
+            ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 2),
           valueWidget ?? Text(
@@ -5091,7 +5305,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                                     // const SizedBox(width: 4),
                                     // Text('>', style: TextStyle(color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: FontWeight.bold)),
                                     // const SizedBox(width: 8),
-                                    Text('CALLS', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: MyntFonts.semiBold)),
+                                    Text('CALL', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: MyntFonts.semiBold)),
                                   ],
                                 ),
                               ),
@@ -5106,7 +5320,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                                     // const SizedBox(width: 4),
                                     // Text('>', style: TextStyle(color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: FontWeight.bold)),
                                     // const SizedBox(width: 8),
-                                    Text('PUTS', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: MyntFonts.semiBold)),
+                                    Text('PUT', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: MyntFonts.semiBold)),
                                   ],
                                 ),
                               ),
@@ -5389,7 +5603,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                         ? Border(right: BorderSide(color: ceBasketBorder, width: 3))
                         : null,
                   ),
-                  child: _buildSideCell(context, provider, row.callOption, callSocketData, isDark, true),
+                  child: _buildSideCell(context, provider, row.callOption, callSocketData, isDark, true, ceBasketBg != null),
                 ),
               ),
               
@@ -5422,7 +5636,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                         ? Border(left: BorderSide(color: peBasketBorder, width: 3))
                         : null,
                   ),
-                  child: _buildSideCell(context, provider, row.putOption, putSocketData, isDark, false),
+                  child: _buildSideCell(context, provider, row.putOption, putSocketData, isDark, false, peBasketBg != null),
                 ),
               ),
             ],
@@ -5432,7 +5646,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
     );
   }
 
-  Widget _buildSideCell(BuildContext context, StrategyBuilderProvider provider, OptionValues? option, dynamic socketData, bool isDark, bool isCall) {
+  Widget _buildSideCell(BuildContext context, StrategyBuilderProvider provider, OptionValues? option, dynamic socketData, bool isDark, bool isCall, bool isSelected) {
     if (option == null) return const SizedBox();
 
     final Map<String, dynamic>? sData = (socketData is Map) ? socketData as Map<String, dynamic> : null;
@@ -5456,43 +5670,59 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
         ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss) 
         : (perChange == "0.00" ? Colors.grey : resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit));
         
-    final oiChangeColor = oiPerChng.startsWith("-") 
-        ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss) 
+    final oiChangeColor = oiPerChng.startsWith("-")
+        ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss)
         : (oiPerChng == "0.00" ? Colors.grey : resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit));
 
-    // Hover mechanism with Square Buttons
+    // Watch so the bookmark icon updates immediately.
+    final isInWatchlist = ref.watch(
+      marketWatchProvider.select(
+        (p) => p.scrips.any(
+          (s) => "${s['exch']}|${s['token']}" == "${option.exch}|${option.token}",
+        ),
+      ),
+    );
+
+    // Reuse the same hover action button UI as the watchlist option chain.
     return HoverActionsWrapper(
       actionsAlignment: isCall ? Alignment.centerRight : Alignment.centerLeft,
       actionsPadding: const EdgeInsets.symmetric(horizontal: 2),
+      // Blue hover background (matches the watchlist option chain), but only
+      // when this leg isn't already selected — a selected Buy/Sell leg keeps
+      // its green/red selection background instead.
+      hoverBackgroundColor: isSelected
+          ? null
+          : resolveThemeColor(context,
+                  dark: MyntColors.primaryDark, light: MyntColors.primary)
+              .withValues(alpha: 0.10),
       actionsBuilder: (ctx) => [
-        // Buy Button
-        InkWell(
-          onTap: () => provider.addToBasket(option, 'BUY', context),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.secondary : MyntColors.primary,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: const Text('B', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+        HoverActionButton.buy(
+          context: ctx,
+          onPressed: () => provider.addToBasket(option, 'BUY', context),
         ),
-        const SizedBox(width: 2),
-        // Sell Button
-        InkWell(
-          onTap: () => provider.addToBasket(option, 'SELL', context),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.lossDark : MyntColors.loss,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: const Text('S', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+        HoverActionButton.sell(
+          context: ctx,
+          onPressed: () => provider.addToBasket(option, 'SELL', context),
+        ),
+        // Chart Button — navigates to home and opens the option's chart
+        HoverActionButton.icon(
+          context: ctx,
+          iconAsset: assets.chartnew,
+          onPressed: () => _handleChartTapSB(option),
+        ),
+        HoverActionButton.icon(
+          context: ctx,
+          iconAsset: isInWatchlist
+              ? assets.bookmarkIcon
+              : assets.bookmarkLineIcon,
+          iconColor: isInWatchlist
+              ? resolveThemeColor(
+                  ctx,
+                  dark: MyntColors.primaryDark,
+                  light: MyntColors.primary,
+                )
+              : null,
+          onPressed: () => _handleSaveToWatchlistSB(option),
         ),
       ],
       child: Row(
@@ -5541,6 +5771,72 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
         ),
       ],
     );
+  }
+
+  /// Open this option's chart. The strategy builder is hosted inside
+  /// CustomizableSplitHomeScreen, which owns the chart panel — so we close the
+  /// option-chain dialog and open the chart in that panel (on the Chart tab),
+  /// the same mechanism the watchlist option chain uses. No navigation, so the
+  /// strategy (basket) is untouched.
+  void _handleChartTapSB(OptionValues option) {
+    if (option.tsym?.contains("|||") ?? false) {
+      ResponsiveSnackBar.showWarning(
+          context, "Symbol not available for trading");
+      return;
+    }
+
+    final marketWatch = ref.read(marketWatchProvider);
+    final depthArgs = DepthInputArgs(
+      exch: option.exch?.toString() ?? '',
+      token: option.token?.toString() ?? '',
+      tsym: option.tsym?.toString() ?? '',
+      instname: '',
+      symbol: option.symbol?.toString() ?? option.tsym?.toString() ?? '',
+      expDate: option.expDate?.toString() ?? '',
+      option: option.option?.toString() ?? '',
+      isOption: true,
+    );
+
+    // Close the option-chain dialog so the chart panel is visible.
+    Navigator.of(context).pop();
+    marketWatch.openOnChartTab = true;
+    marketWatch.scripdepthsize(false);
+    marketWatch.calldepthApis(context, depthArgs, "");
+  }
+
+  /// Add / remove this option to the current watchlist — mirrors the
+  /// watchlist option-chain "Add to Watchlist" action.
+  Future<void> _handleSaveToWatchlistSB(OptionValues option) async {
+    final scripData = ref.read(marketWatchProvider);
+
+    if (scripData.isPreDefWLs == "Yes") {
+      ResponsiveSnackBar.showWarning(
+          context, "This is a pre-defined watchlist that cannot be edited!");
+      return;
+    }
+
+    final scripToken = "${option.exch}|${option.token}";
+    final isCurrentlyInWatchlist = scripData.scrips
+        .any((scrip) => "${scrip['exch']}|${scrip['token']}" == scripToken);
+
+    if (isCurrentlyInWatchlist) {
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, false, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Removed from your watchlist "${scripData.wlName}"');
+      }
+    } else {
+      ref.read(websocketProvider).establishConnection(
+            channelInput: scripToken,
+            task: "d",
+            context: context,
+          );
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, true, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
+      }
+    }
   }
 
   Widget _buildBasketTable(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
@@ -7264,7 +7560,8 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                 isDark,
               ),
               _buildMetricItem(context, 'MARGIN', provider.totalMargin, null, isDark),
-              _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
+              // MARGIN BENEFIT hidden
+              // _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
             ],
           ),
           const SizedBox(height: 8),
@@ -7299,13 +7596,20 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
+                fontWeight: MyntFonts.medium,
+              ).copyWith(fontSize: 11),
+            ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 2),
           valueWidget ?? Text(

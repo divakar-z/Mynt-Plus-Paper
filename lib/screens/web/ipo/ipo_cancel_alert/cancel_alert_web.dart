@@ -157,11 +157,12 @@ class _IpoCancelAlertState extends ConsumerState<IpoCancelAlert> {
     });
 
     try {
+      final ipo = ref.read(ipoProvide);
       final menudata = MenuData(
         flow: "can",
         type: widget.ipocancel.type.toString(),
         symbol: widget.ipocancel.symbol.toString(),
-        category: "",
+        category: ipo.orderCategoryCode(widget.ipocancel),
         name: widget.ipocancel.companyName.toString(),
         applicationNumber: widget.ipocancel.applicationNumber.toString(),
         respBid: [BidReference(bidReferenceNumber: '67890')],
@@ -169,9 +170,7 @@ class _IpoCancelAlertState extends ConsumerState<IpoCancelAlert> {
 
       const List<IposBid> iposbids = [];
 
-      await ref
-          .read(ipoProvide)
-          .getipoplaceorder(context, menudata, iposbids, "");
+      await ipo.getipoplaceorder(context, menudata, iposbids, "");
 
       // Close the dialog after successful cancellation
       if (mounted) {

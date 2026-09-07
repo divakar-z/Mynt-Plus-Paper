@@ -3,7 +3,7 @@
 //import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/provider/market_watch_provider.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 
@@ -204,7 +204,7 @@ class _IPOPerformanceItem extends ConsumerWidget {
       children: [
         Text(
           label,
-          style: GoogleFonts.inter(
+          style: dysInter(
             textStyle: _textStyle(
                 const Color(0xff666666), 10, FontWeight.w500),
           ),
@@ -330,7 +330,7 @@ class _SearchResultItem extends StatelessWidget {
       children: [
         Text(
           label,
-          style: GoogleFonts.inter(
+          style: dysInter(
             textStyle: _textStyle(
                 const Color(0xff666666), 13, FontWeight.w500),
           ),
@@ -357,7 +357,7 @@ class _SearchResultItem extends StatelessWidget {
   }
 
   static TextStyle _textStyle(Color color, double fontSize, FontWeight fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
       fontWeight: fWeight,
       color: color,
       fontSize: fontSize,

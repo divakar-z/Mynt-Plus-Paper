@@ -414,7 +414,9 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
           if (script['exch'] == "BFO" && script["dname"] != "null") {
             List<String> splitVal = script["dname"].toString().split(" ");
             script['symbol'] = splitVal[0];
-            script['expDate'] = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+            script['expDate'] =
+                bfoExpiryWithYear(splitVal, script['tsym']?.toString());
             script['option'] =
                 splitVal.length > 4 ? "${splitVal[3]} ${splitVal[4]}" : splitVal[3];
           } else {

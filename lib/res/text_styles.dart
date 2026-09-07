@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../provider/accessibility_provider.dart';
 import 'colors.dart';
 
-// Helper function to use Geist font instead of Inter
+// Helper function to use Geist font instead of Inter. Resolves through
+// dyslexiaFontOr so every AppTextStyles entry swaps to OpenDyslexic when
+// Dyslexia Support is on (an explicit fontFamily won't inherit it otherwise).
 TextStyle geistFont({TextStyle? textStyle}) {
   return TextStyle(
-    fontFamily: 'Geist',
+    fontFamily: dyslexiaFontOr('Geist'),
     fontWeight: textStyle?.fontWeight,
     fontSize: textStyle?.fontSize,
     color: textStyle?.color,
@@ -18,122 +21,126 @@ TextStyle geistFont({TextStyle? textStyle}) {
   );
 }
 
+// NOTE: `textStyles` is a long-lived singleton (see res.dart), so these are
+// getters — not `final` fields — so the font re-resolves on every access and
+// the Dyslexia Support toggle takes effect live instead of being frozen to
+// whatever font was active when the singleton was first built.
 class AppTextStyles {
-  final appBarTitleTxt = geistFont(
+  TextStyle get appBarTitleTxt => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w600,
     fontSize: 15,
     color: AppColors().colorBlack,
   ));
-  final textFieldLabelStyleInterV = TextStyle(
-    fontFamily: 'Geist',
+  TextStyle get textFieldLabelStyleInterV => TextStyle(
+    fontFamily: dyslexiaFontOr('Geist'),
     fontWeight: FontWeight.w600,
     fontSize: 15,
     color: AppColors().colorBlack,
   );
-  final textFieldLabelStyle = geistFont(
+  TextStyle get textFieldLabelStyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w600,
     fontSize: 15,
     color: AppColors().colorBlack,
   ));
-  final notificationtextstyle = geistFont(
+  TextStyle get notificationtextstyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 14,
     color: AppColors().colorBlack,
   ));
-  final darkmorestyle = geistFont(
+  TextStyle get darkmorestyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 13,
     color: AppColors().colorLightBlue,
   ));
-  final morestyle = geistFont(
+  TextStyle get morestyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 13,
     color: AppColors().colorBlue,
   ));
-  final notificationtimestyle = geistFont(
+  TextStyle get notificationtimestyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 12,
     color: AppColors().colorGrey,
   ));
-  final actMenuTxt = geistFont(
+  TextStyle get actMenuTxt => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 12,
     color: AppColors().colorBlue,
   ));
-  final menuTxt = geistFont(
+  TextStyle get menuTxt => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 12,
     color: AppColors().colorGrey,
   ));
 
-  final prdText = geistFont(
+  TextStyle get prdText => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 14,
     color: AppColors().colorGrey,
   ));
-  final actPrdText = geistFont(
+  TextStyle get actPrdText => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 14,
     color: AppColors().colorBlue,
   ));
 
-  final darktextBtn = geistFont(
+  TextStyle get darktextBtn => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 13,
     color: AppColors().colorLightBlue,
   ));
 
-  final textBtn = geistFont(
+  TextStyle get textBtn => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 13,
     color: AppColors().colorBlue,
   ));
 
-  final btnText = geistFont(
+  TextStyle get btnText => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 13,
     color: AppColors().colorWhite,
   ));
 
-  final lengthtextstyle = geistFont(
+  TextStyle get lengthtextstyle => geistFont(
       textStyle: const TextStyle(
           fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xff666666)));
 
-  final cnfrmvalidInfo = geistFont(
+  TextStyle get cnfrmvalidInfo => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 12,
     color: AppColors().colorBlack,
   ));
 
-  final scripNameTxtStyle = geistFont(
+  TextStyle get scripNameTxtStyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w600,
     fontSize: 14,
     color: AppColors().colorBlack,
   ));
 
-  final scripExchTxtStyle = geistFont(
+  TextStyle get scripExchTxtStyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 11,
     color: AppColors().colorGrey,
   ));
 
-  final resendOtpstyle = geistFont(
+  TextStyle get resendOtpstyle => geistFont(
       textStyle: TextStyle(
     fontWeight: FontWeight.w500,
     fontSize: 12,

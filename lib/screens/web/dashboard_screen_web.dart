@@ -7,6 +7,7 @@ import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../sharedWidget/mynt_loader.dart';
 import '../../../sharedWidget/feature_card_widget.dart';
+import 'support/report_issue_strip.dart';
 import '../../../provider/index_list_provider.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/websocket_provider.dart';
@@ -15,11 +16,13 @@ import '../../../provider/portfolio_provider.dart';
 import '../../../provider/order_provider.dart';
 import '../../../provider/fund_provider.dart';
 import '../../../provider/mf_provider.dart';
+import '../../../provider/privacy_provider.dart';
+import '../../../provider/rupeecase_provider.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/explore_model/stocks_model/toplist_stocks.dart';
 import 'dart:async';
-import 'market_watch/index/index_bottom_sheet_web.dart';
 import 'trade_action_screen_web.dart';
+import 'rupeecase_strategies_section.dart';
 import '../../../routes/route_names.dart';
 import '../../../utils/custom_navigator.dart';
 import '../../../utils/rupee_convert_format.dart';
@@ -38,6 +41,12 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
   final ScrollController _indexScrollController = ScrollController();
   final ScrollController _toolsScrollController = ScrollController();
   final ScrollController _tradeActionScrollController = ScrollController();
+
+  // Arrow visibility for the top indices strip. Index cards are intrinsic-width,
+  // so whether the row overflows is only known after layout — these are updated
+  // from the scroll controller's actual extent in [_updateIndexArrows].
+  bool _canScrollLeftIdx = false;
+  bool _canScrollRightIdx = false;
   // WebSocket subscription for live position updates
   StreamSubscription? _positionSocketSubscription;
   // WebSocket subscription for live holdings updates
@@ -51,6 +60,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
   @override
   void initState() {
     super.initState();
+    _indexScrollController.addListener(_updateIndexArrows);
     // Note: Data fetching is handled by _handleDashboardTap() in customizable_split_home_screen.dart
     // This prevents duplicate API calls when dashboard button is clicked
     // WebSocket bodyscription is handled by WebbodyscriptionManager
@@ -58,6 +68,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       if (!mounted) return;
 
       final indexProvider = ref.read(indexListProvider);
+      ref.read(rupeeCaseProvider).fetchStrategies();
+      ref.read(rupeeCaseProvider).fetchAlgoStrategies();
 
       // Get top indices for dashboard (8 specific indices) if not already fetched
       // This ensures tokens are available for WebbodyscriptionManager
@@ -67,9 +79,10 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         if (!mounted) return;
       }
 
-      // Fetch MF holdings for the dashboard portfolio tab using the same API as holdings tab
-      // This avoids race condition with the old fetchMFHoldings API which can cause double data
-      await ref.read(mfProvider).fetchmfholdingnew();
+      // Fetch MF holdings for the dashboard portfolio tab from the demat
+      // endpoint (the old MF holdings API is being decommissioned).
+      // await ref.read(mfProvider).fetchmfholdingnew();
+      await ref.read(mfProvider).fetchmfdematholding();
       if (!mounted) return;
 
       // Trade action data is fetched by _handleDashboardTap() before this screen is shown
@@ -82,7 +95,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
 
       // Calculate holdings totals on initial load to ensure correct values
       final portfolio = ref.read(portfolioProvider);
-      if (portfolio.holdingsModel != null && portfolio.holdingsModel!.isNotEmpty) {
+      if (portfolio.holdingsModel != null &&
+          portfolio.holdingsModel!.isNotEmpty) {
         portfolio.pnlHoldCal();
       }
     });
@@ -113,8 +127,12 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
 
           // Update LTP if valid (strict guard rejects null/zero defaults)
           final lp = socketData['lp']?.toString();
-          if (lp != null && lp != "null" && lp != "" &&
-              lp != "0" && lp != "0.0" && lp != "0.00" &&
+          if (lp != null &&
+              lp != "null" &&
+              lp != "" &&
+              lp != "0" &&
+              lp != "0.0" &&
+              lp != "0.00" &&
               lp != position.lp) {
             position.lp = lp;
             needsUpdate = true;
@@ -134,7 +152,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final websocket = ref.read(websocketProvider);
     final portfolio = ref.read(portfolioProvider);
 
-    _holdingsSocketSubscription = websocket.socketDataStream.listen((socketDatas) {
+    _holdingsSocketSubscription =
+        websocket.socketDataStream.listen((socketDatas) {
       if (_isDisposed || !mounted) return;
 
       final holdings = portfolio.holdingsModel ?? [];
@@ -177,10 +196,32 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     // when screen is replaced or removed via updateActiveScreen()
     // No need to unbodyscribe here to avoid double calls
 
+    _indexScrollController.removeListener(_updateIndexArrows);
     _indexScrollController.dispose();
     _toolsScrollController.dispose();
     _tradeActionScrollController.dispose();
     super.dispose();
+  }
+
+  /// Recomputes whether the top indices strip can scroll left/right from the
+  /// controller's actual position, and shows/hides the scroll arrows to match.
+  /// Only calls setState when the visibility actually changes, so it is safe to
+  /// invoke from both the scroll listener and a post-frame callback.
+  void _updateIndexArrows() {
+    if (!mounted) return;
+    bool left = false;
+    bool right = false;
+    if (_indexScrollController.hasClients) {
+      final pos = _indexScrollController.position;
+      left = pos.pixels > 0.5;
+      right = pos.pixels < pos.maxScrollExtent - 0.5;
+    }
+    if (left != _canScrollLeftIdx || right != _canScrollRightIdx) {
+      setState(() {
+        _canScrollLeftIdx = left;
+        _canScrollRightIdx = right;
+      });
+    }
   }
 
   @override
@@ -198,13 +239,29 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildTopIndicesSection(context, indexProvider),
+              const SizedBox(height: 22),
+
+              // Algo trading banner and Zebu Algo Strategies
+              // (Original single-row layout commented out — the stacked 2×2 copy
+              // below is shown instead.)
+              // const AlgoStrategiesSection(),
+              // const SizedBox(height: 32),
+
+              // Copy of the Zebu Algo Strategies row, with the four card metrics
+              // laid out as a 2×2 grid (DD and Win Rate beneath Min Cap and CAGR).
+              const AlgoStrategiesSection(stackedMetrics: true),
               const SizedBox(height: 32),
-              // Dashboard cards section (Holdings, Position, Orders, Margins)
-              _buildDashboardCardsSection(context),
-              const SizedBox(height: 32),
+              
               // Tools section (Scalper, Strategy Builder, OptionZ)
               _buildToolsSection(context),
               const SizedBox(height: 32),
+               // Dashboard cards section (Holdings, Position, Orders, Margins)
+              // _buildDashboardCardsSection(context),
+              // const SizedBox(height: 32),
+              // RupeeCase Strategies section.
+              // Self-hides (renders nothing) until data loads.
+              const RupeeCaseStrategiesSection(),
+              
               // Today's trade action section
               // _buildFeatureCardsSection(context),
               // const SizedBox(height: 32),
@@ -213,6 +270,12 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               // const SizedBox(height: 32),
               // Portfolio Analysis section
               // _buildPortfolioAnalysisSection(context),
+
+              // Raise a support ticket. Last on the page deliberately, and not
+              // one of the Tools cards above — see the note on
+              // [ReportIssueStrip] for why.
+              // const SizedBox(height: 32),
+              // const ReportIssueStrip(),
             ],
           ),
         ),
@@ -252,9 +315,10 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
             Expanded(
               child: FeatureCard(
                 badgeNumber: '01',
-                iconData:  shadcn.LucideIcons.chartBar,
+                iconData: shadcn.LucideIcons.chartBar,
                 title: 'OptionZ',
-                description: 'Access advanced options trading platform with real-time data and powerful analytics tools.',
+                description:
+                    'Access advanced options trading platform with real-time data and powerful analytics tools.',
                 badgeColor: const Color(0xFF6366F1), // Indigo - vibrant purple
                 iconColor: const Color(0xFF6366F1),
                 onTap: () async {
@@ -271,7 +335,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 badgeNumber: '02',
                 iconData: shadcn.LucideIcons.draftingCompass,
                 title: 'Strategy Builder',
-                description: 'Create and backtest your trading strategies with our powerful strategy building tools.',
+                description:
+                    'Create and backtest your trading strategies with our powerful strategy building tools.',
                 badgeColor: const Color(0xFF06B6D4), // Cyan - bright teal
                 iconColor: const Color(0xFF06B6D4),
                 onTap: () {
@@ -291,7 +356,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 badgeNumber: '03',
                 iconData: shadcn.LucideIcons.shoppingBag,
                 title: 'Scalper',
-                description: 'Quick in & out trading with real-time market data and lightning-fast order execution.',
+                description:
+                    'Quick in & out trading with real-time market data and lightning-fast order execution.',
                 badgeColor: const Color(0xFFEC4899),
                 iconColor: const Color(0xFFEC4899),
                 onTap: () {},
@@ -302,15 +368,17 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               child: FeatureCard(
                 badgeNumber: '04',
                 iconData: shadcn.BootstrapIcons.wechat,
-                title: 'Refer & Earn',
-                description: 'Invite your friends and earn rewards. Share the benefits of smart trading together.',
+                title: 'Refer',
+                description: 'Invite your friends and family. Share the benefits of smart trading together.',
                 badgeColor: const Color(0xFFF59E0B), // Amber - warm and inviting
                 iconColor: const Color(0xFFF59E0B),
                 onTap: () async {
-                  // Open Refer & Earn in external browser (same as profile dropdown)
+                  // Open Refer in external browser (same as profile dropdown)
                   final Preferences pref = locator<Preferences>();
-                  final url = 'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
-                  launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                  final url =
+                      'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
+                  launchUrl(Uri.parse(url),
+                      mode: LaunchMode.externalApplication);
                 },
               ),
             ),
@@ -404,22 +472,21 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
               WebNavigationHelper.navigateTo(Routes.holdingscreen);
             }
           },
-            trailing: MouseRegion(
+          trailing: MouseRegion(
             cursor: SystemMouseCursors.click,
             child: GestureDetector(
-               onTap: () {
-              if (WebNavigationHelper.isAvailable) {
-                WebNavigationHelper.navigateTo(Routes.portfolioDashboard);
-              }
-            },
+              onTap: () {
+                if (WebNavigationHelper.isAvailable) {
+                  WebNavigationHelper.navigateTo(Routes.portfolioDashboard);
+                }
+              },
               child: Text(
                 'Insights',
                 style: MyntWebTextStyles.symbol(
                   context,
                   fontWeight: MyntFonts.bold,
                   color: resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: MyntColors.primary),
+                      dark: MyntColors.primaryDark, light: MyntColors.primary),
                 ),
               ),
             ),
@@ -472,8 +539,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                   context,
                   fontWeight: MyntFonts.bold,
                   color: resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: MyntColors.primary),
+                      dark: MyntColors.primaryDark, light: MyntColors.primary),
                 ),
               ),
             ),
@@ -566,7 +632,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         onTap: onTap,
         child: Container(
           decoration: BoxDecoration(
-            color: isDarkMode(context) ? MyntColors.dashboardCarColor : shadcn.Theme.of(context).colorScheme.card,
+            color: isDarkMode(context)
+                ? MyntColors.dashboardCarColor
+                : shadcn.Theme.of(context).colorScheme.card,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: resolveThemeColor(context,
@@ -655,10 +723,13 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final metric = metrics[index];
     final String valueStr = metric['value'] as String;
     final bool isPnl = metric['isPnl'] ?? false;
+    final privacy = ref.watch(privacyProvider);
     // Efficient color determination: check first char for negative, regex for zero
     final bool isNegative = valueStr.startsWith('-');
     final bool isZero = !valueStr.contains(RegExp(r'[1-9]'));
-    final Color valueColor = (isPnl && !isZero)
+    // Privacy Mode: profit/loss colour is neutralized too, so the mask can't
+    // leak direction through green/red.
+    final Color valueColor = (isPnl && !isZero && !privacy.isPrivate)
         ? (isNegative
             ? resolveThemeColor(context,
                 dark: MyntColors.lossDark, light: MyntColors.loss)
@@ -666,6 +737,16 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                 dark: MyntColors.profitDark, light: MyntColors.profit))
         : resolveThemeColor(context,
             dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+
+    // Keep the ₹ / (%) shells visible so layout stays stable, but hide the
+    // number and its sign.
+    final String displayValue = privacy.isPrivate
+        ? (valueStr.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask)
+        : valueStr;
+    final String? subValueStr = metric['subValue'] as String?;
+    final String? displaySubValue = subValueStr == null
+        ? null
+        : (privacy.isPrivate ? '($kPrivacyMask%)' : subValueStr);
 
     final bool isLeftAligned = index % 2 == 0;
     final alignment =
@@ -697,15 +778,15 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
-              metric['value'],
+              displayValue,
               style: MyntWebTextStyles.price(
                 context,
                 color: valueColor,
               ),
             ),
-            if (metric['subValue'] != null)
+            if (displaySubValue != null)
               Text(
-                metric['subValue'],
+                displaySubValue,
                 style: MyntWebTextStyles.priceChange(
                   context,
                   color: valueColor,
@@ -772,13 +853,25 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
 
   List<Map<String, dynamic>> _getMutualFundMetrics(
       BuildContext context, MFProvider mfData) {
-    // Use the same data source as holdings tab (mfholdingnew.summary)
-    // This ensures consistency and avoids race condition with the old API
-    final summary = mfData.mfholdingnew?.summary;
-    final invest = double.tryParse(summary?.invested ?? '0') ?? 0.0;
-    final current = double.tryParse(summary?.currentValue ?? '0') ?? 0.0;
-    final totalPnL = double.tryParse(summary?.absReturnValue ?? '0') ?? 0.0;
-    final totalPnLPer = double.tryParse(summary?.absReturnPercent ?? '0') ?? 0.0;
+    // Data source moved to the demat holdings endpoint (the old MF holdings
+    // API is being decommissioned). Prefer the API summary; fall back to
+    // computing totals from the rows when the summary block is absent —
+    // same approach as the Holdings screen's MF BETA summary cards.
+    // final summary = mfData.mfholdingnew?.summary;
+    final summary = mfData.mfDematHolding?.summary;
+    double invest = double.tryParse(summary?.invested ?? '0') ?? 0.0;
+    double current = double.tryParse(summary?.currentValue ?? '0') ?? 0.0;
+    double totalPnL = double.tryParse(summary?.absReturnValue ?? '0') ?? 0.0;
+    double totalPnLPer =
+        double.tryParse(summary?.absReturnPercent ?? '0') ?? 0.0;
+    if (summary == null) {
+      for (final h in mfData.mfDematHolding?.data ?? []) {
+        invest += double.tryParse(h.investedValue ?? '0') ?? 0.0;
+        current += double.tryParse(h.currentValue ?? '0') ?? 0.0;
+      }
+      totalPnL = current - invest;
+      totalPnLPer = invest != 0 ? (totalPnL / invest) * 100 : 0.0;
+    }
 
     return [
       {'label': 'Invested', 'value': invest.toIndianRupee()},
@@ -839,421 +932,88 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final indexValues = allIndexValues.take(5).toList();
     final hasIndices = indexValues.isNotEmpty;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Header with title and navigation arrows
-        Row(
-          children: [
-            Text(
-              'Indices',
-              style: MyntWebTextStyles.head(
-                context,
-                darkColor: MyntColors.textPrimaryDark,
-                lightColor: MyntColors.textPrimary,
-                fontWeight: MyntFonts.bold,
-              ),
+    // After each layout, re-evaluate which arrows are needed from the actual
+    // scroll extent — index cards are intrinsic-width, so whether the row
+    // overflows can't be known before layout. Cheap: only setStates on change.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateIndexArrows());
+
+    // Tight spacing between ticker items so the indices read as a compact strip.
+    const double cardSpacing = 8.0;
+
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          // Left scroll button — shown only when there is content to the left.
+          if (_canScrollLeftIdx)
+            _buildIndexScrollButton(
+              context,
+              icon: Icons.arrow_back_ios,
+              onTap: () {
+                if (_indexScrollController.hasClients) {
+                  final newOffset =
+                      (_indexScrollController.offset - 250.0).clamp(
+                    0.0,
+                    _indexScrollController.position.maxScrollExtent,
+                  );
+                  _indexScrollController.animateTo(
+                    newOffset,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                }
+              },
             ),
-            const SizedBox(width: 12),
-            // "See all indices" link moved near the title
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: () async {
-                  await _showAllIndicesBottomSheet(context, indexProvider);
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: shadcn.Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withOpacity(0.0),
-                  ),
-                  child: Icon(
-                    Icons.arrow_forward_ios,
-                    size: 14,
-                    color: resolveThemeColor(context,
-                        dark: MyntColors.primaryDark,
-                        light: MyntColors.primary),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        // Index cards + Algo Trading card in a row
-        SizedBox(
-          height: 130,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final availableWidth = constraints.maxWidth;
-              const algoCardWidth = 280.0;
-              const cardSpacing = 12.0;
-              // Reserve space for the algo card on the right
-              final indicesAvailableWidth =
-                  availableWidth - algoCardWidth - cardSpacing;
-
-              const minCardWidth = 140.0;
-              final totalCards = indexValues.length;
-              final totalSpacing = cardSpacing * (totalCards - 1);
-              final totalMinWidth =
-                  (minCardWidth * totalCards) + totalSpacing;
-
-              double cardWidth;
-              bool needsScrolling = false;
-
-              if (indicesAvailableWidth >= totalMinWidth) {
-                cardWidth =
-                    (indicesAvailableWidth - totalSpacing) / totalCards;
-              } else {
-                cardWidth = minCardWidth;
-                needsScrolling = true;
-              }
-
-              return Row(
-                children: [
-                  // Left scroll button (outside scroll area)
-                  if (needsScrolling)
-                    _buildIndexScrollButton(
-                      context,
-                      icon: Icons.arrow_back_ios,
-                      onTap: () {
-                        if (_indexScrollController.hasClients) {
-                          final scrollAmount = cardWidth + cardSpacing;
-                          final newOffset =
-                              (_indexScrollController.offset - scrollAmount)
-                                  .clamp(
-                            0.0,
-                            _indexScrollController.position.maxScrollExtent,
-                          );
-                          _indexScrollController.animateTo(
-                            newOffset,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut,
-                          );
-                        }
-                      },
-                    ),
-                  if (needsScrolling) const SizedBox(width: 8),
-                  // Scrollable indices section
-                  Expanded(
-                    child: hasIndices
-                        ? SingleChildScrollView(
-                            controller: _indexScrollController,
-                            scrollDirection: Axis.horizontal,
-                            physics: needsScrolling
-                                ? const ClampingScrollPhysics()
-                                : const NeverScrollableScrollPhysics(),
-                            child: Row(
-                              children: indexValues
-                                  .asMap()
-                                  .entries
-                                  .map((entry) {
-                                final index = entry.key;
-                                final item = entry.value;
-                                return Container(
-                                  width: cardWidth,
-                                  margin: EdgeInsets.only(
-                                    right: index < indexValues.length - 1
-                                        ? cardSpacing
-                                        : 0,
-                                  ),
-                                  child: _DashboardIndexCard(
-                                    indexItem: item,
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          )
-                        : Center(
-                            child:
-                                MyntLoader.simple(size: MyntLoaderSize.small),
-                          ),
-                  ),
-                  // Right scroll button (outside scroll area)
-                  if (needsScrolling) const SizedBox(width: 8),
-                  if (needsScrolling)
-                    _buildIndexScrollButton(
-                      context,
-                      icon: Icons.arrow_forward_ios,
-                      onTap: () {
-                        if (_indexScrollController.hasClients) {
-                          final scrollAmount = cardWidth + cardSpacing;
-                          final newOffset =
-                              (_indexScrollController.offset + scrollAmount)
-                                  .clamp(
-                            0.0,
-                            _indexScrollController.position.maxScrollExtent,
-                          );
-                          _indexScrollController.animateTo(
-                            newOffset,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut,
-                          );
-                        }
-                      },
-                    ),
-                  const SizedBox(width: cardSpacing),
-                  // Algo Trading card next to indices
-                  _buildAlgoTradingBannerCard(),
-                ],
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAlgoTradingBannerCard() {
-    const Color accent = Color(0xFF4A1F8E);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () async {
-          final Uri algoUri = Uri.parse('https://algo.zebuetrade.com/');
-          if (await canLaunchUrl(algoUri)) {
-            await launchUrl(
-              algoUri,
-              mode: LaunchMode.externalApplication,
-            );
-          }
-        },
-        child: Container(
-          width: 280,
-          height: 130,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              stops: [0.0, 0.55, 1.0],
-              colors: [
-                Color(0xFF170B26),
-                Color(0xFF4A1F8E),
-                Color(0xFF7B3FB5),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.10),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: accent.withValues(alpha: 0.28),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              // Bottom-right glow (same as Tools card)
-              Positioned(
-                right: -70,
-                bottom: -70,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 240,
-                    height: 240,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          const Color(0xFFB685FF).withValues(alpha: 0.65),
-                          const Color(0xFFB685FF).withValues(alpha: 0.0),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Top-left glow (same as Tools card)
-              Positioned(
-                left: -50,
-                top: -50,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 160,
-                    height: 160,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          Colors.white.withValues(alpha: 0.06),
-                          Colors.white.withValues(alpha: 0.0),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+          if (_canScrollLeftIdx) const SizedBox(width: 8),
+          // Indices strip — always scrollable so trailing cards are never
+          // clipped inaccessibly; the arrows reflect the real scroll extent.
+          Expanded(
+            child: hasIndices
+                ? SingleChildScrollView(
+                    controller: _indexScrollController,
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    child: Row(
                       children: [
-                        // Stacked rotated icon (same as Tools card)
-                        SizedBox(
-                          width: 48,
-                          height: 42,
-                          child: Stack(
-                            children: [
-                              Positioned(
-                                left: 0,
-                                top: 8,
-                                child: Transform.rotate(
-                                  angle: -0.18,
-                                  child: Container(
-                                    width: 32,
-                                    height: 32,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white
-                                          .withValues(alpha: 0.22),
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                left: 6,
-                                top: 4,
-                                child: Transform.rotate(
-                                  angle: -0.09,
-                                  child: Container(
-                                    width: 32,
-                                    height: 32,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white
-                                          .withValues(alpha: 0.45),
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                left: 12,
-                                top: 0,
-                                child: Container(
-                                  width: 32,
-                                  height: 32,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius:
-                                        BorderRadius.circular(8),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: accent.withValues(
-                                            alpha: 0.4),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Center(
-                                    child: SvgPicture.asset(
-                                      assets.boltIcon,
-                                      width: 18,
-                                      height: 18,
-                                      colorFilter: const ColorFilter.mode(
-                                        accent,
-                                        BlendMode.srcIn,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
+                        for (int i = 0; i < indexValues.length; i++)
+                          Padding(
+                            padding: EdgeInsets.only(
+                              right:
+                                  i < indexValues.length - 1 ? cardSpacing : 0,
+                            ),
+                            child: _DashboardIndexCard(
+                              indexItem: indexValues[i],
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      'Algo Trading',
-                                      style: MyntWebTextStyles.body(
-                                        context,
-                                        color: Colors.white,
-                                        fontWeight: MyntFonts.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius:
-                                          BorderRadius.circular(5),
-                                    ),
-                                    child: Text(
-                                      'NEW',
-                                      style: MyntWebTextStyles.caption(
-                                        context,
-                                        color: const Color(0xFF170B26),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                'Automated • Rule-based',
-                                style: MyntWebTextStyles.para(
-                                  context,
-                                  color: Colors.white
-                                      .withValues(alpha: 0.85),
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
                       ],
                     ),
-                    const SizedBox(height: 6),
-                    Divider(
-                      height: 1,
-                      color: Colors.white.withValues(alpha: 0.18),
-                    ),
-                    const SizedBox(height: 6),
-                    Expanded(
-                      child: Text(
-                        'Create & deploy automated trading strategies with Zebu Algo.',
-                        style: MyntWebTextStyles.para(
-                          context,
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontWeight: FontWeight.w500,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+                  )
+                : Center(
+                    child: MyntLoader.simple(size: MyntLoaderSize.small),
+                  ),
           ),
-        ),
+          // Right scroll button — shown only when there is content to the right.
+          if (_canScrollRightIdx) const SizedBox(width: 8),
+          if (_canScrollRightIdx)
+            _buildIndexScrollButton(
+              context,
+              icon: Icons.arrow_forward_ios,
+              onTap: () {
+                if (_indexScrollController.hasClients) {
+                  final newOffset =
+                      (_indexScrollController.offset + 250.0).clamp(
+                    0.0,
+                    _indexScrollController.position.maxScrollExtent,
+                  );
+                  _indexScrollController.animateTo(
+                    newOffset,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                }
+              },
+            ),
+        ],
       ),
     );
   }
@@ -1350,20 +1110,20 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       //     }
       //   },
       // },
-      {
-        'title': 'MF Stratergy',
-      'subtitle': 'Mutual Funds • Smart Investing',
-    'description': 'Create and invest in curated mutual fund baskets with a single tap. Diversify your portfolio and manage multiple funds effortlessly.',
-        'badge': null,
-        'isIcon' :false,
-        'accentColor': const Color(0xFF16C4C5),
-        'svgAsset': assets.mfIcon,
-        'onTap': () {
-          if (WebNavigationHelper.isAvailable) {
-            WebNavigationHelper.navigateTo('basketDashboard');
-          }
-        },
-      },
+      //   {
+      //     'title': 'MF Stratergy',
+      //   'subtitle': 'Mutual Funds • Smart Investing',
+      // 'description': 'Create and invest in curated mutual fund baskets with a single tap. Diversify your portfolio and manage multiple funds effortlessly.',
+      //     'badge': null,
+      //     'isIcon' :false,
+      //     'accentColor': const Color(0xFF16C4C5),
+      //     'svgAsset': assets.mfIcon,
+      //     'onTap': () {
+      //       if (WebNavigationHelper.isAvailable) {
+      //         WebNavigationHelper.navigateTo('basketDashboard');
+      //       }
+      //     },
+      //   },
       {
         'title': 'WebHook Trading',
         'subtitle': 'TradingView • Auto Alert',
@@ -1372,7 +1132,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFFEC4899),
         'badge': null,
         'icon': Icons.webhook,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('tradingViewWebHook');
@@ -1387,7 +1147,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF0EA5E9),
         'badge': null,
         'icon': Icons.auto_graph_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           // Navigate to orders screen and switch to SIP tab (index 5)
           ref.read(orderProvider).changeTabIndex(5, context);
@@ -1404,7 +1164,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF3B82F6),
         'badge': null,
         'icon': Icons.rocket_launch_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('scalper');
@@ -1419,7 +1179,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF8B5CF6),
         'badge': null,
         'icon': Icons.show_chart,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('strategyBuilder');
@@ -1434,7 +1194,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         'accentColor': const Color(0xFF10B981),
         'badge': null,
         'icon': Icons.bar_chart_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         'onTap': () async {
           final funds = ref.read(fundProvider);
           await funds.fetchHstoken(context);
@@ -1442,20 +1202,21 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         },
       },
       {
-        'title': 'Refer & Earn',
-        'subtitle': 'Instant Rewards • Unlimited Referrals',
+        'title': 'Refer',
+        // Echoes the headline on the refer page this card opens.
+        'subtitle': 'Your word is worth more',
         'description':
-            'Invite friends to Mynt and earn rewards for every successful referral.',
+            'Share Zebu with friends and family you want to see grow — they start in minutes.',
         'accentColor': const Color(0xFFF59E0B),
         'badge': null,
         'icon': Icons.card_giftcard_rounded,
-        'isIcon' :true,
+        'isIcon': true,
         // 'onTap': () {
         //   final Preferences pref = locator<Preferences>();
-          // final url =
-          //     'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
-          // launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-          'onTap': () {
+        // final url =
+        //     'https://profile.zebuetrade.com/refer?uid=${pref.clientId}&token=${pref.token}';
+        // launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        'onTap': () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo('refer');
           }
@@ -1681,29 +1442,32 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                           ],
                                                         ),
                                                         child: Center(
-                                                          child: tool['isIcon'] ==
-                                                                  true
-                                                              ? Icon(
-                                                                  tool['icon']
-                                                                      as IconData,
-                                                                  size: 24,
-                                                                  color: const Color(
-                                                                      0xFF4A1F8E),
-                                                                )
-                                                              : SvgPicture.asset(
-                                                                  tool['svgAsset']
-                                                                      as String,
-                                                                  width: 24,
-                                                                  height: 24,
-                                                                  colorFilter:
-                                                                      const ColorFilter
-                                                                          .mode(
-                                                                    Color(
-                                                                        0xFF4A1F8E),
-                                                                    BlendMode
-                                                                        .srcIn,
-                                                                  ),
-                                                                ),
+                                                          child:
+                                                              tool['isIcon'] ==
+                                                                      true
+                                                                  ? Icon(
+                                                                      tool['icon']
+                                                                          as IconData,
+                                                                      size: 24,
+                                                                      color: const Color(
+                                                                          0xFF4A1F8E),
+                                                                    )
+                                                                  : SvgPicture
+                                                                      .asset(
+                                                                      tool['svgAsset']
+                                                                          as String,
+                                                                      width: 24,
+                                                                      height:
+                                                                          24,
+                                                                      colorFilter:
+                                                                          const ColorFilter
+                                                                              .mode(
+                                                                        Color(
+                                                                            0xFF4A1F8E),
+                                                                        BlendMode
+                                                                            .srcIn,
+                                                                      ),
+                                                                    ),
                                                         ),
                                                       ),
                                                     ),
@@ -1727,8 +1491,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                           child: Text(
                                                             tool['title']
                                                                 as String,
-                                                            style: MyntWebTextStyles
-                                                                .body(
+                                                            style:
+                                                                MyntWebTextStyles
+                                                                    .body(
                                                               context,
                                                               color:
                                                                   Colors.white,
@@ -1759,8 +1524,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                             ),
                                                             child: Text(
                                                               'NEW',
-                                                              style: MyntWebTextStyles
-                                                                  .caption(
+                                                              style:
+                                                                  MyntWebTextStyles
+                                                                      .caption(
                                                                 context,
                                                                 color: const Color(
                                                                     0xFF170B26),
@@ -1782,8 +1548,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                                                 alpha: 0.85),
                                                       ),
                                                       maxLines: 1,
-                                                      overflow: TextOverflow
-                                                          .ellipsis,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
                                                     ),
                                                   ],
                                                 ),
@@ -1835,13 +1601,13 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
                                 color: darkMode
-                                    ? accent.withValues(alpha: 0.06)
-                                    : Colors.white,
+                                    ? MyntColors.cardDark
+                                    : MyntColors.card,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
                                   color: darkMode
-                                      ? accent.withValues(alpha: 0.20)
-                                      : accent.withValues(alpha: 0.15),
+                                      ? MyntColors.cardBorderDark
+                                      : MyntColors.cardBorder,
                                   width: 1,
                                 ),
                               ),
@@ -1853,184 +1619,194 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.center,
                                     children: [
-                                // Stacked card icon effect
-                                SizedBox(
-                                  width: 64,
-                                  height: 56,
-                                  child: Stack(
-                                    children: [
-                                      // Back card
-                                      Positioned(
-                                        left: 0,
-                                        top: 10,
-                                        child: Transform.rotate(
-                                          angle: -0.18,
-                                          child: Container(
-                                            width: 44,
-                                            height: 44,
-                                            decoration: BoxDecoration(
-                                                    color: accent
-                                                        .withValues(alpha: 0.18),
+                                      // Stacked card icon effect
+                                      SizedBox(
+                                        width: 64,
+                                        height: 56,
+                                        child: Stack(
+                                          children: [
+                                            // Back card
+                                            Positioned(
+                                              left: 0,
+                                              top: 10,
+                                              child: Transform.rotate(
+                                                angle: -0.18,
+                                                child: Container(
+                                                  width: 44,
+                                                  height: 44,
+                                                  decoration: BoxDecoration(
+                                                    color: accent.withValues(
+                                                        alpha: 0.18),
                                                     borderRadius:
-                                                  BorderRadius.circular(11),
+                                                        BorderRadius.circular(
+                                                            11),
+                                                  ),
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                        ),
-                                      ),
-                                      // Mid card
-                                      Positioned(
-                                        left: 8,
-                                        top: 5,
-                                        child: Transform.rotate(
-                                          angle: -0.09,
-                                          child: Container(
-                                            width: 44,
-                                            height: 44,
-                                            decoration: BoxDecoration(
-                                                    color: accent
-                                                        .withValues(alpha: 0.35),
-                                                     borderRadius:
-                                                  BorderRadius.circular(11),
+                                            // Mid card
+                                            Positioned(
+                                              left: 8,
+                                              top: 5,
+                                              child: Transform.rotate(
+                                                angle: -0.09,
+                                                child: Container(
+                                                  width: 44,
+                                                  height: 44,
+                                                  decoration: BoxDecoration(
+                                                    color: accent.withValues(
+                                                        alpha: 0.35),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            11),
+                                                  ),
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                        ),
-                                      ),
-                                      // Front card with icon
-                                      Positioned(
-                                        left: 16,
-                                        top: 0,
-                                        child: Container(
-                                          width: 44,
-                                          height: 44,
-                                          decoration: BoxDecoration(
-                                            color: accent,
-                                            borderRadius:
-                                                BorderRadius.circular(11),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: accent
-                                                          .withValues(alpha: 0.4),
+                                            // Front card with icon
+                                            Positioned(
+                                              left: 16,
+                                              top: 0,
+                                              child: Container(
+                                                width: 44,
+                                                height: 44,
+                                                decoration: BoxDecoration(
+                                                  color: accent,
+                                                  borderRadius:
+                                                      BorderRadius.circular(11),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: accent.withValues(
+                                                          alpha: 0.4),
                                                       blurRadius: 8,
-                                                offset:
-                                                    const Offset(0, 3),
-                                              ),
-                                            ],
-                                          ),
-                                          child: Center(
-                                            child:  tool['isIcon'] == true
-                                  ?  Icon(tool['icon'] as IconData, size: 24, color: Colors.white)
-                                  : SvgPicture.asset(
-                                      tool['svgAsset'] as String,
-                                      width: 24,
-                                      height: 24,
-                                      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
-                                    ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.center,
-                                    children: [
-                                      Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.center,
-                                        children: [
-                                          Flexible(
-                                            child: Text(
-                                              tool['title'] as String,
-                                              style:
-                                                  MyntWebTextStyles.body(
-                                                context,
-                                                darkColor: MyntColors
-                                                    .textPrimaryDark,
-                                                lightColor:
-                                                    MyntColors.textPrimary,
-                                                fontWeight:
-                                                    MyntFonts.bold,
-                                              ),
-                                            ),
-                                          ),
-                                          if (badge != null) ...[
-                                            const SizedBox(width: 6),
-                                            Container(
-                                              padding: const EdgeInsets
-                                                  .symmetric(
-                                                  horizontal: 6,
-                                                  vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: accent,
-                                                borderRadius:
-                                                    BorderRadius.circular(
-                                                        5),
-                                              ),
-                                              child: Text(
-                                                'NEW',
-                                                style: MyntWebTextStyles
-                                                    .caption(
-                                                  context,
-                                                  color: Colors.white,
+                                                      offset:
+                                                          const Offset(0, 3),
+                                                    ),
+                                                  ],
+                                                ),
+                                                child: Center(
+                                                  child: tool['isIcon'] == true
+                                                      ? Icon(
+                                                          tool['icon']
+                                                              as IconData,
+                                                          size: 24,
+                                                          color: Colors.white)
+                                                      : SvgPicture.asset(
+                                                          tool['svgAsset']
+                                                              as String,
+                                                          width: 24,
+                                                          height: 24,
+                                                          colorFilter:
+                                                              const ColorFilter
+                                                                  .mode(
+                                                                  Colors.white,
+                                                                  BlendMode
+                                                                      .srcIn),
+                                                        ),
                                                 ),
                                               ),
                                             ),
                                           ],
-                                        ],
-                                      ),
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        tool['subtitle'] as String,
-                                        style: MyntWebTextStyles.para(
-                                          context,
-                                          darkColor: MyntColors
-                                              .textSecondaryDark,
-                                          lightColor:
-                                              MyntColors.textSecondary,
                                         ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.center,
+                                              children: [
+                                                Flexible(
+                                                  child: Text(
+                                                    tool['title'] as String,
+                                                    style:
+                                                        MyntWebTextStyles.body(
+                                                      context,
+                                                      darkColor: MyntColors
+                                                          .textPrimaryDark,
+                                                      lightColor: MyntColors
+                                                          .textPrimary,
+                                                      fontWeight:
+                                                          MyntFonts.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (badge != null) ...[
+                                                  const SizedBox(width: 6),
+                                                  Container(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 2),
+                                                    decoration: BoxDecoration(
+                                                      color: accent,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              5),
+                                                    ),
+                                                    child: Text(
+                                                      'NEW',
+                                                      style: MyntWebTextStyles
+                                                          .caption(
+                                                        context,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              tool['subtitle'] as String,
+                                              style: MyntWebTextStyles.para(
+                                                context,
+                                                darkColor: MyntColors
+                                                    .textSecondaryDark,
+                                                lightColor:
+                                                    MyntColors.textSecondary,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ],
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            // Divider
-                            Divider(
-                              height: 1,
-                              color: resolveThemeColor(context,
-                                  dark: MyntColors.dividerDark,
-                                  light: MyntColors.divider),
-                            ),
-                            const SizedBox(height: 10),
-                            // Description
-                            Expanded(
-                              child: Text(
-                                tool['description'] as String,
-                                style: MyntWebTextStyles.para(
-                                  context,
-                                  darkColor:
-                                      MyntColors.textSecondaryDark,
-                                  lightColor:
-                                      MyntColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
+                                  const SizedBox(height: 10),
+                                  // Divider
+                                  Divider(
+                                    height: 1,
+                                    color: resolveThemeColor(context,
+                                        dark: MyntColors.dividerDark,
+                                        light: MyntColors.divider),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  // Description
+                                  Expanded(
+                                    child: Text(
+                                      tool['description'] as String,
+                                      style: MyntWebTextStyles.para(
+                                        context,
+                                        darkColor: MyntColors.textSecondaryDark,
+                                        lightColor: MyntColors.textSecondary,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
+                          ),
+                        );
                       }).toList(),
                     ),
                   ),
@@ -2060,8 +1836,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 );
                                 _toolsScrollController.animateTo(
                                   newOffset,
-                                  duration:
-                                      const Duration(milliseconds: 300),
+                                  duration: const Duration(milliseconds: 300),
                                   curve: Curves.easeInOut,
                                 );
                               }
@@ -2072,9 +1847,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                               height: 32,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: shadcn.Theme.of(context)
-                                    .colorScheme
-                                    .card,
+                                color:
+                                    shadcn.Theme.of(context).colorScheme.card,
                                 border: Border.all(
                                   color: shadcn.Theme.of(context)
                                       .colorScheme
@@ -2083,8 +1857,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color:
-                                        Colors.black.withValues(alpha: 0.1),
+                                    color: Colors.black.withValues(alpha: 0.1),
                                     blurRadius: 4,
                                     offset: const Offset(0, 2),
                                   ),
@@ -2130,8 +1903,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 );
                                 _toolsScrollController.animateTo(
                                   newOffset,
-                                  duration:
-                                      const Duration(milliseconds: 300),
+                                  duration: const Duration(milliseconds: 300),
                                   curve: Curves.easeInOut,
                                 );
                               }
@@ -2142,9 +1914,8 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                               height: 32,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: shadcn.Theme.of(context)
-                                    .colorScheme
-                                    .card,
+                                color:
+                                    shadcn.Theme.of(context).colorScheme.card,
                                 border: Border.all(
                                   color: shadcn.Theme.of(context)
                                       .colorScheme
@@ -2153,8 +1924,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color:
-                                        Colors.black.withValues(alpha: 0.1),
+                                    color: Colors.black.withValues(alpha: 0.1),
                                     blurRadius: 4,
                                     offset: const Offset(0, 2),
                                   ),
@@ -2452,7 +2222,9 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       width: width,
       height: 400,
       decoration: BoxDecoration(
-        color: isDarkMode(context) ? MyntColors.dashboardCarColor : shadcn.Theme.of(context).colorScheme.card,
+        color: isDarkMode(context)
+            ? MyntColors.dashboardCarColor
+            : shadcn.Theme.of(context).colorScheme.card,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: resolveThemeColor(context,
@@ -2486,7 +2258,6 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
                     onTap: () {
-
                       if (WebNavigationHelper.isAvailable) {
                         try {
                           WebNavigationHelper.navigateTo(
@@ -2712,52 +2483,6 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       ],
     );
   }
-
-  Future<void> _showAllIndicesBottomSheet(
-    BuildContext context,
-    IndexListProvider indexProvider,
-  ) async {
-    try {
-      // Get first index from top indices or default index list as reference
-      final topIndices = indexProvider.topIndicesForDashboard?.indValues;
-      final defaultIndices = indexProvider.defaultIndexList?.indValues;
-
-      // Use first index from top indices, or fallback to first default index
-      final defaultIndex = (topIndices != null && topIndices.isNotEmpty)
-          ? topIndices[0]
-          : (defaultIndices != null && defaultIndices.isNotEmpty)
-              ? defaultIndices[0]
-              : null;
-
-      if (defaultIndex == null) {
-        return;
-      }
-
-      // Fetch index list for the bottom sheet
-      await indexProvider.fetchIndexList("NSE", context);
-
-      // Show the bottom sheet
-      showDialog(
-        context: context,
-        barrierDismissible: true,
-        builder: (BuildContext context) {
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            child: IndexBottomSheetWeb(
-              defaultIndex: defaultIndex,
-              indexPosition: 0, // Use position 0 for "See all indices"
-            ),
-          );
-        },
-      );
-
-      // Clean up after dialog closes
-      await indexProvider.fetchIndexList("exit", context);
-      final marketWatch = ref.read(marketWatchProvider);
-      await marketWatch.requestMWScrip(context: context, isSubscribe: true);
-    } catch (e) {
-    }
-  }
 }
 
 // Custom index card widget for dashboard
@@ -2917,87 +2642,50 @@ class _DashboardIndexCardState extends ConsumerState<_DashboardIndexCard> {
             if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
               await marketWatch.calldepthApis(context, depthArgs, "");
             }
-          } catch (e) {
-          }
+          } catch (e) {}
         },
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Use responsive width - minimum 140, expand to fit available space
-            final cardWidth = constraints.maxWidth > 0 ? constraints.maxWidth : 180.0;
-            final isCompact = cardWidth < 160;
-
-            return Container(
-              constraints: const BoxConstraints(minWidth: 140),
-              padding: EdgeInsets.all(isCompact ? 12 : 15),
-              decoration: BoxDecoration(
-                color: _isHovered
-                    ? shadcn.Theme.of(context).colorScheme.muted
-                    : resolveThemeColor(context,
-                        dark: MyntColors.dashboardCarColor,
-                        light: shadcn.Theme.of(context).colorScheme.card),
-                borderRadius: BorderRadius.circular(4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: _isHovered
+                ? shadcn.Theme.of(context).colorScheme.muted
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                widget.indexItem.idxname?.toUpperCase() ?? "",
+                style: MyntWebTextStyles.symbol(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary),
+                ),
+                maxLines: 1,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    widget.indexItem.idxname?.toUpperCase() ?? "",
-                    style: MyntWebTextStyles.symbol(
-                      context,
-                      color: resolveThemeColor(context,
-                          dark: MyntColors.textPrimaryDark,
-                          light: MyntColors.textPrimary),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 8),
-                  // Price and change section
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // LTP without ₹ symbol, with profit/loss color
-                      Text(
-                        _ltp,
-                        style: MyntWebTextStyles.price(
-                          context,
-                          color: changeColor,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      // Change and percentage - wrap to next line if needed
-                      Wrap(
-                        spacing: 4,
-                        runSpacing: 2,
-                        children: [
-                          Text(
-                            _change.startsWith("-") ? _change : "+$_change",
-                            style: MyntWebTextStyles.priceChange(
-                              context,
-                              color: resolveThemeColor(context,
-                                  dark: MyntColors.textPrimaryDark,
-                                  light: MyntColors.textPrimary),
-                            ),
-                          ),
-                          Text(
-                            "($_perChange%)",
-                            style: MyntWebTextStyles.priceChange(
-                              context,
-                              color: resolveThemeColor(context,
-                                  dark: MyntColors.textPrimaryDark,
-                                  light: MyntColors.textPrimary),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
+              const SizedBox(width: 8),
+              Text(
+                _ltp,
+                style: MyntWebTextStyles.price(
+                  context,
+                  color: changeColor,
+                ),
               ),
-            );
-          },
+              const SizedBox(width: 8),
+              Text(
+                "${_change.startsWith('-') ? _change : '+$_change'} ($_perChange%)",
+                style: MyntWebTextStyles.priceChange(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3153,8 +2841,7 @@ class _DashboardStockCardState extends ConsumerState<_DashboardStockCard> {
             if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
               await marketWatch.calldepthApis(context, depthArgs, "");
             }
-          } catch (e) {
-          }
+          } catch (e) {}
         },
         child: Container(
           width: 180,
@@ -3410,18 +3097,18 @@ class _TradeActionStockItemState extends ConsumerState<_TradeActionStockItem> {
                 if (depthArgs.token.isNotEmpty && depthArgs.exch.isNotEmpty) {
                   await marketWatch.calldepthApis(context, depthArgs, "");
                 }
-              } catch (e) {
-              }
+              } catch (e) {}
             },
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 0),
               decoration: BoxDecoration(
                 color: isHovered
                     // ? shadcn.Theme.of(context).colorScheme.muted
-                  ? resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: shadcn.Theme.of(context).colorScheme.muted,
-                    ).withValues(alpha: 0.08)
+                    ? resolveThemeColor(
+                        context,
+                        dark: MyntColors.primaryDark,
+                        light: shadcn.Theme.of(context).colorScheme.muted,
+                      ).withValues(alpha: 0.08)
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(4),
               ),

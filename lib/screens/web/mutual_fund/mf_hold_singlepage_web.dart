@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
 
 import '../../../provider/mf_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../res/global_state_text.dart';
 import '../../../res/res.dart';
@@ -154,6 +155,7 @@ class _mfholdsinlepageWeb extends State<mfholdsinlepageWeb>
               "${_formatValue(data.profitLoss)} (${(double.tryParse(data.changeprofitLoss ?? '0') ?? 0).toStringAsFixed(2)}%)",
               theme,
               valueColor: _getColorBasedOnValue(data.profitLoss, theme),
+              maskedValue: "$kPrivacyMask ($kPrivacyMask%)",
             ),
 
             // Units and Avg Price
@@ -173,6 +175,7 @@ class _mfholdsinlepageWeb extends State<mfholdsinlepageWeb>
               "NAV",
               "${data.curNav ?? '0'}",
               theme,
+              maskable: false,
             ),
 
             // Pledged Units and Current NAV
@@ -201,7 +204,7 @@ class _mfholdsinlepageWeb extends State<mfholdsinlepageWeb>
   }
 
   Widget rowOfInfoData(String title1, String value1, ThemesProvider theme,
-      {Color? valueColor}) {
+      {Color? valueColor, bool maskable = true, String? maskedValue}) {
     return Container(
       decoration: BoxDecoration(
         border: Border(
@@ -231,18 +234,24 @@ class _mfholdsinlepageWeb extends State<mfholdsinlepageWeb>
             ),
             const SizedBox(width: 8),
             Flexible(
-              child: Text(
-                value1,
-                textAlign: TextAlign.right,
-                style: MyntWebTextStyles.bodySmall(
-                  context,
-                  color: valueColor ??
-                      (theme.isDarkMode
-                          ? MyntColors.textPrimaryDark
-                          : MyntColors.textPrimary),
-                  fontWeight: MyntFonts.medium,
-                ),
-              ),
+              // Privacy Mode: value masked (and any profit/loss colour
+              // dropped) unless the row is market data like NAV.
+              child: Consumer(builder: (context, ref, _) {
+                final privacy = ref.watch(privacyProvider);
+                final isMasked = maskable && privacy.isPrivate;
+                return Text(
+                  isMasked ? (maskedValue ?? kPrivacyMask) : value1,
+                  textAlign: TextAlign.right,
+                  style: MyntWebTextStyles.bodySmall(
+                    context,
+                    color: (isMasked ? null : valueColor) ??
+                        (theme.isDarkMode
+                            ? MyntColors.textPrimaryDark
+                            : MyntColors.textPrimary),
+                    fontWeight: MyntFonts.medium,
+                  ),
+                );
+              }),
             ),
           ],
         ),

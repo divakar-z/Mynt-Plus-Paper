@@ -45,6 +45,7 @@ class _ProfileSectionScreenWebState
   bool _ddpiEsignLoading = false;
   bool _closureEsignLoading = false;
   bool _closureCancelLoading = false;
+  bool _closureInitiateLoading = false;
   bool _mtfEsignLoading = false;
   bool _bankEsignLoading = false;
   bool _bankCancelLoading = false;
@@ -3464,12 +3465,14 @@ color: resolveThemeColor(context,
               ),
               const SizedBox(height: 18),
               Builder(builder: (context) {
+                final bool busy = _closureInitiateLoading;
+                final bool disabled = initiateDisabled || busy;
                 final btn = Opacity(
-                  opacity: initiateDisabled ? 0.5 : 1.0,
+                  opacity: disabled ? 0.5 : 1.0,
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: initiateDisabled
+                      onTap: disabled
                           ? null
                           : () => _showClosureConfirmDialog(theme),
                       borderRadius: BorderRadius.circular(8),
@@ -3482,13 +3485,23 @@ color: resolveThemeColor(context,
                               light: MyntColors.primary),
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(
-                          "Initiate Closure",
-                          style: MyntWebTextStyles.body(context,
-                            color: Colors.white,
-                            fontWeight: MyntFonts.semiBold,
-                          ).copyWith(decoration: TextDecoration.none),
-                        ),
+                        child: busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white),
+                                ),
+                              )
+                            : Text(
+                                "Initiate Closure",
+                                style: MyntWebTextStyles.body(context,
+                                  color: Colors.white,
+                                  fontWeight: MyntFonts.semiBold,
+                                ).copyWith(decoration: TextDecoration.none),
+                              ),
                       ),
                     ),
                   ),
@@ -3882,23 +3895,33 @@ color: resolveThemeColor(context,
     );
   }
 
-  // ─── Margin / Holdings Dialog (positive balance OR holdings present) ───
-  void _showMarginPositiveDialog({
+  // ─── Marginposive Dialog Router ───
+  // Branch A — Withdraw flow:
+  //   holdingres != 'yes' OR blatranyesno != 'zero ledger balance'
+  // Branch B — Holdings transfer (CMR upload):
+  //   holdingres == 'yes' AND zerobal == 'some holdings'
+  //                       AND blatranyesno == 'zero ledger balance'
+  void _openMarginposiveDialog({
+    required String holdingres,
+    required String zerobal,
+    required String blatranyesno,
     required double balance,
-    required bool hasHoldings,
-    required int holdingsCount,
+    required String reason,
+    required dynamic clientData,
   }) {
-    final String title = hasHoldings ? 'Holdings Present' : 'Account Closure ?';
-    final String body = hasHoldings
-        ? 'You have ${holdingsCount > 0 ? '$holdingsCount ' : ''}holdings in your demat account. '
-            'Please sell or transfer your holdings before submitting your closure request.'
-        : 'Please withdraw your available balance of Rs ${balance.toStringAsFixed(2)} '
-            'before submitting your closure request.';
-    final String linkLabel =
-        hasHoldings ? 'Go to Holdings' : 'Withdraw Your Amount';
-    final String linkRoute =
-        hasHoldings ? Routes.holdingscreen : Routes.fundscreen;
+    final bool branchB = holdingres == 'yes' &&
+        zerobal == 'some holdings' &&
+        blatranyesno == 'zero ledger balance';
 
+    if (branchB) {
+      _showHoldingsTransferDialog(reason: reason, clientData: clientData);
+    } else {
+      _showWithdrawBalanceDialog(balance);
+    }
+  }
+
+  // ─── Withdraw Balance Dialog (marginposive Branch A) ───
+  void _showWithdrawBalanceDialog(double balance) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -3934,7 +3957,7 @@ color: resolveThemeColor(context,
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(title,
+                      Text('Account Closer?',
                           style:
                               MyntWebTextStyles.title(ctx, color: textColor)),
                       MyntCloseButton(onPressed: () => Navigator.pop(ctx)),
@@ -3947,36 +3970,41 @@ color: resolveThemeColor(context,
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        body,
-                        style: MyntWebTextStyles.bodySmall(ctx,
-                            color: subtitleColor,
-                            fontWeight: MyntFonts.regular),
-                      ),
-                      const SizedBox(height: 20),
                       RichText(
                         text: TextSpan(
                           style: MyntWebTextStyles.bodySmall(ctx,
                               color: subtitleColor,
                               fontWeight: MyntFonts.regular),
                           children: [
-                            const TextSpan(text: 'Click here to '),
-                            WidgetSpan(
-                              alignment: PlaceholderAlignment.middle,
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.pop(ctx);
-                                  WebNavigationHelper.navigateTo(linkRoute);
-                                },
-                                child: Text(
-                                  linkLabel,
-                                  style: MyntWebTextStyles.bodySmall(ctx,
-                                      color: primaryColor,
-                                      fontWeight: MyntFonts.semiBold),
-                                ),
-                              ),
+                            const TextSpan(
+                                text:
+                                    'Please withdraw your available balance of '),
+                            TextSpan(
+                              text: 'Rs ${balance.toStringAsFixed(2)}',
+                              style: MyntWebTextStyles.bodySmall(ctx,
+                                  color: textColor,
+                                  fontWeight: MyntFonts.semiBold),
                             ),
+                            const TextSpan(
+                                text:
+                                    ' before submitting your closure request'),
                           ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            WebNavigationHelper.navigateTo(Routes.fundscreen);
+                          },
+                          child: Text(
+                            'Click here to withdraw Your Amount',
+                            style: MyntWebTextStyles.bodySmall(ctx,
+                                color: primaryColor,
+                                fontWeight: MyntFonts.semiBold),
+                          ),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -3993,6 +4021,308 @@ color: resolveThemeColor(context,
             ),
           ),
         );
+      },
+    );
+  }
+
+  // ─── Holdings Transfer Dialog (CMR upload for transferring stocks) ───
+  void _showHoldingsTransferDialog({
+    required String reason,
+    required dynamic clientData,
+  }) {
+    final dpIdController = TextEditingController();
+    final boIdController = TextEditingController();
+    Uint8List? cmrBytes;
+    String? cmrFileName;
+    bool submitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setDialogState) {
+          final cardBg = resolveThemeColor(ctx,
+              dark: MyntColors.cardDark, light: MyntColors.card);
+          final textColor = resolveThemeColor(ctx,
+              dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+          final subtitleColor = resolveThemeColor(ctx,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary);
+          final dividerColor = resolveThemeColor(ctx,
+              dark: MyntColors.dividerDark, light: MyntColors.divider);
+          final primaryColor = resolveThemeColor(ctx,
+              dark: MyntColors.primaryDark, light: MyntColors.primary);
+          final errorColor = resolveThemeColor(ctx,
+              dark: MyntColors.errorDark, light: MyntColors.error);
+          final dropBg = resolveThemeColor(ctx,
+              dark: const Color(0xff1A1F2A),
+              light: const Color(0xFFF6F7F7));
+
+          final bool canSubmit = dpIdController.text.trim().length >= 4 &&
+              boIdController.text.trim().length >= 4 &&
+              cmrBytes != null &&
+              !submitting;
+
+          Future<void> pickCmrFile() async {
+            final result = await FilePicker.platform.pickFiles(
+              type: FileType.custom,
+              allowedExtensions: ['pdf'],
+              withData: true,
+            );
+            if (result != null && result.files.isNotEmpty) {
+              final file = result.files.first;
+              if (file.bytes != null) {
+                setDialogState(() {
+                  cmrBytes = file.bytes;
+                  cmrFileName = file.name;
+                });
+              }
+            }
+          }
+
+          Future<void> onSubmit() async {
+            setDialogState(() => submitting = true);
+            try {
+              final segmentsData = clientData.segmentsData;
+              final bankDataJson = segmentsData != null
+                  ? jsonEncode(
+                      segmentsData.map((s) => s.toJson()).toList())
+                  : '[]';
+
+              final closureResp = await ref
+                  .read(profileAllDetailsProvider)
+                  .closeaccfinalspro(
+                    dpIdController.text.trim(),
+                    boIdController.text.trim(),
+                    '',
+                    reason,
+                    clientData,
+                    bankDataJson,
+                    hasHoldings: true,
+                    fileBytes: cmrBytes,
+                    fileName: cmrFileName,
+                  );
+
+              if (closureResp is Map &&
+                  closureResp['closure_fileid'] != null &&
+                  closureResp['closure_mailid'] != null) {
+                await ref
+                    .read(profileAllDetailsProvider)
+                    .fetchMobEmailStatus();
+                if (mounted) Navigator.pop(ctx);
+                if (mounted) _showClosureEsignConfirmationDialog();
+              } else {
+                final msg = closureResp is Map
+                    ? (closureResp['msg'] ?? 'Closure request failed')
+                    : 'Closure request failed';
+                if (mounted) warningMessage(context, msg.toString());
+              }
+            } finally {
+              if (mounted) setDialogState(() => submitting = false);
+            }
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            child: Container(
+              width: 460,
+              decoration: BoxDecoration(
+                  color: cardBg, borderRadius: BorderRadius.circular(8)),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      border:
+                          Border(bottom: BorderSide(color: dividerColor)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Account Closure?',
+                            style: MyntWebTextStyles.title(ctx,
+                                color: textColor)),
+                        MyntCloseButton(
+                            onPressed: submitting
+                                ? null
+                                : () => Navigator.pop(ctx)),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Kindly transfer your stocks to another demat account according to your wish',
+                          style: MyntWebTextStyles.bodySmall(ctx,
+                              color: textColor,
+                              fontWeight: MyntFonts.semiBold),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Please enter your another Demat account details',
+                          style: MyntWebTextStyles.bodySmall(ctx,
+                              color: subtitleColor,
+                              fontWeight: MyntFonts.regular),
+                        ),
+                        const SizedBox(height: 16),
+                        Text('DP ID',
+                            style: MyntWebTextStyles.caption(ctx,
+                                color: subtitleColor,
+                                fontWeight: MyntFonts.medium)),
+                        const SizedBox(height: 6),
+                        MyntTextField(
+                          controller: dpIdController,
+                          placeholder: 'Enter DP ID',
+                          inputFormatters: [
+                            LengthLimitingTextInputFormatter(8),
+                          ],
+                          onChanged: (val) {
+                            // Reject the user's own DP code (legacy:
+                            // dpcode == profileData.CLIENT_DP_CODE.slice(-8))
+                            final entered = val.trim();
+                            final ownDpCode =
+                                (clientData?.cLIENTDPCODE ?? '').toString();
+                            final ownTail = ownDpCode.length >= 8
+                                ? ownDpCode.substring(ownDpCode.length - 8)
+                                : ownDpCode;
+                            if (entered.length == 8 &&
+                                ownTail.isNotEmpty &&
+                                entered == ownTail) {
+                              dpIdController.clear();
+                              warningMessage(context,
+                                  'Please use a different DP ID. You can\'t transfer holdings to the same demat account.');
+                            }
+                            setDialogState(() {});
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        Text('BO ID',
+                            style: MyntWebTextStyles.caption(ctx,
+                                color: subtitleColor,
+                                fontWeight: MyntFonts.medium)),
+                        const SizedBox(height: 6),
+                        MyntTextField(
+                          controller: boIdController,
+                          placeholder: 'Enter BO ID',
+                          inputFormatters: [
+                            LengthLimitingTextInputFormatter(8),
+                          ],
+                          onChanged: (_) => setDialogState(() {}),
+                        ),
+                        const SizedBox(height: 16),
+                        RichText(
+                          text: TextSpan(
+                            style: MyntWebTextStyles.bodySmall(ctx,
+                                color: textColor,
+                                fontWeight: MyntFonts.semiBold),
+                            children: [
+                              const TextSpan(text: 'Attach Your CMR Copy. '),
+                              TextSpan(
+                                text: '*',
+                                style: MyntWebTextStyles.bodySmall(ctx,
+                                    color: errorColor,
+                                    fontWeight: MyntFonts.semiBold),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Attach a copy of the CMR that is either digitally signed or sealed, and physically signed by the respective DP',
+                          style: MyntWebTextStyles.caption(ctx,
+                              color: subtitleColor,
+                              fontWeight: MyntFonts.regular),
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 16),
+                          decoration: BoxDecoration(
+                            color: dropBg,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: dividerColor,
+                                style: BorderStyle.solid),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Upload your CMR Copy',
+                                style: MyntWebTextStyles.body(ctx,
+                                    color: primaryColor,
+                                    fontWeight: MyntFonts.semiBold),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Select a file or drag it into the box below.',
+                                style: MyntWebTextStyles.bodySmall(ctx,
+                                    color: subtitleColor,
+                                    fontWeight: MyntFonts.regular),
+                              ),
+                              const SizedBox(height: 12),
+                              MyntPrimaryButton(
+                                label: cmrBytes == null
+                                    ? 'Choose File'
+                                    : 'Replace File',
+                                icon: Icons.upload,
+                                size: MyntButtonSize.medium,
+                                onPressed:
+                                    submitting ? null : pickCmrFile,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Accepted formats: .pdf',
+                                style: MyntWebTextStyles.caption(ctx,
+                                    color: subtitleColor,
+                                    fontWeight: MyntFonts.regular),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (cmrFileName != null) ...[
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Icon(Icons.check_circle,
+                                  size: 16, color: Colors.green),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  cmrFileName!,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: MyntWebTextStyles.bodySmall(ctx,
+                                      color: textColor,
+                                      fontWeight: MyntFonts.regular),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        const SizedBox(height: 20),
+                        MyntPrimaryButton(
+                          label: 'Submit',
+                          size: MyntButtonSize.large,
+                          isFullWidth: true,
+                          isLoading: submitting,
+                          onPressed: canSubmit ? onSubmit : null,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
       },
     );
   }
@@ -4124,6 +4454,8 @@ color: resolveThemeColor(context,
       return;
     }
 
+    if (mounted) setState(() => _closureInitiateLoading = true);
+    try {
     // Step 1: Run balance check + holdings check in parallel
     final results = await Future.wait([
       provider.closeaccnalprov(reason, clientData),
@@ -4144,15 +4476,19 @@ color: resolveThemeColor(context,
         ? (balCheck['balance'] as num).toDouble()
         : 0;
 
-    // Holdings stored for later transfer flow (parity with `holdingres`).
-    // Note: API may return holdings as a List, a flag string ("yes"/"no"),
-    // or absent — handle all shapes defensively.
-    final dynamic rawHoldings = holdingCheck?['holdings'];
-    final List holdingsList = rawHoldings is List ? rawHoldings : const [];
-    final bool hasHoldings = msg2.contains('some holdings');
+    final String holdingres =
+        (holdingCheck?['holdings'] ?? '').toString().toLowerCase();
+    final String zerobal = msg2;
+    final String blatranyesno = msg2;
+    final bool negativeLedger = msg1 == 'negative legeder balance' ||
+        msg1.contains('negative');
+    final bool positiveLedger = msg1 == 'postive ledger balance' ||
+        msg1.contains('postive') ||
+        msg1.contains('positive');
 
-    // Spec rule 1: msg1 == 'negative ledger balance' && stat == 'Not Ok'
-    if (msg1.contains('negative') && stat == 'Not Ok') {
+    // FIX 3 — 5-branch decision tree (order matters)
+    // Branch 1: negative ledger + Not Ok → settle outstanding dialog
+    if (negativeLedger && stat == 'Not Ok') {
       Navigator.pop(dialogCtx);
       if (mounted) {
         _showNegativeBalanceDialog(balance, clientData.cLIENTID ?? '');
@@ -4160,37 +4496,52 @@ color: resolveThemeColor(context,
       return;
     }
 
-    // Spec rule 3: msg2 == 'some holdings' OR msg2 == 'zero ledger balance'
-    if (hasHoldings || msg2.contains('zero ledger balance')) {
+    // Branch 2: stat == 'Ok' → clean account, fall through to closure submit
+    if (stat == 'Ok') {
+      // fall through to Step 2 below
+    }
+    // Branch 3: holdings present or zero-ledger msg2 → marginposive dialog
+    else if (msg2 == 'some holdings' || msg2 == 'zero ledger balance') {
       Navigator.pop(dialogCtx);
       if (mounted) {
-        _showMarginPositiveDialog(
+        _openMarginposiveDialog(
+          holdingres: holdingres,
+          zerobal: zerobal,
+          blatranyesno: blatranyesno,
           balance: balance,
-          hasHoldings: hasHoldings,
-          holdingsCount: holdingsList.length,
+          reason: reason,
+          clientData: clientData,
         );
       }
       return;
     }
-
-    // Spec rule 4: msg1 == 'positive ledger balance' && stat == 'Not Ok'
-    if (msg1.contains('positive') && stat == 'Not Ok') {
+    // Branch 4: positive ledger + Not Ok → marginposive (withdraw)
+    else if (positiveLedger && stat == 'Not Ok') {
       Navigator.pop(dialogCtx);
       if (mounted) {
-        _showMarginPositiveDialog(
+        _openMarginposiveDialog(
+          holdingres: holdingres,
+          zerobal: zerobal,
+          blatranyesno: blatranyesno,
           balance: balance,
-          hasHoldings: false,
-          holdingsCount: 0,
+          reason: reason,
+          clientData: clientData,
         );
       }
       return;
     }
-
-    // Spec rule 2: stat == 'Ok' → proceed with closure
-    if (stat != 'Ok') {
+    // Branch 5: unrecognized → surface backend message
+    else {
       Navigator.pop(dialogCtx);
       if (mounted) {
-        warningMessage(context, 'Unable to process closure. Please try again.');
+        final String errtext =
+            (balCheck['msg'] ?? balCheck['emsg'] ?? '').toString().trim();
+        warningMessage(
+          context,
+          errtext.isNotEmpty
+              ? errtext
+              : 'Unable to process closure. Please try again.',
+        );
       }
       return;
     }
@@ -4224,6 +4575,9 @@ color: resolveThemeColor(context,
           ? (closureResp['msg'] ?? 'Closure request failed')
           : 'Closure request failed';
       if (mounted) warningMessage(context, msg.toString());
+    }
+    } finally {
+      if (mounted) setState(() => _closureInitiateLoading = false);
     }
   }
 
