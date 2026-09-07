@@ -180,9 +180,11 @@ class _OptionChainSSState extends ConsumerState<OptionChainSSWeb> {
         await ref
             .read(marketWatchProvider)
             .requestWSOptChain(context: context, isSubscribe: false);
+        // Underlying index is subscribed via touchline ("t") now, so tear it
+        // down with "u" (depth "ud" is reserved for the market-depth panel).
         await ref.read(websocketProvider).establishConnection(
               channelInput: "${widget.wlValue.exch}|${widget.wlValue.token}",
-              task: "ud",
+              task: "u",
               context: context,
             );
         Navigator.pop(context);

@@ -258,7 +258,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       if (tokens.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
               channelInput: tokens,
-              task: "d", // Subscribe with depth for web
+              task: "t", // Subscribe with touchline for web (alerts need only LTP)
               context: context,
             );
       }

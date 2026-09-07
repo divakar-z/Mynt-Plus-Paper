@@ -119,11 +119,21 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
           // and preserves the user's current tab state
           final isOverviewTab = _selectedTabIndex == 0;
 
-          // Only change depth visibility if we're on Overview tab
-          // For other tabs (Chart, Options, Stock Report), preserve current depth state
-          // This prevents depth from opening and closing when switching symbols
-          if (isOverviewTab) {
-            // Overview tab: show depth with new scrip data
+          // ALWAYS unsubscribe the old depth when symbol changes,
+          // regardless of which tab is active. The old symbol's depth feed
+          // is no longer needed once a new symbol is selected.
+          // This fixes the bug where depth from option chain chart lingered
+          // when changing symbols via watchlist on a non-Overview tab.
+          if (mw.currentDepthSymbol != null) {
+            mw.unsubscribeFromDepthData(context: context);
+          }
+
+          // Subscribe to the new symbol's depth if we're on the Overview tab,
+          // OR if the depth sidebar is currently open on any other tab.
+          // This prevents depth from staying blank when changing symbols while
+          // the depth sidebar is manually opened on the Chart tab.
+          if (isOverviewTab || mw.isDepthVisible) {
+            // Show depth with new scrip data
             mw.setIsDepthVisibleWeb(
               true,
               context: context,
@@ -174,16 +184,14 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       }
     }
 
-    // Unsubscribe from depth data using stored container (ref is not available in dispose)
+    // Unsubscribe from depth data using stored container (ref is not available in dispose).
+    // force: true — the whole single-stock page is going away (chart included), so
+    // release the depth "ud" even for watchlisted symbols. The context is typically
+    // unmounted here, which is why the depth teardown no longer gates on mounted.
     if (_storedContainer != null) {
       try {
         final mw = _storedContainer!.read(marketWatchProvider);
-        if (_storedContext != null && _storedContext!.mounted) {
-          mw.unsubscribeFromDepthData(context: _storedContext);
-        } else {
-          // Context not mounted, but still try to unsubscribe without context
-          mw.unsubscribeFromDepthData(context: _storedContext);
-        }
+        mw.unsubscribeFromDepthData(context: _storedContext, force: true);
       } catch (e) {
         // Depth will be cleaned up when scrip changes anyway
       }
