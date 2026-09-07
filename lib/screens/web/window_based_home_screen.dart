@@ -26,7 +26,7 @@ import '../../../provider/order_provider.dart';
 import '../../../provider/portfolio_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/user_profile_provider.dart';
-import '../../../provider/version_provider.dart';
+// import '../../../provider/version_provider.dart'; // mobile-only store check
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/webview_chart_provider.dart';
 import '../../../provider/iop_provider.dart';
@@ -223,7 +223,9 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
   void _initializeWebSocket() {
     ref.read(networkStateProvider).networkStream();
     ref.read(marketWatchProvider).fToast.init(context);
-    ref.read(versionProvider).checkVersion(context);
+    // Store-version check is mobile-only (compares against the strapi
+    // Play Store number); on web the build-update banner covers updates.
+    // ref.read(versionProvider).checkVersion(context);
 
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted &&
