@@ -20,7 +20,7 @@ import '../../../../provider/web_auth_provider.dart';
 
 import '../../../../provider/thems.dart';
 import '../../../../provider/user_profile_provider.dart';
-import '../../../../provider/version_provider.dart';
+// import '../../../../provider/version_provider.dart'; // mobile-only store check
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/app_release.dart';
 import '../../../../res/res.dart';
@@ -216,7 +216,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     // Defer context-dependent operations to avoid holding context reference
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (mounted) {
-        ref.read(versionProvider).checkVersion(context);
+        // Store-version check is mobile-only (compares against the strapi
+        // Play Store number); on web the build-update banner covers updates.
+        // ref.read(versionProvider).checkVersion(context);
         ref.read(authProvider).setChangetotp(true);
         ref.read(webAuthProvider).init(); // Initialize web auth provider
 

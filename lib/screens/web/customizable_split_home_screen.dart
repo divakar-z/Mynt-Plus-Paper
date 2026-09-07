@@ -48,7 +48,7 @@ import '../../../provider/portfolio_provider.dart';
 import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/user_profile_provider.dart';
-import '../../../provider/version_provider.dart';
+// import '../../../provider/version_provider.dart'; // mobile-only store check
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/webview_chart_provider.dart';
 import '../../../provider/iop_provider.dart';
@@ -637,7 +637,9 @@ class _CustomizableSplitHomeScreenState
 
     ref.read(networkStateProvider).networkStream();
     ref.read(marketWatchProvider).fToast.init(context);
-    ref.read(versionProvider).checkVersion(context);
+    // Store-version check is mobile-only (compares against the strapi
+    // Play Store number); on web the build-update banner covers updates.
+    // ref.read(versionProvider).checkVersion(context);
 
     // Initialize websocket connection early to ensure real-time data is available
     if (mounted &&
@@ -1062,6 +1064,8 @@ class _CustomizableSplitHomeScreenState
               screenType: BannerScreenType.homescreen,
               showImmediately: true,
             ),
+            // Floating "new build available" pill, top-center above all panes
+            const BuildUpdateBanner(),
             // DEBUG: Screen size overlay — remove after testing
             // Positioned(
             //   bottom: 8,
@@ -1213,7 +1217,6 @@ class _CustomizableSplitHomeScreenState
           ),
           body: Column(
             children: [
-              const BuildUpdateBanner(),
               // _buildOldVersionBanner(),
               Expanded(child: _buildNewLayout(theme)),
             ],

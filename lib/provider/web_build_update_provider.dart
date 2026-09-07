@@ -43,7 +43,6 @@ class WebBuildUpdateProvider extends DefaultChangeNotifier {
   }
 
   static const Duration _pollInterval = Duration(minutes: 5);
-  static const Duration _snoozeDuration = Duration(minutes: 30);
 
   /// What this tab is actually running, captured once at startup and never
   /// re-read (a background service-worker update must not shift it).
@@ -58,12 +57,20 @@ class WebBuildUpdateProvider extends DefaultChangeNotifier {
 
   bool _updateAvailable = false;
   String? _serverVersionLabel;
-  DateTime? _snoozedUntil;
+  /// Close = dismissed for this whole visit (manager's rule: no snooze —
+  /// the pill returns only on the next page load). In-memory on purpose:
+  /// a fresh visit starts a fresh provider, so it re-shows by itself.
+  bool _dismissed = false;
+
+  /// The server bootstrap that was pending when the user dismissed. If an
+  /// even newer build lands afterwards, the dismissal no longer covers it.
+  String? _dismissedBootstrap;
+  String? _lastServerBootstrap;
+
   bool _applying = false;
   bool _checkInFlight = false;
   int _checkCount = 0;
   Timer? _pollTimer;
-  Timer? _snoozeTimer;
   Future<void> Function()? _cancelVisibilityListener;
 
   bool get updateAvailable => _updateAvailable;
@@ -75,9 +82,7 @@ class WebBuildUpdateProvider extends DefaultChangeNotifier {
   /// via flutter_bootstrap.js, but bring no new number to show.
   String? get serverVersionLabel => _serverVersionLabel;
 
-  bool get showStrip =>
-      _updateAvailable &&
-      (_snoozedUntil == null || DateTime.now().isAfter(_snoozedUntil!));
+  bool get showStrip => _updateAvailable && !_dismissed;
 
   void _log(String message) => debugPrint('[BuildUpdate] $message');
 
@@ -141,6 +146,18 @@ class WebBuildUpdateProvider extends DefaultChangeNotifier {
             'server unreachable or answered garbage — skipped');
         return;
       }
+      if (bootstrap != null) _lastServerBootstrap = bootstrap;
+      // A dismissal covers only the build the user said "not now" to. If the
+      // server has moved on to an even newer build, surface the pill again.
+      if (_dismissed &&
+          bootstrap != null &&
+          _dismissedBootstrap != null &&
+          bootstrap != _dismissedBootstrap) {
+        _dismissed = false;
+        _dismissedBootstrap = null;
+        _log('A newer build than the dismissed one is hosted — '
+            'showing the banner again');
+      }
       // No running copy captured (e.g. first visit with no service worker,
       // or startup while offline): adopt the first good server read as the
       // reference, so at least in-session deploys are detected.
@@ -194,17 +211,14 @@ class WebBuildUpdateProvider extends DefaultChangeNotifier {
     }
   }
 
-  /// Close-button action: hides the strip for [_snoozeDuration], then shows
-  /// it again — closing only delays the update, it never cancels it.
-  void snooze() {
-    _snoozedUntil = DateTime.now().add(_snoozeDuration);
-    _log('Banner closed — snoozed for ${_snoozeDuration.inMinutes} minutes');
-    _snoozeTimer?.cancel();
-    _snoozeTimer = Timer(_snoozeDuration + const Duration(seconds: 1), () {
-      if (disposed) return;
-      _log('Snooze over — showing the banner again');
-      notifyListeners();
-    });
+  /// Close-button action: hides the pill for the rest of this visit.
+  /// It returns on the next page load (fresh provider), or earlier if an
+  /// even newer build gets hosted in the meantime.
+  void dismiss() {
+    _dismissed = true;
+    _dismissedBootstrap = _lastServerBootstrap;
+    _log('Banner closed — hidden until the next visit '
+        '(or a newer build than this one)');
     notifyListeners();
   }
 
@@ -229,7 +243,9 @@ class WebBuildUpdateProvider extends DefaultChangeNotifier {
     if (raw == null) return 'unavailable';
     try {
       final data = jsonDecode(raw) as Map<String, dynamic>;
-      return '${data['version']}+${data['build_number']}';
+      final version = data['version'];
+      final buildNumber = data['build_number'];
+      return buildNumber == null ? '$version' : '$version+$buildNumber';
     } catch (_) {
       return '${raw.length} bytes';
     }
@@ -241,7 +257,6 @@ class WebBuildUpdateProvider extends DefaultChangeNotifier {
   @override
   void dispose() {
     _pollTimer?.cancel();
-    _snoozeTimer?.cancel();
     _cancelVisibilityListener?.call();
     super.dispose();
   }
