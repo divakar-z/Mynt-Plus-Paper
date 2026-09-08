@@ -22,6 +22,7 @@ extension type _ScalperChartsBridge._(JSObject _) implements JSObject {
   external void createChart(String containerId, JSObject options);
   external void changeSymbol(String containerId, String symbol);
   external void setDispName(String symbol, String dispName);
+  external void seedSymbolData(String symbol, String exch, String token);
   external bool hasChart(String containerId);
   external void pushTick(String containerId, JSObject tickData);
   external void resetData(String containerId);
@@ -245,6 +246,20 @@ class WebChartManager {
       bridge.setDispName(newSymbol, dispName);
     } catch (e) {
       log('WebChartManager: setDispName error: $e');
+    }
+
+    // Seed the authoritative exch + token for the same reason. createChart
+    // carries them as initialToken/initialExch, but the changeSymbol path
+    // below passes the symbol string alone — leaving the bridge's
+    // resolveSymbol to look the token up via be.mynt.in/getSymbolinfo, which
+    // returns `{}` for derivatives (NFO/BFO/MCX). That empty result degraded
+    // to token:"" in GetSecurityInfo AND TPSeries, so every watchlist switch
+    // to an option/future drew a blank chart. Seeding also skips that lookup
+    // round-trip entirely for the symbols it *does* resolve.
+    try {
+      bridge.seedSymbolData(newSymbol, exch, token);
+    } catch (e) {
+      log('WebChartManager: seedSymbolData error: $e');
     }
 
     if (!chartExists) {

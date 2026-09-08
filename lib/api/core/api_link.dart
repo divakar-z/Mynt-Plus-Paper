@@ -330,7 +330,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get indentUpiRequest => '$wrapperUrl/IndentUPIRequest';
   String get upiCollectRequest => '$wrapperUrl/UPICollectRequest';
   String get wrapperCheckStatus => '$wrapperUrl/check_status';
-  String get qrCodeUrl => 'https://copy.mynt.in/get_qr1';
+  String get qrCodeUrl => 'https://sess.mynt.in/get_qr1';
 
   // Atom gateway
   String get atomUrl => 'https://fundapi.mynt.in/atom';
