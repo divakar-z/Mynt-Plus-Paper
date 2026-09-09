@@ -214,11 +214,11 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get getAllIndx => 'https://go.mynt.in/NorenWClientWeb/GetIndexList';
 
   // Position Group
-  String get positionGrp => 'https://copy.mynt.in/Getpositiongrp';
-  String get creatGrpName => 'https://copy.mynt.in/Createpositiongrp';
-  String get addSymbolGrp => 'https://copy.mynt.in/addsymbolpositiongrp';
-  String get delpositiongrpName => 'https://copy.mynt.in/Deletepositiongrp';
-  String get delpositiongrpSym => 'https://copy.mynt.in/removesymbolpositiongrp';
+  String get positionGrp => 'https://ws.mynt.in/login/Getpositiongrp';
+  String get creatGrpName => 'https://ws.mynt.in/login/Createpositiongrp';
+  String get addSymbolGrp => 'https://ws.mynt.in/login/addsymbolpositiongrp';
+  String get delpositiongrpName => 'https://ws.mynt.in/login/Deletepositiongrp';
+  String get delpositiongrpSym => 'https://ws.mynt.in/login/removesymbolpositiongrp';
 
   // Scrip Overview
 
