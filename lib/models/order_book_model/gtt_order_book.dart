@@ -115,11 +115,27 @@ class GttOrderBookModel {
     c = json['C'];
     prd = json['prd'];
     ordersource = json['ordersource'];
-    placeOrderParams = json['place_order_params'] != null
-        ? PlaceOrderParams.fromJson(json['place_order_params'])
-        : null;
-    placeOrderParamsLeg2 = json['place_order_params_leg2'] != null
-        ? PlaceOrderParamsLeg2.fromJson(json['place_order_params_leg2'])
+    // A BUY OCO leaves this app with its two legs swapped - see
+    // OrderApi._ocoLegsInBrokerOrder. The broker's first slot always means
+    // "LTP goes above", and a buy target sits BELOW the LTP, so the upper
+    // level (the stoploss) has to be sent first. Swap that pair back here so
+    // every screen above this model keeps reading leg 1 as the Target and
+    // leg 2 as the Stoploss, exactly as it already does for a sell. A single
+    // GTT has no leg 2 and is never touched.
+    final dynamic leg1Json = json['place_order_params'];
+    final dynamic leg2Json = json['place_order_params_leg2'];
+    final String? ocoSide = (json['trantype'] ??
+            (leg1Json is Map ? leg1Json['trantype'] : null))
+        ?.toString();
+    final bool swapLegs = leg2Json != null && ocoSide == 'B';
+
+    final dynamic targetParams = swapLegs ? leg2Json : leg1Json;
+    final dynamic stoplossParams = swapLegs ? leg1Json : leg2Json;
+
+    placeOrderParams =
+        targetParams != null ? PlaceOrderParams.fromJson(targetParams) : null;
+    placeOrderParamsLeg2 = stoplossParams != null
+        ? PlaceOrderParamsLeg2.fromJson(stoplossParams)
         : null;
     d = json['d'];
     if (json['oivariable'] != null) {
@@ -127,6 +143,14 @@ class GttOrderBookModel {
       json['oivariable'].forEach((v) {
         oivariable!.add(Oivariable.fromJson(v));
       });
+      if (swapLegs && oivariable!.length > 1) {
+        oivariable = oivariable!.reversed.toList();
+      }
+      // Keep the headline trigger in step with leg 1 after a swap, so the GTT
+      // table and the details pane quote the same number for a buy OCO.
+      if (swapLegs && oivariable!.isNotEmpty) {
+        d = oivariable![0].d ?? d;
+      }
     }
     expDate = json['expDate'];
     option = json['option'];

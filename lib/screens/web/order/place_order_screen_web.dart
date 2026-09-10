@@ -6606,11 +6606,19 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                                 : val2 <= ltp
                                                                                     ? "Stoploss trigger price cannot be less than or equal to LTP"
                                                                                     : "Invalid trigger prices")
+                                                                            // Both sell branches reject the equal case as well, so the
+                                                                            // wording has to say so. The buy branch above already spelled
+                                                                            // it out; the mismatch meant a trigger typed exactly at LTP was
+                                                                            // refused with "cannot be less than LTP", which contradicted
+                                                                            // what the user had entered (TC_274 / TC_276). The old third
+                                                                            // branch here read "cannot be equal to LTP" and was
+                                                                            // unreachable - every failing sell case is caught by one of the
+                                                                            // two above it - so it now matches the buy fallback.
                                                                             : (val1 <= ltp
-                                                                                ? "Target trigger price cannot be less than LTP"
+                                                                                ? "Target trigger price cannot be less than or equal to LTP"
                                                                                 : val2 >= ltp
-                                                                                    ? "Stoploss trigger price cannot be greater than LTP"
-                                                                                    : "Target trigger price cannot be equal to LTP");
+                                                                                    ? "Stoploss trigger price cannot be greater than or equal to LTP"
+                                                                                    : "Invalid trigger prices");
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             ocoErrorMsg);
@@ -8925,6 +8933,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                         isSecu = true;
                                       });
                                       await action();
+                                      // The acknowledgement is per ORDER, not per
+                                      // window - cau_msg rides on each order in the
+                                      // vendor payload. With the sticky order window
+                                      // on this screen survives the placement, so
+                                      // without this reset every later order skipped
+                                      // the dialog entirely (TC_584). Sticky is our
+                                      // own feature and the vendor has no equivalent;
+                                      // it must not quietly suppress a compliance
+                                      // prompt that sticky-off users still get.
+                                      if (mounted) {
+                                        setState(() {
+                                          isSecu = false;
+                                        });
+                                      }
                                       // Close the place order dialog after order is placed
                                       // Only close if sticky order window is not enabled
                                       bool stickyOrderWindow = userOrderPreference['stickysrc'] == "True" || userOrderPreference['stickysrc'] == true;
