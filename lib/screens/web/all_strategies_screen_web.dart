@@ -81,7 +81,7 @@ const List<String> _kHeaders = [
   'Rebalance',
   'CAGR',
   '5Y Return',
-  'Min Investment',
+  'Min Cap',
   '',
 ];
 
@@ -97,7 +97,7 @@ bool _isNumeric(String h) =>
     h == 'Rebalance' ||
     h == 'CAGR' ||
     h == '5Y Return' ||
-    h == 'Min Investment';
+    h == 'Min Cap';
 
 bool _isSortable(String h) => h.isNotEmpty;
 
@@ -189,7 +189,7 @@ class _StrategyTableState extends State<_StrategyTable> {
           return a.cagr.compareTo(b.cagr);
         case '5Y Return':
           return a.netReturn.compareTo(b.netReturn);
-        case 'Min Investment':
+        case 'Min Cap':
           return a.minInvest.compareTo(b.minInvest);
         default:
           return 0;
@@ -527,7 +527,7 @@ String _cellText(String header, RupeeCaseStrategy s) {
       return '${s.cagr.toStringAsFixed(2)}%';
     case '5Y Return':
       return '${s.netReturn >= 0 ? '' : ''}${s.netReturn.toStringAsFixed(2)}%';
-    case 'Min Investment':
+    case 'Min Cap':
       return '₹${RupeeFormat.format(s.minInvest, decimalPlaces: 0)}';
     default:
       return 'Backtest';
@@ -580,7 +580,7 @@ Widget _cellContent(
         '${r >= 0 ? '' : ''}${r.toStringAsFixed(2)}%',
         _returnColor(context, r),
       );
-    case 'Min Investment':
+    case 'Min Cap':
       return _numCell(
         context,
         '₹${RupeeFormat.format(s.minInvest, decimalPlaces: 0)}',
