@@ -21,7 +21,11 @@ import '../../../../res/mynt_web_color_styles.dart';
 
 class PledgenUnpledge extends StatefulWidget {
   final String ddd;
-  const PledgenUnpledge({super.key, required this.ddd});
+
+  /// When set, an app-bar back button is shown that calls this instead of
+  /// popping — used by the Holdings screen to return to its own view.
+  final VoidCallback? onBack;
+  const PledgenUnpledge({super.key, required this.ddd, this.onBack});
 
   @override
   State<PledgenUnpledge> createState() => _PledgenUnpledgeScreenState();
@@ -76,30 +80,38 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
       // Calculate counts for cards
       int pledgeListCount = 0;
       int unpledgeListCount = 0;
+      int nonApprovedCount = 0;
 
       if (ledgerprovider.pledgeandunpledge?.data != null) {
         for (var item in ledgerprovider.pledgeandunpledge!.data!) {
-          double soh = double.tryParse(item.sOHQTY?.toString() ?? '0') ?? 0;
-          double nsoh = double.tryParse(item.nSOHQTY?.toString() ?? '0') ?? 0;
-          if ((soh + nsoh) > 0) pledgeListCount++;
+          final int soh =
+              (double.tryParse(item.sOHQTY?.toString() ?? '0') ?? 0).toInt();
+          final int nsoh =
+              (double.tryParse(item.nSOHQTY?.toString() ?? '0') ?? 0).toInt();
+          final int colQty =
+              (double.tryParse(item.cOLQTY?.toString() ?? '0') ?? 0).toInt();
 
-          double colQty = double.tryParse(item.cOLQTY?.toString() ?? '0') ?? 0;
-          if (colQty > 0) unpledgeListCount++;
+          // Tab "0" — Available Balance (Pledge)
+          if (item.initiated == "0" &&
+              item.status == 'Ok' &&
+              (soh + nsoh) != 0) {
+            pledgeListCount++;
+          }
+          // Tab "1" — Pledge Balance (Unpledge)
+          if (colQty != 0) {
+            unpledgeListCount++;
+          }
+          // Tab "2" — Non Approved
+          if ((item.status ?? '').trim().toLowerCase() == "not_ok") {
+            nonApprovedCount++;
+          }
         }
       }
-
-      int nonApprovedCount = int.tryParse(
-              ledgerprovider.pledgeandunpledge?.noOfNonApprovedStocks
-                      ?.toString() ??
-                  '0') ??
-          0;
 
       double nonApprovedSum = 0.0;
       if (ledgerprovider.pledgeandunpledge?.data != null) {
         for (var item in ledgerprovider.pledgeandunpledge!.data!) {
-          if (item.status == "Not_ok" &&
-              (double.tryParse(item.cOLQTY?.toString() ?? '0') ?? 0).toInt() ==
-                  0) {
+          if ((item.status ?? '').trim().toLowerCase() == "not_ok") {
             double scripValue =
                 double.tryParse(item.aMOUNT?.toString() ?? '0') ?? 0.0;
             nonApprovedSum += scripValue;
@@ -276,17 +288,20 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
           backgroundColor: resolveThemeColor(context,
               dark: MyntColors.backgroundColorDark,
               light: MyntColors.backgroundColor),
-          // leadingWidth: 41,
+          leadingWidth: widget.onBack == null ? null : 44,
           titleSpacing: 6,
           centerTitle: false,
-          // leading: CustomBackBtn(onBack: () => context.go(WebRoutes.home)),
+          leading: widget.onBack == null
+              ? null
+              : CustomBackBtn(onBack: widget.onBack),
           elevation: 0,
           surfaceTintColor: Colors.transparent,
           title: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Padding(
-                padding: const EdgeInsets.only(left: 16.0),
+                padding:
+                    EdgeInsets.only(left: widget.onBack == null ? 16.0 : 0),
                 child: Text("Pledge",
                     overflow: TextOverflow.ellipsis,
                     style: MyntWebTextStyles.title(context,
