@@ -655,6 +655,57 @@ mixin OrderAPI on ApiCore {
     }
   }
 
+  /// Orders the two OCO legs the way the broker actually reads them.
+  ///
+  /// The broker treats the OCO slots POSITIONALLY: "x" (paired with
+  /// place_order_params) is the "LTP goes ABOVE" condition, and "y" (paired
+  /// with place_order_params_leg2) is "LTP goes BELOW". It has no notion of
+  /// target vs stoploss - the vendor terminal exposes exactly these two slots
+  /// as a fixed greater-than / less-than pair, identical for buy and sell.
+  ///
+  /// Our screens collect Target as leg 1 and Stoploss as leg 2. On a SELL the
+  /// target IS the upper level, so the two happened to line up. On a BUY the
+  /// target is the LOWER level, so sending it as "x" registered it as an
+  /// "above" condition that was already true: the target fired the instant the
+  /// OCO was created, cancelled the stoploss, and left behind a buy limit
+  /// order priced under the market that could never fill. Buy OCO had never
+  /// worked. Swapping the pair for a buy puts the upper level in "x" on both
+  /// sides.
+  ///
+  /// GttOrderBookModel.fromJson swaps the same pair back on the way in, so
+  /// every screen above this layer keeps reading leg 1 as the Target.
+  Map<String, dynamic> _ocoLegsInBrokerOrder(PlaceOcoOrderInput input) {
+    Map<String, dynamic> buildLeg(
+            String prctyp, String prd, String qty, String prc, String trgprc) =>
+        {
+          "tsym": UrlUtils.encodeParameter(input.tsym),
+          "exch": input.exch,
+          "trantype": input.trantype,
+          "prctyp": prctyp,
+          "prd": prd,
+          "ret": "DAY",
+          "actid": prefs.clientId,
+          "uid": prefs.clientId,
+          "ordersource": "WEB",
+          "qty": qty,
+          "prc": prc,
+          "trgprc": trgprc,
+        };
+
+    final Map<String, dynamic> targetLeg = buildLeg(
+        input.prctyp1, input.prd1, input.qty1, input.prc1, input.trgprc1);
+    final Map<String, dynamic> stoplossLeg = buildLeg(
+        input.prctyp2, input.prd2, input.qty2, input.prc2, input.trgprc2);
+
+    final bool isBuy = input.trantype == "B";
+    return {
+      "aboveTrigger": isBuy ? input.d2 : input.d1,
+      "belowTrigger": isBuy ? input.d1 : input.d2,
+      "aboveLeg": isBuy ? stoplossLeg : targetLeg,
+      "belowLeg": isBuy ? targetLeg : stoplossLeg,
+    };
+  }
+
   //  Place OCO order to kambala
   Future<PlaceGttOrderModel> placeOCOOrderAPI(PlaceOcoOrderInput input) async {
     try {
@@ -662,6 +713,7 @@ mixin OrderAPI on ApiCore {
       // ai_t is LMT_BOS_O for both buy and sell OCO — confirmed against a
       // working sell-side OCO request (the doc's "LMT_SOB_O for sell" is
       // not what the broker actually accepts).
+      final Map<String, dynamic> legs = _ocoLegsInBrokerOrder(input);
       Map payload = {
         "uid": prefs.clientId,
         "ai_t": "LMT_BOS_O",
@@ -669,37 +721,11 @@ mixin OrderAPI on ApiCore {
         "tsym": UrlUtils.encodeParameter(input.tsym),
         "exch": input.exch,
         "oivariable": [
-          {"d": input.d1, "var_name": "x"},
-          {"d": input.d2, "var_name": "y"}
+          {"d": legs["aboveTrigger"], "var_name": "x"},
+          {"d": legs["belowTrigger"], "var_name": "y"}
         ],
-        "place_order_params": {
-          "tsym": UrlUtils.encodeParameter(input.tsym),
-          "exch": input.exch,
-          "trantype": input.trantype,
-          "prctyp": input.prctyp1,
-          "prd": input.prd1,
-          "ret": "DAY",
-          "actid": prefs.clientId,
-          "uid": prefs.clientId,
-          "ordersource": "WEB",
-          "qty": input.qty1,
-          "prc": input.prc1,
-          "trgprc": input.trgprc1
-        },
-        "place_order_params_leg2": {
-          "tsym": UrlUtils.encodeParameter(input.tsym),
-          "exch": input.exch,
-          "trantype": input.trantype,
-          "prctyp": input.prctyp2,
-          "prd": input.prd2,
-          "ret": "DAY",
-          "actid": prefs.clientId,
-          "uid": prefs.clientId,
-          "ordersource": "WEB",
-          "qty": input.qty2,
-          "prc": input.prc2,
-          "trgprc": input.trgprc2,
-        }
+        "place_order_params": legs["aboveLeg"],
+        "place_order_params_leg2": legs["belowLeg"],
       };
 
       if (input.remarks.isNotEmpty) {
@@ -723,6 +749,7 @@ mixin OrderAPI on ApiCore {
   Future<PlaceGttOrderModel> modifyOCOOrderAPI(PlaceOcoOrderInput input) async {
     try {
       final uri = Uri.parse(apiLinks.modifyOCOOrderURL);
+      final Map<String, dynamic> legs = _ocoLegsInBrokerOrder(input);
       Map payload = {
         "uid": prefs.clientId,
         "ai_t": "LMT_BOS_O",
@@ -731,37 +758,11 @@ mixin OrderAPI on ApiCore {
         "exch": input.exch,
         "al_id": input.alid,
         "oivariable": [
-          {"d": input.d1, "var_name": "x"},
-          {"d": input.d2, "var_name": "y"}
+          {"d": legs["aboveTrigger"], "var_name": "x"},
+          {"d": legs["belowTrigger"], "var_name": "y"}
         ],
-        "place_order_params": {
-          "tsym": UrlUtils.encodeParameter(input.tsym),
-          "exch": input.exch,
-          "trantype": input.trantype,
-          "prctyp": input.prctyp1,
-          "prd": input.prd1,
-          "ret": "DAY",
-          "actid": prefs.clientId,
-          "uid": prefs.clientId,
-          "ordersource": "WEB",
-          "qty": input.qty1,
-          "prc": input.prc1,
-          "trgprc": input.trgprc1
-        },
-        "place_order_params_leg2": {
-          "tsym": UrlUtils.encodeParameter(input.tsym),
-          "exch": input.exch,
-          "trantype": input.trantype,
-          "prctyp": input.prctyp2,
-          "prd": input.prd2,
-          "ret": "DAY",
-          "actid": prefs.clientId,
-          "uid": prefs.clientId,
-          "ordersource": "WEB",
-          "qty": input.qty2,
-          "prc": input.prc2,
-          "trgprc": input.trgprc2,
-        }
+        "place_order_params": legs["aboveLeg"],
+        "place_order_params_leg2": legs["belowLeg"],
       };
 
       if (input.remarks.isNotEmpty) {
