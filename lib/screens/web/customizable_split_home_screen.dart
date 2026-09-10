@@ -7195,7 +7195,7 @@ class _TickerItemState extends State<_TickerItem> {
   Widget build(BuildContext context) {
     final isPositive = widget.value >= 0;
     final displayValue = widget.showAsAmount
-        ? "₹${_formatAmount(widget.value.abs())}"
+        ? _formatAmount(widget.value.abs())
         : widget.value.toStringAsFixed(2);
 
     Color valueColor;
@@ -7241,7 +7241,7 @@ class _TickerItemState extends State<_TickerItem> {
               const SizedBox(width: 8),
               Text(
                 widget.isMasked
-                    ? (widget.showAsAmount ? "₹$kPrivacyMask" : kPrivacyMask)
+                    ? kPrivacyMask
                     : (widget.showAsAmount
                         ? (isPositive ? displayValue : "-$displayValue")
                         : displayValue),

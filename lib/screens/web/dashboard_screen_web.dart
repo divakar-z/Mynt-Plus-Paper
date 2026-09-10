@@ -3136,7 +3136,7 @@ class _TradeActionStockItemState extends ConsumerState<_TradeActionStockItem> {
                       // LTP
                       if (widget.showPrice) ...[
                         Text(
-                          "₹${(double.tryParse(_ltp) ?? 0.0).toStringAsFixed(2)}",
+                          (double.tryParse(_ltp) ?? 0.0).toStringAsFixed(2),
                           style: MyntWebTextStyles.price(
                             context,
                             color: changeColor,
