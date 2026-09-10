@@ -16,7 +16,7 @@ class AppRelease {
   static const String version = '3.0.3';
 
   /// e.g. `1.0.554`.
-  static const String build = '1.0.563';
+  static const String build = '1.0.565';
 
   /// e.g. `3 Sep 2026`.
   static const String releasedOn = '9 Sep 2026';

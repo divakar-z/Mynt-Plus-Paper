@@ -8,8 +8,10 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/screens/web/holdings/hold_table.dart';
 import 'package:mynt_plus/screens/web/holdings/mf_demat_hold_table.dart';
+import 'package:mynt_plus/screens/web/profile/pledge/pledge_unpledge_screen.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
+import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
 import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/profile_all_details_provider.dart';
@@ -87,6 +89,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
 
   final ValueNotifier<String?> _hoveredRowToken = ValueNotifier<String?>(null);
   final ValueNotifier<int?> _hoveredColumnIndex = ValueNotifier<int?>(null);
+
+  // Inline Pledge view: when true the Pledge screen replaces this whole screen
+  // (its back button clears the flag), so the "Pledge" link never routes away.
+  bool _showPledge = false;
 
   // WebSocket subscription for live holdings updates
   StreamSubscription? _holdingsSocketSubscription;
@@ -243,6 +249,19 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     }
   }
 
+  // Show the Pledge screen in place of Holdings. Seeds the pledge data the way
+  // the panel navigation (_handlePledgeUnpledgeTap) normally would, since we
+  // never leave the Holdings route here.
+  void _openPledgeView() {
+    setState(() => _showPledge = true);
+
+    final ledger = ref.read(ledgerProvider);
+    if (ledger.pledgeandunpledge == null) {
+      ledger.getCurrentDate('pandu');
+      ledger.fetchpledgeandunpledge(context);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isLoading = ref.watch(portfolioProvider.select((p) => p.holdloader));
@@ -254,6 +273,21 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
 
     // Use ref.watch to rebuild when provider values update (from pnlHoldCal)
     final portfolioData = ref.watch(portfolioProvider);
+
+    // Pledge takes over the whole Holdings screen; its back button returns.
+    if (_showPledge) {
+      return SizedBox.expand(
+        child: Container(
+          color: resolveThemeColor(context,
+              dark: MyntColors.backgroundColorDark,
+              light: MyntColors.backgroundColor),
+          child: PledgenUnpledge(
+            ddd: "DDDDD",
+            onBack: () => setState(() => _showPledge = false),
+          ),
+        ),
+      );
+    }
 
     // DrawerOverlay is now at app level in main.dart
     // Using same scroll pattern as Positions page - no outer scroll, Expanded for table
@@ -1060,6 +1094,36 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
           );
         }
 
+        // "Pledge" link — swaps this screen for the Pledge screen in place,
+        // which carries a back button to return here.
+        Widget buildPledgeLink() {
+          final accent = resolveThemeColor(
+            context,
+            dark: MyntColors.primaryDark,
+            light: MyntColors.primary,
+          );
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _openPledgeView,
+              borderRadius: BorderRadius.circular(4),
+              hoverColor: accent.withValues(alpha: 0.1),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text(
+                  'Pledge',
+                  style: MyntWebTextStyles.symbol(
+                    context,
+                    fontWeight: MyntFonts.bold,
+                    color: accent,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
         // Build search widget
         Widget buildSearch() {
           final screenWidth = MediaQuery.of(context).size.width;
@@ -1178,8 +1242,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 
                 Row(
                   children: [
-                    // Insights button (only for Equity tab)
+                    // Pledge + Insights buttons (only for Equity tab)
                     if (_selectedTabIndex == 0) ...[
+                      buildPledgeLink(),
+                      const SizedBox(width: 4),
                       Material(
                         color: Colors.transparent,
                         child: InkWell(
@@ -1228,8 +1294,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
           children: [
             buildTabs(),
             const Spacer(),
-            // Insights button (only for Equity tab)
+            // Pledge + Insights buttons (only for Equity tab)
             if (_selectedTabIndex == 0) ...[
+              buildPledgeLink(),
+              const SizedBox(width: 4),
               Material(
                 color: Colors.transparent,
                 child: InkWell(
