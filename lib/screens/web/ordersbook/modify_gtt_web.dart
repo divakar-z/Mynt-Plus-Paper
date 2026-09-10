@@ -1409,11 +1409,19 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                       : val2 <= ltp
                                           ? "Stoploss Trigger Price can not be Less than or equal to LTP"
                                           : "Invalid trigger prices")
+                                  // Both sell branches reject the equal case as well, so the
+                                  // wording has to say so. The buy branch above already spelled
+                                  // it out; the mismatch meant a trigger typed exactly at LTP was
+                                  // refused with "cannot be less than LTP", which contradicted
+                                  // what the user had entered (TC_274 / TC_276). The old third
+                                  // branch here read "cannot be equal to LTP" and was
+                                  // unreachable - every failing sell case is caught by one of the
+                                  // two above it - so it now matches the buy fallback.
                                   : (val1 <= ltp
-                                      ? "Target Trigger Price can not be Less than LTP"
+                                      ? "Target Trigger Price can not be Less than or equal to LTP"
                                       : val2 >= ltp
-                                          ? "Stoploss Trigger Price can not be Greater than LTP"
-                                          : "Trigger Price can not be equal to LTP");
+                                          ? "Stoploss Trigger Price can not be Greater than or equal to LTP"
+                                          : "Invalid trigger prices");
                               showResponsiveWarningMessage(context, ocoErrorMsg);
                             }
                           } else {
