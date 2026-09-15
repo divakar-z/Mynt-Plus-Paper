@@ -2844,13 +2844,12 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
 
   // CAS (Closing Auction Session) indicative-price row — solid badge + label + value.
   Widget _buildCasIndicativeRow() {
-    // CAS (Closing Auction Session) applies only to NSE/BSE cash equities.
-    final exch = widget.wlValue.exch;
-    if (exch != "NSE" && exch != "BSE") return const SizedBox.shrink();
     // Read the per-token indicative price from the websocket provider — it
     // retains the rare `ic` delta reliably, unlike the volatile socket map.
     final value = casIndicativeDisplay(
         ref.read(websocketProvider).indicativeClose(regtoken));
+    // No indicative price (no auction / not eligible / not sent) — hide the row.
+    if (value == '—') return const SizedBox.shrink();
     // Match the trading-info rows below (Avg Price, Volume, …): same spacing,
     // bottom divider only (no top line).
     return Padding(
@@ -2899,7 +2898,7 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                           const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: resolveThemeColor(context,
-                            dark: MyntColors.primaryDark,
+                            dark: MyntColors.secondary,
                             light: MyntColors.primary),
                         borderRadius: BorderRadius.circular(4),
                       ),
