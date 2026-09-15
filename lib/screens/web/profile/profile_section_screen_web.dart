@@ -63,7 +63,13 @@ class _ProfileSectionScreenWebState
 
   // ─── Personal-info edit gate (closed → non-individual → inactive → 7-day).
   // Used by DDPI activation. Re-KYC is intentionally skipped here per spec.
-  String? _personalInfoEditBlockReason({required bool checkRekyc}) {
+  // `checkLast7Days` opts out of the post-activation 7-day block: the rule
+  // covers mobile/email/primary bank/bank deletion/nominee modification only,
+  // so activities like DDPI must stay available inside that window.
+  String? _personalInfoEditBlockReason({
+    required bool checkRekyc,
+    bool checkLast7Days = true,
+  }) {
     final provider = ref.read(profileAllDetailsProvider);
     final clientData = provider.clientAllDetails.clientData;
     final mobStatus = provider.mobEmailStatus;
@@ -80,13 +86,23 @@ class _ProfileSectionScreenWebState
       return 'Modification not allowed for inactive client codes. '
           'Please reactivate the account.';
     }
-    if (mobStatus.last7DaysCheck != true) {
+    if (checkLast7Days && mobStatus.last7DaysCheck != true) {
       return 'Modification request not allowed within 7 days of activation';
     }
     if (checkRekyc && provider.rekycStatus.toLowerCase() == 'yes') {
       return 'Modification not allowed while Re-KYC is in progress.';
     }
     return null;
+  }
+
+  // ─── Bank logo URL ───
+  // The logo is keyed by the 4-character bank code that prefixes the IFSC.
+  // Guarded because a malformed/short IFSC would otherwise throw a RangeError
+  // and take the whole bank list down.
+  String _bankLogoUrl(String? ifsc) {
+    final code = (ifsc ?? '').trim();
+    final bank = (code.length >= 4 ? code.substring(0, 4) : code).toLowerCase();
+    return 'https://rekycbe.mynt.in/static/logos/$bank/symbol.svg';
   }
 
   // ─── Pending status helpers ───
@@ -308,11 +324,14 @@ class _ProfileSectionScreenWebState
               else if (!actionsDisabled)
                 Builder(builder: (context) {
                   final atMaxBanks = bankData != null && bankData.length >= 5;
+                  // Adding a bank is a secondary-bank addition (nothing here
+                  // sets defaultAc), so it is exempt from the 7-day
+                  // post-activation block — only primary-bank changes and
+                  // deletions are restricted.
                   final addDisabled = atMaxBanks ||
                       isClientClosed ||
                       !isIndividual ||
-                      !isAccountActive ||
-                      !isPast7Days;
+                      !isAccountActive;
                   final addTooltip = atMaxBanks
                       ? "Maximum bank accounts reached."
                       : isClientClosed
@@ -323,9 +342,7 @@ class _ProfileSectionScreenWebState
                               : !isIndividual
                                   ? "Non-individual accounts can't modify data here. "
                                       "Please contact support at (+91) 93 8010 8010 for help."
-                                  : !isPast7Days
-                                      ? "Modification request not allowed within 7 days of activation."
-                                      : "";
+                                  : "";
                   final addButton = Material(
                     color: Colors.transparent,
                     child: InkWell(
@@ -429,7 +446,7 @@ class _ProfileSectionScreenWebState
                           ),
                           child: ClipOval(
                             child: SvgPicture.network(
-                              "https://rekycbe.mynt.in/autho/banklogo?bank=${(bank.iFSCCode ?? "").substring(0, 4).toLowerCase()}&type=svg&t=${DateTime.now().millisecondsSinceEpoch}",
+                              _bankLogoUrl(bank.iFSCCode),
                               fit: BoxFit.contain,
                               height: 22,
                               width: 22,
@@ -566,6 +583,13 @@ class _ProfileSectionScreenWebState
                             final setPrimaryTooltip = !isPast7Days
                                 ? "Modification request not allowed within 7 days of activation."
                                 : "";
+                            // Bank deletion is restricted within 7 days of
+                            // activation/reactivation, same as Set as Primary.
+                            final deleteDisabled =
+                                isClientClosed || !isPast7Days;
+                            final deleteTooltip = !isPast7Days
+                                ? "Modification request not allowed within 7 days of activation."
+                                : "";
                             final editIcon = InkWell(
                               onTap: editDisabled
                                   ? null
@@ -622,9 +646,10 @@ class _ProfileSectionScreenWebState
                                       if (setPrimaryDisabled) return;
                                       _showSetPrimaryDialog(bank, theme);
                                     } else if (value == 'delete') {
-                                      if (isClientClosed) return;
+                                      if (deleteDisabled) return;
                                       _showDeleteBankDialog(bank, theme,
-                                          isIndividual: isIndividual);
+                                          isIndividual: isIndividual,
+                                          isPast7Days: isPast7Days);
                                     }
                                   },
                                   itemBuilder: (ctx) => [
@@ -646,14 +671,17 @@ class _ProfileSectionScreenWebState
                                     ),
                                     PopupMenuItem<String>(
                                       value: 'delete',
-                                      enabled: !isClientClosed,
-                                      child: Text("Delete",
-                                        style: MyntWebTextStyles.bodySmall(
-                                            context,
-                                          color: Colors.red,
-                                          fontWeight: MyntFonts.medium,
-                                        ).copyWith(
-                                            decoration: TextDecoration.none),
+                                      enabled: !deleteDisabled,
+                                      child: Tooltip(
+                                        message: deleteTooltip,
+                                        child: Text("Delete",
+                                          style: MyntWebTextStyles.bodySmall(
+                                              context,
+                                            color: Colors.red,
+                                            fontWeight: MyntFonts.medium,
+                                          ).copyWith(
+                                              decoration: TextDecoration.none),
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -1049,8 +1077,8 @@ class _ProfileSectionScreenWebState
 
   // ─── Delete Bank Confirmation Dialog ───
   void _showDeleteBankDialog(dynamic bank, ThemesProvider theme,
-      {bool isIndividual = true}) {
-    final deleteCtaDisabled = !isIndividual;
+      {bool isIndividual = true, bool isPast7Days = true}) {
+    final deleteCtaDisabled = !isIndividual || !isPast7Days;
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -1769,9 +1797,10 @@ class _ProfileSectionScreenWebState
                     ? null
                     : () async {
                         // Personal-info gates: closed → non-individual →
-                        // inactive → 7-day. Re-KYC is intentionally skipped.
+                        // inactive. Re-KYC is intentionally skipped, and DDPI
+                        // is exempt from the 7-day post-activation block.
                         final blockReason = _personalInfoEditBlockReason(
-                            checkRekyc: false);
+                            checkRekyc: false, checkLast7Days: false);
                         if (blockReason != null) {
                           warningMessage(context, blockReason);
                           return;
@@ -2390,14 +2419,15 @@ class _ProfileSectionScreenWebState
     bool mtfClAuto = clientData?.mTFClAuto == "Y";
 
     // gates: accountstatus != 'client_close' -> button visible
-    //            CATEGORY != 'I' || !atve_sts || client_close || !last7days -> button disabled
+    //            CATEGORY != 'I' || !atve_sts || client_close -> button disabled
+    // MTF is exempt from the 7-day post-activation block, so last7days is
+    // deliberately not part of these gates.
     final bool isClientClosed = clientData?.isClientClosed ?? false;
     final bool isIndividual = clientData?.isIndividual ?? false;
     final bool accSgtAtveSts =
         (mobStatus?.accSgtAtveSts ?? '').toLowerCase() == 'active';
-    final bool isPast7Days = mobStatus?.last7DaysCheck == true;
     final bool mtfActionDisabled =
-        !isIndividual || !accSgtAtveSts || isClientClosed || !isPast7Days;
+        !isIndividual || !accSgtAtveSts || isClientClosed;
 
     final cardBg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
@@ -2518,10 +2548,10 @@ color: resolveThemeColor(context,
                                 child: CircularProgressIndicator(
                                     strokeWidth: 2, color: primaryColor))
                             : Builder(builder: (context) {
-                                // Resume E-sign link per spec:
-                                // disabled when !last7days || !atve_sts.
-                                final esignDisabled =
-                                    !isPast7Days || !accSgtAtveSts;
+                                // Resume E-sign link: disabled only when
+                                // !atve_sts. The 7-day block does not apply to
+                                // MTF, so an in-flight request stays signable.
+                                final esignDisabled = !accSgtAtveSts;
                                 return Material(
                                   color: Colors.transparent,
                                   child: InkWell(

@@ -696,7 +696,8 @@ class _ProfileDetailsScreenWebState
   // ─── Annual Income edit-gate
   //   !atve_sts        → "Modification not allowed for inactive client code…"
   //   !CATEGORY=='I'   → "Non-individual accounts can't modify data here…"
-  //   !last7days       → "Modification request not allowed within 7 days of activation"
+  // Income modification is exempt from the 7-day post-activation block, so
+  // last7days is deliberately not checked here.
   // Returns null when edit is allowed, otherwise a user-facing reason string.
   // The yearlyIncomeDisable gate (e-sign pending/completed) is handled at the call site via incomeStatus
   _EditBlock? _annualIncomeEditBlock() {
@@ -726,12 +727,6 @@ class _ProfileDetailsScreenWebState
       return const _EditBlock(
           tooltip: "Non-individual accounts can't modify data here. "
               "Please contact support at (+91) 93 8010 8010 for help.");
-    }
-    // last7days
-    if (mobStatus.last7DaysCheck != true) {
-      return const _EditBlock(
-          tooltip:
-              'Modification request not allowed within 7 days of activation');
     }
     return null;
   }
@@ -1690,6 +1685,23 @@ class _EditBlock {
   const _EditBlock({this.tooltip, this.clickable = false});
 }
 
+/// True when an OTP-send response says the OTP actually went out.
+///
+/// Both the email and mobile endpoints answer with a free-text `msg` for
+/// success and failure alike, so this matches on the "sent" token instead of an
+/// exact string. Rejections such as "This mail already linked to another
+/// account" fall through to false and get shown to the user, rather than
+/// silently advancing the dialog to the OTP field.
+bool _otpSendSucceeded(String? msg) {
+  if (msg == null || msg.trim().isEmpty) return false;
+  final m = msg.toLowerCase();
+  const failureHints = [
+    'not sent', 'not send', 'fail', 'error', 'invalid', 'already',
+  ];
+  if (failureHints.any(m.contains)) return false;
+  return m.contains('sent') || m.contains('send');
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 //  EMAIL CHANGE DIALOG (inline OTP flow)
 // ═══════════════════════════════════════════════════════════════════════
@@ -1866,16 +1878,21 @@ class _EmailChangeDialogState extends State<_EmailChangeDialog> {
                           onPressed: () async {
                             if (!_formKey.currentState!.validate()) return;
                             setState(() => _isLoading = true);
-                            await widget.profileProvider.emaileotpfun(
+                            final msg = await widget.profileProvider
+                                .emaileotpfun(
                               widget.profileProvider.newEmailController.text,
                               widget.clientData.cLIENTIDMAIL ?? "",
                               widget.clientData.cLIENTNAME ?? "",
                               widget.clientData.cLIENTDPCODE ?? "",
                             );
-                            setState(() {
-                              _otpSent = true;
-                              _isLoading = false;
-                            });
+                            setState(() => _isLoading = false);
+                            if (!mounted) return;
+                            if (_otpSendSucceeded(msg)) {
+                              setState(() => _otpSent = true);
+                            } else {
+                              error(context,
+                                  msg ?? 'Failed to send OTP. Please try again.');
+                            }
                           },
                         ),
                       if (_otpSent)
@@ -2099,7 +2116,7 @@ class _MobileChangeDialogState extends State<_MobileChangeDialog> {
                             );
                             setState(() => _isLoading = false);
                             if (!mounted) return;
-                            if (msg != null && (msg.toLowerCase().contains('otp') || msg.toLowerCase().contains('sent'))) {
+                            if (_otpSendSucceeded(msg)) {
                               setState(() => _otpSent = true);
                             } else {
                               error(context, msg ?? 'Failed to send OTP. Please try again.');

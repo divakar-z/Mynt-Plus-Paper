@@ -1886,6 +1886,16 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
         : text;
   }
 
+  // ─── Bank logo URL ───
+  // The logo is keyed by the 4-character bank code that prefixes the IFSC.
+  // Guarded because a malformed/short IFSC would otherwise throw a RangeError
+  // and take the whole bank list down.
+  String _bankLogoUrl(String? ifsc) {
+    final code = (ifsc ?? '').trim();
+    final bank = (code.length >= 4 ? code.substring(0, 4) : code).toLowerCase();
+    return 'https://rekycbe.mynt.in/static/logos/$bank/symbol.svg';
+  }
+
   // Add this variable
   final selectedBtmIndx = 4;
 
@@ -3116,7 +3126,7 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
                           ),
                           child: ClipOval(
                             child: SvgPicture.network(
-                              "https://rekycbe.mynt.in/autho/banklogo?bank=${(bank.iFSCCode ?? "").substring(0, 4).toLowerCase()}&type=svg&t=${DateTime.now().millisecondsSinceEpoch}",
+                              _bankLogoUrl(bank.iFSCCode),
                               fit: BoxFit.contain,
                               height: 22,
                               width: 22,
