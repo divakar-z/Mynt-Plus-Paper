@@ -455,14 +455,18 @@ class ProfileProvider extends DefaultChangeNotifier {
     }
   }
 
-  Future emaileotpfun(String newEmail, String oldEmail, String clientName,
-      String dpcode) async {
+  /// Returns the server's `msg` so the caller can tell a sent OTP from a
+  /// rejection (e.g. "This mail already linked to another account"), or null
+  /// if the request itself failed.
+  Future<String?> emaileotpfun(String newEmail, String oldEmail,
+      String clientName, String dpcode) async {
     try {
-      String response = await api.sendOTPtoChangeEmailApi(
+      final response = await api.sendOTPtoChangeEmailApi(
           newEmail, oldEmail, clientName, dpcode);
-      // _mobileotpo = response;
       notifyListeners();
-
+      return response?.toString();
+    } catch (e) {
+      return null;
     } finally {
       notifyListeners();
     }
