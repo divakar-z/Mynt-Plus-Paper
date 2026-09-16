@@ -2079,9 +2079,17 @@ changeHoldingsTabIndex(int index) {
                 return;
               }
 
-                  if (_placeOrderModel!.stat! == "Ok") {
-                    successMessage(context, "Position exited successfully.");
-                  }
+                  // TC_389.2 — duplicate toast on Exit All. fetchExitPosition
+                  // above already shows "Position exited successfully." on a
+                  // successful exit, so this second one fired the identical
+                  // message again for the SAME order. Exit All therefore
+                  // toasted twice per position; the selected-positions branch
+                  // below never had this line, which is why it was correct.
+                  // Retired, not deleted — the success path is now owned
+                  // solely by fetchExitPosition.
+                  // if (_placeOrderModel!.stat! == "Ok") {
+                  //   successMessage(context, "Position exited successfully.");
+                  // }
 
               if (_placeOrderModel!.stat!.toLowerCase() != "ok") {
                 break;
@@ -3248,11 +3256,27 @@ changeHoldingsTabIndex(int index) {
     }
   }
 
+  /// True when at least one open position is still ticked for exit.
+  /// Reads the per-position flags, which are what exitPosition() acts on —
+  /// not the counters, which can be reset independently.
+  bool get hasExitSelection =>
+      _openPosition?.any((p) => p.isExitSelection == true) ?? false;
+
   // Reset exit position selection state
   void resetExitPositionSelection() {
     _exitPositionQty = 0;
     _isExitAllPosition = false;
     _exitSelectedPositions.clear();
+
+    // CRITICAL: exitPosition() places a MARKET exit order for every position
+    // whose isExitSelection is true and never looks at the counters above.
+    // Clearing only the counters would hide the count while still squaring
+    // off those positions, so the per-position flags must be cleared here.
+    if (_openPosition != null) {
+      for (final position in _openPosition!) {
+        position.isExitSelection = false;
+      }
+    }
 
     notifyListeners();
   }

@@ -75,8 +75,32 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
         _searchQuery.value = _searchController.text;
       }
     });
+    // TC_389 — exit selections are held against the FULL open position list,
+    // never the filtered one, and exitPosition() squares off everything still
+    // ticked. So a row that was ticked and is now hidden by the product filter
+    // or the search box would still be exited, with the button and the confirm
+    // dialog both showing the stale count. Clear the selection whenever the
+    // visible list changes. Listening on the notifiers rather than on the
+    // widgets catches every path that can change them, including any added
+    // later.
+    _searchQuery.addListener(_clearExitSelectionOnListChange);
+    _selectedFilter.addListener(_clearExitSelectionOnListChange);
     // Set up WebSocket subscription for live position updates (like mobile)
     _setupSocketSubscription();
+  }
+
+  /// Drops any pending exit selection when the visible position list changes.
+  /// Kept cheap: does nothing unless something is actually selected, so it
+  /// will not fire a provider notify on every keystroke.
+  void _clearExitSelectionOnListChange() {
+    if (!mounted) return;
+    final positionBook = ref.read(portfolioProvider);
+    if (!positionBook.hasExitSelection &&
+        positionBook.exitPositionQty == 0 &&
+        !positionBook.isExitAllPosition) {
+      return;
+    }
+    positionBook.resetExitPositionSelection();
   }
 
   void _setupSocketSubscription() {
@@ -128,6 +152,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     _verticalScrollController.dispose();
     _hoveredRowToken.dispose();
     _hoveredColumnIndex.dispose();
+    _searchQuery.removeListener(_clearExitSelectionOnListChange);
+    _selectedFilter.removeListener(_clearExitSelectionOnListChange);
     _searchQuery.dispose(); // ✅ Dispose search query ValueNotifier
     _searchController.dispose(); // Dispose TextEditingController
     _selectedFilter.dispose();
@@ -520,7 +546,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             // Filter dropdown button
             SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             _buildFilterButton(theme),
-
+            SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             // Exit All Button - only show if there are open positions
             // Use Consumer to watch exitPositionQty which changes when selections change
             Consumer(
@@ -920,35 +946,73 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
 
     return Builder(
       builder: (buttonContext) {
-        return Tooltip(
-          message: 'Filter',
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => _showFilterPopup(buttonContext, theme),
-              child: Container(
-                width: buttonSize,
-                height: buttonSize,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Center(
-                  child: SvgPicture.asset(
-                    assets.searchFilter,
-                    width: iconSize,
-                    colorFilter: ColorFilter.mode(
-                      resolveThemeColor(
-                        context,
-                        dark: MyntColors.iconDark,
-                        light: MyntColors.icon,
+        // The icon used to look identical whether or not a product filter was
+        // on, so a filtered list was indistinguishable from a short one. Tint
+        // the icon and fill the button while a filter is active, and name the
+        // filter in the tooltip — same idea as the group filter button below.
+        return ValueListenableBuilder<String>(
+          valueListenable: _selectedFilter,
+          builder: (context, currentFilter, child) {
+            final isFiltered = currentFilter != 'All';
+            final activeColor = resolveThemeColor(
+              context,
+              dark: MyntColors.secondary,
+              light: MyntColors.primary,
+            );
+            return Tooltip(
+              message: isFiltered ? 'Filter: $currentFilter' : 'Filter',
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () => _showFilterPopup(buttonContext, theme),
+                  child: Container(
+                    width: buttonSize,
+                    height: buttonSize,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      // Clip.none so the dot can sit just outside the icon's
+                      // top-right corner. It stays well inside the button box,
+                      // so nothing is cut off.
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          SvgPicture.asset(
+                            assets.searchFilter,
+                            width: iconSize,
+                            colorFilter: ColorFilter.mode(
+                              isFiltered
+                                  ? activeColor
+                                  : resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.iconDark,
+                                      light: MyntColors.icon,
+                                    ),
+                              BlendMode.srcIn,
+                            ),
+                          ),
+                          if (isFiltered)
+                            Positioned(
+                              top: -5,
+                              right: -3,
+                              child: Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: activeColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                      BlendMode.srcIn,
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );

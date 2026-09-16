@@ -20,6 +20,16 @@ class PositionDownloadHelper {
     return num.toStringAsFixed(2);
   }
 
+  /// Total traded quantity = today's plus whatever was carried forward.
+  /// The API splits every position into day and cf halves; printing only the
+  /// day half made rows that could not add up (buy 0, sell 65, net 0 — the
+  /// 65 bought yesterday was simply missing).
+  static String _totalQty(String? dayQty, String? cfQty) {
+    final d = int.tryParse(dayQty?.toString() ?? '0') ?? 0;
+    final c = int.tryParse(cfQty?.toString() ?? '0') ?? 0;
+    return (d + c).toString();
+  }
+
   /// Generate and download a PDF file from position data.
   static Future<void> downloadPdf({
     required List<PositionBookModel> positions,
@@ -59,12 +69,22 @@ class PositionDownloadHelper {
             p.exch ?? '',
             p.tsym ?? p.symbol ?? '',
             p.sPrdtAli ?? p.prd ?? '',
-            _formatNumber(p.daybuyqty),
-            _formatNumber(p.daybuyavgprc),
-            _formatNumber(p.daysellqty),
-            _formatNumber(p.daysellavgprc),
+            // Was day-only: daybuyqty / daybuyavgprc / daysellqty /
+            // daysellavgprc. Now the full traded figure — day plus carry
+            // forward — so Buy minus Sell reconciles with Net Qty.
+            // totbuyavgprc / totsellavgprc are the API's own blended averages
+            // over both halves, so no average is recomputed here.
+            _formatNumber(_totalQty(p.daybuyqty, p.cfbuyqty)),
+            _formatNumber(p.totbuyavgprc),
+            _formatNumber(_totalQty(p.daysellqty, p.cfsellqty)),
+            _formatNumber(p.totsellavgprc),
             p.netqty ?? p.qty ?? '0',
-            _formatNumber(p.netavgprc ?? p.avgPrc),
+            // Was: _formatNumber(p.netavgprc ?? p.avgPrc) — read the RAW net
+            // average and so ignored the app's pick between netupldprc and
+            // netavgprc, printing a different price from the screen on any
+            // carry-forward position. avgPrc is what positionCal stores and
+            // what the table's Act Avg cell shows, so use it first.
+            _formatNumber(p.avgPrc ?? p.netavgprc),
             _formatNumber(p.lp),
             _formatNumber(p.profitNloss),
           ];
@@ -88,32 +108,74 @@ class PositionDownloadHelper {
         header: (context) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
-            // Logo + Title + Client info row
+            // Retired: client info sat inside the logo/title row and the
+            // header carried no Date/Time (TC_255). Kept for rollback.
+            // pw.Row(
+            //   crossAxisAlignment: pw.CrossAxisAlignment.center,
+            //   children: [
+            //     if (logoImage != null)
+            //       pw.Image(logoImage, width: 60, height: 30)
+            //     else
+            //       pw.SizedBox(width: 60),
+            //     pw.Expanded(
+            //       child: pw.Center(
+            //         child: pw.Text('Position Book', style: titleStyle),
+            //       ),
+            //     ),
+            //     pw.Column(
+            //       crossAxisAlignment: pw.CrossAxisAlignment.end,
+            //       children: [
+            //         pw.Text('Client Name  :  $clientName',
+            //             style: headerStyle),
+            //         pw.SizedBox(height: 2),
+            //         pw.Text('Client Code   :  $clientId',
+            //             style: headerStyle),
+            //       ],
+            //     ),
+            //   ],
+            // ),
+            // Logo + Title row
             pw.Row(
-              crossAxisAlignment: pw.CrossAxisAlignment.center,
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
                 if (logoImage != null)
                   pw.Image(logoImage, width: 60, height: 30)
                 else
                   pw.SizedBox(width: 60),
-                pw.Expanded(
-                  child: pw.Center(
-                    child: pw.Text('Position Book', style: titleStyle),
-                  ),
-                ),
-                pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.end,
-                  children: [
-                    pw.Text('Client Name  :  $clientName',
-                        style: headerStyle),
-                    pw.SizedBox(height: 2),
-                    pw.Text('Client Code   :  $clientId',
-                        style: headerStyle),
-                  ],
-                ),
+                pw.Text('Position Book', style: titleStyle),
+                pw.SizedBox(width: 60),
               ],
             ),
             pw.Divider(thickness: 0.5),
+            pw.SizedBox(height: 4),
+            // Client info
+            pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text('Client Name  :  $clientName',
+                          style: headerStyle),
+                      pw.SizedBox(height: 2),
+                      pw.Text('Client Code   :  $clientId',
+                          style: headerStyle),
+                    ],
+                  ),
+                ),
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
+                    children: [
+                      pw.Text('Date  :  $dateStr', style: headerStyle),
+                      pw.SizedBox(height: 2),
+                      pw.Text('Time  :  $timeStr', style: headerStyle),
+                    ],
+                  ),
+                ),
+              ],
+            ),
             pw.SizedBox(height: 10),
             // Summary boxes
             pw.Row(
@@ -132,14 +194,16 @@ class PositionDownloadHelper {
           children: [
             pw.Divider(thickness: 0.5),
             pw.SizedBox(height: 2),
-            pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.end,
-              children: [
-                pw.Text('Date: $dateStr  |  Time: $timeStr',
-                    style: pw.TextStyle(fontSize: 6, fontWeight: pw.FontWeight.bold)),
-              ],
-            ),
-            pw.SizedBox(height: 4),
+            // Retired: Date/Time moved up into the header to match Orders,
+            // Holdings and MF Holdings, whose footers carry the address only.
+            // pw.Row(
+            //   mainAxisAlignment: pw.MainAxisAlignment.end,
+            //   children: [
+            //     pw.Text('Date: $dateStr  |  Time: $timeStr',
+            //         style: pw.TextStyle(fontSize: 6, fontWeight: pw.FontWeight.bold)),
+            //   ],
+            // ),
+            // pw.SizedBox(height: 4),
             pw.Text(
               'Zebu Share And Wealth Management Private Limited',
               style:
@@ -365,22 +429,30 @@ class PositionDownloadHelper {
     // ════════════════════════════════════════════════════════════
     // ROW 7: Column headers
     // ════════════════════════════════════════════════════════════
+    // Excel was left on the original column set when commit dfa0f530 rewrote
+    // the PDF's, so the two exports drifted apart. Now aligned to the PDF.
+    // Retired list:
+    // final headers = [
+    //   'Instrument', 'Exchange', 'Product', 'Qty', 'Avg Price', 'LTP',
+    //   'P&L', 'MTM', 'Buy Qty', 'Sell Qty', 'Buy Avg', 'Sell Avg',
+    // ];
     final headers = [
-      'Instrument',
+      'S.No',
       'Exchange',
+      'Symbol',
       'Product',
-      'Qty',
-      'Avg Price',
+      'Buy Qty',
+      'Buy Price',
+      'Sell Qty',
+      'Sell Price',
+      'Net Qty',
+      'Net Price',
       'LTP',
       'P&L',
-      'MTM',
-      'Buy Qty',
-      'Sell Qty',
-      'Buy Avg',
-      'Sell Avg',
     ];
     for (int i = 0; i < headers.length; i++) {
-      final style = i >= 3 ? colHeaderRightStyle : colHeaderStyle;
+      // First four are text columns, the rest are numeric.
+      final style = i >= 4 ? colHeaderRightStyle : colHeaderStyle;
       setTextCell(i, 7, headers[i], style);
     }
 
@@ -390,18 +462,22 @@ class PositionDownloadHelper {
     for (int r = 0; r < positions.length; r++) {
       final p = positions[r];
       final row = 8 + r;
-      setTextCell(0, row, p.tsym ?? p.symbol ?? '', textStyle);
+      // Reordered to the PDF's layout. Every expression below is the same one
+      // the PDF row builder uses, so the two files cannot disagree on a value.
+      // Per-row MTM is dropped — the PDF has no such column. Total MTM is
+      // still in the summary block above.
+      setTextCell(0, row, '${r + 1}', textStyle);
       setTextCell(1, row, p.exch ?? '', textStyle);
-      setTextCell(2, row, p.sPrdtAli ?? p.prd ?? '', textStyle);
-      setNumCell(3, row, _toDouble(p.qty ?? p.netqty), numStyle);
-      setNumCell(4, row, _toDouble(p.avgPrc ?? p.netavgprc), numStyle);
-      setNumCell(5, row, _toDouble(p.lp), numStyle);
-      setNumCell(6, row, _toDouble(p.profitNloss), numStyle);
-      setNumCell(7, row, _toDouble(p.mTm), numStyle);
-      setNumCell(8, row, _toDouble(p.daybuyqty), numStyle);
-      setNumCell(9, row, _toDouble(p.daysellqty), numStyle);
-      setNumCell(10, row, _toDouble(p.daybuyavgprc), numStyle);
-      setNumCell(11, row, _toDouble(p.daysellavgprc), numStyle);
+      setTextCell(2, row, p.tsym ?? p.symbol ?? '', textStyle);
+      setTextCell(3, row, p.sPrdtAli ?? p.prd ?? '', textStyle);
+      setNumCell(4, row, _toDouble(_totalQty(p.daybuyqty, p.cfbuyqty)), numStyle);
+      setNumCell(5, row, _toDouble(p.totbuyavgprc), numStyle);
+      setNumCell(6, row, _toDouble(_totalQty(p.daysellqty, p.cfsellqty)), numStyle);
+      setNumCell(7, row, _toDouble(p.totsellavgprc), numStyle);
+      setNumCell(8, row, _toDouble(p.netqty ?? p.qty), numStyle);
+      setNumCell(9, row, _toDouble(p.avgPrc ?? p.netavgprc), numStyle);
+      setNumCell(10, row, _toDouble(p.lp), numStyle);
+      setNumCell(11, row, _toDouble(p.profitNloss), numStyle);
     }
 
     // ════════════════════════════════════════════════════════════

@@ -1605,29 +1605,72 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
   Widget _buildFilterButton(ThemesProvider theme) {
     return Builder(
       builder: (buttonContext) {
-        return MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => _showFilterPopup(buttonContext, theme),
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(
-                child: SvgPicture.asset(
-                  assets.searchFilter,
-                  width: 20,
-                  color: resolveThemeColor(
-                    context,
-                    dark: MyntColors.iconDark,
-                    light: MyntColors.icon,
+        // The icon looked identical whether or not a filter was on, so a
+        // filtered list was indistinguishable from a short one. Tint the icon
+        // and show a dot on its corner while a filter is active, and name the
+        // filter in the tooltip. Same treatment as the Positions screen.
+        return ValueListenableBuilder<String>(
+          valueListenable: _selectedFilter,
+          builder: (context, currentFilter, child) {
+            final isFiltered = currentFilter != 'All';
+            final activeColor = resolveThemeColor(
+              context,
+              dark: MyntColors.secondary,
+              light: MyntColors.primary,
+            );
+            return Tooltip(
+              message: isFiltered ? 'Filter: $currentFilter' : 'Filter',
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () => _showFilterPopup(buttonContext, theme),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      // Clip.none so the dot can sit just outside the icon's
+                      // top-right corner. It stays inside the button box.
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          SvgPicture.asset(
+                            assets.searchFilter,
+                            width: 20,
+                            colorFilter: ColorFilter.mode(
+                              isFiltered
+                                  ? activeColor
+                                  : resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.iconDark,
+                                      light: MyntColors.icon,
+                                    ),
+                              BlendMode.srcIn,
+                            ),
+                          ),
+                          if (isFiltered)
+                            Positioned(
+                              top: -5,
+                              right: -3,
+                              child: Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: activeColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
