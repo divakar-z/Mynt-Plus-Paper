@@ -21,6 +21,7 @@ import 'package:mynt_plus/sharedWidget/accessibility/chart_a11y_filter.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/focus_indicator_overlay.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/highlight_links_overlay.dart';
 import 'package:mynt_plus/sharedWidget/chart_overlay_widget.dart';
+import 'package:mynt_plus/sharedWidget/mobile_restriction_gate.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -441,14 +442,20 @@ class MyApp extends ConsumerWidget {
                   textScaler: TextScaler.linear(a11y.textScale),
                 ),
                 child: shadcn.DrawerOverlay(
-                  child: Stack(
-                    children: [
-                      DefaultTextStyle(
-                        style: baseTextStyle,
-                        child: child!,
+                  child: DefaultTextStyle(
+                    style: baseTextStyle,
+                    // Mobile-sized viewports get the "install the app" screen
+                    // instead of the trading shell. Always mounted so the depth
+                    // above the router content stays constant (see note below).
+                    child: MobileRestrictionGate(
+                      isDark: themeProvide.isDarkMode,
+                      child: Stack(
+                        children: [
+                          child!,
+                          const ChartOverlayWidget(),
+                        ],
                       ),
-                      const ChartOverlayWidget(),
-                    ],
+                    ),
                   ),
                 ),
               );
