@@ -536,7 +536,9 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
     switch (status) {
       case 'OPEN':
         return 'OPEN';
+      // case 'COMPLETE':
       case 'COMPLETE':
+        return 'COMPLETE';
       case 'EXECUTED':
         return 'EXECUTED';
       case 'REJECTED':
@@ -1109,7 +1111,9 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
             break;
           case 7:
             final s = (order.status ?? '').toUpperCase();
-            cellText = s == 'COMPLETE' || s == 'EXECUTED' ? 'EXECUTED'
+            // cellText = s == 'COMPLETE' || s == 'EXECUTED' ? 'EXECUTED'
+            cellText = s == 'COMPLETE' ? 'COMPLETE'
+                : s == 'EXECUTED' ? 'EXECUTED'
                 : s == 'CANCELLED' || s == 'CANCELED' ? 'CANCELLED'
                 : s == 'TRIGGER_PENDING' ? 'TRIGGER PENDING'
                 : s == 'AFTER_MARKET_ORDER_REQ_RECEIVED' ? 'AMO'
@@ -2533,7 +2537,9 @@ class _ScalperOrderTableRowState extends State<_ScalperOrderTableRow> {
     switch (status) {
       case 'OPEN':
         return 'OPEN';
+      // case 'COMPLETE':
       case 'COMPLETE':
+        return 'COMPLETE';
       case 'EXECUTED':
         return 'EXECUTED';
       case 'REJECTED':

@@ -3116,7 +3116,11 @@ changeHoldingsTabIndex(int index) {
         ConstantName.sessCheck = true;
         if (isPosition) {
           await fetchPositionBook(context, _isDay);
-          successMessage(context, "Position exited successfully.");
+          // "Ok" only means the order was accepted — the websocket reports executed / rejected.
+          // successMessage(context, "Position exited successfully.");
+          final exitSymbol =
+              placeOrderInput.tsym.replaceAll(RegExp(r'-EQ$'), "");
+          successMessage(context, "Exit order placed for $exitSymbol.");
         } else {
           await fetchHoldings(context, "Refresh");
         }
@@ -3336,7 +3340,16 @@ changeHoldingsTabIndex(int index) {
         if (context.mounted) {
         Navigator.pop(context);
           // Show error message from API
-          final errorMsg = _positionConvertionModel!.emsg ?? "Conversion failed";
+          // final errorMsg = _positionConvertionModel!.emsg ?? "Conversion failed";
+          final rawMsg = _positionConvertionModel!.emsg ?? "";
+          final symbol = input.tsym.replaceAll(RegExp(r'-EQ$'), "");
+          final String errorMsg;
+          if (rawMsg.contains("No Holdings uploaded")) {
+            errorMsg =
+                "This position can't be converted to $toProduct. $symbol is not in your holdings.";
+          } else {
+            errorMsg = rawMsg.isNotEmpty ? rawMsg : "Conversion failed";
+          }
           if (kIsWeb) {
             ResponsiveSnackBar.showWarning(context, errorMsg);
           } else {
