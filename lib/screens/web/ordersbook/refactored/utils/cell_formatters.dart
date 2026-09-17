@@ -49,7 +49,11 @@ class CellFormatters {
     switch (status) {
       case 'OPEN':
         return 'Open';
+      // case 'COMPLETE':
+      // case 'EXECUTED':
+      //   return 'Executed';
       case 'COMPLETE':
+        return 'Complete'; // show API status as-is, same as detail panel + mobile
       case 'EXECUTED':
         return 'Executed';
       case 'REJECTED':

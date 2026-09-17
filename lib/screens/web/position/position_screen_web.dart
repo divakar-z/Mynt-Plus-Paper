@@ -852,7 +852,10 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             ? positionBook.allPostionList
             : positionBook.openPosition ?? [];
 
-        final filteredPositions = _getFilteredPositionsFromList(positions);
+        // Download is the full list, same as Holdings and Orders —
+        // search, product filter and sort are not applied.
+        // final filteredPositions = _getFilteredPositionsFromList(positions);
+        final filteredPositions = positions.toList();
 
         if (filteredPositions.isEmpty) {
           warningMessage(context, 'No positions to download');

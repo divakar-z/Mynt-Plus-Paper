@@ -1984,41 +1984,98 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                           // ]
                           const SizedBox(height: 10),
                           // AMO Alert Banner - shown when market is closed
+                          // Boxed banner (same box as before) with soft amber tint + AMO badge; old banner kept below, commented
                           if (_isMarketClosed && _afterMarketOrder && orderType != "CO - BO" && orderType != "GTT") ...[
                             Container(
-                              margin: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              margin: const EdgeInsets.only(left: 10, right: 10, bottom: 12),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                               decoration: BoxDecoration(
-                                color: MyntColors.primaryDark.withValues(alpha: 0.1),
+                                // Cream background, light tan border, deep amber badge with white text
+                                color: resolveThemeColor(context,
+                                    dark: MyntColors.warningDark.withValues(alpha: 0.12),
+                                    light: MyntColors.warning.withValues(alpha: 0.08)),
                                 borderRadius: BorderRadius.circular(6),
                                 border: Border.all(
-                                  color: resolveThemeColor(context, dark: MyntColors.primaryDark.withValues(alpha: 0.3), light: MyntColors.primary.withValues(alpha: 0.3)),
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.warningDark.withValues(alpha: 0.35),
+                                      light: MyntColors.warning.withValues(alpha: 0.30)),
                                   width: 1,
                                 ),
                               ),
                               child: Row(
                                 children: [
-                                  Icon(
-                                    Icons.info_outline,
-                                    color: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-                                    size: 18,
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFB7791F),
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                    child: Text(
+                                      'AMO',
+                                      style: WebTextStyles.para(
+                                        isDarkTheme: theme.isDarkMode,
+                                        color: MyntColors.textWhite,
+                                        fontWeight: WebFonts.semiBold,
+                                      ),
+                                    ),
                                   ),
                                   const SizedBox(width: 10),
                                   Expanded(
                                     child: Text(
-                                      'Market is closed. Orders will be placed as AMO (After Market Order).',
-                                      style: WebTextStyles.para(
+                                      // 'Market is closed. Orders will be placed as AMO (After Market Order).',
+                                      'Market closed · Orders will be placed as After Market Order',
+                                      style: WebTextStyles.bodySmall(
                                         isDarkTheme: theme.isDarkMode,
-                                        color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
-                                        fontWeight: WebFonts.regular,
+                                        color: resolveThemeColor(context,
+                                            dark: MyntColors.textPrimaryDark,
+                                            light: MyntColors.textPrimary),
+                                        fontWeight: WebFonts.medium,
                                       ),
                                       maxLines: 2,
+                                      // maxLines: 1,
+                                      // overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
                           ],
+                          // Old boxed AMO banner:
+                          // if (_isMarketClosed && _afterMarketOrder && orderType != "CO - BO" && orderType != "GTT") ...[
+                          //   Container(
+                          //     margin: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
+                          //     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          //     decoration: BoxDecoration(
+                          //       color: MyntColors.primaryDark.withValues(alpha: 0.1),
+                          //       borderRadius: BorderRadius.circular(6),
+                          //       border: Border.all(
+                          //         color: resolveThemeColor(context, dark: MyntColors.primaryDark.withValues(alpha: 0.3), light: MyntColors.primary.withValues(alpha: 0.3)),
+                          //         width: 1,
+                          //       ),
+                          //     ),
+                          //     child: Row(
+                          //       children: [
+                          //         Icon(
+                          //           Icons.info_outline,
+                          //           color: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
+                          //           size: 18,
+                          //         ),
+                          //         const SizedBox(width: 10),
+                          //         Expanded(
+                          //           child: Text(
+                          //             'Market is closed. Orders will be placed as AMO (After Market Order).',
+                          //             style: WebTextStyles.para(
+                          //               isDarkTheme: theme.isDarkMode,
+                          //               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
+                          //               fontWeight: WebFonts.regular,
+                          //             ),
+                          //             maxLines: 2,
+                          //           ),
+                          //         ),
+                          //       ],
+                          //     ),
+                          //   ),
+                          // ],
                           Expanded(
                             child: SingleChildScrollView(
                               child: Column(children: [

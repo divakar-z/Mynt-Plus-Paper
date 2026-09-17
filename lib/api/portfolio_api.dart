@@ -293,7 +293,8 @@ mixin PortfolioAPI on ApiCore {
               "prevprd":"${positionConvertionInput.prevprd}",
               "trantype":"${positionConvertionInput.trantype}",
               "postype":"${positionConvertionInput.postype}",
-              "ordersource":"MOB"}&jKey=${prefs.clientSession}''');
+              "ordersource":"WEB"}&jKey=${prefs.clientSession}''');
+      // "ordersource":"MOB"}&jKey=${prefs.clientSession}''');
 
       // log("Position Convertion => ${res.body}");
       final json = jsonDecode(res.body);

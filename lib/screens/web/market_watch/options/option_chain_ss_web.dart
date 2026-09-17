@@ -2812,7 +2812,8 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
       case 'placed':
         return 'PLACED';
       case 'complete':
-        return 'EXECUTED';
+        // return 'EXECUTED';
+        return 'COMPLETE';
       case 'rejected':
         return 'REJECTED';
       case 'canceled':
