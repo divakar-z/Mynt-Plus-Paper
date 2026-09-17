@@ -42,7 +42,7 @@ import '../sharedWidget/snack_bar.dart';
 import 'auth_provider.dart';
 import 'core/default_change_notifier.dart';
 import 'index_list_provider.dart';
-// import 'package:http/http.dart' as http;
+import 'package:http/http.dart' as http;
 
 final transcationProvider =
     ChangeNotifierProvider((ref) => TranctionProvider(ref));
@@ -226,8 +226,19 @@ class TranctionProvider extends DefaultChangeNotifier {
   ip() async {
     try {
       toggleLoadingOn(true);
-      String ip = await IpAddress().getIp();
-      _ipAddress = ip;
+      if (kIsWeb) {
+        // public_ip_address calls ipv4.seeip.org, which blocks browsers via CORS
+        try {
+          final response = await http
+              .get(Uri.parse('https://api.ipify.org?format=text'))
+              .timeout(const Duration(seconds: 5));
+          _ipAddress = response.statusCode == 200 ? response.body.trim() : '';
+        } catch (_) {
+          _ipAddress = '';
+        }
+      } else {
+        _ipAddress = await IpAddress().getIp();
+      }
       return _ipAddress;
     } finally {
       toggleLoadingOn(false);
