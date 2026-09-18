@@ -28,6 +28,11 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
 
   final TextEditingController oldPassword = TextEditingController();
   final TextEditingController newPassword = TextEditingController();
+
+  // Repeat of newPassword. Purely client-side — the change-password API only
+  // takes uid/oldpwd/pwd, so this never leaves the app. Added 18 Sep 2026 on
+  // client feedback that two boxes looked like new + retype but weren't.
+  final TextEditingController confirmPassword = TextEditingController();
   final TextEditingController forGetloginMethCtrl = TextEditingController();
 
   // 4-digit OTP entered by user during the OTP-gated forgot-password flow.
@@ -43,15 +48,30 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
   bool get isDisableforgetbtn => _isDisableforgetbtn;
   bool _hideoldpassword = true;
   bool _hidenewpassword = true;
+  bool _hideconfirmpassword = true;
   bool get hideoldpassword => _hideoldpassword;
   bool get hidenewpassword => _hidenewpassword;
+  bool get hideconfirmpassword => _hideconfirmpassword;
 
   bool _isDisableChangepassbtn = true;
   bool get isDisableChangepassbtn => _isDisableChangepassbtn;
 
+  // True when New Password has text that breaks the rules, as opposed to
+  // being empty. The empty case is an ordinary "please fill this in" message
+  // and shows inline in red like every other field; only a rules failure goes
+  // into the bubble.
+  bool newPasswordRulesUnmet = false;
+
+  // The unmet requirements, one per entry, in the order they are checked.
+  // The validation bubble lists these as bullets — a comma-joined sentence
+  // was hard to read (client review 18 Sep 2026). newPasswordError still
+  // carries the joined version for surfaces that show a plain message.
+  List<String> newPasswordMissing = [];
+
   String? userIdChangepassError,
       oldPasswordError,
       newPasswordError,
+      confirmPasswordError,
       forgetpassError,
       forgotOtpError;
 
@@ -65,6 +85,7 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
     _isDisableforgetbtn = true;
     oldPassword.clear();
     newPassword.clear();
+    confirmPassword.clear();
     forGetloginMethCtrl.clear();
     forgotOtpController.clear();
     notifyListeners();
@@ -75,6 +96,9 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
     userIdChangepassError = null;
     oldPasswordError = null;
     newPasswordError = null;
+    newPasswordRulesUnmet = false;
+    newPasswordMissing = [];
+    confirmPasswordError = null;
     forgetpassError = null;
     forgotOtpError = null;
     notifyListeners();
@@ -131,7 +155,9 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
 // If Change pass validation is successful, activate the button.
 
   activateChangePass() {
-    if ((newPasswordError == "" || newPasswordError == null) && (oldPasswordError == "" || oldPasswordError == null)) {
+    if ((newPasswordError == "" || newPasswordError == null) &&
+        (oldPasswordError == "" || oldPasswordError == null) &&
+        (confirmPasswordError == "" || confirmPasswordError == null)) {
       _isDisableChangepassbtn = false;
     } else {
       _isDisableChangepassbtn = true;
@@ -149,6 +175,11 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
 
   hiddenewpasswords() {
     _hidenewpassword = !_hidenewpassword;
+    notifyListeners();
+  }
+
+  hiddeconfirmpasswords() {
+    _hideconfirmpassword = !_hideconfirmpassword;
     notifyListeners();
   }
 
@@ -194,6 +225,8 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
     }
     String value = newPassword.text.trim();
     newPasswordError = "";
+    newPasswordRulesUnmet = false;
+    newPasswordMissing = [];
 
     if (value.isEmpty) {
       newPasswordError = "Please enter the new password";
@@ -218,11 +251,33 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
 
       if (missing.isNotEmpty) {
         newPasswordError = "Please enter ${missing.join(', ')}";
+        newPasswordMissing = missing;
+        newPasswordRulesUnmet = true;
       } else {
         newPasswordError = "";
       }
     }
 
+    notifyListeners();
+  }
+
+  // Repeat New Password check. Client-side only, so the message is shown
+  // inline in red — never as a toast (toasts are reserved for backend emsg).
+  void validateConfirmPassword() {
+    // Match validateNewPassword: spaces are stripped, not rejected.
+    if (confirmPassword.text.contains(' ')) {
+      confirmPassword.text = confirmPassword.text.replaceAll(' ', '');
+    }
+    final confirmValue = confirmPassword.text.trim();
+    final newValue = newPassword.text.trim();
+
+    if (confirmValue.isEmpty) {
+      confirmPasswordError = "Please repeat the new password";
+    } else if (confirmValue != newValue) {
+      confirmPasswordError = "Passwords do not match";
+    } else {
+      confirmPasswordError = "";
+    }
     notifyListeners();
   }
 
@@ -257,10 +312,13 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
 
       if (_forgetPasswordModel!.stat == "Ok") {
         ConstantName.sessCheck = true;
-        if (context.mounted) {
-          ResponsiveSnackBar.showSuccess(
-              context, 'Generated Password has been sent to Your Mobile Number and Email');
-        }
+        // Retired 18 Sep 2026 (client feedback): the "sent to your mobile
+        // and email" message is now static text above the Generated Password
+        // field on the Change Your Password screen, not a 4s toast.
+        // if (context.mounted) {
+        //   ResponsiveSnackBar.showSuccess(
+        //       context, 'Generated Password has been sent to Your Mobile Number and Email');
+        // }
 
         userIdController.text = '${_forgetPasswordModel!.clientid}';
 
@@ -404,10 +462,13 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
           userIdController.text =
               forGetloginMethCtrl.text.trim().toUpperCase();
         }
-        if (context.mounted) {
-          ResponsiveSnackBar.showSuccess(context,
-              'Generated Password has been sent to Your Mobile Number and Email');
-        }
+        // Retired 18 Sep 2026 (client feedback): the "sent to your mobile
+        // and email" message is now static text above the Generated Password
+        // field on the Change Your Password screen, not a 4s toast.
+        // if (context.mounted) {
+        //   ResponsiveSnackBar.showSuccess(context,
+        //       'Generated Password has been sent to Your Mobile Number and Email');
+        // }
         return true;
       }
 
@@ -436,6 +497,9 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
   submitChangePass(BuildContext context) {
     validateOldPassword();
     validateNewPassword();
+    // NOTE: no validateConfirmPassword() here — this method is only reached
+    // from the Mobile change_pass screen, which has no Repeat field. The two
+    // web surfaces call fetchChangePassword directly and validate there.
     if (oldPasswordError == "" && newPasswordError == "") {
       fetchChangePassword(userIdController.text.toUpperCase(), oldPassword.text,
           newPassword.text, context);

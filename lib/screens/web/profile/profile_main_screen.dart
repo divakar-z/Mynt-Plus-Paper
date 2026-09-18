@@ -24,6 +24,7 @@ import 'package:mynt_plus/provider/fund_provider.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
+import 'package:mynt_plus/sharedWidget/password_error_bubble.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart' show ScreenType;
 
@@ -545,6 +546,11 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   // only when the user actually attempts to type/paste beyond 12 chars
   // (caught by the custom inputFormatter). Auto-hides after 2 seconds.
   bool _showNewPwdMaxLengthError = false;
+
+  // Validation bubble under the New Password field, shown only on a submit
+  // that falls short. Same behaviour as the login Change Password screen.
+  final PasswordErrorBubbleController _newPwdBubble =
+      PasswordErrorBubbleController();
   Timer? _newPwdMaxLengthHideTimer;
 
   // True once we've kicked off the TOTP fetch for this mounting of the
@@ -568,6 +574,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
     mktProtCtrl.dispose();
     qtyCtrl.dispose();
     _newPwdMaxLengthHideTimer?.cancel();
+    _newPwdBubble.dispose();
     super.dispose();
   }
 
@@ -575,6 +582,20 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   /// user attempts to type/paste beyond 12 chars. Shows the inline red
   /// "Password must be exactly 12 characters" error briefly, then auto-hides
   /// after 2 seconds so the message disappears once the user stops trying.
+  // Only a RULES failure goes in the bubble. An empty field gets the same
+  // inline red message as every other field on this screen.
+  void _showNewPwdBubble(ChangePasswordProvider changePassword) {
+    if (changePassword.newPasswordRulesUnmet && mounted) {
+      _newPwdBubble.show(
+        context,
+        passwordRulesHeading,
+        points: changePassword.newPasswordMissing,
+      );
+    } else {
+      _newPwdBubble.hide();
+    }
+  }
+
   void _triggerNewPwdMaxLengthError() {
     if (!mounted) return;
     _newPwdMaxLengthHideTimer?.cancel();
@@ -956,7 +977,11 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
           const SizedBox(height: 10),
           SizedBox(
             width: 400,
-            child: MyntFormTextField(
+            // Wrapped so the validation bubble can hang off the bottom of
+            // this exact field.
+            child: CompositedTransformTarget(
+              link: _newPwdBubble.link,
+              child: MyntFormTextField(
               controller: changePassword.newPassword,
               placeholder: 'Enter new password',
               height: 40,
@@ -999,9 +1024,13 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                 constraints: const BoxConstraints(),
               ),
               onChanged: (v) {
+                // Typing dismisses the bubble, the way a browser drops its
+                // own validation popup.
+                _newPwdBubble.hide();
                 changePassword.validateNewPassword();
                 changePassword.activateChangePass();
               },
+            ),
             ),
           ),
           // Transient red error: takes priority over the missing-requirements
@@ -1018,7 +1047,11 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                         light: MyntColors.loss)),
               ),
             )
-          else if (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty)
+          // The rules message lives in the bubble; the plain "field is empty"
+          // message stays inline so this field reads like the two around it.
+          else if (!changePassword.newPasswordRulesUnmet &&
+              changePassword.newPasswordError != null &&
+              changePassword.newPasswordError!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 5),
               child: Text(
@@ -1029,6 +1062,80 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                         light: MyntColors.loss)),
               ),
             ),
+          const SizedBox(height: 16),
+
+          // Repeat New Password Field
+          //
+          // Client feedback 15 Sep 2026 on the Forgot Password flow: the two
+          // password boxes read as new + retype but weren't. Added here too so
+          // both change-password surfaces behave the same. Client-side only —
+          // the change-password API takes uid/oldpwd/pwd, this never leaves
+          // the app.
+          Text(
+            'Repeat New Password',
+            style: MyntWebTextStyles.body(context,
+                fontWeight: MyntFonts.medium,
+                color: resolveThemeColor(context,
+                    dark: MyntColors.textPrimaryDark,
+                    light: MyntColors.textPrimary)),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: 400,
+            child: MyntFormTextField(
+              controller: changePassword.confirmPassword,
+              placeholder: 'Repeat new password',
+              height: 40,
+              obscureText: changePassword.hideconfirmpassword,
+              readOnly: changePassword.loading,
+              // Same charset and 12-char ceiling as New Password, so a valid
+              // password can always be retyped in full. No transient
+              // max-length error here — New Password already explains it.
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(
+                  RegExp(r'[A-Za-z0-9#$\-*@]'),
+                ),
+                LengthLimitingTextInputFormatter(12),
+              ],
+              trailingWidget: IconButton(
+                icon: Icon(
+                  changePassword.hideconfirmpassword ? Icons.visibility_off : Icons.visibility,
+                  size: 18,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary),
+                ),
+                onPressed: () {
+                  changePassword.hiddeconfirmpasswords();
+                  changePassword.activateChangePass();
+                },
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+              // Only clear a standing mismatch while typing — don't nag with
+              // "do not match" on every keystroke before the retype is done.
+              onChanged: (v) {
+                if (changePassword.confirmPasswordError != null &&
+                    changePassword.confirmPasswordError!.isNotEmpty) {
+                  changePassword.validateConfirmPassword();
+                }
+                changePassword.activateChangePass();
+              },
+            ),
+          ),
+          if (changePassword.confirmPasswordError != null &&
+              changePassword.confirmPasswordError!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                changePassword.confirmPasswordError!,
+                style: MyntWebTextStyles.caption(context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.lossDark,
+                        light: MyntColors.loss)),
+              ),
+            ),
+
           const SizedBox(height: 24),
 
           // Buttons
@@ -1038,6 +1145,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                 height: 36,
                 child: OutlinedButton(
                   onPressed: () {
+                    _newPwdBubble.hide();
                     changePassword.changePassMethod();
                   },
                   style: OutlinedButton.styleFrom(
@@ -1071,10 +1179,13 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                   onPressed: changePassword.loading
                       ? null
                       : changePassword.oldPassword.text.isEmpty ||
-                              changePassword.newPassword.text.isEmpty
+                              changePassword.newPassword.text.isEmpty ||
+                              changePassword.confirmPassword.text.isEmpty
                           ? () {
                               changePassword.validateOldPassword();
                               changePassword.validateNewPassword();
+                              changePassword.validateConfirmPassword();
+                              _showNewPwdBubble(changePassword);
                             }
                           : () async {
                               // Set userId if not already set
@@ -1086,10 +1197,13 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                               // Validate fields
                               changePassword.validateOldPassword();
                               changePassword.validateNewPassword();
+                              changePassword.validateConfirmPassword();
                               changePassword.activateChangePass();
+                              _showNewPwdBubble(changePassword);
 
                               if ((changePassword.oldPasswordError != null && changePassword.oldPasswordError!.isNotEmpty) ||
-                                  (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty)) {
+                                  (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty) ||
+                                  (changePassword.confirmPasswordError != null && changePassword.confirmPasswordError!.isNotEmpty)) {
                                 return;
                               }
 

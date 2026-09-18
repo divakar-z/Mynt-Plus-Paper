@@ -7,6 +7,8 @@ import 'package:flutter_svg/svg.dart';
 // import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mynt_plus/sharedWidget/custom_text_form_field.dart';
 import 'package:mynt_plus/sharedWidget/accessibility/accessibility_panel.dart';
+// Retired with the info-icon popover (client feedback 15 Sep 2026).
+// import 'generated_password_info.dart';
 import 'totp_setup_dialog.dart';
 // import 'package:remove_emoji_input_formatter/remove_emoji_input_formatter.dart';
 import '../../../../locator/preference.dart';
@@ -24,6 +26,7 @@ import '../../../../provider/user_profile_provider.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/app_release.dart';
 import '../../../../res/res.dart';
+import '../../../../sharedWidget/password_error_bubble.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../routes/route_names.dart';
@@ -71,6 +74,8 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   bool _isInitializing = true; // True until auto-login check completes
   late FocusNode focusNode;
   late FocusNode focusNode1;
+  // Repeat New Password field on the Change Your Password screen.
+  late FocusNode focusNode2;
   bool _showForgotPassword = false;
   // OTP-gated forgot-password screen — shown between identifier entry and
   // the Change Password screen. User enters the 4-digit OTP sent to their
@@ -88,6 +93,12 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   bool _setupDialogOpen = false;
   bool _showChangePassword = false;
   bool _isPasswordExpired = false; // Tracks if change password was triggered by password expiry
+
+  // Validation bubble under the New Password field. Only ever shown on a
+  // submit that falls short — the client's call — so nothing red appears
+  // while the user is still typing.
+  final PasswordErrorBubbleController _newPwdBubble =
+      PasswordErrorBubbleController();
   
   // OTP Timer Logic
   Timer? _timer;
@@ -171,6 +182,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     focusNode.addListener(_onFocusChange);
     focusNode1 = FocusNode();
     focusNode1.addListener(_onFocusChange);
+    focusNode2 = FocusNode();
 
     // When arriving from the OAuth flow (URL carries ?client_id=...), skip the
     // saved-account view and show fresh credential fields — the URL's client_id
@@ -273,6 +285,8 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     focusNode1.removeListener(_onFocusChange);
     focusNode.dispose();
     focusNode1.dispose();
+    focusNode2.dispose();
+    _newPwdBubble.dispose();
     _timer?.cancel();
     _a11yOverlay?.remove();
     _a11yOverlay = null;
@@ -877,11 +891,26 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
   Future<void> _handleChangePasswordSubmit() async {
     final forpass = ref.read(changePasswordProvider);
 
-    // Validate both fields
+    // Validate all three fields
     forpass.validateOldPassword(isPasswordExpired: _isPasswordExpired);
     forpass.validateNewPassword();
+    forpass.validateConfirmPassword();
 
-    if (forpass.oldPasswordError == "" && forpass.newPasswordError == "") {
+    // Only a RULES failure goes in the bubble. An empty field gets the same
+    // inline red message as every other field on this screen.
+    if (forpass.newPasswordRulesUnmet && mounted) {
+      _newPwdBubble.show(
+        context,
+        passwordRulesHeading,
+        points: forpass.newPasswordMissing,
+      );
+    } else {
+      _newPwdBubble.hide();
+    }
+
+    if (forpass.oldPasswordError == "" &&
+        forpass.newPasswordError == "" &&
+        forpass.confirmPasswordError == "") {
       await forpass.fetchChangePassword(
         forpass.userIdController.text.toUpperCase(),
         forpass.oldPassword.text,
@@ -897,6 +926,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
       if (forpass.changepasswordmodel?.stat == "Ok") {
         // Success! Go back to login form
         if (mounted) {
+          _newPwdBubble.hide();
           setState(() {
             _showChangePassword = false;
           });
@@ -2076,6 +2106,26 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                             // ),
                             // const SizedBox(height: 20),
 
+                            // Client feedback 15 Sep 2026: the screen itself has to
+                            // say what the generated password is and where it was
+                            // sent. This static line replaces both the info-icon
+                            // popover and the 4s "sent to your mobile/email" toast.
+                            // Only the forgot-password flow sees it — the forced
+                            // expiry flow asks for the user's own Old Password.
+                            if (!_isPasswordExpired) ...[
+                              Text(
+                                "We've sent a generated password to your registered mobile number and email. Enter it below, then set a new password of your choice.",
+                                style: MyntWebTextStyles.para(
+                                  context,
+                                  fontWeight: MyntFonts.regular,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.textSecondaryDark,
+                                      light: MyntColors.textSecondary),
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                            ],
+
                             // Old/Generated Password Field
                             TextFormField(
                               controller: forpass.oldPassword,
@@ -2101,20 +2151,59 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                       dark: MyntColors.textSecondaryDark,
                                       light: MyntColors.textSecondary),
                                 ),
-                                suffixIcon: InkWell(
-                                  onTap: () {
-                                    forpass.hiddeoldpasswords();
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: SvgPicture.asset(
-                                      forpass.hideoldpassword
-                                          ? "assets/icon/eye-off.svg"
-                                          : "assets/icon/eye.svg",
-                                      color: resolveThemeColor(context,
-                                          dark: MyntColors.textSecondaryDark,
-                                          light: MyntColors.textSecondary),
-                                      width: 20,
+                                // suffixIcon: InkWell(
+                                //   onTap: () {
+                                //     forpass.hiddeoldpasswords();
+                                //   },
+                                //   child: Padding(
+                                //     padding: const EdgeInsets.all(12),
+                                //     child: SvgPicture.asset(
+                                //       forpass.hideoldpassword
+                                //           ? "assets/icon/eye-off.svg"
+                                //           : "assets/icon/eye.svg",
+                                //       color: resolveThemeColor(context,
+                                //           dark: MyntColors.textSecondaryDark,
+                                //           light: MyntColors.textSecondary),
+                                //       width: 20,
+                                //     ),
+                                //   ),
+                                // ),
+                                // Retired: the info icon + popover that explained the
+                                // generated password. Replaced by the static helper
+                                // text above this field (client feedback 15 Sep 2026).
+                                // suffixIcon: Row(
+                                //   mainAxisSize: MainAxisSize.min,
+                                //   children: [
+                                //     if (!_isPasswordExpired)
+                                //       GeneratedPasswordInfoIcon(
+                                //         fieldFocusNodes: [focusNode, focusNode1],
+                                //       ),
+                                // Grey hover circle (MyntCloseButton pattern).
+                                suffixIcon: Material(
+                                  color: Colors.transparent,
+                                  shape: const CircleBorder(),
+                                  child: InkWell(
+                                    customBorder: const CircleBorder(),
+                                    hoverColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.05),
+                                    splashColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.1),
+                                    highlightColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.03),
+                                    onTap: () {
+                                      forpass.hiddeoldpasswords();
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: SvgPicture.asset(
+                                        forpass.hideoldpassword
+                                            ? "assets/icon/eye-off.svg"
+                                            : "assets/icon/eye.svg",
+                                        color: resolveThemeColor(context,
+                                            dark: MyntColors.textSecondaryDark,
+                                            light: MyntColors.textSecondary),
+                                        width: 20,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -2156,12 +2245,18 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                             const SizedBox(height: 20),
 
                             // New Password Field
-                            TextFormField(
+                            //
+                            // Wrapped so the validation bubble can hang off
+                            // the bottom of this exact field.
+                            CompositedTransformTarget(
+                              link: _newPwdBubble.link,
+                              child: TextFormField(
                               controller: forpass.newPassword,
                               focusNode: focusNode1,
                               readOnly: forpass.loading,
                               obscureText: forpass.hidenewpassword,
-                              textInputAction: TextInputAction.done,
+                              // Repeat New Password now follows this field.
+                              textInputAction: TextInputAction.next,
                               // Backend enforces max 12 chars + alphanumeric +
                               // allowed specials (#, $, -, *, @). Mirror that
                               // at the input level so users get immediate
@@ -2211,20 +2306,49 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                       dark: MyntColors.textSecondaryDark,
                                       light: MyntColors.textSecondary),
                                 ),
-                                suffixIcon: InkWell(
-                                  onTap: () {
-                                    forpass.hiddenewpasswords();
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: SvgPicture.asset(
-                                      forpass.hidenewpassword
-                                          ? "assets/icon/eye-off.svg"
-                                          : "assets/icon/eye.svg",
-                                      color: resolveThemeColor(context,
-                                          dark: MyntColors.textSecondaryDark,
-                                          light: MyntColors.textSecondary),
-                                      width: 20,
+                                // suffixIcon: InkWell(
+                                //   onTap: () {
+                                //     forpass.hiddenewpasswords();
+                                //   },
+                                //   child: Padding(
+                                //     padding: const EdgeInsets.all(12),
+                                //     child: SvgPicture.asset(
+                                //       forpass.hidenewpassword
+                                //           ? "assets/icon/eye-off.svg"
+                                //           : "assets/icon/eye.svg",
+                                //       color: resolveThemeColor(context,
+                                //           dark: MyntColors.textSecondaryDark,
+                                //           light: MyntColors.textSecondary),
+                                //       width: 20,
+                                //     ),
+                                //   ),
+                                // ),
+                                // Grey hover circle, same as the Generated Password row (MyntCloseButton pattern).
+                                suffixIcon: Material(
+                                  color: Colors.transparent,
+                                  shape: const CircleBorder(),
+                                  child: InkWell(
+                                    customBorder: const CircleBorder(),
+                                    hoverColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.05),
+                                    splashColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.1),
+                                    highlightColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.03),
+                                    onTap: () {
+                                      forpass.hiddenewpasswords();
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: SvgPicture.asset(
+                                        forpass.hidenewpassword
+                                            ? "assets/icon/eye-off.svg"
+                                            : "assets/icon/eye.svg",
+                                        color: resolveThemeColor(context,
+                                            dark: MyntColors.textSecondaryDark,
+                                            light: MyntColors.textSecondary),
+                                        width: 20,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -2246,15 +2370,24 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                     const EdgeInsets.symmetric(vertical: 8),
                               ),
                               onChanged: (v) {
+                                // Typing dismisses the bubble, the way a
+                                // browser drops its own validation popup.
+                                _newPwdBubble.hide();
                                 forpass.validateNewPassword();
                                 forpass.activateChangePass();
                               },
                               onFieldSubmitted: (_) {
-                                _handleChangePasswordSubmit();
+                                // Enter moves to Repeat New Password, not submit.
+                                FocusScope.of(context).requestFocus(focusNode2);
                               },
+                            ),
                             ),
                             const SizedBox(height: 5),
                           
+                            // The rules message lives in the bubble; what
+                            // stays inline is the transient max-length warning
+                            // and the plain "field is empty" message, so this
+                            // field reads like the two around it.
                             if (_showNewPwdMaxLengthError)
                               Text(
                                 "Password must be exactly 12 characters",
@@ -2265,11 +2398,128 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                       light: MyntColors.loss),
                                 ),
                               )
-                            else if (forpass.newPasswordError != null &&
-                                forpass.newPasswordError!.isNotEmpty &&
-                                forpass.newPasswordError != "")
+                            else if (!forpass.newPasswordRulesUnmet &&
+                                forpass.newPasswordError != null &&
+                                forpass.newPasswordError!.isNotEmpty)
                               Text(
                                 "${forpass.newPasswordError}",
+                                style: MyntWebTextStyles.para(
+                                  context,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.lossDark,
+                                      light: MyntColors.loss),
+                                ),
+                              ),
+
+                            const SizedBox(height: 20),
+
+                            // Repeat New Password Field
+                            //
+                            // Client feedback 15 Sep 2026: the two existing
+                            // boxes read as new + retype but weren't, so the
+                            // real retype is added here. Client-side only —
+                            // the change-password API takes uid/oldpwd/pwd,
+                            // this value never leaves the app.
+                            TextFormField(
+                              controller: forpass.confirmPassword,
+                              focusNode: focusNode2,
+                              readOnly: forpass.loading,
+                              obscureText: forpass.hideconfirmpassword,
+                              textInputAction: TextInputAction.done,
+                              // Same charset and 12-char ceiling as New
+                              // Password, so a valid password can always be
+                              // retyped in full. No transient max-length
+                              // error here — New Password already explains it.
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(
+                                  RegExp(r'[A-Za-z0-9#$\-*@]'),
+                                ),
+                                LengthLimitingTextInputFormatter(12),
+                              ],
+                              style: MyntWebTextStyles.title(
+                                context,
+                                fontWeight: MyntFonts.medium,
+                                color: resolveThemeColor(context,
+                                    dark: MyntColors.textPrimaryDark,
+                                    light: MyntColors.textPrimary),
+                              ),
+                              decoration: InputDecoration(
+                                filled: false,
+                                labelText: "Repeat New Password",
+                                floatingLabelBehavior: FloatingLabelBehavior.auto,
+                                labelStyle: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.regular,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.textSecondaryDark,
+                                      light: MyntColors.textSecondary),
+                                ),
+                                // Grey hover circle, same as the other two eyes.
+                                suffixIcon: Material(
+                                  color: Colors.transparent,
+                                  shape: const CircleBorder(),
+                                  child: InkWell(
+                                    customBorder: const CircleBorder(),
+                                    hoverColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.05),
+                                    splashColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.1),
+                                    highlightColor: (isDarkMode(context) ? Colors.white : Colors.black)
+                                        .withValues(alpha: 0.03),
+                                    onTap: () {
+                                      forpass.hiddeconfirmpasswords();
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: SvgPicture.asset(
+                                        forpass.hideconfirmpassword
+                                            ? "assets/icon/eye-off.svg"
+                                            : "assets/icon/eye.svg",
+                                        color: resolveThemeColor(context,
+                                            dark: MyntColors.textSecondaryDark,
+                                            light: MyntColors.textSecondary),
+                                        width: 20,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                enabledBorder: UnderlineInputBorder(
+                                  borderSide: BorderSide(
+                                      color: resolveThemeColor(context,
+                                          dark: MyntColors.dividerDark,
+                                          light: MyntColors.divider),
+                                      width: 1),
+                                ),
+                                focusedBorder: UnderlineInputBorder(
+                                  borderSide: BorderSide(
+                                      color: resolveThemeColor(context,
+                                          dark: MyntColors.primaryDark,
+                                          light: MyntColors.primary),
+                                      width: 1),
+                                ),
+                                contentPadding:
+                                    const EdgeInsets.symmetric(vertical: 8),
+                              ),
+                              // Only clear a standing mismatch while typing —
+                              // don't nag with "do not match" on every
+                              // keystroke before the retype is finished.
+                              onChanged: (v) {
+                                if (forpass.confirmPasswordError != null &&
+                                    forpass.confirmPasswordError!.isNotEmpty) {
+                                  forpass.validateConfirmPassword();
+                                }
+                                forpass.activateChangePass();
+                              },
+                              onFieldSubmitted: (_) {
+                                _handleChangePasswordSubmit();
+                              },
+                            ),
+                            const SizedBox(height: 5),
+
+                            if (forpass.confirmPasswordError != null &&
+                                forpass.confirmPasswordError!.isNotEmpty)
+                              Text(
+                                "${forpass.confirmPasswordError}",
                                 style: MyntWebTextStyles.para(
                                   context,
                                   color: resolveThemeColor(context,
@@ -2330,6 +2580,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                                     auth.passError = null;
                                     _showChangePassword = false;
                                     _isPasswordExpired = false;
+                                    _newPwdBubble.hide();
                                     forpass.changePassMethod();
                                   });
                                 },
