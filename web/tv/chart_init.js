@@ -1180,6 +1180,39 @@
       if (!sub && entry.main && entry.main.callback) sub = entry.main;
       if (!sub) return;
 
+      // Studies subscribed on a DAILY series need the tick too, even while the
+      // displayed resolution is intraday. Pivot Points Standard is the case
+      // that matters: it opens a secondary 1D series (pivTimeFrame "Auto" maps
+      // 1-15m -> "1D") and only emits a pivot set when a NEW bar appears on
+      // that series, computed from the PREVIOUS daily bar's H/L/C. EODChartData
+      // has no row for the current session, so without a synthesised bar for
+      // today the study never sees today's period and draws no lines for it —
+      // every earlier day renders fine, which is exactly how the bug presents.
+      //
+      // Each target is bucketed with its OWN resolution below. That is what
+      // makes this safe: the crash this function's targeting was written to
+      // avoid ("Cannot read properties of null (reading '1')") came from
+      // feeding a bar bucketed for resolution A into a sub on resolution B,
+      // not from serving more than one sub.
+      //
+      // '1D'/'D' is the complete set — a 1W/1M/12M study needs no separate
+      // case. resolveSymbol declares has_weekly_and_monthly:false with
+      // daily_multipliers:["1"], so the library's
+      // findSuitableResolutionToBuildFrom() resolves every W/M series to
+      // "1D" and aggregates it itself; the datafeed is never asked for
+      // '1W'/'1M'. Verified against this exact symbolInfo: on a 30m chart
+      // (Auto pivots -> 1W) the library issues `GETBARS res=1D` and reuses
+      // the existing 1D subscription — no 1W subscribe is ever made.
+      // So pivots on intervals above 15m ride the same 1D sub as below.
+      var targets = [sub];
+      if (entry.studies) {
+        for (var suid in entry.studies) {
+          var st = entry.studies[suid];
+          if (!st || !st.callback || st === sub) continue;
+          if (st.resolution === '1D' || st.resolution === 'D') targets.push(st);
+        }
+      }
+
       var lp = parseFloat(tickData.lp);
       if (isNaN(lp) || lp === 0) return;
 
@@ -1198,78 +1231,83 @@
                     && !isNaN(dayHigh) && dayHigh > 0
                     && !isNaN(dayLow)  && dayLow  > 0;
 
-      // Parse trade time
-      var time = parseLTT(tickData.ltt);
+      // Parse trade time once; each target buckets it with its own resolution.
+      var rawTime = parseLTT(tickData.ltt);
 
-      // Bucket to candle boundary. Daily must land on the EOD grid: bars from
-      // EODChartData are stamped at the session time-of-day (09:15 IST /
-      // 03:45Z), NOT midnight, and TV spaces daily bars ~24h apart. An
-      // IST-midnight anchor is only ~14h45m after the last EOD bar (< 24h),
-      // so TV merged today's tick into YESTERDAY's candle. Keep the last
-      // bar's time-of-day and move it onto today's UTC date so it forms a
-      // proper next-day bucket.
-      var isDaily = (sub.resolution === '1D' || sub.resolution === 'D');
-      if (isDaily) {
-        var lastT = sub.lastBar ? sub.lastBar.time : null;
-        var eodOffset = (lastT != null)
-          ? (((lastT % 86400000) + 86400000) % 86400000)
-          : 13500000; // 09:15 IST (03:45Z) fallback
-        time = Math.floor(Date.now() / 86400000) * 86400000 + eodOffset;
-      } else {
-        time = bucketTime(time, sub.resolution, exchange);
+      function emitTo(sub) {
+        // Bucket to candle boundary. Daily must land on the EOD grid: bars from
+        // EODChartData are stamped at the session time-of-day (09:15 IST /
+        // 03:45Z), NOT midnight, and TV spaces daily bars ~24h apart. An
+        // IST-midnight anchor is only ~14h45m after the last EOD bar (< 24h),
+        // so TV merged today's tick into YESTERDAY's candle. Keep the last
+        // bar's time-of-day and move it onto today's UTC date so it forms a
+        // proper next-day bucket.
+        var isDaily = (sub.resolution === '1D' || sub.resolution === 'D');
+        var time;
+        if (isDaily) {
+          var lastT = sub.lastBar ? sub.lastBar.time : null;
+          var eodOffset = (lastT != null)
+            ? (((lastT % 86400000) + 86400000) % 86400000)
+            : 13500000; // 09:15 IST (03:45Z) fallback
+          time = Math.floor(Date.now() / 86400000) * 86400000 + eodOffset;
+        } else {
+          time = bucketTime(rawTime, sub.resolution, exchange);
+        }
+
+        // Volume delta calculation
+        var curVolume = vol;
+        if (curVolume < sub.preVolume) curVolume = sub.preVolume;
+        var volumeDelta = curVolume - sub.preVolume;
+
+        var lastBar = sub.lastBar;
+        var bar;
+
+        if (!lastBar) {
+          // No history bar yet — initialize from this tick so real-time updates
+          // can start even if getBars failed or returned empty data. For daily,
+          // seed full OHLC from the broker's day stats instead of a flat tick.
+          bar = isDaily && hasDayOhlc ? {
+            time: time, open: dayOpen, high: dayHigh, low: dayLow, close: lp, volume: vol
+          } : {
+            time: time, open: lp, high: lp, low: lp, close: lp, volume: 0
+          };
+          sub.preVolume = curVolume;
+        } else if (time > lastBar.time) {
+          // New candle - price crossed into next time bucket. For daily this
+          // is the roll into "today" from yesterday's EOD bar — seed full
+          // OHLC from the broker's day stats instead of a flat single-tick.
+          bar = isDaily && hasDayOhlc ? {
+            time: time, open: dayOpen, high: dayHigh, low: dayLow, close: lp, volume: vol
+          } : {
+            time: time, open: lp, high: lp, low: lp, close: lp, volume: 0
+          };
+          sub.preVolume = curVolume;
+        } else {
+          // Update existing candle. For daily, prefer the broker's running
+          // day O/H/L since they're authoritative (TV's local high/low can
+          // miss spikes that occurred before the chart connected).
+          bar = isDaily && hasDayOhlc ? {
+            time: lastBar.time,
+            open:   dayOpen,
+            high:   Math.max(dayHigh, lp),
+            low:    Math.min(dayLow,  lp),
+            close:  lp,
+            volume: vol
+          } : {
+            time: lastBar.time,
+            open: lastBar.open,
+            high: Math.max(lastBar.high, lp),
+            low: Math.min(lastBar.low, lp),
+            close: lp,
+            volume: volumeDelta
+          };
+        }
+
+        sub.lastBar = bar;
+        sub.callback(bar);
       }
 
-      // Volume delta calculation
-      var curVolume = vol;
-      if (curVolume < sub.preVolume) curVolume = sub.preVolume;
-      var volumeDelta = curVolume - sub.preVolume;
-
-      var lastBar = sub.lastBar;
-      var bar;
-
-      if (!lastBar) {
-        // No history bar yet — initialize from this tick so real-time updates
-        // can start even if getBars failed or returned empty data. For daily,
-        // seed full OHLC from the broker's day stats instead of a flat tick.
-        bar = isDaily && hasDayOhlc ? {
-          time: time, open: dayOpen, high: dayHigh, low: dayLow, close: lp, volume: vol
-        } : {
-          time: time, open: lp, high: lp, low: lp, close: lp, volume: 0
-        };
-        sub.preVolume = curVolume;
-      } else if (time > lastBar.time) {
-        // New candle - price crossed into next time bucket. For daily this
-        // is the roll into "today" from yesterday's EOD bar — seed full
-        // OHLC from the broker's day stats instead of a flat single-tick.
-        bar = isDaily && hasDayOhlc ? {
-          time: time, open: dayOpen, high: dayHigh, low: dayLow, close: lp, volume: vol
-        } : {
-          time: time, open: lp, high: lp, low: lp, close: lp, volume: 0
-        };
-        sub.preVolume = curVolume;
-      } else {
-        // Update existing candle. For daily, prefer the broker's running
-        // day O/H/L since they're authoritative (TV's local high/low can
-        // miss spikes that occurred before the chart connected).
-        bar = isDaily && hasDayOhlc ? {
-          time: lastBar.time,
-          open:   dayOpen,
-          high:   Math.max(dayHigh, lp),
-          low:    Math.min(dayLow,  lp),
-          close:  lp,
-          volume: vol
-        } : {
-          time: lastBar.time,
-          open: lastBar.open,
-          high: Math.max(lastBar.high, lp),
-          low: Math.min(lastBar.low, lp),
-          close: lp,
-          volume: volumeDelta
-        };
-      }
-
-      sub.lastBar = bar;
-      sub.callback(bar);
+      for (var ti = 0; ti < targets.length; ti++) emitTo(targets[ti]);
     },
 
     /**
