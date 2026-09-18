@@ -513,6 +513,28 @@ class GroupTileHeader extends ConsumerWidget {
                   fontWeight: MyntFonts.medium,
                 ),
               ),
+              // Position count pill — same treatment as the category count in
+              // the basket builder (collection_basket_builder.dart).
+              const SizedBox(width: 8),
+              Builder(
+                builder: (context) {
+                  final countColor = resolveThemeColor(context,
+                      dark: MyntColors.primaryDark, light: MyntColors.primary);
+                  return Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: countColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: Text(
+                      '$itemCount',
+                      style: MyntWebTextStyles.para(context,
+                          fontWeight: MyntFonts.semiBold, color: countColor),
+                    ),
+                  );
+                },
+              ),
               // Action buttons - only show when expanded, right next to group name
               if (isExpanded) ...[
                 const SizedBox(width: 12),
