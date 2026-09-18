@@ -72,6 +72,11 @@ class WebColors {
   static const Color warningDark = Color(0xFFD29922);
   static const Color pending = Color(0xFFFFB038);
 
+  /// Trade-journal note marker on the P&L Summary heat map. A vivid orange
+  /// chosen to stay visible on the profit green, the loss red, and the empty
+  /// grey cells alike; rendered with a lighter same-hue glow around it.
+  static const Color noteMarker = Color(0xFFFF7900);
+
   // ---------------- BACKGROUND----------------
 
   static const Color searchBg = Color(0xFFF9F9F9);
@@ -155,6 +160,22 @@ class WebColors {
 /// Convenient alias for WebColors - use this throughout the app
 /// Example: MyntColors.primary, MyntColors.textPrimaryDark
 typedef MyntColors = WebColors;
+
+/// Parses a `#RRGGBB` hex string (the format the journal-notes backend stores
+/// for tag colours) into a [Color].
+///
+/// Tolerant of bad input — an empty or malformed string returns [fallback]
+/// instead of throwing, unlike the private `_hexToColor` copies in the chart
+/// engine, which crash on `''`. Also accepts `#AARRGGBB`.
+Color hexToColor(String? hex, {Color fallback = WebColors.textSecondary}) {
+  if (hex == null) return fallback;
+  final cleaned = hex.replaceAll('#', '').trim();
+  if (cleaned.length != 6 && cleaned.length != 8) return fallback;
+  final value = int.tryParse(cleaned, radix: 16);
+  if (value == null) return fallback;
+  // 6-digit input gets an opaque alpha.
+  return Color(cleaned.length == 6 ? (0xFF000000 | value) : value);
+}
 
 /// ===============================================================
 /// WEB BOX SHADOWS (Reusable shadow definitions)

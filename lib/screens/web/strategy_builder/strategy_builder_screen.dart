@@ -5305,7 +5305,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                                     // const SizedBox(width: 4),
                                     // Text('>', style: TextStyle(color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: FontWeight.bold)),
                                     // const SizedBox(width: 8),
-                                    Text('CALLS', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: MyntFonts.semiBold)),
+                                    Text('CALL', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: MyntFonts.semiBold)),
                                   ],
                                 ),
                               ),
@@ -5320,7 +5320,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                                     // const SizedBox(width: 4),
                                     // Text('>', style: TextStyle(color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: FontWeight.bold)),
                                     // const SizedBox(width: 8),
-                                    Text('PUTS', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: MyntFonts.semiBold)),
+                                    Text('PUT', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: MyntFonts.semiBold)),
                                   ],
                                 ),
                               ),
@@ -5828,7 +5828,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
     } else {
       ref.read(websocketProvider).establishConnection(
             channelInput: scripToken,
-            task: "d",
+            task: "t",
             context: context,
           );
       final success = await scripData.addDelMarketScrip(

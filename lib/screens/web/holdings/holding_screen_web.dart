@@ -7,11 +7,13 @@ import 'package:mynt_plus/provider/fund_provider.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/screens/web/holdings/hold_table.dart';
-import 'package:mynt_plus/screens/web/holdings/mf_hold_table.dart';
 import 'package:mynt_plus/screens/web/holdings/mf_demat_hold_table.dart';
+import 'package:mynt_plus/screens/web/profile/pledge/pledge_unpledge_screen.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
+import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/profile_all_details_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
@@ -25,12 +27,20 @@ import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../sharedWidget/snack_bar.dart';
 import '../../../utils/rupee_convert_format.dart';
 import 'holdings_download_helper.dart';
+import 'mf_holdings_download_helper.dart';
 
 class HoldingScreenWeb extends ConsumerWidget {
   final List<dynamic> listofHolding;
   final int initialTabIndex;
-  const HoldingScreenWeb(
-      {super.key, required this.listofHolding, this.initialTabIndex = 0});
+
+  final int tabRequestId;
+
+  const HoldingScreenWeb({
+    super.key,
+    required this.listofHolding,
+    this.initialTabIndex = 0,
+    this.tabRequestId = 0,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -42,15 +52,22 @@ class HoldingScreenWeb extends ConsumerWidget {
     }
 
     return _HoldingScreenContent(
-        listofHolding: listofHolding, initialTabIndex: initialTabIndex);
+      listofHolding: listofHolding,
+      initialTabIndex: initialTabIndex,
+      tabRequestId: tabRequestId,
+    );
   }
 }
 
 class _HoldingScreenContent extends ConsumerStatefulWidget {
   final List<dynamic> listofHolding;
   final int initialTabIndex;
-  const _HoldingScreenContent(
-      {required this.listofHolding, this.initialTabIndex = 0});
+  final int tabRequestId;
+  const _HoldingScreenContent({
+    required this.listofHolding,
+    this.initialTabIndex = 0,
+    this.tabRequestId = 0,
+  });
 
   @override
   ConsumerState<_HoldingScreenContent> createState() =>
@@ -73,10 +90,23 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
   final ValueNotifier<String?> _hoveredRowToken = ValueNotifier<String?>(null);
   final ValueNotifier<int?> _hoveredColumnIndex = ValueNotifier<int?>(null);
 
+  // Inline Pledge view: when true the Pledge screen replaces this whole screen
+  // (its back button clears the flag), so the "Pledge" link never routes away.
+  bool _showPledge = false;
+
   // WebSocket subscription for live holdings updates
   StreamSubscription? _holdingsSocketSubscription;
   DateTime _lastUpdate = DateTime.now();
   static const Duration _updateInterval = Duration(milliseconds: 300);
+
+  @override
+  void didUpdateWidget(covariant _HoldingScreenContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.tabRequestId != oldWidget.tabRequestId &&
+        widget.initialTabIndex != _selectedTabIndex) {
+      setState(() => _selectedTabIndex = widget.initialTabIndex);
+    }
+  }
 
   @override
   void initState() {
@@ -210,9 +240,25 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     } else if (_selectedTabIndex == 1) {
       await portfolioData.fetchMtfHoldings(context, "Refresh", isRefresh: true);
     } else if (_selectedTabIndex == 2) {
-      await ref.read(mfProvider).fetchmfholdingnew();
+      // Unreachable (old MF tab retired) — and the old MF holdings API is
+      // decommissioned; demat is the only MF holdings source now.
+      // await ref.read(mfProvider).fetchmfholdingnew();
+      await ref.read(mfProvider).fetchmfdematholding();
     } else {
       await ref.read(mfProvider).fetchmfdematholding();
+    }
+  }
+
+  // Show the Pledge screen in place of Holdings. Seeds the pledge data the way
+  // the panel navigation (_handlePledgeUnpledgeTap) normally would, since we
+  // never leave the Holdings route here.
+  void _openPledgeView() {
+    setState(() => _showPledge = true);
+
+    final ledger = ref.read(ledgerProvider);
+    if (ledger.pledgeandunpledge == null) {
+      ledger.getCurrentDate('pandu');
+      ledger.fetchpledgeandunpledge(context);
     }
   }
 
@@ -227,6 +273,21 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
 
     // Use ref.watch to rebuild when provider values update (from pnlHoldCal)
     final portfolioData = ref.watch(portfolioProvider);
+
+    // Pledge takes over the whole Holdings screen; its back button returns.
+    if (_showPledge) {
+      return SizedBox.expand(
+        child: Container(
+          color: resolveThemeColor(context,
+              dark: MyntColors.backgroundColorDark,
+              light: MyntColors.backgroundColor),
+          child: PledgenUnpledge(
+            ddd: "DDDDD",
+            onBack: () => setState(() => _showPledge = false),
+          ),
+        ),
+      );
+    }
 
     // DrawerOverlay is now at app level in main.dart
     // Using same scroll pattern as Positions page - no outer scroll, Expanded for table
@@ -474,6 +535,18 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     required Color valueColor,
     required ThemesProvider theme,
   }) {
+    // Privacy Mode: hide the amount (and its sign/colour); the ₹ and (%)
+    // shells stay so the layout doesn't shift.
+    final privacy = ref.watch(privacyProvider);
+    if (privacy.isPrivate) {
+      value = value.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask;
+      percentage = percentage == null ? null : kPrivacyMask;
+      valueColor = resolveThemeColor(
+        context,
+        dark: MyntColors.textPrimaryDark,
+        light: MyntColors.textPrimary,
+      );
+    }
     return shadcn.Theme(
         data: shadcn.Theme.of(context).copyWith(radius: () => 0.3),
         child: shadcn.Card(
@@ -656,40 +729,55 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     );
   }
 
+  // Totals for the Mutual Fund (demat) tab. Prefers the API summary when
+  // present; otherwise computes them from the demat holdings rows (the demat
+  // endpoint may omit a summary block). Shared by the summary cards and the
+  // PDF / Excel export so both always show the same numbers.
+  ({
+    double invested,
+    double currentValue,
+    double returns,
+    double returnsPercent,
+  }) _mfDematTotals(MFProvider mfData) {
+    final summary = mfData.mfDematHolding?.summary;
+    final holdings = mfData.mfDematHolding?.data ?? [];
+
+    double invested;
+    double currentValue;
+    double returns;
+    if (summary != null) {
+      invested = double.tryParse(summary.invested ?? '0') ?? 0.0;
+      currentValue = double.tryParse(summary.currentValue ?? '0') ?? 0.0;
+      returns = double.tryParse(summary.absReturnValue ?? '0') ??
+          (currentValue - invested);
+    } else {
+      invested = 0.0;
+      currentValue = 0.0;
+      for (final h in holdings) {
+        invested += double.tryParse(h.investedValue ?? '0') ?? 0.0;
+        currentValue += double.tryParse(h.currentValue ?? '0') ?? 0.0;
+      }
+      returns = currentValue - invested;
+    }
+
+    return (
+      invested: invested,
+      currentValue: currentValue,
+      returns: returns,
+      returnsPercent: invested != 0 ? (returns / invested) * 100 : 0.0,
+    );
+  }
+
   Widget _buildMfDematSummaryCards(ThemesProvider theme) {
     return Consumer(
       builder: (context, ref, _) {
         final mfData = ref.watch(mfProvider);
-        final summary = mfData.mfDematHolding?.summary;
-        final holdings = mfData.mfDematHolding?.data ?? [];
+        final totals = _mfDematTotals(mfData);
 
-        // Prefer the API summary when present; otherwise compute totals from
-        // the demat holdings rows (the demat endpoint may omit a summary block).
-        double invested;
-        double currentValue;
-        double returns;
-        if (summary != null) {
-          invested = double.tryParse(summary.invested ?? '0') ?? 0.0;
-          currentValue = double.tryParse(summary.currentValue ?? '0') ?? 0.0;
-          returns = double.tryParse(summary.absReturnValue ?? '0') ??
-              (currentValue - invested);
-        } else {
-          invested = 0.0;
-          currentValue = 0.0;
-          for (final h in holdings) {
-            invested += double.tryParse(h.investedValue ?? '0') ?? 0.0;
-            currentValue += double.tryParse(h.currentValue ?? '0') ?? 0.0;
-          }
-          returns = currentValue - invested;
-        }
-
-        final returnsPercent =
-            invested != 0 ? (returns / invested) * 100 : 0.0;
-
-        final investedStr = invested.toStringAsFixed(2);
-        final currentStr = currentValue.toStringAsFixed(2);
-        final returnsStr = returns.toStringAsFixed(2);
-        final returnsPercentStr = returnsPercent.toStringAsFixed(2);
+        final investedStr = totals.invested.toStringAsFixed(2);
+        final currentStr = totals.currentValue.toStringAsFixed(2);
+        final returnsStr = totals.returns.toStringAsFixed(2);
+        final returnsPercentStr = totals.returnsPercent.toStringAsFixed(2);
 
         final cards = [
           _buildStatCard(
@@ -814,13 +902,13 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                         );
                       },
                     ),
-                    // Mutual Funds tab - Using MfTableExample from mf_hold_table.dart with search
-                    ValueListenableBuilder<String>(
-                      valueListenable: _mfSearchQuery,
-                      builder: (context, searchQuery, child) {
-                        return MfTableExample(searchQuery: searchQuery);
-                      },
-                    ),
+                    // Old Mutual Funds tab (retired) — stubbed with an empty
+                    // placeholder instead of removing the entry so the other
+                    // tab indices (0/1/3) stay stable. IMPORTANT: this must
+                    // NOT build MfTableExample: the IndexedStack builds all
+                    // children, and that table fires fetchmfholdingnew() from
+                    // its initState even when the tab is hidden.
+                    const SizedBox.shrink(),
                     // Mutual Fund Beta tab - Using MfDematTableExample from mf_demat_hold_table.dart with search
                     ValueListenableBuilder<String>(
                       valueListenable: _mfDematSearchQuery,
@@ -840,8 +928,6 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
     // Calculate counts for tabs
     final stocksCount = widget.listofHolding.length;
     final mtfCount = portfolioData.mtfHoldingsModel?.length ?? 0;
-    final mutualFundsCount =
-        ref.read(mfProvider).mfholdingnew?.data?.length ?? 0;
     final mfDematCount =
         ref.read(mfProvider).mfDematHolding?.data?.length ?? 0;
 
@@ -944,7 +1030,8 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
         }
 
         Widget buildTabs() {
-          final betaSelected = _selectedTabIndex == 3;
+          // Was used by the BETA-suffixed rich label (commented below).
+          // final betaSelected = _selectedTabIndex == 3;
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -962,50 +1049,78 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 label: tabTextLabel('MTF', 1),
               ),
               const SizedBox(width: 8),
-              // Mutual Fund tab
-              tabChip(
-                index: 2,
-                count: mutualFundsCount,
-                label: tabTextLabel('Mutual Fund', 2),
-              ),
-              const SizedBox(width: 8),
-              // Mutual Fund Beta tab
+              // Old Mutual Fund tab (index 2) is retired — only the demat
+              // based tab is offered now (BETA suffix dropped from its
+              // label). Its table is stubbed in the IndexedStack below so
+              // its API never fires.
+              // Mutual Fund tab (demat)
               tabChip(
                 index: 3,
                 count: mfDematCount,
-                label: Text.rich(
-                  TextSpan(
-                    style: MyntWebTextStyles.body(
-                      context,
-                      fontWeight: betaSelected
-                          ? MyntFonts.semiBold
-                          : MyntFonts.medium,
-                    ).copyWith(
-                      color: betaSelected
-                          ? shadcn.Theme.of(context).colorScheme.foreground
-                          : shadcn.Theme.of(context)
-                              .colorScheme
-                              .mutedForeground,
-                    ),
-                    children: [
-                      const TextSpan(text: 'Mutual Fund '),
-                      TextSpan(
-                        text: 'BETA',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: MyntFonts.bold,
-                          color: resolveThemeColor(
-                            context,
-                            dark: MyntColors.primaryDark,
-                            light: MyntColors.primary,
-                          ),
-                        ),
-                      ),
-                    ],
+                label: tabTextLabel('Mutual Fund', 3),
+                // label: Text.rich(
+                //   TextSpan(
+                //     style: MyntWebTextStyles.body(
+                //       context,
+                //       fontWeight: betaSelected
+                //           ? MyntFonts.semiBold
+                //           : MyntFonts.medium,
+                //     ).copyWith(
+                //       color: betaSelected
+                //           ? shadcn.Theme.of(context).colorScheme.foreground
+                //           : shadcn.Theme.of(context)
+                //               .colorScheme
+                //               .mutedForeground,
+                //     ),
+                //     children: [
+                //       const TextSpan(text: 'Mutual Fund '),
+                //       TextSpan(
+                //         text: 'BETA',
+                //         style: TextStyle(
+                //           fontSize: 12,
+                //           fontWeight: MyntFonts.bold,
+                //           color: resolveThemeColor(
+                //             context,
+                //             dark: MyntColors.primaryDark,
+                //             light: MyntColors.primary,
+                //           ),
+                //         ),
+                //       ),
+                //     ],
+                //   ),
+                // ),
+              ),
+            ],
+          );
+        }
+
+        // "Pledge" link — swaps this screen for the Pledge screen in place,
+        // which carries a back button to return here.
+        Widget buildPledgeLink() {
+          final accent = resolveThemeColor(
+            context,
+            dark: MyntColors.primaryDark,
+            light: MyntColors.primary,
+          );
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _openPledgeView,
+              borderRadius: BorderRadius.circular(4),
+              hoverColor: accent.withValues(alpha: 0.1),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text(
+                  'Pledge',
+                  style: MyntWebTextStyles.symbol(
+                    context,
+                    fontWeight: MyntFonts.bold,
+                    color: accent,
                   ),
                 ),
               ),
-            ],
+            ),
           );
         }
 
@@ -1082,8 +1197,9 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 _buildEdisButton(theme, portfolioData),
                 const SizedBox(width: 12),
               ],
-              // MF E-DIS button (only show on Mutual Fund tab when POA is not active)
-              if (_selectedTabIndex == 2 &&
+              // MF E-DIS button (only show on Mutual Fund BETA tab when POA
+              // is not active — moved here from the retired old MF tab)
+              if (_selectedTabIndex == 3 &&
                   ref.read(profileAllDetailsProvider).clientAllDetailsSafe?.clientData?.pOA != 'Y') ...[
                 _buildMfEdisButton(theme),
                 const SizedBox(width: 12),
@@ -1092,6 +1208,11 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
               if (_selectedTabIndex == 0 || _selectedTabIndex == 1) ...[
                 _buildDownloadButton(theme, portfolioData,
                     isMtf: _selectedTabIndex == 1),
+                const SizedBox(width: 12),
+              ],
+              // Download button (Mutual Fund tab)
+              if (_selectedTabIndex == 3) ...[
+                _buildMfDownloadButton(theme),
                 const SizedBox(width: 12),
               ],
               // Reload button - triggers manual refresh
@@ -1121,8 +1242,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                 
                 Row(
                   children: [
-                    // Insights button (only for Equity tab)
+                    // Pledge + Insights buttons (only for Equity tab)
                     if (_selectedTabIndex == 0) ...[
+                      buildPledgeLink(),
+                      const SizedBox(width: 4),
                       Material(
                         color: Colors.transparent,
                         child: InkWell(
@@ -1171,8 +1294,10 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
           children: [
             buildTabs(),
             const Spacer(),
-            // Insights button (only for Equity tab)
+            // Pledge + Insights buttons (only for Equity tab)
             if (_selectedTabIndex == 0) ...[
+              buildPledgeLink(),
+              const SizedBox(width: 4),
               Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -1322,7 +1447,68 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
           );
         }
       },
-      itemBuilder: (context) => [
+      itemBuilder: (context) => _downloadMenuItems(),
+    );
+  }
+
+  // Download button (PDF / Excel) for the Mutual Fund tab. Exports the demat
+  // MF holdings and the same totals the summary cards show.
+  Widget _buildMfDownloadButton(ThemesProvider theme) {
+    return PopupMenuButton<String>(
+      icon: Icon(
+        Icons.download,
+        size: 24,
+        color: theme.isDarkMode
+            ? MyntColors.textWhite
+            : MyntColors.textPrimary,
+      ),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      tooltip: 'Download',
+      color: resolveThemeColor(context,
+          dark: MyntColors.cardDark, light: MyntColors.card),
+      onSelected: (value) {
+        final pref = locator<Preferences>();
+        final clientId = pref.clientId ?? '';
+        final clientName = pref.clientName ?? '';
+        final mfData = ref.read(mfProvider);
+        final holdings = mfData.mfDematHolding?.data ?? [];
+
+        if (holdings.isEmpty) {
+          warningMessage(context, 'No mutual fund holdings to download');
+          return;
+        }
+
+        final totals = _mfDematTotals(mfData);
+
+        if (value == 'pdf') {
+          MfHoldingsDownloadHelper.downloadPdf(
+            holdings: holdings,
+            clientId: clientId,
+            clientName: clientName,
+            totalInvested: totals.invested,
+            totalCurrentValue: totals.currentValue,
+            totalReturns: totals.returns,
+            totalReturnsPercent: totals.returnsPercent,
+          );
+        } else if (value == 'excel') {
+          MfHoldingsDownloadHelper.downloadExcel(
+            holdings: holdings,
+            clientId: clientId,
+            clientName: clientName,
+            totalInvested: totals.invested,
+            totalCurrentValue: totals.currentValue,
+            totalReturns: totals.returns,
+            totalReturnsPercent: totals.returnsPercent,
+          );
+        }
+      },
+      itemBuilder: (context) => _downloadMenuItems(),
+    );
+  }
+
+  // Shared PDF / Excel entries for every download menu on this screen.
+  List<PopupMenuEntry<String>> _downloadMenuItems() => [
         PopupMenuItem(
           value: 'pdf',
           child: Row(
@@ -1343,9 +1529,7 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
             ],
           ),
         ),
-      ],
-    );
-  }
+      ];
 
   // E-DIS button
   Widget _buildEdisButton(
@@ -1421,29 +1605,72 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
   Widget _buildFilterButton(ThemesProvider theme) {
     return Builder(
       builder: (buttonContext) {
-        return MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => _showFilterPopup(buttonContext, theme),
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(
-                child: SvgPicture.asset(
-                  assets.searchFilter,
-                  width: 20,
-                  color: resolveThemeColor(
-                    context,
-                    dark: MyntColors.iconDark,
-                    light: MyntColors.icon,
+        // The icon looked identical whether or not a filter was on, so a
+        // filtered list was indistinguishable from a short one. Tint the icon
+        // and show a dot on its corner while a filter is active, and name the
+        // filter in the tooltip. Same treatment as the Positions screen.
+        return ValueListenableBuilder<String>(
+          valueListenable: _selectedFilter,
+          builder: (context, currentFilter, child) {
+            final isFiltered = currentFilter != 'All';
+            final activeColor = resolveThemeColor(
+              context,
+              dark: MyntColors.secondary,
+              light: MyntColors.primary,
+            );
+            return Tooltip(
+              message: isFiltered ? 'Filter: $currentFilter' : 'Filter',
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () => _showFilterPopup(buttonContext, theme),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      // Clip.none so the dot can sit just outside the icon's
+                      // top-right corner. It stays inside the button box.
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          SvgPicture.asset(
+                            assets.searchFilter,
+                            width: 20,
+                            colorFilter: ColorFilter.mode(
+                              isFiltered
+                                  ? activeColor
+                                  : resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.iconDark,
+                                      light: MyntColors.icon,
+                                    ),
+                              BlendMode.srcIn,
+                            ),
+                          ),
+                          if (isFiltered)
+                            Positioned(
+                              top: -5,
+                              right: -3,
+                              child: Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: activeColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );

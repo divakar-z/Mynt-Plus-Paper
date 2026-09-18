@@ -5,6 +5,7 @@ import '../models/scanner_model/scan_explain.dart' show ExplainKey, ExplainScope
 import '../screens/web/customizable_split_home_screen.dart';
 // ScannerSubPage is re-exported via the import above (no separate file).
 import '../screens/splash_screen.dart';
+import '../screens/web/chart_engine/chart_popout_screen.dart';
 import '../screens/web/authentication/login/login_web.dart';
 import '../screens/web/oauth/oauth_login_screen.dart';
 import '../screens/web/public/pnl_insights_screen.dart';
@@ -55,6 +56,10 @@ class WebRoutes {
   static const String notification = '/notification';
   static const String oauthAuthorize = '/OAuthlogin/authorize/oauth';
   static const String dailyPnl = '/dailypnl';
+  /// Detached, view-only chart window opened via `window.open` from the chart
+  /// top bar. Standalone (no trading shell); reads exch/token/tsym/tf/n from
+  /// query params. See [ChartPopoutScreen].
+  static const String chartPopout = '/chart-popout';
   static const String scanner = '/scanner';
   static const String scannerSymbols = '/scanner/symbols';
   static const String scannerScanners = '/scanner/scanners';
@@ -316,6 +321,24 @@ void initializeWebRouter() {
         builder: (context, state) => PnlInsightsScreen(
           ucode: state.uri.queryParameters['ucode'],
         ),
+      ),
+
+      // Detached chart popout — a second Flutter window opened from the chart
+      // top bar. Renders standalone (no trading shell); ticks come from the
+      // alternate ws.zebull.in feed so the main window keeps its go.mynt.in
+      // socket. jKey is never in the URL. See [ChartPopoutScreen].
+      GoRoute(
+        path: WebRoutes.chartPopout,
+        builder: (context, state) {
+          final q = state.uri.queryParameters;
+          return ChartPopoutScreen(
+            exch: (q['exch'] ?? '').trim(),
+            token: (q['token'] ?? '').trim(),
+            tsym: (q['tsym'] ?? '').trim(),
+            timeframeMinutes: int.tryParse((q['tf'] ?? '').trim()) ?? 5,
+            slot: int.tryParse((q['n'] ?? '').trim()) ?? 1,
+          );
+        },
       ),
 
       // Profile details screen (also handles Digilocker callback with ?code=&state=)

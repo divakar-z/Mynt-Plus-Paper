@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/privacy_provider.dart';
 import 'package:mynt_plus/provider/transcation_provider.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
@@ -251,6 +252,20 @@ class _MtfTransferScreenState extends ConsumerState<MtfTransferScreen> {
               const SizedBox(height: 4),
               Builder(
                 builder: (context) {
+                  // Privacy Mode: balance masked, colour neutralized.
+                  final privacy = ref.watch(privacyProvider);
+                  if (privacy.isPrivate) {
+                    return Text(
+                      kPrivacyMask,
+                      style: MyntWebTextStyles.head(
+                        context,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textPrimary),
+                        fontWeight: MyntFonts.medium,
+                      ),
+                    );
+                  }
                   final value = fund.mtfTotalAmount;
                   final Color color = value > 0
                       ? resolveThemeColor(context,
@@ -292,8 +307,8 @@ class _MtfTransferScreenState extends ConsumerState<MtfTransferScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                getFormatter(
-                    value: fund.mtfAmount, v4d: false, noDecimal: false),
+                ref.watch(privacyProvider).mask(getFormatter(
+                    value: fund.mtfAmount, v4d: false, noDecimal: false)),
                 style: MyntWebTextStyles.head(
                   context,
                   fontWeight: MyntFonts.medium,
@@ -472,8 +487,11 @@ class _MtfTransferScreenState extends ConsumerState<MtfTransferScreen> {
                             _errorText = "Amount must be greater than 0";
                           } else if (entered > maxCash) {
                             _disable = true;
-                            _errorText =
-                                "Amount cannot exceed available cash ₹${maxCash.toStringAsFixed(2)}";
+                            // Privacy Mode: don't print the balance in the
+                            // validation message.
+                            _errorText = ref.read(privacyProvider).isPrivate
+                                ? "Amount cannot exceed available cash"
+                                : "Amount cannot exceed available cash ₹${maxCash.toStringAsFixed(2)}";
                           } else {
                             _disable = false;
                             _errorText = "";
@@ -544,8 +562,8 @@ class _MtfTransferScreenState extends ConsumerState<MtfTransferScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          getFormatter(
-              value: fund.mtfTotalAmount, v4d: false, noDecimal: false),
+          ref.watch(privacyProvider).mask(getFormatter(
+              value: fund.mtfTotalAmount, v4d: false, noDecimal: false)),
           style: MyntWebTextStyles.head(
             context,
             fontWeight: MyntFonts.medium,
@@ -588,7 +606,7 @@ class _MtfTransferScreenState extends ConsumerState<MtfTransferScreen> {
             ),
           ),
           Text(
-            value,
+            ref.watch(privacyProvider).mask(value),
             style: MyntWebTextStyles.bodySmall(
               context,
               fontWeight: MyntFonts.semiBold,

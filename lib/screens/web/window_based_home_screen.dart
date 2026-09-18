@@ -27,7 +27,7 @@ import '../../../provider/order_provider.dart';
 import '../../../provider/portfolio_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/user_profile_provider.dart';
-import '../../../provider/version_provider.dart';
+// import '../../../provider/version_provider.dart'; // mobile-only store check
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/webview_chart_provider.dart';
 import '../../../provider/iop_provider.dart';
@@ -67,6 +67,8 @@ import 'portfolio_analysis_web.dart';
 import 'market_watch/options/option_chain_ss_web.dart';
 import '../Mobile/desk_reports/pledge_unpledge_screen.dart';
 import 'mutual_fund/mf_main_screen_web.dart';
+import 'all_strategies_screen_web.dart';
+import 'all_algo_strategies_screen_web.dart';
 import 'mutual_fund/mf_all_best_funds_web.dart';
 import 'mutual_fund/mf_top_category_list_web.dart';
 import 'mutual_fund/mf_nfo_screen_web.dart';
@@ -222,7 +224,9 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
   void _initializeWebSocket() {
     ref.read(networkStateProvider).networkStream();
     ref.read(marketWatchProvider).fToast.init(context);
-    ref.read(versionProvider).checkVersion(context);
+    // Store-version check is mobile-only (compares against the strapi
+    // Play Store number); on web the build-update banner covers updates.
+    // ref.read(versionProvider).checkVersion(context);
 
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted &&
@@ -268,11 +272,12 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
     }
 
     if (!websocket.wsConnected) {
-      // Web uses depth subscription ("d") for all symbols to have depth data ready
+      // Web uses touchline ("t") for general symbols; only the depth panel's
+      // symbol (lastSubscribeDepth) is restored with depth ("d").
       if (ConstantName.lastSubscribe.isNotEmpty) {
         websocket.establishConnection(
             channelInput: ConstantName.lastSubscribe,
-            task: "d",
+            task: "t",
             context: context);
       }
 
@@ -528,6 +533,10 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return const ScannerShellScreen();
       case ScreenType.orderflow:
         return const OrderflowShellScreen();
+      case ScreenType.curatedStrategies:
+        return const AllStrategiesScreenWeb();
+      case ScreenType.allAlgoStrategies:
+        return const AllAlgoStrategiesScreenWeb();
     }
   }
 
@@ -645,6 +654,10 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Scanner';
       case ScreenType.orderflow:
         return 'Orderflow';
+      case ScreenType.curatedStrategies:
+        return 'Strategies';
+      case ScreenType.allAlgoStrategies:
+        return 'Algo Strategies';
     }
   }
 

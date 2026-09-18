@@ -206,12 +206,14 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
   }
 
   Widget _buildSymbolSection(ThemesProvider theme) {
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = widget.trade.masterName;
     final symbol = widget.trade.symbol?.replaceAll("-EQ", "") ??
         widget.trade.tsym?.replaceAll("-EQ", "") ??
         '';
     final expDate = widget.trade.expDate ?? '';
     final option = widget.trade.option ?? '';
-    final displayText = '$symbol $expDate $option'.trim();
+    final displayText = master ?? '$symbol $expDate $option'.trim();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -339,9 +341,7 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
 
           _rowOfInfoData(
             "Qty",
-            widget.trade.flqty?.toString() ??
-                widget.trade.qty?.toString() ??
-                '0',
+            _formatTradeQty(),
             theme,
           ),
           _rowOfInfoData(
@@ -388,6 +388,23 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
         ],
       ),
     );
+  }
+
+  // TC_327.6: Qty shown as "filled / total" LOTS for MCX (raw units / lot size),
+  // matching the Trade list and the Executed popup. Non-MCX uses lot size 1, so
+  // it shows raw filled / total. Mirrors trade_book_screen._formatTradeQty.
+  // (Trade Value is left as-is — it is money, not a quantity.)
+  String _formatTradeQty() {
+    final rawFilled = int.tryParse(widget.trade.fillshares?.toString() ??
+            widget.trade.flqty?.toString() ??
+            '0') ??
+        0;
+    final rawQty = int.tryParse(widget.trade.qty?.toString() ?? '0') ?? 0;
+    final lotSize = widget.trade.exch == 'MCX'
+        ? (int.tryParse(widget.trade.ls?.toString() ?? '1') ?? 1)
+        : 1;
+    final safeLot = lotSize > 0 ? lotSize : 1;
+    return '${rawFilled ~/ safeLot} / ${rawQty ~/ safeLot}';
   }
 
   Widget _rowOfInfoData(String title1, String value1, ThemesProvider theme) {

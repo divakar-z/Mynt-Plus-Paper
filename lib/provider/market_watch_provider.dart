@@ -464,6 +464,29 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// Loads the derivative contract master into the DerivativeMaster cache
+  /// ("EXCH:token" -> ready display name), for only the derivative exchanges the
+  /// user is entitled to (from userDetail.exarr). Background, non-blocking;
+  /// failures are swallowed so login is never affected.
+  Future<void> fetchDerivativeMaster() async {
+    try {
+      // Cash equity exchanges (NSE/BSE) hold no derivatives and, sent as parent
+      // codes, expand to the whole family. Skip only those and send every other
+      // segment the user is entitled to (F&O, commodity, currency) from exarr.
+      const cashExch = {'NSE', 'BSE'};
+      final exarr = ref.read(userProfileProvider).userDetailModel?.exarr ?? [];
+      var exchanges = exarr.where((e) => !cashExch.contains(e)).toList();
+      // Fallback so it never fetches an empty list (e.g. user detail not ready).
+      if (exchanges.isEmpty) exchanges = ['NFO', 'BFO', 'MCX'];
+      final data = await api.getDerivativeMaster(exchanges: exchanges);
+      DerivativeMaster.setAll(data);
+      debugPrint(
+          '[DerivativeMaster] loaded ${data.length} contracts for $exchanges');
+    } catch (e) {
+      debugPrint('[DerivativeMaster] fetch error: $e');
+    }
+  }
+
   // Save current page index to SharedPreferences
   Future<void> _saveCurrentPageIndex() async {
     try {
@@ -518,6 +541,9 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     try {
       _exarr = [];
       _pendingWatchlists.clear();
+      // Reset the derivative-master cache so the next account starts clean and
+      // never reads the previous session's fetched set.
+      DerivativeMaster.clear();
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('pending_watchlists');
     } catch (e) {
@@ -835,17 +861,17 @@ class MarketWatchProvider extends DefaultChangeNotifier {
       String? finalTsym = tsym ?? _activeTab?.tsym;
 
       if (finalExch != null && finalToken != null && finalTsym != null) {
-        final newDepthSymbol = "$finalExch|$finalToken";
-
-        // Only subscribe if it's a different scrip or not already loaded
-        if (newDepthSymbol != _currentDepthSymbol || !_depthDataLoaded) {
-          await subscribeToDepthData(
-            exch: finalExch,
-            token: finalToken,
-            tsym: finalTsym,
-            context: context,
-          );
-        }
+        // Always delegate to subscribeToDepthData — it idempotently reconciles
+        // against the socket's actual "d" subscription state. Gating here on the
+        // stale _currentDepthSymbol/_depthDataLoaded flags is what caused depth
+        // to silently not re-subscribe when returning to Overview after a
+        // tab/panel switch cleared the websocket's sent-subscription tracking.
+        await subscribeToDepthData(
+          exch: finalExch,
+          token: finalToken,
+          tsym: finalTsym,
+          context: context,
+        );
       }
     } else if (!value && _currentDepthSymbol != null) {
       // Unsubscribe when depth panel is closed
@@ -863,18 +889,36 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   }) async {
     try {
       final depthSymbol = "$exch|$token";
+      debugPrint('[DEPTH_TRACK] subscribeToDepthData called for $depthSymbol (current: $_currentDepthSymbol, loaded: $_depthDataLoaded)');
 
-      // Unsubscribe from old depth socket if different scrip
+      // Unsubscribe from old depth socket if different scrip.
+      // force: true — the old symbol is almost always still in the watchlist
+      // (touchline), so a non-forced depth "ud" would be swallowed by the
+      // protected-symbol filter and the old symbol's depth "d" feed would keep
+      // streaming. A depth "ud" only releases the depth feed and leaves the
+      // watchlist's touchline "t" intact, so forcing it here is safe.
       if (_currentDepthSymbol != null && _currentDepthSymbol != depthSymbol) {
-        await unsubscribeFromDepthData(context: context);
+        debugPrint('[DEPTH_TRACK] Symbol changed: unsubscribing old depth $_currentDepthSymbol before subscribing $depthSymbol');
+        await unsubscribeFromDepthData(context: context, force: true);
       }
 
-      // Skip if already subscribed to this symbol
-      if (_currentDepthSymbol == depthSymbol && _depthDataLoaded) {
+      // Skip only if a depth ("d") subscription is STILL live on the socket for
+      // this symbol. _depthDataLoaded alone is not trustworthy: a tab/panel
+      // switch can trigger a preserveData reconnect that clears the websocket's
+      // sent-subscription tracking while these provider flags stay set — leaving
+      // us "loaded" in state but with no "d" on the wire. Gating on the socket's
+      // actual state is what makes returning to Overview re-send the "d".
+      final depthLiveOnSocket =
+          ref.read(websocketProvider).hasDepthSubscription(depthSymbol);
+      if (_currentDepthSymbol == depthSymbol &&
+          _depthDataLoaded &&
+          depthLiveOnSocket) {
+        debugPrint('[DEPTH_TRACK] SKIPPED: depth already live on socket for $depthSymbol');
         return;
       }
 
 
+      debugPrint('[DEPTH_TRACK] SUBSCRIBING depth "d" for $depthSymbol');
       await ref.read(websocketProvider).establishConnection(
             channelInput: depthSymbol,
             task: "d",
@@ -883,6 +927,7 @@ class MarketWatchProvider extends DefaultChangeNotifier {
 
       _currentDepthSymbol = depthSymbol;
       _depthDataLoaded = true;
+      debugPrint('[DEPTH_TRACK] SUBSCRIBED depth "d" for $depthSymbol ✅');
     } catch (e) {
       _depthDataLoaded = false;
       _currentDepthSymbol = null;
@@ -890,28 +935,44 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   }
 
   /// Unsubscribe from market depth data
-  Future<void> unsubscribeFromDepthData({BuildContext? context}) async {
-    if (_currentDepthSymbol == null) return;
+  ///
+  /// [force] is set when the whole single-stock page is being disposed (the user
+  /// left Overview for Holdings/Positions/etc). In that case the depth panel AND
+  /// the chart are both unmounting, so the depth ("d") feed is genuinely no longer
+  /// displayed and must be released with "ud" even for watchlisted symbols — the
+  /// separate touchline ("t") feed the watchlist uses is unaffected by a depth ud.
+  /// Without [force] (e.g. an Overview→Chart tab switch) the protective check is
+  /// kept so the chart's still-open depth feed is not torn down.
+  Future<void> unsubscribeFromDepthData(
+      {BuildContext? context, bool force = true}) async {
+    if (_currentDepthSymbol == null) {
+      debugPrint('[DEPTH_TRACK] unsubscribeFromDepthData: SKIPPED (no current depth symbol)');
+      return;
+    }
 
     try {
       final depthSymbol = _currentDepthSymbol!;
+      debugPrint('[DEPTH_TRACK] UNSUBSCRIBING depth "ud" for $depthSymbol (force: $force)');
 
       // Clear tracking first so the protective check in WebSubscriptionManager
       // does not see this symbol as "currentDepthSymbol" and block its own ud.
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
 
-      if (context != null && context.mounted) {
+      // On a forced (page-dispose) teardown the context is usually already
+      // unmounted, so don't gate on context.mounted — the ud send needs the
+      // live WS channel, not a mounted widget.
+      if (context != null && (force || context.mounted)) {
         try {
           // Route through WebSubscriptionManager so the ud is skipped when the
           // symbol is still needed by the watchlist / holdings / positions /
-          // indices / ticker. The watchlist itself subscribes via task "d" —
-          // the same channel as depth — so an unprotected ud would also kill
-          // the watchlist's LTP feed for that scrip.
+          // indices / ticker (touchline). [force] bypasses that protection when
+          // the page is closing so the depth feed is actually released.
           await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
                 tokensToCheck: {depthSymbol},
                 context: context,
                 source: 'depth',
+                bypassProtection: force,
               );
         } catch (e) {
           // If unsubscribe fails, it's okay - we've already cleared tracking
@@ -1496,10 +1557,13 @@ getOptionawait(String exch, String token) {
   }
 
   void setChartScript(String exch, String token, String tsym) async {
-    // Unsubscribe from old depth and reset depth loaded state when changing scrip
-    // Note: We don't pass context here as it might not be available,
-    // unsubscribe will happen on next depth panel open if needed
-    resetDepthLoadedState();
+    // Force a fresh depth fetch on the next depth-panel open, but DO NOT clear
+    // _currentDepthSymbol here. This runs on the scrip-change microtask BEFORE
+    // subscribeToDepthData(new) fires; if we nulled _currentDepthSymbol now, that
+    // later call could no longer tell which old symbol to release, so the old
+    // symbol's depth "d" feed would keep streaming (no "ud" ever sent). Keeping
+    // the tracking lets subscribeToDepthData unsubscribe the old token first.
+    _depthDataLoaded = false;
 
     if (kIsWeb) {
       // On Flutter Web, use WebChartManager to change symbol via postMessage
@@ -1509,6 +1573,7 @@ getOptionawait(String exch, String token) {
         token: token,
         tsym: tsym,
         isDarkMode: isDarkMode,
+        decorativeName: DerivativeMaster.nameFor(exch, token),
       );
     } else {
       await ConstantName.chartwebViewController!.evaluateJavascript(
@@ -3246,11 +3311,11 @@ getOptionawait(String exch, String token) {
           source: 'optionChain',
         );
       } else {
-        // Subscribe using depth task for web
+        // Subscribe using touchline task for web (option chain only needs LTP)
         final input = optionTokens.join('#');
         await ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: "d",
+            task: "t",
             context: context);
       }
     } else {
@@ -3289,11 +3354,11 @@ getOptionawait(String exch, String token) {
           source: 'futures',
         );
       } else {
-        // Subscribe using depth task for web
+        // Subscribe using touchline task for web (futures list only needs LTP)
         final input = futuresTokens.join('#');
         await ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: "d",
+            task: "t",
             context: context);
       }
     } else {

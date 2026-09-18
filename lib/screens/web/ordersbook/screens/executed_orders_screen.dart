@@ -1056,6 +1056,9 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
   }
 
   String _formatInstrumentText(OrderBookModel order) {
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = order.masterName;
+    if (master != null && master.isNotEmpty) return master;
     if (order.tsym != null && order.tsym!.isNotEmpty) {
       // Remove "-EQ" suffix and don't include exchange
       return order.tsym!.replaceAll("-EQ", "").trim();
@@ -1096,7 +1099,8 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
     if (order.status == null) return 'N/A';
 
     final status = order.status!.toUpperCase();
-    if (status == 'COMPLETE') return 'Executed';
+    // if (status == 'COMPLETE') return 'Executed';
+    if (status == 'COMPLETE') return 'Complete'; // show API status as-is, same as detail panel + mobile
     if (status == 'REJECTED') return 'Rejected';
     if (status == 'CANCELED' || status == 'CANCELLED') return 'Cancelled';
     if (status == 'OPEN') return 'Open';

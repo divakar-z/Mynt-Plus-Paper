@@ -573,10 +573,11 @@ class _OptionChainPutRowState extends ConsumerState<_OptionChainPutRow> {
         setState(() {});
       }
     } else {
-      // Add to watchlist - using depth subscription for web
+      // Add to watchlist - touchline for web (watchlist tile only needs LTP;
+      // depth is reserved for the market-depth panel)
       provider.read(websocketProvider).establishConnection(
             channelInput: scripToken,
-            task: "d",
+            task: "t",
             context: context,
           );
 
@@ -727,10 +728,11 @@ Widget _buildOIData(ThemesProvider theme, String oiLack, String oiPerChng, doubl
         fontSize: 14.0,
       );
     } else {
-      // Using depth subscription for web
+      // Touchline for web (watchlist tile only needs LTP; depth is reserved
+      // for the market-depth panel)
       provider.read(websocketProvider).establishConnection(
             channelInput: "${option.exch}|${option.token}",
-            task: "d",
+            task: "t",
             context: context,
           );
       scripData.addDelMarketScrip(

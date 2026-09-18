@@ -25,11 +25,15 @@ String resolveProduct(ChartScrip scrip, OrderDefaults? defaults) {
 /// Whether an order on [exch] placed *now* should be flagged AMO (After Market
 /// Order) because the market is closed. Mirrors `PlaceOrderScreenWeb`'s
 /// `_checkMarketClosed` so chart orders behave like the normal place-order
-/// screen: MCX/NCOM close at 23:50 IST, every other exchange at 16:00 IST.
+/// screen: MCX/NCOM close at 23:50 IST, every other exchange at 16:00 IST, and
+/// the window carries past midnight until 02:00 IST for every exchange.
 bool isAmoTime(String exch) {
   final nowIst =
       DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
   final minutes = nowIst.hour * 60 + nowIst.minute;
+  // Checked first: the minute counter resets at midnight, so the overnight
+  // stretch has to be handled before the per-exchange close times.
+  if (minutes < 2 * 60) return true; // 00:00 - 01:59 IST
   if (exch == 'MCX' || exch == 'NCOM') return minutes >= 23 * 60 + 50;
   return minutes >= 16 * 60;
 }
@@ -58,6 +62,12 @@ Map<String, dynamic> buildOrderScreenArgs({
   required OrderPrefillKind kind,
   double? price,
   ScripInfoModel? realScripInfo,
+  // The REAL live LTP (from the shared WS feed) for this scrip. When > 0 it
+  // seeds `orderArg.ltp` so PlaceOrderScreenWeb validates the trigger against
+  // the actual last-traded price and shows it in the header. Without it the
+  // screen fell back to the ORDER's own price as "LTP", producing a false
+  // "Trigger should be greater than LTP" warning and a wrong header LTP.
+  double? liveLtp,
   // Drives the product code (Delivery/Intraday/Normal) from the user's
   // Order Defaults → Product Type. Without it the order would always open
   // as CNC/NRML regardless of the user's intraday preference.
@@ -134,6 +144,12 @@ Map<String, dynamic> buildOrderScreenArgs({
   // else fall back to "0" so the LTP field has a usable initial value.
   final displayLtp = (prc ?? trgprc)?.toStringAsFixed(2) ?? '0';
 
+  // The value handed to the screen as "LTP". Prefer the caller-supplied live
+  // LTP (used for trigger validation + header display); only fall back to the
+  // order's own price when no live tick is available.
+  final ltpStr =
+      (liveLtp != null && liveLtp > 0) ? liveLtp.toStringAsFixed(2) : displayLtp;
+
   final orderArg = OrderScreenArgs(
     exchange: scrip.exch,
     token: scrip.token,
@@ -141,7 +157,7 @@ Map<String, dynamic> buildOrderScreenArgs({
     transType: isBuy,
     perChange: '0',
     lotSize: scrip.ls.toString(),
-    ltp: displayLtp,
+    ltp: ltpStr,
     isExit: false,
     orderTpye: '',
     isModify: false,
@@ -172,7 +188,7 @@ Map<String, dynamic> buildOrderScreenArgs({
         ..lc = '0.00'
         ..uc = '0.00'
         ..ordMsg = ''
-        ..lp = displayLtp
+        ..lp = ltpStr
         ..mult = '1'
         ..prcftrD = '1');
 

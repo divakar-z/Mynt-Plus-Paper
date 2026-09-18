@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 
 class RowTable extends StatelessWidget {
   final String title;
@@ -28,7 +28,7 @@ class RowTable extends StatelessWidget {
   }
 
   TextStyle textStyle(Color color, double fontSize, fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle: TextStyle(
       fontWeight: fWeight,
       color: color,

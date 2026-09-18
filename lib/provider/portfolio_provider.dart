@@ -2061,10 +2061,10 @@ changeHoldingsTabIndex(int index) {
                   channel: defaultTargetPlatform == TargetPlatform.android
                       ? '${ref.read(authProvider).deviceInfo["brand"]}'
                       : "${ref.read(authProvider).deviceInfo["model"]}",
-                      frzqty: ((int.parse(element.frzqty.toString()) /
-                              int.parse(element.ls.toString()))
+                       frzqty: ((int.parse(element.frzqty?.toString() ?? "0") /
+                              int.parse(element.ls?.toString() ?? "1"))
                           .floor() *
-                      int.parse(element.ls.toString())));
+                      int.parse(element.ls?.toString() ?? "1")));
                await fetchExitPosition(context, placeOrderInput, true, true);
                       
               // _placeOrderModel = await api.getPlaceOrder(
@@ -2079,9 +2079,17 @@ changeHoldingsTabIndex(int index) {
                 return;
               }
 
-                  if (_placeOrderModel!.stat! == "Ok") {
-                    successMessage(context, "Position exited successfully.");
-                  }
+                  // TC_389.2 — duplicate toast on Exit All. fetchExitPosition
+                  // above already shows "Position exited successfully." on a
+                  // successful exit, so this second one fired the identical
+                  // message again for the SAME order. Exit All therefore
+                  // toasted twice per position; the selected-positions branch
+                  // below never had this line, which is why it was correct.
+                  // Retired, not deleted — the success path is now owned
+                  // solely by fetchExitPosition.
+                  // if (_placeOrderModel!.stat! == "Ok") {
+                  //   successMessage(context, "Position exited successfully.");
+                  // }
 
               if (_placeOrderModel!.stat!.toLowerCase() != "ok") {
                 break;
@@ -2106,10 +2114,10 @@ changeHoldingsTabIndex(int index) {
                   channel: defaultTargetPlatform == TargetPlatform.android
                       ? '${ref.read(authProvider).deviceInfo["brand"]}'
                       : "${ref.read(authProvider).deviceInfo["model"]}",
-                  frzqty: ((int.parse(element.frzqty.toString()) /
-                              int.parse(element.ls.toString()))
+                  frzqty: ((int.parse(element.frzqty?.toString() ?? "0") /
+                              int.parse(element.ls?.toString() ?? "1"))
                           .floor() *
-                      int.parse(element.ls.toString())));
+                      int.parse(element.ls?.toString() ?? "1")));
               await fetchExitPosition(context, placeOrderInput, true, true);
             }
           }
@@ -3084,7 +3092,7 @@ changeHoldingsTabIndex(int index) {
       int qty = int.parse(placeOrderInput.qty);
       int frzqty = int.parse(placeOrderInput.frzqty.toString());
 
-      if (qty > frzqty) {
+      if (frzqty > 0 && qty > frzqty) {
         int fullOrders = qty ~/ frzqty;
         int remainingQty = qty % frzqty;
 
@@ -3108,7 +3116,11 @@ changeHoldingsTabIndex(int index) {
         ConstantName.sessCheck = true;
         if (isPosition) {
           await fetchPositionBook(context, _isDay);
-          successMessage(context, "Position exited successfully.");
+          // "Ok" only means the order was accepted — the websocket reports executed / rejected.
+          // successMessage(context, "Position exited successfully.");
+          final exitSymbol =
+              placeOrderInput.tsym.replaceAll(RegExp(r'-EQ$'), "");
+          successMessage(context, "Exit order placed for $exitSymbol.");
         } else {
           await fetchHoldings(context, "Refresh");
         }
@@ -3248,11 +3260,27 @@ changeHoldingsTabIndex(int index) {
     }
   }
 
+  /// True when at least one open position is still ticked for exit.
+  /// Reads the per-position flags, which are what exitPosition() acts on —
+  /// not the counters, which can be reset independently.
+  bool get hasExitSelection =>
+      _openPosition?.any((p) => p.isExitSelection == true) ?? false;
+
   // Reset exit position selection state
   void resetExitPositionSelection() {
     _exitPositionQty = 0;
     _isExitAllPosition = false;
     _exitSelectedPositions.clear();
+
+    // CRITICAL: exitPosition() places a MARKET exit order for every position
+    // whose isExitSelection is true and never looks at the counters above.
+    // Clearing only the counters would hide the count while still squaring
+    // off those positions, so the per-position flags must be cleared here.
+    if (_openPosition != null) {
+      for (final position in _openPosition!) {
+        position.isExitSelection = false;
+      }
+    }
 
     notifyListeners();
   }
@@ -3312,7 +3340,16 @@ changeHoldingsTabIndex(int index) {
         if (context.mounted) {
         Navigator.pop(context);
           // Show error message from API
-          final errorMsg = _positionConvertionModel!.emsg ?? "Conversion failed";
+          // final errorMsg = _positionConvertionModel!.emsg ?? "Conversion failed";
+          final rawMsg = _positionConvertionModel!.emsg ?? "";
+          final symbol = input.tsym.replaceAll(RegExp(r'-EQ$'), "");
+          final String errorMsg;
+          if (rawMsg.contains("No Holdings uploaded")) {
+            errorMsg =
+                "This position can't be converted to $toProduct. $symbol is not in your holdings.";
+          } else {
+            errorMsg = rawMsg.isNotEmpty ? rawMsg : "Conversion failed";
+          }
           if (kIsWeb) {
             ResponsiveSnackBar.showWarning(context, errorMsg);
           } else {

@@ -47,6 +47,14 @@ class MfDematHoldingData {
   String? planType;
   String? schemeCode;
   String? minimumPurchaseAmount;
+  // Needed by the redeem flow's minimum-units validation (backend added
+  // Scheme_Code for order placement; this parses Minimum_Redemption_Qty
+  // whenever the response carries it).
+  String? minimumRedemptionQty;
+  /// "Y" / "N" gates for the Add and Redeem row actions. See
+  /// MfDematHoldingData.isPurchaseAllowed for how an absent value is treated.
+  String? purchaseAllowed;
+  String? redemptionAllowed;
   String? totalUnits;
   String? avgNav;
   String? curNav;
@@ -82,6 +90,9 @@ class MfDematHoldingData {
     planType = json['PlanType']?.toString();
     schemeCode = json['Scheme_Code']?.toString();
     minimumPurchaseAmount = json['Minimum_Purchase_Amount']?.toString();
+    minimumRedemptionQty = json['Minimum_Redemption_Qty']?.toString();
+    purchaseAllowed = json['Purchase_Allowed']?.toString();
+    redemptionAllowed = json['Redemption_Allowed']?.toString();
     totalUnits = json['total_units']?.toString();
     avgNav = json['avg_nav']?.toString();
     curNav = json['Cur_Nav']?.toString();
@@ -106,6 +117,8 @@ class MfDematHoldingData {
     json['PlanType'] = planType;
     json['Scheme_Code'] = schemeCode;
     json['Minimum_Purchase_Amount'] = minimumPurchaseAmount;
+    json['Purchase_Allowed'] = purchaseAllowed;
+    json['Redemption_Allowed'] = redemptionAllowed;
     json['total_units'] = totalUnits;
     json['avg_nav'] = avgNav;
     json['Cur_Nav'] = curNav;

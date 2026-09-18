@@ -15,6 +15,7 @@ import 'dart:html' as html;
 import 'tv_chart/chart_iframe_guard.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/thems.dart';
+import '../../../sharedWidget/functions.dart';
 import '../../../res/res.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
@@ -587,7 +588,7 @@ class _WatchListScreenWebState extends State<WatchListScreenWeb>
                         ignoring: true,
                         child: MyntSearchTextField(
                           controller: TextEditingController(),
-                          placeholder: 'Search & add',
+                          placeholder: isPreDef == 'Yes' ? 'Search stocks' : 'Search & add',
                           leadingIcon: assets.searchIcon,
                           enabled: false,
                           leadingIconHoverEffect: false,
@@ -2283,7 +2284,10 @@ class _WatchlistIndexSlotWebState
                 exch: depthArgs.exch,
                 token: depthArgs.token,
                 tsym: depthArgs.tsym,
-                dispName: depthArgs.tsym,
+                dispName: (DerivativeMaster.nameFor(
+                            depthArgs.exch, depthArgs.token) ??
+                        depthArgs.tsym)
+                    .replaceAll('-EQ', ''),
                 ls: 1,
                 ti: 0.05,
                 instname: depthArgs.instname,

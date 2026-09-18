@@ -5,6 +5,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 
 import '../../../../models/portfolio_model/position_book_model.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
@@ -293,6 +294,8 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
   @override
   Widget build(BuildContext context) {
     final positions = ref.watch(portfolioProvider);
+    // Privacy Mode: qty, avg and P&L are masked; LTP stays visible.
+    final privacy = ref.watch(privacyProvider);
 
     if (widget.groupList.isEmpty) {
       return const SizedBox.shrink();
@@ -365,22 +368,22 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
           final rawQty = int.tryParse(groupItem['qty']?.toString() ?? '0') ?? 0;
           final lotSize = double.tryParse(groupItem['ls']?.toString() ?? '1') ?? 1.0;
           final qty = exchange == 'MCX' ? (rawQty / lotSize).toInt() : rawQty;
-          final qtyStr = qty > 0 ? '+$qty' : '$qty';
+          final qtyStr = privacy.mask(qty > 0 ? '+$qty' : '$qty');
 
           // Get average price based on day/net mode
-          final avgPrice = positions.isDay
+          final avgPrice = privacy.mask(positions.isDay
               ? groupItem['avgPrc']?.toString() ?? '0.00'
               : positions.isNetPnl
                   ? (groupItem['netupldprc'] ?? groupItem['avgPrc'])?.toString() ?? '0.00'
-                  : (groupItem['netavgprc'] ?? groupItem['avgPrc'])?.toString() ?? '0.00';
+                  : (groupItem['netavgprc'] ?? groupItem['avgPrc'])?.toString() ?? '0.00');
 
           final ltp = groupItem['lp']?.toString() ?? '0.00';
 
           // Get P&L based on net/mtm mode
-          final pnlStr = positions.isNetPnl
+          final pnlStr = privacy.mask(positions.isNetPnl
               ? (groupItem['profitNloss'] ?? groupItem['rpnl'])?.toString() ?? '0.00'
-              : groupItem['mTm']?.toString() ?? '0.00';
-          final pnlValue = double.tryParse(pnlStr) ?? 0.0;
+              : groupItem['mTm']?.toString() ?? '0.00');
+          final pnlValue = privacy.isPrivate ? 0.0 : (double.tryParse(pnlStr) ?? 0.0);
 
           // Text color for closed positions
           final textColor = isClosed
@@ -448,7 +451,10 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: _getTextStyle(context,
-                        color: isClosed ? textColor : _getQtyColor(qty, context)),
+                        color: isClosed
+                            ? textColor
+                            : _getQtyColor(
+                                privacy.isPrivate ? 0 : qty, context)),
                   ),
                 ),
               ),

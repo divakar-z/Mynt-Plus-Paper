@@ -1,3 +1,5 @@
+import 'package:mynt_plus/sharedWidget/functions.dart';
+
 class HoldingsModel {
   String? stat;
   List<ExchTsym>? exchTsym;
@@ -160,6 +162,16 @@ class HoldingsModel {
 }
 
 class ExchTsym {
+  /// Backend display name from the DerivativeMaster (keyed by exch:token), or
+  /// null when the contract isn't in the master (equities / indices).
+  String? get masterName => DerivativeMaster.nameFor(exch, token);
+
+  /// Ready contract name for display: master name when available, else the
+  /// existing tsym/expiry/option assembly.
+  String get displayName =>
+      masterName ??
+      '${tsym?.replaceAll("-EQ", "") ?? ''} ${expDate ?? ''} ${option ?? ''}';
+
   String? exch;
   String? token;
   String? tsym;

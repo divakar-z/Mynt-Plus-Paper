@@ -320,7 +320,7 @@ class _OrderBookDetailScreenWebState
           children: [
             Flexible(
               child: Text(
-                "${_orderData.symbol?.replaceAll("-EQ", "") ?? ''} ${_orderData.expDate ?? ''} ${_orderData.option ?? ''} ",
+                "${_orderData.displayName} ",
                 style: MyntWebTextStyles.title(
                   context,
                   color: resolveThemeColor(context,
@@ -510,6 +510,7 @@ class _OrderBookDetailScreenWebState
           _rowOfInfoData("Trigger Price", _orderData.trgprc ?? "0.00", theme),
           _rowOfInfoData("Product / Type",
               "${_orderData.sPrdtAli} / ${_orderData.prctyp ?? "-"}", theme),
+          _rowOfInfoData("Validity", _orderData.ret ?? "-", theme),
           _rowOfInfoData(
               "Market Protection", _orderData.mktProtection ?? "-", theme),
           _rowOfInfoData("AMO", _orderData.amo ?? "-", theme),
@@ -814,7 +815,13 @@ class _OrderBookDetailScreenWebState
       } else if (order.status == "COMPLETE") {
         filledQty = int.tryParse(order.rqty.toString()) ?? 0;
       } else {
-        filledQty = int.tryParse(order.dscqty.toString()) ?? 0;
+        // Nothing filled yet, so 0 - matching the orders table, which just
+        // reads fillshares with a 0 default. This branch used to read
+        // dscqty, which looked harmless only because disclosed qty was
+        // never actually sent and so was always "0". Once disclosed qty
+        // started working, an unfilled order of 5 with disclosed 2 showed
+        // "2 / 5" here while the table correctly showed "0 / 5".
+        filledQty = 0;
       }
 
       int lotSize =
@@ -1138,7 +1145,7 @@ class _OrderBookDetailScreenWebState
 
   Future<bool?> _showCancelOrderDialog(
       ThemesProvider theme, BuildContext targetContext) async {
-    final symbol = _orderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = _orderData.displayName.trim();
 
     return showDialog<bool>(
       context: targetContext,
@@ -1265,7 +1272,7 @@ class _OrderBookDetailScreenWebState
 
   Future<bool?> _showExitPositionDialog(
       ThemesProvider theme, BuildContext targetContext) async {
-    final symbol = _orderData.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = _orderData.displayName.trim();
 
     return showDialog<bool>(
       context: targetContext,

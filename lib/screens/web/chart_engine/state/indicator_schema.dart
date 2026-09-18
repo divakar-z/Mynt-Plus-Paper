@@ -4,13 +4,25 @@
 ///
 /// Kinds not in the registry fall back to the single-`period` row from the
 /// generic dialog (governed by `_kKindsWithPeriod` in the shell screen).
+/// One choice in a dropdown (enum) param. The value persisted in
+/// `IndicatorConfig.params` is the option's INDEX in [IndicatorParam.options]
+/// — kept numeric so the params map stays `Map<String, num>`. The engine maps
+/// the same index order back to a behavior, so keep option order in sync with
+/// the matching tables in `chart-indicators.js` / `chart-overlays.js`.
+class IndicatorOption {
+  final String label;
+  const IndicatorOption(this.label);
+}
+
 class IndicatorParam {
   /// Map key inside `IndicatorConfig.params`.
   final String key;
-  /// Short label shown next to the stepper.
+  /// Short label shown next to the control.
   final String label;
   /// One-line caption below the label.
   final String description;
+  /// Default stored value. For enum params this is the default option index;
+  /// for bool params it is 0 or 1.
   final num defaultValue;
   final num min;
   final num max;
@@ -18,16 +30,24 @@ class IndicatorParam {
   final num step;
   /// Forces integer storage when true; floats round-trip as `double`.
   final bool isInt;
+  /// Non-null => render a dropdown; the stored value is the selected index.
+  final List<IndicatorOption>? options;
+  /// True => render a switch; the stored value is 0 or 1.
+  final bool isBool;
   const IndicatorParam({
     required this.key,
     required this.label,
     required this.description,
     required this.defaultValue,
-    required this.min,
-    required this.max,
+    this.min = 0,
+    this.max = 0,
     this.step = 1,
     this.isInt = true,
+    this.options,
+    this.isBool = false,
   });
+  /// True when this param should render as a dropdown.
+  bool get isEnum => options != null;
 }
 
 class IndicatorSchema {
@@ -104,6 +124,9 @@ const Map<String, IndicatorSchema> _kSchemas = {
       ),
     ],
   ),
+  // RSI gains a Source selector + an optional smoothing MA line (the
+  // "SMA-based RSI" users asked for). Enum option order MUST match the tables
+  // in chart-indicators.js: RSI_SOURCES and RSI_SMOOTHINGS.
   'rsi': IndicatorSchema(
     kind: 'rsi',
     displayName: 'Relative Strength Index',
@@ -113,6 +136,38 @@ const Map<String, IndicatorSchema> _kSchemas = {
         key: 'period', label: 'Period',
         description: 'Lookback length for the oscillator',
         defaultValue: 14, min: 2, max: 200,
+      ),
+      IndicatorParam(
+        key: 'source', label: 'Source',
+        description: 'Price series the RSI is computed on',
+        defaultValue: 0,
+        options: [
+          IndicatorOption('Close'), IndicatorOption('Open'),
+          IndicatorOption('High'), IndicatorOption('Low'),
+          IndicatorOption('HL2'), IndicatorOption('HLC3'),
+          IndicatorOption('OHLC4'),
+        ],
+      ),
+      IndicatorParam(
+        key: 'smoothingType', label: 'Smoothing',
+        description: 'Moving average drawn over the RSI',
+        defaultValue: 1, // SMA
+        options: [
+          IndicatorOption('None'), IndicatorOption('SMA'),
+          IndicatorOption('SMA + Bollinger Bands'), IndicatorOption('EMA'),
+          IndicatorOption('SMMA (RMA)'), IndicatorOption('WMA'),
+          IndicatorOption('VWMA'),
+        ],
+      ),
+      IndicatorParam(
+        key: 'smoothingLength', label: 'Smoothing Length',
+        description: 'Length of the smoothing moving average',
+        defaultValue: 14, min: 1, max: 200,
+      ),
+      IndicatorParam(
+        key: 'bbStdDev', label: 'BB StdDev',
+        description: 'Std-dev multiplier (SMA + Bollinger Bands only)',
+        defaultValue: 2, min: 0.5, max: 5, step: 0.1, isInt: false,
       ),
     ],
   ),
@@ -634,6 +689,45 @@ const Map<String, IndicatorSchema> _kSchemas = {
         key: 'maxAccel', label: 'Max Acceleration',
         description: 'Acceleration factor ceiling',
         defaultValue: 0.2, min: 0.01, max: 0.2, step: 0.01, isInt: false,
+      ),
+    ],
+  ),
+  // Pivot Points — support/resistance levels from the prior period's OHLC,
+  // drawn as a price-pane overlay. Enum option order MUST match the tables in
+  // chart-overlays.js (PIVOT_VARIANTS) and chart-indicators.js (PIVOT_TIMEFRAMES).
+  // Line color = IndicatorConfig.color, line width = IndicatorConfig.thickness.
+  'pivots': IndicatorSchema(
+    kind: 'pivots',
+    displayName: 'Pivot Points',
+    shortDescription: 'Support/resistance pivots from the prior period.',
+    params: [
+      IndicatorParam(
+        key: 'variant', label: 'Type',
+        description: 'Pivot calculation method',
+        defaultValue: 0,
+        options: [
+          IndicatorOption('Classical'), IndicatorOption('Fibonacci'),
+          IndicatorOption('Camarilla'), IndicatorOption('Woodie'),
+          IndicatorOption('DeMark'),
+        ],
+      ),
+      IndicatorParam(
+        key: 'pivotTimeframe', label: 'Timeframe',
+        description: 'Period each pivot set is derived from',
+        defaultValue: 0,
+        options: [
+          IndicatorOption('Daily'), IndicatorOption('Weekly'),
+        ],
+      ),
+      IndicatorParam(
+        key: 'showLabels', label: 'Show labels',
+        description: 'Draw the P / S / R label on each level',
+        defaultValue: 1, isBool: true,
+      ),
+      IndicatorParam(
+        key: 'showPrices', label: 'Show prices',
+        description: 'Draw the price next to each level',
+        defaultValue: 1, isBool: true,
       ),
     ],
   ),

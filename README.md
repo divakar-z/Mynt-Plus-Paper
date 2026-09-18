@@ -175,3 +175,6 @@ python3 tool/prune_web_fonts.py build/web
 - [WEB_PERFORMANCE_ANALYSIS_REPORT.md](WEB_PERFORMANCE_ANALYSIS_REPORT.md) — first-load analysis
 - [PERFORMANCE_OPTIMIZATION_SUMMARY.md](PERFORMANCE_OPTIMIZATION_SUMMARY.md)
 - [WEB_BUILD_OPTIMIZATION.md](WEB_BUILD_OPTIMIZATION.md)
+
+
+flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080

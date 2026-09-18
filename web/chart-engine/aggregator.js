@@ -28,18 +28,21 @@ const SOURCE_INTERVAL_FOR_MINUTES = (mins) => {
  *        Target candles in chronological order. `ts` is the bucket start
  *        unix epoch seconds.
  */
-function bucketCandles(src, targetMinutes) {
+function bucketCandles(src, targetMinutes, exch) {
   if (!Array.isArray(src) || src.length === 0) return [];
-  // Daily, weekly, monthly use calendar-aware bucketing (IST). Everything
-  // else uses modular bucketing on the second.
+  // Daily, weekly, monthly use calendar-aware bucketing (IST). Intraday anchors
+  // each bucket to the exchange's SESSION OPEN (NSE 09:15 / MCX 09:00), not the
+  // UTC epoch — otherwise a 1h bucket lands on the UTC hour (08:30 IST) instead
+  // of the session open.
   if (targetMinutes >= 1440) {
     return _bucketCalendar(src, targetMinutes);
   }
   const targetSec = targetMinutes * 60;
+  const openMin = _sessionOpenMinFor(exch);
   const out = [];
   let cur = null;
   for (const c of src) {
-    const bucket = c.ts - (c.ts % targetSec);
+    const bucket = _intradayBucketStart(c.ts, targetSec, openMin);
     if (!cur || cur.ts !== bucket) {
       if (cur) out.push(cur);
       cur = { ts: bucket, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v };
@@ -103,6 +106,32 @@ function _monthStartIst(ts) {
   return istMonthStart - IST_OFFSET;
 }
 
+// Session open (IST minutes from midnight) per exchange — mirrors
+// chart-helpers.js `_sessionBoundsFor`. Used to anchor intraday buckets to the
+// session open. null → unknown exchange → fall back to plain epoch-modular
+// bucketing (previous behaviour).
+function _sessionOpenMinFor(exch) {
+  if (exch === 'NSE' || exch === 'NFO' || exch === 'BSE' || exch === 'BFO') return 555; // 09:15
+  if (exch === 'CDS' || exch === 'BCD') return 540;   // 09:00
+  if (exch === 'MCX' || exch === 'NCOM') return 540;  // 09:00
+  return null;
+}
+
+// Intraday bucket start (epoch seconds) for a candle/tick at `tsSec`, anchored
+// to the exchange's session open for THAT bar's IST day — so a 1h NSE bucket
+// starts at 09:15 (not the UTC-hour boundary, which is 08:30 IST because IST is
+// UTC+5:30). Falls back to plain epoch-modular when the exchange has no known
+// session (openMin null). `tsSec` before the open (pre-open, already filtered
+// upstream) clamps to the open.
+function _intradayBucketStart(tsSec, targetSec, openMin) {
+  if (openMin == null) return tsSec - (tsSec % targetSec);
+  const istSec = tsSec + IST_OFFSET;
+  const istMidnightUtc = (istSec - (istSec % 86400)) - IST_OFFSET;
+  const sessionOpenUtc = istMidnightUtc + openMin * 60;
+  if (tsSec < sessionOpenUtc) return sessionOpenUtc;
+  return sessionOpenUtc + Math.floor((tsSec - sessionOpenUtc) / targetSec) * targetSec;
+}
+
 /**
  * Apply a live tick to the last candle of `candles`, or append a new candle
  * if the tick falls in the next bucket.
@@ -115,7 +144,7 @@ function _monthStartIst(ts) {
  * tick = { lp:number, v:number (cum), ft:number (epoch seconds) }
  * targetMs = target candle width in milliseconds
  */
-function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
+function ingestTickIntoBucket(candles, tick, aggState, targetMs, exch) {
   if (tick.lp == null || tick.v == null || tick.ft == null) return 'skipped';
   const raw = +tick.lp;
   const cumVol = +tick.v;
@@ -126,6 +155,10 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
   // skip every tick (dv = 0 - 0 = 0). Bypass volume tracking entirely in
   // that mode and aggregate purely from lp + ft.
   const lpOnly = tick._lpOnly === true;
+  // `priceOnly` starts equal to lpOnly, but is also switched on for a
+  // depth-sourced tick that moved the price with NO volume delta (see the
+  // dv===0 branch below). Such a tick updates OHLC but credits no volume.
+  let priceOnly = lpOnly;
 
   if (!lpOnly) {
     if (aggState.prevCumVol == null) {
@@ -138,8 +171,22 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
       aggState.prevCumVol = cumVol;
     } else {
       const dv = cumVol - aggState.prevCumVol;
-      if (dv <= 0) return 'skipped';      // late delivery — don't touch aggState
-      if (dv > 50000) {                   // huge jump — reset baseline
+      // dv < 0   → cumulative volume went backwards: a stale/out-of-order
+      //            delivery. Never touch the bar.
+      // dv === 0 → this frame reported no NEW trades. On brokers where the
+      //            live `lp` rides depth (`df`) frames that don't re-send `v`,
+      //            the last price keeps moving while `v` stays frozen — so a
+      //            dv===0 tick whose PRICE changed is a genuine price update we
+      //            must still apply (close/high/low) with no volume to credit,
+      //            exactly like lpOnly. A dv===0 tick at the SAME price is a
+      //            true duplicate — skip it to avoid redraw churn. Without this,
+      //            a touchline ('t') eviction (leaving a depth-only feed) froze
+      //            the candle while lp was still live and the Stale pill climbed.
+      if (dv < 0) return 'skipped';
+      if (dv === 0) {
+        if (raw === aggState.prevPrice) return 'skipped';
+        priceOnly = true;
+      } else if (dv > 50000) {            // huge jump — reset baseline
         aggState.prevCumVol = cumVol;
         aggState.prevPrice = raw;
         aggState.prevMs = tickMs;
@@ -148,7 +195,13 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
     }
   }
 
-  const bucketSec = Math.floor(tickMs / targetMs) * (targetMs / 1000);
+  const targetSec = targetMs / 1000;
+  // Intraday: anchor to the session open (same as bucketCandles) so live ticks
+  // land in the SAME bucket the history was bucketed into. Daily+ keeps epoch
+  // bucketing (its own day-OHLC logic handles the bar).
+  const bucketSec = (targetMs < 86400000)
+      ? _intradayBucketStart(tickMs / 1000, targetSec, _sessionOpenMinFor(exch))
+      : Math.floor(tickMs / targetMs) * targetSec;
   // Daily/weekly/monthly: TODAY's bar isn't in the EOD history (which ends
   // yesterday), so it's built from live ticks. Seed/maintain it from the
   // broker's true day OHLC (tick.dayOpen/High/Low) — using the first tick's lp
@@ -171,7 +224,7 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
     // (clock skew). Dropping every such tick would freeze the LTP forever.
     // Instead, update the existing latest bar's close so the chart still
     // tracks live price even if we can't accurately bucket the timestamp.
-    if (lpOnly) {
+    if (priceOnly) {
       c.c = raw;
       if (raw > c.h) c.h = raw;
       if (raw < c.l) c.l = raw;
@@ -197,7 +250,7 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs) {
   if (raw > c.h) c.h = raw;
   if (raw < c.l) c.l = raw;
   applyDayExtremes(c);
-  if (!lpOnly) {
+  if (!priceOnly) {
     c.v += (cumVol - aggState.prevCumVol);
     aggState.prevCumVol = cumVol;
     aggState.prevPrice = raw;

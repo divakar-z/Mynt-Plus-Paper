@@ -28,6 +28,14 @@
   const root = document.getElementById('top-bar');
   if (!root) return;
 
+  // Popout view-only mode — the iframe URL carries `?popout=1`. Unlike
+  // lite mode above, do NOT early-return: the popout window still renders
+  // the full bar (search / timeframe / fx / draw / Snap / Settings) so
+  // draw/indicator/timeframe tools stay usable. Only the two trading
+  // controls (INSTANT badge, Order-Defaults button) are omitted below.
+  let IS_POPOUT = false;
+  try { IS_POPOUT = new URLSearchParams(window.location.search).get('popout') === '1'; } catch (_) {}
+
   // ── Shared form-row builders ────────────────────────────────────────────
   // Each builder returns the row's DOM element. Caller wires the change
   // callback. The visual contract mirrors Flutter's RefinedRow (label +
@@ -294,10 +302,16 @@
   // opens a popover grouped by pane count showing all layouts in the
   // catalog Flutter pushed via `setLayoutCatalog`. Picking one posts
   // `setActiveLayoutId` back to Flutter which routes through the existing
-  // setLayout pipeline (catalog stays Flutter-owned).
+  // setLayout pipeline (catalog stays Flutter-owned). The catalog is
+  // Flutter-pushed and the popout has no Flutter host, so this control is
+  // hidden entirely in popout mode (same guard pattern as the INSTANT
+  // badge/Order-Defaults button). `layoutBtn` stays `undefined` and the
+  // ORDER array's `.filter(Boolean)` skips it.
+  let layoutBtn;
+  if (!IS_POPOUT) {
   let layoutCatalog = [];                // [{id, paneCount, areas, ...}]
   let activeLayoutId = null;
-  const layoutBtn = document.createElement('button');
+  layoutBtn = document.createElement('button');
   layoutBtn.className = 'tb-chip tb-layout';
   layoutBtn.type = 'button';
   layoutBtn.title = 'Layout';
@@ -415,6 +429,7 @@
     repaintLayoutButton();
   });
   root.appendChild(layoutBtn);
+  }
 
   // ── Symbol typeahead ────────────────────────────────────────────────────
   // 220px text input. Focus opens a result popover below; debounced search
@@ -1011,19 +1026,6 @@
           'Time until current bar closes',
           _switch(v.showBarCountdown,
               (x) => _patchView({ showBarCountdown: x }))));
-      body.appendChild(_row('Key levels (pivots)',
-          'PP, R1–R3, S1–S3 from prev session',
-          _switch(v.showKeyLevels,
-              (x) => _patchView({ showKeyLevels: x }))));
-      if (v.showKeyLevels) {
-        body.appendChild(_row('Pivot variant',
-            'Classical, Fibonacci or Camarilla',
-            _segmented(v.pivotVariant, [
-              { value: 'classical', label: 'Classical' },
-              { value: 'fibonacci', label: 'Fibonacci' },
-              { value: 'camarilla', label: 'Camarilla' },
-            ], (x) => _patchView({ pivotVariant: x }))));
-      }
       body.appendChild(_row('Auto-pattern',
           'HH / HL / LH / LL labels',
           _switch(v.showAutoPattern,
@@ -1397,7 +1399,12 @@
     }
   }
 
-  const odBtn = document.createElement('button');
+  // Popout view-only mode omits the Order-Defaults control entirely (it's
+  // a trading surface) — `odBtn` stays undefined and the ORDER array below
+  // filters it out.
+  let odBtn;
+  if (!IS_POPOUT) {
+  odBtn = document.createElement('button');
   odBtn.className = 'tb-chip tb-od';
   odBtn.type = 'button';
   odBtn.title = 'Order defaults';
@@ -1472,6 +1479,7 @@
   });
 
   root.appendChild(odBtn);
+  }
 
   // ── Draw button + popover ───────────────────────────────────────────────
   // Session-level state (NOT per-pane): activeDrawTool, drawingsLocked,
@@ -2337,6 +2345,7 @@
     { kind: 'dpo',      label: 'DPO',    fullName: 'Detrended Price Oscillator',  category: 'momentum' },
     { kind: 'pvt',      label: 'PVT',    fullName: 'Price Volume Trend',          category: 'momentum' },
     { kind: 'ad',       label: 'A/D',    fullName: 'Accumulation/Distribution',   category: 'momentum' },
+    { kind: 'pivots',   label: 'PIV',    fullName: 'Pivot Points',                category: 'trend' },
   ];
   const INDICATOR_CATEGORIES = [
     { value: 'all',        label: 'All' },
@@ -3096,6 +3105,43 @@
 
   root.appendChild(labBtn);
 
+  // ── Pop out ─────────────────────────────────────────────────────────────
+  // Opens the current pane's symbol in a standalone view-only popout window —
+  // the Flutter `/chart-popout` route (a second app instance that reuses the
+  // real chart host in `?popout=1` mode, fed by the alternate socket). Never
+  // shown inside a popout itself.
+  let popBtn = null;
+  if (!IS_POPOUT) {
+  popBtn = document.createElement('button');
+  popBtn.className = 'tb-chip tb-popout';
+  popBtn.type = 'button';
+  popBtn.title = 'Pop out chart';
+  popBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" '
+    + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M15 3h6v6"/><path d="M10 14 21 3"/>'
+    + '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+  popBtn.addEventListener('click', () => {
+    const s = symbolCurrent;
+    if (!s || !s.exch || !s.token) return;               // nothing to pop out
+    let slots = [];
+    try { slots = JSON.parse(localStorage.getItem('popoutSlots') || '[]'); } catch (_) { slots = []; }
+    const used = new Set(slots.map((x) => Number(x)).filter((x) => !isNaN(x)));
+    let n = 1; while (used.has(n)) n++;
+    used.add(n);
+    try { localStorage.setItem('popoutSlots', JSON.stringify(Array.from(used).sort((a, b) => a - b))); } catch (_) {}
+    const tf = (activePaneState && activePaneState.timeframeMinutes) || 5;
+    const qs = 'exch=' + encodeURIComponent(s.exch)
+      + '&token=' + encodeURIComponent(s.token)
+      + '&tsym=' + encodeURIComponent(s.tsym || '')
+      + '&tf=' + encodeURIComponent(tf)
+      + '&n=' + n;
+    // The Flutter popout owns its own drawings/indicators/session (no JS
+    // handoff): reuses the real host, so those all work natively in-window.
+    window.open('/chart-popout?' + qs, 'mynt_popout_' + n);
+  });
+  root.appendChild(popBtn);
+  }
+
   // ── Snap (screenshot) ───────────────────────────────────────────────────
   // Directly drives the active pane's takeScreenshot() — no Flutter round
   // trip to decide which pane (the iframe knows its own active state). The
@@ -3119,13 +3165,20 @@
   root.appendChild(snapBtn);
 
   // ── INSTANT toggle ──────────────────────────────────────────────────────
+  // Popout view-only mode omits this control entirely — it's a trading
+  // surface, and building it would also read/write the shared
+  // `chartEngineTopBarV1.instantOrders` localStorage key and wire the
+  // `setInstantOrders` bridge listener, neither of which the popout should
+  // touch. `badge` stays undefined and the ORDER array below filters it out.
+  let badge;
+  if (!IS_POPOUT) {
   const INSTANT_KEY = 'chartEngineTopBarV1.instantOrders';
   let instantOn = (function () {
     try { return localStorage.getItem(INSTANT_KEY) === '1'; }
     catch (_) { return false; }
   })();
 
-  const badge = document.createElement('button');
+  badge = document.createElement('button');
   badge.className = 'tb-chip tb-instant';
   badge.type = 'button';
   badge.innerHTML = '<span class="tb-instant-icon">⚠</span> INSTANT';
@@ -3181,12 +3234,13 @@
   });
 
   root.appendChild(badge);
+  }
 
   // ── Final layout pass ───────────────────────────────────────────────────
   // Reorder children to the canonical sequence per user spec:
   //   [Symbol] [Timeframe] [Style] [fx] [Cursor]
   //       ...flex spacer...
-  //   [Layout] [INSTANT] [Order Defaults] [Snap] [Settings]
+  //   [Layout] [INSTANT] [Order Defaults] [Pop out] [Snap] [Settings]
   // `appendChild` of an existing child MOVES it (doesn't create a duplicate);
   // the first right-group button gets `.tb-right-start` which applies
   // `margin-left: auto` for the flex spacer.
@@ -3194,13 +3248,21 @@
   // and the crosshair/cursor-mode picker both moved to the floating left rail
   // (buildDrawRail). drawBtn stays constructed (its repaint helpers are still
   // referenced) but is never mounted.
+  // `.filter(Boolean)` tolerates `badge`/`odBtn`/`popBtn` being omitted in
+  // popout view-only mode (all stay `undefined`/`null` when `IS_POPOUT` is
+  // true — a popout window never offers to pop itself out).
   const ORDER = [
     symWrap, tfBtn, styleBtn, fxBtn,
-    layoutBtn, labBtn, badge, odBtn, snapBtn, settingsBtn,
-  ];
-  // Move the right-anchor class — Layout is now the first right-group
-  // button instead of the INSTANT badge.
-  badge.classList.remove('tb-right-start');
-  layoutBtn.classList.add('tb-right-start');
+    layoutBtn, labBtn, badge, odBtn, popBtn, snapBtn, settingsBtn,
+  ].filter(Boolean);
+  // Move the right-anchor class — Layout is normally the first right-group
+  // button instead of the INSTANT badge. In popout mode `layoutBtn`,
+  // `badge`, `odBtn` and `popBtn` are all omitted (view-only, no Flutter
+  // host/catalog), and `labBtn` is permanently `display:none`, so the
+  // actual first VISIBLE right-group control there is `snapBtn` — walk the
+  // same candidates in ORDER and anchor whichever is first present.
+  if (badge) badge.classList.remove('tb-right-start');
+  const rightAnchorBtn = layoutBtn || badge || odBtn || popBtn || snapBtn;
+  if (rightAnchorBtn) rightAnchorBtn.classList.add('tb-right-start');
   for (const el of ORDER) root.appendChild(el);
 })();

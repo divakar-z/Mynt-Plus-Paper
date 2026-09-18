@@ -274,6 +274,28 @@ class BidDetail {
     rate = json['rate'].toString();
   }
 
+  /// Whether the bid was placed at the cut-off price.
+  ///
+  /// The exchanges report this differently: NSE returns a real bool in
+  /// `atCutOff`, while BSE echoes back the `cuttoffflag` that was posted, which
+  /// lands here as a string ("false" for a bid placed without cut-off) and so
+  /// has to be read as a flag rather than compared against a single value.
+  ///
+  /// [exchange] is the parent order's `type`, and decides whenever it is
+  /// decisive. It is not relied on alone because the bid shape is chosen by
+  /// `type == 'NSE'` when the order is placed: a missing or differently spelled
+  /// type is written in the BSE shape, and so carries no `atCutOff` to read.
+  bool isCutOffFor(String? exchange) {
+    if (exchange == "BSE") return _cuttoffflagIsSet;
+    if (atCutOff != null) return atCutOff!;
+    return _cuttoffflagIsSet;
+  }
+
+  bool get _cuttoffflagIsSet {
+    final flag = cuttoffflag?.toLowerCase();
+    return flag == "true" || flag == "1" || flag == "y";
+  }
+
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['actioncode'] = actioncode;

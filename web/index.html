@@ -204,11 +204,15 @@
       });
     })();
 
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function() {
-        navigator.serviceWorker.register('firebase-messaging-sw.js');
-      });
-    }
+    // Removed: this manual registration is redundant (the Firebase JS SDK
+    // auto-registers firebase-messaging-sw.js at its own dedicated scope on
+    // getToken) and it was landing on the ROOT scope, evicting Flutter's
+    // caching service worker — the root cause of stale-build/cache issues.
+    // if ('serviceWorker' in navigator) {
+    //   window.addEventListener('load', function() {
+    //     navigator.serviceWorker.register('firebase-messaging-sw.js');
+    //   });
+    // }
     // Hide splash once Flutter paints the first frame
     window.addEventListener('flutter-first-frame', function () {
       var splash = document.getElementById('flutter-splash');

@@ -542,12 +542,16 @@ class _SecureFundState extends ConsumerState<SecureFund> {
                 noDecimal: false),
             text: "Exposure",
           ),
+          // The Limits response carries basket margin as `scripbskmrg`; the
+          // `scripbskmar` key this row used to read is never sent, so the row
+          // always printed 0.00 while the vendor showed the real figure.
+          // value: _safeParseDouble("${funds.fundDetailModel?.scripbskmar ?? 0.00}"),
           buildPeakMarginInfo(
             isDarkMode: theme.isDarkMode,
             theme: theme,
             value: getFormatter(
                 value: _safeParseDouble(
-                    "${funds.fundDetailModel?.scripbskmar ?? 0.00}"),
+                    "${funds.fundDetailModel?.scripbskmrg ?? 0.00}"),
                 v4d: false,
                 noDecimal: false),
             text: "Basket Margin",

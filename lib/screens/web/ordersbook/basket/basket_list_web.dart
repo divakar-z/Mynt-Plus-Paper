@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:intl/intl.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
@@ -150,7 +151,7 @@ class _BasketListState extends ConsumerState<BasketList> {
   TextStyle _geistTextStyle(
       {Color? color, double? fontSize, FontWeight? fontWeight}) {
     return TextStyle(
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       color: color,
       fontSize: fontSize,
       fontWeight: fontWeight,
@@ -297,7 +298,7 @@ class _BasketListState extends ConsumerState<BasketList> {
   // Calculate minimum column widths dynamically
   Map<int, double> _calculateMinWidths(
       List<dynamic> baskets, BuildContext context) {
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 24.0;
     const sortIconWidth = 24.0;
 
@@ -1577,9 +1578,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                   crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
                                     Text(
-                                      "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
-                                          .replaceAll("-EQ", "")
-                                          .toUpperCase(),
+                                      (scrip.masterName?.isNotEmpty == true)
+                                          ? scrip.masterName!
+                                          : "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
+                                              .replaceAll("-EQ", "")
+                                              .toUpperCase(),
                                       style: WebTextStyles.symbolList(
                                         isDarkTheme: theme.isDarkMode,
                                         color: theme.isDarkMode
@@ -1587,7 +1590,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                             : WebColors.textPrimary,
                                       ),
                                     ),
-                                    if (scrip.option != null &&
+                                    if (scrip.masterName == null &&
+                                        scrip.option != null &&
                                         scrip.option.toString().isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(left: 4),
@@ -1601,7 +1605,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                           ),
                                         ),
                                       ),
-                                    if (scrip.expDate != null &&
+                                    if (scrip.masterName == null &&
+                                        scrip.expDate != null &&
                                         scrip.expDate.toString().isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(left: 4),
@@ -3151,7 +3156,9 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   Future<void> _handleDeleteBasketScript(
       Map<String, dynamic> item, int index, ThemesProvider theme) async {
     // Show confirmation dialog
-    final symbol = item['symbol']?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = DerivativeMaster.nameFor(
+            item['exch']?.toString(), item['token']?.toString()) ??
+        (item['symbol']?.replaceAll("-EQ", "") ?? 'N/A');
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) {
@@ -3547,7 +3554,10 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
   @override
   Widget build(BuildContext context) {
     final tsym = widget.item['tsym']?.toString() ?? widget.item['symbol']?.toString() ?? '';
-    final displayText = tsym.replaceAll("-EQ", "").trim();
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = DerivativeMaster.nameFor(
+        widget.item['exch']?.toString(), widget.item['token']?.toString());
+    final displayText = master ?? tsym.replaceAll("-EQ", "").trim();
     final exch = widget.item['exch']?.toString() ?? '';
 
     return SizedBox.expand(

@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import 'package:mynt_plus/provider/ledger_provider.dart';
-import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/screens/web/profile/pledge/pledge_details.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
@@ -119,9 +118,10 @@ class _PledgeFilterState extends State<PledgeFilter> {
           } else if (((double.parse(value.cOLQTY.toString()).toInt()) != 0) &&
               widget.activetabe == "1") {
             matchesTab = true;
-          } else if (value.status == "Not_ok" &&
-              widget.activetabe == "2" &&
-              ((double.parse(value.cOLQTY.toString()).toInt()) == 0)) {
+          } else if (widget.activetabe == "2" &&
+              (value.status ?? '').trim().toLowerCase() == "not_ok") {
+            // Every Not_ok scrip is non-approved, including ones that still
+            // carry collateral qty (approved when pledged, de-listed later).
             matchesTab = true;
           }
 
@@ -205,27 +205,29 @@ class _PledgeFilterState extends State<PledgeFilter> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final double totalWidth = constraints.maxWidth;
-            final double symbolWidth = totalWidth * 0.25;
-            final double qtyPledgeWidth = totalWidth * 0.15;
-            final double totalQtyWidth = totalWidth * 0.12;
-            final double valueWidth = totalWidth * 0.16;
-            final double mrgEstWidth = totalWidth * 0.18;
-            final double estPctWidth = totalWidth * 0.14;
+            // Available Balance carries an extra "Qty to unpledge" column
+            // for holdings that are already partly pledged — but only when
+            // some holding in the list actually has collateral to release,
+            // otherwise it is a column of "--".
+            final bool showUnpledgeColumn = tab == '0' &&
+                dataval.any((v) =>
+                    (double.tryParse(v.cOLQTY?.toString() ?? '0')?.toInt() ??
+                        0) !=
+                    0);
+
+            final List<double> shares = showUnpledgeColumn
+                ? const [0.18, 0.13, 0.13, 0.11, 0.15, 0.16, 0.14]
+                : const [0.25, 0.15, 0.12, 0.16, 0.18, 0.14];
 
             final Map<int, shadcn.TableSize> colWidths = {
-              0: shadcn.FixedTableSize(symbolWidth),
-              1: shadcn.FixedTableSize(qtyPledgeWidth),
-              2: shadcn.FixedTableSize(totalQtyWidth),
-              3: shadcn.FixedTableSize(valueWidth),
-              4: shadcn.FixedTableSize(mrgEstWidth),
-              5: shadcn.FixedTableSize(estPctWidth),
+              for (var i = 0; i < shares.length; i++)
+                i: shadcn.FixedTableSize(totalWidth * shares[i]),
             };
 
-            final String qtyHeader = tab == '0'
-                ? 'Qty to pledge'
-                : tab == '1'
-                    ? 'Qty to unpledge'
-                    : 'Qty';
+            // Non-Approved lists what would be pledged once approved, so it
+            // carries the same header as Available Balance.
+            final String qtyHeader =
+                tab == '1' ? 'Qty to unpledge' : 'Qty to pledge';
 
             return shadcn.OutlinedContainer(
               child: Column(
@@ -239,6 +241,9 @@ class _PledgeFilterState extends State<PledgeFilter> {
                         cells: [
                           _buildTableHeaderCell('Symbol', context),
                           _buildTableHeaderCell(qtyHeader, context, alignRight: true),
+                          if (showUnpledgeColumn)
+                            _buildTableHeaderCell('Qty to unpledge', context,
+                                alignRight: true),
                           _buildTableHeaderCell('Total Qty', context, alignRight: true),
                           _buildTableHeaderCell('Value', context, alignRight: true),
                           _buildTableHeaderCell('Mrg / Est', context, alignRight: true),
@@ -263,6 +268,7 @@ class _PledgeFilterState extends State<PledgeFilter> {
                                 value: value,
                                 index: index,
                                 tab: tab,
+                                showUnpledgeColumn: showUnpledgeColumn,
                                 ledgerprovider: ledgerprovider,
                                 theme: theme,
                                 context: context,
@@ -389,63 +395,55 @@ class _PledgeFilterState extends State<PledgeFilter> {
     required dynamic value,
     required int index,
     required String tab,
+    required bool showUnpledgeColumn,
     required LDProvider ledgerprovider,
     required ThemesProvider theme,
     required BuildContext context,
     required dynamic ref,
   }) {
-    final portfolio = ref.read(mfProvider);
-    final isin = value.iSIN?.toString() ?? "";
-    String mfname = "";
-    if (portfolio.mfholdingnew?.data != null && isin.isNotEmpty) {
-      for (var mfData in portfolio.mfholdingnew!.data!) {
-        if (mfData.iSIN == isin) {
-          mfname = mfData.name ?? "";
-          break;
-        }
-      }
-    }
+    // Symbol display — always NSE_SYMBOL (consistent with mobile).
+    final String symbolName = value.nSESYMBOL ?? '--';
 
-    // Symbol display
-    final String symbolName = value.sERIES == "GR" && mfname.isNotEmpty
-        ? mfname
-        : (value.nSESYMBOL ?? '--');
+    // Total Qty is the API's NET field on every tab.
+    final int totalQty = double.tryParse(value.nET?.toString() ?? '0')?.toInt() ?? 0;
 
-    // Calculate quantities based on tab
-    int totalQty;
+    // Collateral qty already pledged for this scrip.
+    final int collateralQty =
+        double.tryParse(value.cOLQTY?.toString() ?? '0')?.toInt() ?? 0;
+
+    // Editable qty stays tab-specific: collateral qty drives unpledge,
+    // available holding qty drives pledge and non-approved.
     String pledgeQty;
 
-    if (tab == '0') {
-      // Pledge tab: available qty
-      totalQty = (double.tryParse(value.nSOHQTY?.toString() ?? '0')?.toInt() ?? 0) +
-          (double.tryParse(value.sOHQTY?.toString() ?? '0')?.toInt() ?? 0);
-      pledgeQty = value.dummvalue != null && value.dummvalue != 'null'
-          ? '${double.tryParse(value.dummvalue.toString())?.toInt() ?? totalQty}'
-          : '$totalQty';
-    } else if (tab == '1') {
+    if (tab == '1') {
       // Unpledge tab: collateral qty
-      totalQty = double.tryParse(value.cOLQTY?.toString() ?? '0')?.toInt() ?? 0;
-      if (value.unPlegeQty != null && value.unPlegeQty != "0" && value.unPlegeQty != "") {
-        pledgeQty = value.unPlegeQty!;
-      } else if (value.dummunpledgevalue != null && value.dummunpledgevalue != 'null') {
-        pledgeQty = '${double.tryParse(value.dummunpledgevalue.toString())?.toInt() ?? totalQty}';
-      } else {
-        pledgeQty = '$totalQty';
-      }
+      pledgeQty = _unpledgeQtyLabel(value, collateralQty);
     } else {
-      // Non-approved tab
-      totalQty = (double.tryParse(value.nSOHQTY?.toString() ?? '0')?.toInt() ?? 0) +
-          (double.tryParse(value.sOHQTY?.toString() ?? '0')?.toInt() ?? 0);
+      // Pledge and Non-approved tabs: available qty
+      final int availableQty =
+          (double.tryParse(value.nSOHQTY?.toString() ?? '0')?.toInt() ?? 0) +
+              (double.tryParse(value.sOHQTY?.toString() ?? '0')?.toInt() ?? 0);
       pledgeQty = value.dummvalue != null && value.dummvalue != 'null'
-          ? '${double.tryParse(value.dummvalue.toString())?.toInt() ?? totalQty}'
-          : '$totalQty';
+          ? '${double.tryParse(value.dummvalue.toString())?.toInt() ?? availableQty}'
+          : '$availableQty';
     }
+
+    final String qtyLabel = _qtyDisplay(pledgeQty);
+
+    // A holding on Available Balance can already be partly pledged. That
+    // collateral gets its own column, carrying the same data and the same
+    // flow the Pledge Balance tab uses. _mainpage owns whether the column
+    // exists at all, so the flag comes in rather than being re-derived.
+    final bool showUnpledgeChip = showUnpledgeColumn && collateralQty != 0;
+    final String unpledgeQty = _unpledgeQtyLabel(value, collateralQty);
+    final bool isUnpledgeSelected =
+        value.dummunpledgevalue != null && value.dummunpledgevalue != 'null';
 
     // Value
     final double amountVal = double.tryParse(value.aMOUNT?.toString() ?? '0') ?? 0;
 
     // Margin / Estimated
-    final bool isPledged = (double.tryParse(value.cOLQTY?.toString() ?? '0')?.toInt() ?? 0) != 0;
+    final bool isPledged = collateralQty != 0;
     final String mrgLabel = isPledged ? 'Mrg' : 'Est';
     final double mrgEstVal = isPledged
         ? (double.tryParse(value.margin?.toString() ?? '0') ?? 0)
@@ -484,6 +482,20 @@ class _PledgeFilterState extends State<PledgeFilter> {
       );
     }
 
+    // Unpledge chip on Available Balance reuses the Pledge Balance flow:
+    // same dialog, and the same delete without a confirmation step.
+    void onUnpledgeTap() {
+      _handlePledgeRowTap(value, '1', ledgerprovider, context);
+    }
+
+    void onUnpledgeDelete() {
+      ledgerprovider.removeSinglePledgeItem(
+        value.iSIN?.toString() ?? '',
+        'unpledge',
+        value,
+      );
+    }
+
     final textStyle = MyntWebTextStyles.tableCell(
       context,
       darkColor: MyntColors.textPrimaryDark,
@@ -505,7 +517,8 @@ class _PledgeFilterState extends State<PledgeFilter> {
 
     // Row-level tap: clicking anywhere on the row opens the qty dialog.
     // Disabled on Non-Approved tab (no dialog) and on already-selected rows
-    // in editable tabs (so the edit/delete icons stay reachable).
+    // in editable tabs (so the edit/delete icons stay reachable). The unpledge
+    // cell overrides this with its own tap.
     final VoidCallback? rowTap =
         (tab != '2' && !isItemSelected) ? onQtyTap : null;
 
@@ -534,21 +547,45 @@ class _PledgeFilterState extends State<PledgeFilter> {
           context,
           onTap: rowTap,
         ),
-        // Qty to pledge/unpledge
+        // Qty to pledge/unpledge — a zero qty means there is nothing to act
+        // on, so the cell stays blank instead of showing a '0' chip.
+        // Non-Approved carries the same chip as Available Balance, disabled:
+        // the qty is already submitted, so it reads but doesn't edit.
         _buildTableDataCell(
-          tab != '2'
-              ? _buildQtyWidget(
-                  pledgeQty,
+          qtyLabel.isEmpty
+              ? const SizedBox.shrink()
+              : _buildQtyWidget(
+                  qtyLabel,
                   onQtyTap,
                   context,
                   isSelected: isItemSelected,
                   onDelete: onQtyDelete,
-                )
-              : Text(pledgeQty, style: textStyle),
+                  enabled: tab != '2',
+                ),
           context,
           alignRight: true,
           onTap: rowTap,
         ),
+        // Qty to unpledge — Available Balance only, for holdings that already
+        // carry collateral. Blank when there is nothing pledged to release.
+        if (showUnpledgeColumn)
+          _buildTableDataCell(
+            showUnpledgeChip
+                ? _buildQtyWidget(
+                    unpledgeQty,
+                    onUnpledgeTap,
+                    context,
+                    isSelected: isUnpledgeSelected,
+                    onDelete: onUnpledgeDelete,
+                    isUnpledge: true,
+                  )
+                : Text('--', style: textStyle),
+            context,
+            alignRight: true,
+            onTap: (showUnpledgeChip && !isUnpledgeSelected)
+                ? onUnpledgeTap
+                : null,
+          ),
         // Total Qty
         _buildTableDataCell(
           Text('$totalQty', style: textStyle),
@@ -584,13 +621,73 @@ class _PledgeFilterState extends State<PledgeFilter> {
     );
   }
 
+  /// Qty cells hide a zero: nothing to act on reads as a blank cell rather
+  /// than a '0' competing with the real quantities in the column.
+  String _qtyDisplay(String qty) {
+    final parsed = double.tryParse(qty);
+    return (parsed == null || parsed == 0) ? '' : qty;
+  }
+
+  /// Qty shown on the unpledge side: a submitted unpledge qty wins, then a
+  /// locally edited value, else the full collateral qty.
+  String _unpledgeQtyLabel(dynamic value, int collateralQty) {
+    if (value.unPlegeQty != null &&
+        value.unPlegeQty != "0" &&
+        value.unPlegeQty != "") {
+      return value.unPlegeQty!;
+    }
+    if (value.dummunpledgevalue != null && value.dummunpledgevalue != 'null') {
+      return '${double.tryParse(value.dummunpledgevalue.toString())?.toInt() ?? collateralQty}';
+    }
+    return '$collateralQty';
+  }
+
   Widget _buildQtyWidget(
     String qty,
     VoidCallback onTap,
     BuildContext context, {
     bool isSelected = false,
     VoidCallback? onDelete,
+    bool isUnpledge = false,
+    bool enabled = true,
   }) {
+    // Non-Approved keeps the chip so the column reads like Available Balance,
+    // but muted and inert: the qty is awaiting approval, not editable.
+    if (!enabled) {
+      final mutedColor = resolveThemeColor(context,
+          dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          border: Border.all(color: mutedColor.withValues(alpha: 0.4)),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          qty,
+          style: MyntWebTextStyles.tableCell(
+            context,
+            darkColor: MyntColors.textSecondaryDark,
+            lightColor: MyntColors.textSecondary,
+            fontWeight: MyntFonts.medium,
+          ),
+        ),
+      );
+    }
+
+    // Unpledge chips carry a lock glyph so the two chips on Available
+    // Balance can't be mistaken for each other.
+    final Widget? lockIcon = isUnpledge
+        ? Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Icon(
+              Icons.lock_outline,
+              size: 12,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.lossDark, light: MyntColors.loss),
+            ),
+          )
+        : null;
+
     if (isSelected) {
       // Selected state: green color with edit/delete actions
       final profitColor = resolveThemeColor(context,
@@ -605,14 +702,20 @@ class _PledgeFilterState extends State<PledgeFilter> {
               border: Border.all(color: profitColor),
               borderRadius: BorderRadius.circular(4),
             ),
-            child: Text(
-              qty,
-              style: MyntWebTextStyles.tableCell(
-                context,
-                darkColor: MyntColors.profitDark,
-                lightColor: MyntColors.profit,
-                fontWeight: MyntFonts.semiBold,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (lockIcon != null) lockIcon,
+                Text(
+                  qty,
+                  style: MyntWebTextStyles.tableCell(
+                    context,
+                    darkColor: MyntColors.profitDark,
+                    lightColor: MyntColors.profit,
+                    fontWeight: MyntFonts.semiBold,
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(width: 6),
@@ -635,27 +738,34 @@ class _PledgeFilterState extends State<PledgeFilter> {
       );
     }
 
-    // Default unselected state
-    final primaryColor = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    // Default unselected state — unpledge chips use the loss accent.
+    final accentColor = isUnpledge
+        ? resolveThemeColor(context,
+            dark: MyntColors.lossDark, light: MyntColors.loss)
+        : resolveThemeColor(context,
+            dark: MyntColors.primaryDark, light: MyntColors.primary);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(4),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          border: Border.all(color: primaryColor),
+          border: Border.all(color: accentColor),
           borderRadius: BorderRadius.circular(4),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (lockIcon != null) lockIcon,
             Text(
               qty,
               style: MyntWebTextStyles.tableCell(
                 context,
-                darkColor: MyntColors.primaryDark,
-                lightColor: MyntColors.primary,
+                darkColor: isUnpledge
+                    ? MyntColors.lossDark
+                    : MyntColors.primaryDark,
+                lightColor:
+                    isUnpledge ? MyntColors.loss : MyntColors.primary,
                 fontWeight: MyntFonts.medium,
               ),
             ),

@@ -38,6 +38,7 @@ import '../../../res/mynt_web_color_styles.dart';
 import '../../../res/responsive_extensions.dart';
 
 import '../../../routes/route_names.dart';
+import '../../../utils/cas_indicative.dart';
 import '../../../utils/responsive_navigation.dart';
 import '../../../utils/responsive_snackbar.dart';
 import '../../web/order/quick_order_screen_web.dart';
@@ -696,6 +697,7 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
             const SizedBox(height: 12),
             Column(
               children: [
+                _buildCasIndicativeRow(),
                 data("Avg Price", "${depthData.ap ?? 0.00}", theme),
                 data("Volume", "${depthData.v != "null" ? depthData.v ?? 0.00 : '0'}", theme),
                 data("LTQ", "${depthData.ltq != "null" ? depthData.ltq ?? 0.00 : '0'}", theme),
@@ -826,8 +828,17 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                     // before this widget subscribed, snapshot.data would be null
                     final socketDatas = snapshot.data ?? ref.read(websocketProvider).socketDatas;
 
-                    // Update depth data with WebSocket data if available
-                    if (socketDatas.containsKey(regtoken)) {
+                    // Update depth data with WebSocket data if available.
+                    // Only merge when the shared quote object actually belongs to
+                    // the currently-selected scrip. During a symbol switch,
+                    // `regtoken` flips to the new scrip immediately (widget
+                    // rebuild) but `getQuotes` still holds the PREVIOUS scrip
+                    // until its REST quote lands — merging the new scrip's ticks
+                    // into the old object produced a mixed ladder (row 1 from one
+                    // symbol, rows 2-5 from another). Gating on the token keeps
+                    // every render consistent to a single scrip.
+                    if (depthData.token?.toString() == regtoken &&
+                        socketDatas.containsKey(regtoken)) {
                       _processDepthData(depthData, socketDatas[regtoken]);
 
                       if (scripInfo.actDeptBtn == "Overview") {
@@ -2142,7 +2153,6 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                                                                 ],
                                                               )
                                                             ]),
-
                                                         (scripInfo.totBuyQtyPer
                                                                         .toStringAsFixed(
                                                                             2) ==
@@ -2225,6 +2235,7 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                                                             height: 12),
                                                         Column(
                                                           children: [
+                                                            _buildCasIndicativeRow(),
                                                             data(
                                                                 "Avg Price",
                                                                 "${depthData.ap ?? 0.00}",
@@ -2829,6 +2840,103 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
         style: MyntWebTextStyles.para(context),
       )
     ]);
+  }
+
+  // CAS (Closing Auction Session) indicative-price row — solid badge + label + value.
+  Widget _buildCasIndicativeRow() {
+    // Read the per-token indicative price from the websocket provider — it
+    // retains the rare `ic` delta reliably, unlike the volatile socket map.
+    final value = casIndicativeDisplay(
+        ref.read(websocketProvider).indicativeClose(regtoken));
+    // No indicative price (no auction / not eligible / not sent) — hide the row.
+    if (value == '—') return const SizedBox.shrink();
+    // Match the trading-info rows below (Avg Price, Volume, …): same spacing,
+    // bottom divider only (no top line).
+    return Padding(
+      padding: EdgeInsets.symmetric(
+          horizontal:
+              context.responsive(mobile: 0.0, tablet: 0.0, desktop: 0.0)),
+      child: Column(
+        children: [
+          SizedBox(
+              height:
+                  context.responsive(mobile: 6.0, tablet: 7.0, desktop: 8.0)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  // Hover the badge to reveal the full form (same tooltip style
+                  // as the dashboard card info tooltips, minus the `i` icon).
+                  Tooltip(
+                    message: 'Closing Auction Session',
+                    waitDuration: const Duration(milliseconds: 200),
+                    showDuration: const Duration(seconds: 6),
+                    preferBelow: false,
+                    verticalOffset: 12,
+                    padding: const EdgeInsets.all(12),
+                    constraints: const BoxConstraints(maxWidth: 220),
+                    decoration: BoxDecoration(
+                      color: resolveThemeColor(context,
+                          dark: const Color(0xFF252A33), light: Colors.white),
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x1A000000),
+                          blurRadius: 12,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    textStyle: MyntWebTextStyles.bodySmall(context,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textPrimary),
+                        fontWeight: MyntFonts.regular),
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.secondary,
+                            light: MyntColors.primary),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        'CAS',
+                        style: MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.semiBold, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Indicative Close',
+                    style: MyntWebTextStyles.body(context,
+                        fontWeight: MyntFonts.medium,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textSecondary)),
+                  ),
+                ],
+              ),
+              Text(
+                value,
+                style: MyntWebTextStyles.body(context,
+                    fontWeight: MyntFonts.medium,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary)),
+              ),
+            ],
+          ),
+          SizedBox(
+              height:
+                  context.responsive(mobile: 8.0, tablet: 9.0, desktop: 10.0)),
+          Divider(color: shadcn.Theme.of(context).colorScheme.border),
+        ],
+      ),
+    );
   }
 
   // Ask side (Price on left, Qty on right)

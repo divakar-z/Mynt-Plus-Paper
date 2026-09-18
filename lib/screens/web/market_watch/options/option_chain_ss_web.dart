@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:flutter_swipe_action_cell/flutter_swipe_action_cell.dart';
 import 'package:intl/intl.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:mynt_plus/screens/web/market_watch/options/option_chain_row_web.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import '../../../../models/marketwatch_model/opt_chain_model.dart';
@@ -179,9 +180,11 @@ class _OptionChainSSState extends ConsumerState<OptionChainSSWeb> {
         await ref
             .read(marketWatchProvider)
             .requestWSOptChain(context: context, isSubscribe: false);
+        // Underlying index is subscribed via touchline ("t") now, so tear it
+        // down with "u" (depth "ud" is reserved for the market-depth panel).
         await ref.read(websocketProvider).establishConnection(
               channelInput: "${widget.wlValue.exch}|${widget.wlValue.token}",
-              task: "ud",
+              task: "u",
               context: context,
             );
         Navigator.pop(context);
@@ -882,7 +885,7 @@ class _ColumnHeaders extends ConsumerWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          "CALLS",
+                          "CALL",
                           style: MyntWebTextStyles.body(context,
                               fontWeight: MyntFonts.medium,
                               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary)),
@@ -942,7 +945,7 @@ class _ColumnHeaders extends ConsumerWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          "PUTS",
+                          "PUT",
                           style: MyntWebTextStyles.body(context,
                               fontWeight: MyntFonts.medium,
                               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary)),
@@ -2029,7 +2032,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
               Text(
                 "Pre Trade Margin",
                 style: TextStyle(
-                  fontFamily: 'Geist',
+                  fontFamily: dyslexiaFontOr('Geist'),
                   fontSize: 13,
                   fontWeight: FontWeight.w400,
                   color: shadcn.Theme.of(context).colorScheme.mutedForeground,
@@ -2042,7 +2045,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
                     ? "0.00"
                     : orderProv.bsktOrderMargin!.basketMargin.toIndianFormat(),
                 style: TextStyle(
-                  fontFamily: 'Geist',
+                  fontFamily: dyslexiaFontOr('Geist'),
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
                   color: shadcn.Theme.of(context).colorScheme.foreground,
@@ -2056,7 +2059,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
               Text(
                 "Post Trade Margin",
                 style: TextStyle(
-                  fontFamily: 'Geist',
+                  fontFamily: dyslexiaFontOr('Geist'),
                   fontSize: 13,
                   fontWeight: FontWeight.w400,
                   color: shadcn.Theme.of(context).colorScheme.mutedForeground,
@@ -2069,7 +2072,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
                     ? "0.00"
                     : orderProv.bsktOrderMargin!.postTradeMargin.toIndianFormat(),
                 style: TextStyle(
-                  fontFamily: 'Geist',
+                  fontFamily: dyslexiaFontOr('Geist'),
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                   color: shadcn.Theme.of(context).colorScheme.foreground,
@@ -2099,7 +2102,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
           Text(
             "Basket should contain orders of only 1 segment",
             style: TextStyle(
-              fontFamily: 'Geist',
+              fontFamily: dyslexiaFontOr('Geist'),
               fontSize: 12,
               fontWeight: FontWeight.w500,
               color: Colors.white,
@@ -2809,7 +2812,8 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
       case 'placed':
         return 'PLACED';
       case 'complete':
-        return 'EXECUTED';
+        // return 'EXECUTED';
+        return 'COMPLETE';
       case 'rejected':
         return 'REJECTED';
       case 'canceled':

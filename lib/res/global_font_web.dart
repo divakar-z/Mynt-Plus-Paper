@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
-class WebFonts { 
+import '../provider/accessibility_provider.dart';
+
+class WebFonts {
   
   // HEADERS
   static const double heroSize = 20;      // Main page titles, major headers
@@ -43,8 +45,9 @@ class WebTextStyles {
   }) {
     return TextStyle(
       fontSize: fontSize,
-      // Use Geist font from local assets
-      fontFamily: 'Geist',
+      // Resolved at call time so the Dyslexia Support toggle swaps the font
+      // globally without having to touch every style call site.
+      fontFamily: uiFontFamily,
       color: color ?? (isDarkTheme ? Colors.white : Colors.black),
       fontWeight: fontWeight ?? WebFonts.regular,
       letterSpacing: letterSpacing ?? WebFonts.defaultLetterSpacing,

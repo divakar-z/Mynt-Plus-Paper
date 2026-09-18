@@ -206,6 +206,25 @@ String encodeSetScripTradable(String paneId, bool tradable) =>
       'value': {'paneId': paneId, 'tradable': tradable},
     });
 
+/// Backfills the pane's REAL tick size (+ lot) to the ENGINE after the broker's
+/// GetSecurityInfo lands. `setPaneSymbol` seeds the engine tick ONCE from the
+/// initial scrip — which is the 0.05 default when the entry source (a tick-less
+/// search pick / panel row) carried no `ti` — and its `exch|token` dedup never
+/// re-pushes it. So without this the engine axis/crosshair/snapping keep the
+/// stale 0.05 while the Dart `ChartScrip.ti` gets corrected by the backfill,
+/// and the trigger snaps off the real grid. `chart.setScripMeta` updates the
+/// engine scrip IN PLACE (no history reload; the `setSymbol` guard blocks a
+/// same-symbol re-push). Mirrors the mobile pipeline.
+String encodeSetScripMeta(String paneId, {double? ti, int? ls}) =>
+    jsonEncode({
+      'type': 'setScripMeta',
+      'value': {
+        'paneId': paneId,
+        if (ti != null) 'ti': ti,
+        if (ls != null) 'ls': ls,
+      },
+    });
+
 /// Fire-and-forget push of the current INSTANT-orders flag to the iframe.
 /// Used both on bootstrap (initial sync) and whenever the flag changes for
 /// any reason other than the JS-side badge (e.g. the Settings panel that

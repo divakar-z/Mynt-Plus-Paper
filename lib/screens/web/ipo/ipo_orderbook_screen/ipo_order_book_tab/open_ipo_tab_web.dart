@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/res/global_state_text.dart';
 import '../../../../../provider/iop_provider.dart';
 import '../../../../../provider/thems.dart';
@@ -130,7 +130,7 @@ class _SearchBar extends StatelessWidget {
 
   static TextStyle _textStyle(
       Color color, double fontSize, FontWeight fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle:
             TextStyle(fontWeight: fWeight, color: color, fontSize: fontSize));
   }

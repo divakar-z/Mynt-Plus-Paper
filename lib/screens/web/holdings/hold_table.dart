@@ -63,6 +63,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../res/res.dart';
 // websocket_provider import removed — holdings now uses provider-only path (no stream subscriptions)
 import '../../../utils/rupee_convert_format.dart';
@@ -572,6 +573,9 @@ class _TableExample1State extends ConsumerState<TableExample1> {
   @override
   Widget build(BuildContext context) {
     final portfolioData = ref.watch(portfolioProvider);
+    // Privacy Mode: position data (qty, avg, invested, current, P&L) is
+    // masked; market data (LTP, Day Chg %) stays visible.
+    final privacy = ref.watch(privacyProvider);
     final holdings = widget.isMtf
         ? (portfolioData.mtfHoldingsModel ?? [])
         : (portfolioData.holdingsModel ?? []);
@@ -935,7 +939,11 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                                             '$symbolText$exchangeText';
                                                         if (pledgedQty > 0) {
                                                           tooltipMsg +=
-                                                              ' (Pledged: $pledgedQty)';
+                                                              privacy.mask(
+                                                                  '$pledgedQty',
+                                                                  prefix:
+                                                                      ' (Pledged: ',
+                                                                  suffix: ')');
                                                         }
 
                                                         return Tooltip(
@@ -1001,8 +1009,11 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                                                     ),
                                                                   ),
                                                                   TextSpan(
-                                                                    text:
-                                                                        ' $pledgedQty',
+                                                                    text: privacy
+                                                                        .mask(
+                                                                            '$pledgedQty',
+                                                                            prefix:
+                                                                                ' '),
                                                                     style: MyntWebTextStyles
                                                                         .para(
                                                                       ctx,
@@ -1078,7 +1089,9 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                               borderRadius: BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              'T1: ${math.max(int.parse(holding.npoadt1qty ?? "0"), int.parse(holding.btstqty ?? "0"))}',
+                                              privacy.mask(
+                                                  '${math.max(int.parse(holding.npoadt1qty ?? "0"), int.parse(holding.btstqty ?? "0"))}',
+                                                  prefix: 'T1: '),
                                               style: MyntWebTextStyles.para(
                                                 context,
                                                 darkColor: MyntColors.primaryDark,
@@ -1090,7 +1103,7 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                           const SizedBox(width: 4),
                                         ],
                                         Text(
-                                          '$qty',
+                                          privacy.mask('$qty'),
                                           style: _getTextStyle(context),
                                         ),
                                       ],
@@ -1107,7 +1120,7 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (double.tryParse(holding.avgPrc ?? '0') ?? 0.0).toStringAsFixed(2);
+                                      final value = privacy.mask((double.tryParse(holding.avgPrc ?? '0') ?? 0.0).toStringAsFixed(2));
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1143,7 +1156,7 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (holding.invested ?? '0.00').toIndianFormat();
+                                      final value = privacy.mask((holding.invested ?? '0.00').toIndianFormat());
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1161,7 +1174,7 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                   child: Align(
                                     alignment: Alignment.centerRight,
                                     child: Builder(builder: (context) {
-                                      final value = (holding.currentValue ?? '0.00').toIndianFormat();
+                                      final value = privacy.mask((holding.currentValue ?? '0.00').toIndianFormat());
                                       return Tooltip(
                                         message: value,
                                         child: Text(value, style: _getTextStyle(context), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1182,10 +1195,10 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                       builder: (context) {
                                         final dayPnlValue = exchTsym?.oneDayChg ?? '0.00';
                                         final numValue = double.tryParse(dayPnlValue.replaceAll(RegExp(r'[^0-9.-]'), '')) ?? 0.0;
-                                        final displayValue = dayPnlValue.toIndianFormat();
+                                        final displayValue = privacy.mask(dayPnlValue.toIndianFormat());
                                         return Tooltip(
                                           message: displayValue,
-                                          child: Text(displayValue, style: _getTextStyle(context, color: _getValueColor(numValue)), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          child: Text(displayValue, style: _getTextStyle(context, color: _getValueColor(privacy.isPrivate ? 0.0 : numValue)), maxLines: 1, overflow: TextOverflow.ellipsis),
                                         );
                                       },
                                     ),
@@ -1226,10 +1239,10 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                       builder: (context) {
                                         final pnlValue = exchTsym?.profitNloss ?? '0.00';
                                         final numValue = double.tryParse(pnlValue.replaceAll(RegExp(r'[^0-9.-]'), '')) ?? 0.0;
-                                        final displayValue = pnlValue.toIndianFormat();
+                                        final displayValue = privacy.mask(pnlValue.toIndianFormat());
                                         return Tooltip(
                                           message: displayValue,
-                                          child: Text(displayValue, style: _getTextStyle(context, color: _getValueColor(numValue)), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          child: Text(displayValue, style: _getTextStyle(context, color: _getValueColor(privacy.isPrivate ? 0.0 : numValue)), maxLines: 1, overflow: TextOverflow.ellipsis),
                                         );
                                       },
                                     ),
@@ -1248,10 +1261,14 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                       builder: (context) {
                                         final pctValue = exchTsym?.pNlChng ?? '0.00';
                                         final numValue = double.tryParse(pctValue) ?? 0.0;
-                                        final displayValue = '${numValue >= 0 ? "+" : ""}$pctValue%';
+                                        // Overall change % derives from the user's avg price, so it
+                                        // is masked (sign hidden too), unlike the market Day Chg %.
+                                        final displayValue = privacy.isPrivate
+                                            ? '$kPrivacyMask%'
+                                            : '${numValue >= 0 ? "+" : ""}$pctValue%';
                                         return Tooltip(
                                           message: displayValue,
-                                          child: Text(displayValue, style: _getTextStyle(context, color: _getValueColor(numValue)).copyWith(fontSize: 12, fontWeight: FontWeight.w400), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          child: Text(displayValue, style: _getTextStyle(context, color: _getValueColor(privacy.isPrivate ? 0.0 : numValue)).copyWith(fontSize: 12, fontWeight: FontWeight.w400), maxLines: 1, overflow: TextOverflow.ellipsis),
                                         );
                                       },
                                     ),

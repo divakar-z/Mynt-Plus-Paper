@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:flutter/material.dart'
     show
         RefreshIndicator,
@@ -256,7 +258,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       if (tokens.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
               channelInput: tokens,
-              task: "d", // Subscribe with depth for web
+              task: "t", // Subscribe with touchline for web (alerts need only LTP)
               context: context,
             );
       }
@@ -434,11 +436,19 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
           Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
           
           String aInstrument = a is BrokerMessage
-              ? (aParsed?['instrument'] ?? 'N/A')
-              : (a.tsym?.replaceAll("-EQ", "") ?? 'N/A');
+              ? (DerivativeMaster.nameFor(a.exch, a.token) ??
+                  aParsed?['instrument'] ??
+                  'N/A')
+              : (DerivativeMaster.nameFor(a.exch, a.token) ??
+                  a.tsym?.replaceAll("-EQ", "") ??
+                  'N/A');
           String bInstrument = b is BrokerMessage
-              ? (bParsed?['instrument'] ?? 'N/A')
-              : (b.tsym?.replaceAll("-EQ", "") ?? 'N/A');
+              ? (DerivativeMaster.nameFor(b.exch, b.token) ??
+                  bParsed?['instrument'] ??
+                  'N/A')
+              : (DerivativeMaster.nameFor(b.exch, b.token) ??
+                  b.tsym?.replaceAll("-EQ", "") ??
+                  'N/A');
           r = cmp<String>(aInstrument, bInstrument);
           break;
         case 1: // Exchange
@@ -934,12 +944,12 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
 
     final headerStyle = TextStyle(
       fontSize: fontSize,
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       fontWeight: MyntFonts.semiBold, // w600 for headers
     );
     final cellStyle = TextStyle(
       fontSize: fontSize,
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       fontWeight: MyntFonts.medium, // w500 for data cells
     );
 
@@ -968,11 +978,13 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
         switch (col) {
           case 0: // Instrument
             if (alert is BrokerMessage) {
-              cellText = parsed?['instrument'] ?? 'N/A';
+              cellText = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+                  (parsed?['instrument'] ?? 'N/A');
               final exchange = parsed?['exchange'] ?? '';
               if (exchange.isNotEmpty) cellText += ' $exchange';
             } else {
-              final symbol = (alert.tsym ?? '').replaceAll("-EQ", "").trim();
+              final symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+                  (alert.tsym ?? '').replaceAll("-EQ", "").trim();
               final exchange = alert.exch ?? '';
               cellText = exchange.isNotEmpty ? '$symbol $exchange' : symbol;
             }
@@ -1099,11 +1111,13 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     String symbol = '';
     String exchange = '';
     if (alert is BrokerMessage) {
-      // Use direct fields from API response
-      symbol = alert.tsym?.replaceAll("-EQ", "") ?? '';
+      // Use direct fields from API response; prefer the DerivativeMaster name.
+      symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+          (alert.tsym?.replaceAll("-EQ", "") ?? '');
       exchange = alert.exch ?? '';
     } else {
-      symbol = alert.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+      symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+          (alert.tsym?.replaceAll("-EQ", "") ?? 'N/A');
       exchange = alert.exch ?? '';
     }
 
@@ -1704,7 +1718,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
   }
 
   Future<bool?> _showCancelAlertDialog(AlertPendingModel alert) async {
-    final symbol = alert.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = DerivativeMaster.nameFor(alert.exch, alert.token) ??
+        (alert.tsym?.replaceAll("-EQ", "") ?? 'N/A');
 
     return showDialog<bool>(
       context: context,

@@ -210,6 +210,7 @@ class Assets {
   final String gttdashboard = "assets/icon/dashboard/gtt_dash.svg";
   final String sipdashboard = "assets/icon/dashboard/sip_dash.svg";
   final String basketdashboard = "assets/icon/dashboard/basket_dash.svg";
+  final String rebalanceIcon = "assets/icon/repeat 1 (1).svg";
   final String alertdashboard = "assets/icon/dashboard/alert_dash.svg";
   final String referandearn = "assets/icon/dashboard/refer_and_earn.svg";
   final String plsummary = "assets/icon/dashboard/p&l_summary.svg";
@@ -250,6 +251,10 @@ class Assets {
   final String biggpay = "assets/icon/paymentIcon/gpay.svg";
   final String bigphnpay = "assets/icon/paymentIcon/phonepe.svg";
   final String bigpaytm = "assets/icon/paymentIcon/paytm.svg";
+
+  // Brand logos for dashboard strategy sections
+  final String yuktiLogo = "assets/Yukti.svg";
+  final String miLogo = "assets/MI.svg";
 
   // Scanner sentiment candle images
   final String scannerBullish = "assets/scanner/bullish.png";

@@ -455,7 +455,7 @@ class _FormDownloadScreenWebState extends ConsumerState<FormDownloadScreenWeb> {
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: () => _openLink(
-                      'https://rekycbe.mynt.in${form['path']}'),
+                      'https://rekycbe.mynt.in/file?path=${Uri.encodeFull(form['path'] ?? '')}'),
                   borderRadius: BorderRadius.circular(6),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(

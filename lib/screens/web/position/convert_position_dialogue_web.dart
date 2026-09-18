@@ -51,6 +51,8 @@ class _ConvertPositionDialogueWebState
     }
 
     _qtyController = TextEditingController(text: initialQty);
+    // Rebuild so the Lot / Qty helper line follows what is typed
+    _qtyController.addListener(_onQtyChanged);
 
     // Request focus after dialog animation completes
     Future.delayed(const Duration(milliseconds: 250), () {
@@ -66,8 +68,33 @@ class _ConvertPositionDialogueWebState
     });
   }
 
+  void _onQtyChanged() {
+    if (mounted) setState(() {});
+  }
+
+  bool get _isMcx => widget.convertPosition.exch == 'MCX';
+
+  int get _lotSize {
+    final ls = int.tryParse("${widget.convertPosition.ls ?? 1}") ?? 1;
+    return ls > 0 ? ls : 1;
+  }
+
+  // Same helper lines as Place Order: MCX box is in lots (show Qty),
+  // other lot-based contracts box is in units (show Lot).
+  String _qtyHelperText() {
+    final typed = int.tryParse(_qtyController.text) ?? 0;
+    if (_isMcx) {
+      return "Max Lot: $_maxQty · Qty: ${typed * _lotSize}";
+    }
+    if (_lotSize > 1) {
+      return "Max Qty: $_maxQty · Lot: ${(typed / _lotSize).ceil()}";
+    }
+    return "Max Qty: $_maxQty";
+  }
+
   @override
   void dispose() {
+    _qtyController.removeListener(_onQtyChanged);
     _qtyController.dispose();
     _focusNode.dispose();
     // Re-enable chart iframe pointer events when dialog closes
@@ -138,7 +165,9 @@ class _ConvertPositionDialogueWebState
 
   Future<void> _handleConvert() async {
 
-    if (_qtyController.text.isEmpty || _qtyController.text == "0") {
+    // if (_qtyController.text.isEmpty || _qtyController.text == "0") {
+    if (_qtyController.text.isEmpty ||
+        (int.tryParse(_qtyController.text) ?? 0) <= 0) {
       showResponsiveWarningMessage(
         context,
         _qtyController.text.isEmpty
@@ -154,9 +183,26 @@ class _ConvertPositionDialogueWebState
       });
       showResponsiveWarningMessage(
         context,
-        'Quantity cannot be greater than Max Quantity',
+        // 'Quantity cannot be greater than Max Quantity',
+        _isMcx
+            ? 'Lot cannot be greater than Max Lot'
+            : 'Quantity cannot be greater than Max Quantity',
       );
       return;
+    }
+
+    // Lot-multiple guard, same rule and message as Place Order (MCX box is in lots)
+    if (!_isMcx) {
+      final enteredQty = int.parse(_qtyController.text);
+      int q = (enteredQty / _lotSize).round() * _lotSize;
+      if (q < _lotSize) q = _lotSize; // never suggest 0 — minimum is one lot
+      if (enteredQty != q) {
+        showResponsiveWarningMessage(
+          context,
+          "Quantity should be multiple of lot size $_lotSize => $q",
+        );
+        return;
+      }
     }
 
     final finalQty = widget.convertPosition.exch == 'MCX'
@@ -380,7 +426,8 @@ class _ConvertPositionDialogueWebState
 
                             // Quantity Section
                             Text(
-                              "Quantity (Lot Size: ${widget.convertPosition.ls})",
+                              // "Quantity (Lot Size: ${widget.convertPosition.ls})",
+                              _isMcx ? "Lot" : "Qty",
                               style: MyntWebTextStyles.body(
                                 context,
                                 fontWeight: MyntFonts.semiBold,
@@ -399,7 +446,8 @@ class _ConvertPositionDialogueWebState
                             MyntFormTextField(
                               controller: _qtyController,
                               focusNode: _focusNode,
-                              placeholder: 'Enter quantity',
+                              // placeholder: 'Enter quantity',
+                              placeholder: _isMcx ? 'Enter lot' : 'Enter quantity',
                               keyboardType: TextInputType.number,
                               inputFormatters: [
                                 FilteringTextInputFormatter.digitsOnly,
@@ -408,7 +456,8 @@ class _ConvertPositionDialogueWebState
                             ),
                             SizedBox(height: 8),
                             Text(
-                              "Max Qty: $_maxQty",
+                              // "Max Qty: $_maxQty",
+                              _qtyHelperText(),
                               style: MyntWebTextStyles.para(
                                 context,
                                 color: resolveThemeColor(

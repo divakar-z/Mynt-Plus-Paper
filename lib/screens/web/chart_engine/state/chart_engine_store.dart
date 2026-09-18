@@ -7,6 +7,15 @@ import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/option_underlying_match.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// When true, the running Flutter instance is the detached `/chart-popout`
+/// window. Set ONCE at startup (main.dart) from the launch URL, before any
+/// provider is read. In this mode [ChartEngineSessionNotifier] neither hydrates
+/// from nor persists to the shared `chartEngineSession` prefs key — the popout
+/// runs on a throwaway session seeded from the URL, so it can never clobber the
+/// main window's saved layout/panes/indicators. Isolated to the session store
+/// only; palette/order-defaults still share prefs (read-only, harmless).
+bool kChartPopoutMode = false;
+
 /// All supported chart layouts. The enum NAME is the persistence id and the
 /// postMessage value — keep stable across versions.
 enum ChartLayout {
@@ -277,6 +286,7 @@ String defaultIndicatorColor(String kind) {
     case 'dpo':      return '#EAB308';
     case 'pvt':      return '#06B6D4';
     case 'ad':       return '#10B981';
+    case 'pivots':   return '#F59E0B';
   }
   return '#3B82F6';
 }
@@ -328,6 +338,7 @@ int defaultIndicatorPeriod(String kind) {
     case 'dpo':      return 20;
     case 'pvt':      return 0;
     case 'ad':       return 0;
+    case 'pivots':   return 0;
     default:         return 20;
   }
 }
@@ -448,7 +459,7 @@ class PaneState {
   final bool showCrosshairLines;
   const PaneState({
     this.scrip,
-    this.timeframeMinutes = 1,
+    this.timeframeMinutes = 5,
     this.overlays = const ChartOverlays(),
     this.qty = 1,
     this.indicators = const [],
@@ -559,7 +570,7 @@ class PaneState {
       scrip: j['scrip'] is Map
           ? ChartScrip.fromJson(j['scrip'] as Map<String, dynamic>)
           : null,
-      timeframeMinutes: (j['timeframeMinutes'] as num?)?.toInt() ?? 1,
+      timeframeMinutes: (j['timeframeMinutes'] as num?)?.toInt() ?? 5,
       overlays: j['overlays'] is Map
           ? ChartOverlays.fromJson(j['overlays'] as Map<String, dynamic>)
           : const ChartOverlays(),
@@ -727,6 +738,10 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
 
   @override
   ChartEngineSession build() {
+    // Popout runs on a fresh throwaway session (seeded from the URL by
+    // ChartPopoutScreen) — never hydrate the shared saved session, so the
+    // detached window can't inherit or overwrite the main window's layout.
+    if (kChartPopoutMode) return const ChartEngineSession();
     // Hydrate from SharedPreferences on first build. Fall back to the
     // default on ANY error so a corrupted prefs entry can't brick the
     // chart engine.
@@ -782,6 +797,8 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
   }
 
   Future<void> _persist() async {
+    // Popout must never write the shared session key (see [kChartPopoutMode]).
+    if (kChartPopoutMode) return;
     try {
       final json = jsonEncode(state.toJson());
       await locator<Preferences>().setChartEngineSession(json);
@@ -855,45 +872,95 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
       // to 1, sometimes 0). Keep the better lot/tick and leave qty untouched.
       final keepLs = existing.ls > scrip.ls ? existing.ls : scrip.ls;
       final keepTi = existing.ti > 0 ? existing.ti : scrip.ti;
-      if (keepLs == existing.ls && keepTi == existing.ti) return; // no-op
+      // Adopt the incoming display name too: a symbol persisted with its raw
+      // tsym must pick up the DerivativeMaster decorative name once it loads,
+      // otherwise the chart title (which reads dispName) stays stale for a
+      // known contract. Only its non-empty value is taken so a lot-less
+      // re-fire can't blank an existing name.
+      final keepDispName =
+          scrip.dispName.isNotEmpty ? scrip.dispName : existing.dispName;
+      if (keepLs == existing.ls &&
+          keepTi == existing.ti &&
+          keepDispName == existing.dispName) {
+        return; // no-op
+      }
       state = state.copyWithPane(
           index,
-          state.panes[index]
-              .copyWith(scrip: scrip.copyWith(ls: keepLs, ti: keepTi)));
+          state.panes[index].copyWith(
+              scrip: scrip.copyWith(
+                  dispName: keepDispName, ls: keepLs, ti: keepTi)));
       _schedulePersist();
       return;
     }
-    final ls = scrip.ls > 0 ? scrip.ls : 1;
-    // Initial qty for the new symbol respects Order Defaults → Trade
-    // Quantity (per instrument family). Futures/options multiply by lot
-    // size so the user's "2 lots" setting becomes 2*ls units; equity is
-    // a raw share count (no lot multiplier).
-    //
-    // Family detection: prefer the broker's `instname` when present, but
-    // fall back to parsing the tsym + the lot size, because several entry
-    // paths (top-bar typeahead, watchlist, saved-session restore) yield
-    // ChartScrips with an empty `instname` even for derivatives. Without
-    // the fallback those land in the equity branch and qty silently
-    // collapses to `equityDefaultQty` (usually 1).
+    // Initial qty for the new symbol respects Order Defaults → Trade Quantity
+    // (per instrument family). See [_qtyForScrip] for the family detection.
     final defaults = ref.read(orderDefaultsProvider);
-    final instname = scrip.instname.toUpperCase();
-    final isOption = instname.startsWith('OPT') ||
-        parseOptionTsym(scrip.tsym) != null;
-    final isFuture = instname.startsWith('FUT') ||
-        // Lot size > 1 with a non-option tsym ≈ a futures/derivative
-        // contract on this broker. Stocks are always ls=1.
-        (!isOption && ls > 1);
-    int initialQty;
-    if (isOption) {
-      initialQty = defaults.optionsDefaultQty * ls;
-    } else if (isFuture) {
-      initialQty = defaults.futuresDefaultQty * ls;
-    } else {
-      initialQty = defaults.equityDefaultQty;
-    }
-    if (initialQty <= 0) initialQty = ls;
+    final initialQty = _qtyForScrip(scrip, defaults);
     state = state.copyWithPane(
         index, state.panes[index].copyWith(scrip: scrip, qty: initialQty));
+    _schedulePersist();
+  }
+
+  /// Seed quantity for [scrip] from the user's Order Defaults → Trade Quantity
+  /// (per instrument family). Futures/options multiply the per-family lot count
+  /// by the contract lot size so the user's "2 lots" setting becomes 2*ls
+  /// units; equity is a raw share count (no lot multiplier).
+  ///
+  /// Family detection prefers the broker's `instname` when present, but falls
+  /// back to parsing the tsym + the lot size, because several entry paths
+  /// (top-bar typeahead, watchlist, saved-session restore) yield ChartScrips
+  /// with an empty `instname` even for derivatives. Without the fallback those
+  /// land in the equity branch and qty silently collapses to `equityDefaultQty`
+  /// (usually 1).
+  int _qtyForScrip(ChartScrip scrip, OrderDefaults defaults) {
+    final ls = scrip.ls > 0 ? scrip.ls : 1;
+    final instname = scrip.instname.toUpperCase();
+    final isOption =
+        instname.startsWith('OPT') || parseOptionTsym(scrip.tsym) != null;
+    final isFuture = instname.startsWith('FUT') ||
+        // Lot size > 1 with a non-option tsym ≈ a futures/derivative contract
+        // on this broker. Stocks are always ls=1.
+        (!isOption && ls > 1);
+    int qty;
+    if (isOption) {
+      qty = defaults.optionsDefaultQty * ls;
+    } else if (isFuture) {
+      qty = defaults.futuresDefaultQty * ls;
+    } else {
+      qty = defaults.equityDefaultQty;
+    }
+    if (qty <= 0) qty = ls;
+    return qty;
+  }
+
+  /// Recomputes every scrip'd pane's quantity from [defaults] using the SAME
+  /// family detection + lot multiplier as [setPaneSymbol]. Called when the user
+  /// changes a per-family Trade Quantity default so panes that were seeded once
+  /// at symbol-set time pick up the new value (e.g. a GOLDM futures pane, lot
+  /// 100, goes 100 → 200 when the futures default changes 1 → 2). Panes with no
+  /// scrip are left untouched. There is NO manual per-pane qty override flag, so
+  /// every scrip'd pane is reseeded. The resulting session change re-pushes
+  /// `encodeSetPaneQty` to the iframe via the shell's session listener.
+  void reseedQtyFromDefaults(OrderDefaults defaults) {
+    if (state.panes.isEmpty) return;
+    final updated = <PaneState>[];
+    var changed = false;
+    for (final pane in state.panes) {
+      final scrip = pane.scrip;
+      if (scrip == null) {
+        updated.add(pane);
+        continue;
+      }
+      final newQty = _qtyForScrip(scrip, defaults);
+      if (newQty == pane.qty) {
+        updated.add(pane);
+        continue;
+      }
+      updated.add(pane.copyWith(qty: newQty));
+      changed = true;
+    }
+    if (!changed) return;
+    state = state.copyWith(panes: updated);
     _schedulePersist();
   }
 

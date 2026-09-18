@@ -307,7 +307,7 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
             Row(
               children: [
                 Text(
-                  "${_exchTsym.tsym?.replaceAll("-EQ", "") ?? ''} ${_exchTsym.expDate ?? ''} ${_exchTsym.option ?? ''} ",
+                  "${_exchTsym.displayName} ",
                   style: WebTextStyles.dialogTitle(
                     isDarkTheme: theme.isDarkMode,
                     color: theme.isDarkMode ? WebDarkColors.textPrimary : WebColors.textSecondary,
@@ -657,7 +657,7 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
 
       wsProvider.establishConnection(
           channelInput: "${_exchTsym.exch}|${_exchTsym.token}#",
-          task: "d",  // Use depth subscription for web
+          task: "t",  // Touchline for web (place-order screen needs only LTP)
           context: context);
 
       await mwProvider.fetchScripInfo(
@@ -739,7 +739,7 @@ class _HoldingDetailScreenWebState extends ConsumerState<HoldingDetailScreenWeb>
 
       wsProvider.establishConnection(
           channelInput: "${_exchTsym.exch}|${_exchTsym.token}#",
-          task: "d",  // Use depth subscription for web
+          task: "t",  // Touchline for web (place-order screen needs only LTP)
           context: context);
 
       await mwProvider.fetchScripInfo(

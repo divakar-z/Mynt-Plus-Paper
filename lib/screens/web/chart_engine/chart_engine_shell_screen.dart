@@ -14,10 +14,12 @@ import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/active_pane_symbol_request.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_oi_data.dart';
+import 'package:mynt_plus/screens/web/chart_engine/state/chart_order_validation.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/indicator_schema.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/pane_runtime_status.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/overlay_payload.dart';
 import 'package:mynt_plus/screens/web/chart_engine/utils/chart_engine_bridge.dart';
+import 'package:mynt_plus/screens/web/chart_engine/utils/popout_feed_client.dart';
 import 'package:mynt_plus/screens/web/chart_engine/widgets/chart_engine_top_bar.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -75,7 +77,24 @@ class ChartEngineShellScreen extends ConsumerStatefulWidget {
   /// owns all controls. Used by `EmbeddedChartView` to drop the now-empty
   /// Flutter chrome inside the symbol details screen.
   final bool embedded;
-  const ChartEngineShellScreen({super.key, this.embedded = false});
+
+  /// When true, this shell hosts the detached `/chart-popout` window (a second
+  /// Flutter instance). It feeds from [feed] (the alternate `ws.zebull.in`
+  /// socket) instead of the shared `websocketProvider` — the main window owns
+  /// the one allowed `go.mynt.in` socket, so the popout must never open it. The
+  /// iframe also boots in `?popout=1` (order surfaces hidden) and order-book /
+  /// GTT fetches are skipped.
+  final bool popout;
+
+  /// Popout-only live feed over the alternate socket. Non-null iff [popout].
+  final PopoutFeedClient? feed;
+
+  const ChartEngineShellScreen({
+    super.key,
+    this.embedded = false,
+    this.popout = false,
+    this.feed,
+  });
 
   @override
   ConsumerState<ChartEngineShellScreen> createState() =>
@@ -218,6 +237,24 @@ class _ChartEngineShellScreenState
         const Duration(seconds: 1), (_) => _wsForwardAll());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (widget.popout) {
+        // POPOUT: never touch the shared websocketProvider — the MAIN window
+        // owns the single allowed go.mynt.in Noren socket, and a second
+        // connection with the same uid would kick it. Drive ticks from the
+        // alternate ws.zebull.in feed instead. The engine's per-token
+        // subscribe requests route to `_feed.subscribe` (see _handleSubscribe)
+        // and each tick posts straight into the iframe. No GTT/order book —
+        // the popout is view-only (order handlers are gated off, ?popout=1).
+        final feed = widget.feed;
+        if (feed != null) {
+          feed.onTick = (token, packet) {
+            if (!mounted) return;
+            _post(encodeTick(token, packet));
+          };
+          feed.start();
+        }
+        return;
+      }
       final ws = ref.read(websocketProvider);
       // All three paths funnel into a microtask-coalesced wrapper so a
       // burst of notifies (very common: ChangeNotifier fires once per WS
@@ -251,6 +288,9 @@ class _ChartEngineShellScreenState
   void dispose() {
     _oiFetchTimer?.cancel();
     _tickPollTimer?.cancel();
+    // Popout: tear down the alternate feed socket (heartbeat, watchdog,
+    // reconnect timers) so the closed window leaves no live connection.
+    widget.feed?.stop();
     _dismissAllPopups();
     if (_windowMessageRef != null) {
       html.window.removeEventListener('message', _windowMessageRef);
@@ -283,6 +323,9 @@ class _ChartEngineShellScreenState
   /// covers every delivery mechanism.
   void _wsForwardAll() {
     if (!mounted) return;
+    // Popout drives ticks from the alternate feed (see initState); the shared
+    // socket is off-limits here, so the 1s poll-forward is a no-op.
+    if (widget.popout) return;
     if (_subscribedKeys.isEmpty && _oiSubs.isEmpty) return;
     final ws = ref.read(websocketProvider);
     // Reconnect detection — re-subscribe everything when WS comes back up.
@@ -387,9 +430,13 @@ class _ChartEngineShellScreenState
         ..style.border = 'none'
         ..style.width = '100%'
         ..style.height = '100%'
-        ..style.backgroundColor = '#0B0F14'
+        // Theme-aware base so the pre-paint iframe surface doesn't flash a
+        // near-black panel behind the light-mode chart.
+        ..style.backgroundColor =
+            ref.read(themeProvider).isDarkMode ? '#0B0F14' : '#FFFFFF'
         ..allow = 'autoplay'
-        ..src = '/chart-engine/index.html?theme=${_currentThemeName()}';
+        ..src = '/chart-engine/index.html?theme=${_currentThemeName()}'
+            '${widget.popout ? '&popout=1' : ''}';
       el.style.setProperty('pointer-events', 'auto', 'important');
       el.onLoad.first.then((_) {
         try { el.focus(); } catch (_) {}
@@ -1290,7 +1337,13 @@ class _ChartEngineShellScreenState
                 'exch':     v.exch,
                 'token':    v.token,
                 'tsym':     v.tsym,
-                'dname':    v.dname,
+                // Prefer the DerivativeMaster decorative name so the JS
+                // typeahead shows (and picks) a human-readable contract name;
+                // falls back to the trading symbol (tsym) first, then dname,
+                // when the contract isn't in the master (indices / equities).
+                // Trim the "-EQ" suffix so equities read "TCS" not "TCS-EQ".
+                'dname':    (v.masterName ?? v.tsym ?? v.dname)
+                    ?.replaceAll('-EQ', ''),
                 'symbol':   v.symbol,
                 'ls':       v.ls,
                 'ti':       v.ti,
@@ -1392,6 +1445,9 @@ class _ChartEngineShellScreenState
   /// reattachment here.
   void _resubscribeAll() {
     if (!mounted) return;
+    // Popout has no shared socket to re-subscribe; the alternate feed client
+    // re-sends its own tracked SubSet on every reconnect ack.
+    if (widget.popout) return;
     final ws = ref.read(websocketProvider);
     for (final key in _subscribedKeys) {
       ws.establishConnection(channelInput: key, task: 't', context: context);
@@ -1404,6 +1460,13 @@ class _ChartEngineShellScreenState
     final exch = value['exch'] as String?;
     final token = value['token'] as String?;
     if (exch == null || token == null) return;
+    if (widget.popout) {
+      // Route to the alternate ws.zebull.in feed — the main socket is
+      // off-limits in popout. The feed client dedups + primes on ack, so we
+      // skip the _subscribedKeys tracking and socketDatas prime below.
+      widget.feed?.subscribe(exch, token);
+      return;
+    }
     final key = '$exch|$token';
     if (_subscribedKeys.contains(key)) return;
     _subscribedKeys.add(key);
@@ -1456,6 +1519,10 @@ class _ChartEngineShellScreenState
     final exch = value['exch'] as String?;
     final token = value['token'] as String?;
     if (exch == null || token == null) return;
+    if (widget.popout) {
+      widget.feed?.unsubscribe(exch, token);
+      return;
+    }
     final key = '$exch|$token';
     if (!_subscribedKeys.contains(key)) return;
     // Remove from our forwarding set — the WS listener will stop posting ticks
@@ -1894,6 +1961,9 @@ class _ChartEngineShellScreenState
         ref
             .read(chartEngineSessionProvider.notifier)
             .backfillPaneScripMetadata(paneIndex, ls: meta.ls, ti: meta.ti);
+        // Also correct the ENGINE's copy of the tick (setPaneSymbol seeded it
+        // once and won't re-push) so the axis/snap tick matches ChartScrip.ti.
+        _post(encodeSetScripMeta('$paneIndex', ti: meta.ti, ls: meta.ls));
       }
       return;
     }
@@ -1922,6 +1992,9 @@ class _ChartEngineShellScreenState
             .read(chartEngineSessionProvider.notifier)
             .backfillPaneScripMetadata(paneIndex,
                 ls: lotSize, ti: tickSize);
+        // Also correct the ENGINE's copy of the tick (setPaneSymbol seeded it
+        // once and won't re-push) so the axis/snap tick matches ChartScrip.ti.
+        _post(encodeSetScripMeta('$paneIndex', ti: tickSize, ls: lotSize));
       }
     }).catchError((_) {});
   }
@@ -1981,6 +2054,54 @@ class _ChartEngineShellScreenState
     if (effectiveInstant &&
         kind != OrderPrefillKind.blank &&
         price != null) {
+      // ── Circuit / trigger validation (parity with PlaceOrderScreenWeb) ─────
+      // The instant path used to fire straight to the API with NO circuit/LTP/
+      // trigger checks. Gate it exactly like the regular order screen; block +
+      // toast on any violation. Fetch scrip info once if not already cached so
+      // the circuit band is available.
+      var vInfo = _cachedScripInfo(scrip);
+      if (vInfo == null) {
+        try {
+          await ref
+              .read(marketWatchProvider)
+              .fetchScripInfo(scrip.token, scrip.exch, context, false);
+        } catch (_) {}
+        if (!mounted) return;
+        vInfo = _cachedScripInfo(scrip) ??
+            ref.read(marketWatchProvider).scripInfoModel;
+      }
+      final isBuyKind = kind == OrderPrefillKind.buyLimit ||
+          kind == OrderPrefillKind.buyStopMkt ||
+          kind == OrderPrefillKind.buyStopLmt;
+      final isSlMktKind = kind == OrderPrefillKind.buyStopMkt ||
+          kind == OrderPrefillKind.sellStopMkt;
+      final isSlLmtKind = kind == OrderPrefillKind.buyStopLmt ||
+          kind == OrderPrefillKind.sellStopLmt;
+      final vPrctype = isSlMktKind
+          ? 'SL-MKT'
+          : (isSlLmtKind ? 'SL-LMT' : 'LMT');
+      // For SL orders the click price is the TRIGGER; the SL-LMT limit is
+      // trigger ± ti (identical to buildPlaceOrderInput). Plain limit uses price.
+      final vTrigger = (isSlMktKind || isSlLmtKind) ? price : null;
+      final vLimit = isSlMktKind
+          ? null
+          : (isSlLmtKind
+              ? (isBuyKind ? price + scrip.ti : price - scrip.ti)
+              : price);
+      final vErr = validateChartOrder(
+        isBuy: isBuyKind,
+        prctype: vPrctype,
+        price: vLimit,
+        trigger: vTrigger,
+        uc: vInfo?.uc,
+        lc: vInfo?.lc,
+        ltp: _currentSpotLtp(scrip),
+      );
+      if (vErr != null) {
+        ResponsiveSnackBar.showWarning(context, vErr);
+        return;
+      }
+
       final deviceInfo = ref.read(authProvider).deviceInfo;
       final defaults = ref.read(orderDefaultsProvider);
       // Freeze-qty slicing: the exchange rejects an order whose quantity
@@ -2052,12 +2173,32 @@ class _ChartEngineShellScreenState
       realInfo = _cachedScripInfo(scrip) ??
           ref.read(marketWatchProvider).scripInfoModel;
     }
+    // Point the shared `getQuotes` at THIS scrip before opening, mirroring the
+    // watchlist Buy path (fetchScripInfo + fetchScripQuote). The order popup's
+    // Market-Info panel dereferences `marketWatchProvider.getQuotes!` for its
+    // base quote + static fields, and overlays live O/H/L/Bid/Ask/Vol from
+    // `socketDatas[token]` — which the chart already populates via its own
+    // pane subscription (_handleSubscribe subscribes both 't' and 'd'). The
+    // missing piece was this getQuotes fetch, so F&O popups showed 0s. It is a
+    // pure data fetch (no WS subscribe/unsubscribe) so it can't disturb the
+    // chart's iframe subscription, and it's cheap when the quote is cached.
+    try {
+      await ref
+          .read(marketWatchProvider)
+          .fetchScripQuote(scrip.token, scrip.exch, context);
+    } catch (_) {
+      // Best-effort; the popup still opens with static/prefill data.
+    }
+    if (!mounted) return;
     final args = buildOrderScreenArgs(
       scrip: scrip,
       qty: qty,
       kind: kind,
       price: price,
       realScripInfo: realInfo,
+      // Real live LTP so the screen validates the trigger against the actual
+      // last-traded price (not the order's own price) and shows it correctly.
+      liveLtp: _currentSpotLtp(scrip),
       // Drives the Bracket-Order pre-fill when the user has auto-SL + TP on.
       orderDefaults: ref.read(orderDefaultsProvider),
     );
@@ -2125,6 +2266,7 @@ class _ChartEngineShellScreenState
         symbol: scrip.tsym,
         qty: pane.qty,
         price: price,
+        ti: scrip.ti,
         ltp: liveLtp,
         onPick: (kind) {
           closeMenu();
@@ -2144,6 +2286,17 @@ class _ChartEngineShellScreenState
       ),
     );
     Overlay.of(context).insert(_plusMenuEntry!);
+  }
+
+  /// Re-push the current (unchanged) overlays for [paneIndex] so a REJECTED
+  /// drag snaps the line back to its stored price — the JS holds the dragged
+  /// line optimistically (`_pendingOverlayMoves`) until an overlay push
+  /// overwrites it.
+  void _snapBackOverlays(int paneIndex) {
+    final session = ref.read(chartEngineSessionProvider);
+    if (paneIndex < 0 || paneIndex >= session.panes.length) return;
+    _post(encodeSetOverlays(
+        paneIndex.toString(), session.panes[paneIndex].overlays.toJson()));
   }
 
   void _handleOverlayDragEnded(int paneIndex, String overlayId, double newPrice) {
@@ -2184,6 +2337,28 @@ class _ChartEngineShellScreenState
       final alId = overlayId.substring(isTp ? 'ocoTp-'.length : 'ocoSl-'.length);
       final gtt = _findOcoByAlId(alId);
       if (gtt == null) return;
+      // ── Validate the dragged leg BEFORE the confirm (circuit + LTP-direction).
+      // The OCO's exit side gives the position direction: exit SELL → long
+      // (Target above LTP, Stop below), exit BUY → short (mirrored). Dragging a
+      // long's Target below the LTP used to be wrongly accepted; block + snap.
+      final exitTrantype = gtt.placeOrderParams?.trantype ??
+          gtt.placeOrderParamsLeg2?.trantype ??
+          gtt.trantype ??
+          'S';
+      final legInfo = _cachedScripInfo(scrip);
+      final legErr = validateChartOcoLeg(
+        isTp: isTp,
+        isLong: exitTrantype == 'S',
+        price: newPrice,
+        uc: legInfo?.uc,
+        lc: legInfo?.lc,
+        ltp: _currentSpotLtp(scrip),
+      );
+      if (legErr != null) {
+        ResponsiveSnackBar.showWarning(context, legErr);
+        _snapBackOverlays(paneIndex);
+        return;
+      }
       // ignore: discarded_futures
       showOcoLegModifyDialog(
         context: context,
@@ -2242,6 +2417,26 @@ class _ChartEngineShellScreenState
     }
     // kindPrefix == 'ord' (LMT): only `prc` changes; newTrigger stays null →
     // ModifyOrderInput.trgprc falls back to prc.
+
+    // ── Circuit / trigger validation (parity with PlaceOrderScreenWeb) ────────
+    // Gate the dragged value exactly like the order screen; on violation toast
+    // + snap the line back (re-push overlays) and send NO modify. Applies to
+    // BOTH the instant and confirm paths below.
+    final dragInfo = _cachedScripInfo(scrip);
+    final dragErr = validateChartOrder(
+      isBuy: order.trantype == 'B',
+      prctype: order.prctyp ?? '',
+      price: finalNewPrice,
+      trigger: newTrigger,
+      uc: dragInfo?.uc,
+      lc: dragInfo?.lc,
+      ltp: _currentSpotLtp(scrip),
+    );
+    if (dragErr != null) {
+      ResponsiveSnackBar.showWarning(context, dragErr);
+      _snapBackOverlays(paneIndex);
+      return;
+    }
 
     if (session.effectiveInstantFor(paneIndex)) {
       // Same ModifyOrderInput construction as showModifyOrderDialog.
@@ -2367,6 +2562,20 @@ class _ChartEngineShellScreenState
     final tpInit = snap(isLong ? ltp * 1.02 : ltp * 0.98);
     final slInit = snap(isLong ? ltp * 0.98 : ltp * 1.02);
 
+    // Circuit band for the OCO card's UC/LC validation (TC_523/524). Cache hit
+    // when the chart already warmed the scrip info; else one quick fetch.
+    var ocoInfo = _cachedScripInfo(scrip);
+    if (ocoInfo == null) {
+      try {
+        await ref
+            .read(marketWatchProvider)
+            .fetchScripInfo(scrip.token, scrip.exch, context, false);
+      } catch (_) {}
+      if (!mounted) return;
+      ocoInfo = _cachedScripInfo(scrip) ??
+          ref.read(marketWatchProvider).scripInfoModel;
+    }
+
     final result = await showOcoTpSlDialog(
       context: context,
       tsym: tsym,
@@ -2375,6 +2584,8 @@ class _ChartEngineShellScreenState
       tpInit: tpInit,
       slInit: slInit,
       ti: ti,
+      uc: ocoInfo?.uc,
+      lc: ocoInfo?.lc,
     );
     if (result == null || !mounted) return;
 
@@ -2661,6 +2872,9 @@ class _ChartEngineShellScreenState
   ///           after 120s since last fetch (unchanged cadence).
   void _maybeFetchOptionChain(Timer? _) {
     if (!mounted || !_iframeReady) return;
+    // Popout is view-only over the alternate feed: the option-chain OI path
+    // subscribes tokens on the shared socket, which the popout must not open.
+    if (widget.popout) return;
     final session = ref.read(chartEngineSessionProvider);
     final oiData = ref.read(chartOiDataProvider);
     final oiNotifier = ref.read(chartOiDataProvider.notifier);
@@ -2984,6 +3198,22 @@ class _ChartEngineShellScreenState
     // popover renders from this mirror; field changes flow back via the
     // `updateOrderDefaults` patch message.
     ref.listen(orderDefaultsProvider, (prev, next) {
+      // BUG A — a per-family Trade Quantity change must reseed every pane's
+      // qty. setPaneSymbol seeds it only once (at symbol-set time), so an
+      // already-shown symbol (e.g. GOLDM futures, lot 100) stayed at the old
+      // qty when the user later changed the default. Recompute with the same
+      // family logic; the resulting session change re-pushes encodeSetPaneQty
+      // via the chartEngineSessionProvider listener above. Run before the
+      // _iframeReady guard so state stays correct even if the change lands
+      // while the iframe is (re)loading.
+      if (prev == null ||
+          prev.equityDefaultQty != next.equityDefaultQty ||
+          prev.futuresDefaultQty != next.futuresDefaultQty ||
+          prev.optionsDefaultQty != next.optionsDefaultQty) {
+        ref
+            .read(chartEngineSessionProvider.notifier)
+            .reseedQtyFromDefaults(next);
+      }
       if (!_iframeReady) return;
       if (prev == next) return;
       _post(encodeSetOrderDefaults(next.toJson()));
@@ -3122,11 +3352,20 @@ class _ChartEngineShellScreenState
                                     height: 72,
                                   ),
                                 ),
-                                const SizedBox(
+                                SizedBox(
                                   width: 90,
                                   height: 90,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 5),
+                                    strokeWidth: 5,
+                                    // Follow the theme accent instead of the
+                                    // default dark indicator color, which reads
+                                    // as a black ring on the white light-mode bg.
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      resolveThemeColor(context,
+                                          dark: MyntColors.primaryDark,
+                                          light: MyntColors.primaryDark),
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),
@@ -3311,6 +3550,30 @@ class _IndicatorSettingsDialogState
     Navigator.of(context).pop();
   }
 
+  // Picks the control for a schema param: dropdown for enums, switch for
+  // booleans, stepper for plain numbers. All three read/write the same numeric
+  // `_values` store (enum = option index, bool = 0/1).
+  Widget _paramControl(IndicatorParam p) {
+    if (p.isEnum) {
+      return _ParamDropdown(
+        param: p,
+        value: _values[p.key] ?? p.defaultValue,
+        onChanged: (v) => setState(() => _values[p.key] = v),
+      );
+    }
+    if (p.isBool) {
+      return _ParamSwitch(
+        value: (_values[p.key] ?? p.defaultValue) >= 1,
+        onChanged: (v) => setState(() => _values[p.key] = v ? 1 : 0),
+      );
+    }
+    return _ParamStepper(
+      value: _values[p.key] ?? p.defaultValue,
+      param: p,
+      onChanged: (v) => setState(() => _values[p.key] = v),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cfg = _findCfg();
@@ -3431,11 +3694,7 @@ class _IndicatorSettingsDialogState
                   _SettingsRow(
                     label: p.label,
                     description: p.description,
-                    control: _ParamStepper(
-                      value: _values[p.key] ?? p.defaultValue,
-                      param: p,
-                      onChanged: (v) => setState(() => _values[p.key] = v),
-                    ),
+                    control: _paramControl(p),
                   ),
                 ]
               else if (useGenericPeriod) ...[
@@ -3749,6 +4008,114 @@ class _StepButton extends StatelessWidget {
           child: Icon(icon, size: 16, color: color),
         ),
       ),
+    );
+  }
+}
+
+// Dropdown control for enum params. Displays the selected option's label and
+// opens a menu; stores the chosen option INDEX back through [onChanged].
+class _ParamDropdown extends StatelessWidget {
+  final IndicatorParam param;
+  final num value; // selected option index
+  final ValueChanged<num> onChanged;
+  const _ParamDropdown({
+    required this.param,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final options = param.options ?? const <IndicatorOption>[];
+    if (options.isEmpty) return const SizedBox.shrink();
+    final idx = value.toInt().clamp(0, options.length - 1);
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.inputBgDark, light: MyntColors.inputBg);
+    final stroke = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final surface = resolveThemeColor(context,
+        dark: MyntColors.overlayBgDark, light: MyntColors.overlayBg);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    return PopupMenuButton<int>(
+      tooltip: '',
+      initialValue: idx,
+      color: surface,
+      elevation: 8,
+      position: PopupMenuPosition.under,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: stroke, width: 1),
+      ),
+      onSelected: (i) {
+        if (i != idx) onChanged(i);
+      },
+      itemBuilder: (context) => [
+        for (int i = 0; i < options.length; i++)
+          PopupMenuItem<int>(
+            value: i,
+            height: 40,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    options[i].label,
+                    style: i == idx
+                        ? MyntWebTextStyles.body(context,
+                            fontWeight: MyntFonts.semiBold)
+                        : MyntWebTextStyles.body(context),
+                  ),
+                ),
+                if (i == idx) Icon(Icons.check, size: 16, color: accent),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        width: 168,
+        height: 36,
+        padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: stroke, width: 1),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                options[idx].label,
+                overflow: TextOverflow.ellipsis,
+                style: MyntWebTextStyles.body(context,
+                    fontWeight: MyntFonts.semiBold),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.expand_more, size: 16, color: muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Switch control for boolean params (stored as 0/1).
+class _ParamSwitch extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  const _ParamSwitch({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    return Switch(
+      value: value,
+      onChanged: onChanged,
+      activeTrackColor: accent,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
   }
 }

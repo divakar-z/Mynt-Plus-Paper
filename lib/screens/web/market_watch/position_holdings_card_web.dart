@@ -13,6 +13,7 @@ import '../../../models/portfolio_model/position_book_model.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/order_provider.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/websocket_provider.dart';
 import '../../../res/mynt_web_color_styles.dart';
@@ -386,15 +387,25 @@ class _PositionHoldingsCardWebState
                           ),
                         ),
                         TextSpan(
-                          text: "${absQty == 0 ? '' : isLong ? '+' : '-'}$absQty ",
+                          // Privacy Mode: qty (with its long/short sign and
+                          // colour) is hidden.
+                          text: ref.watch(privacyProvider).mask(
+                              "${absQty == 0 ? '' : isLong ? '+' : '-'}$absQty",
+                              suffix: " "),
                           style: MyntWebTextStyles.para(
                             context,
                             fontWeight: MyntFonts.medium,
-                            color: positionColor,
+                            color: ref.watch(privacyProvider).isPrivate
+                                ? resolveThemeColor(context,
+                                    dark: MyntColors.textSecondaryDark,
+                                    light: MyntColors.textSecondary)
+                                : positionColor,
                           ),
                         ),
                         TextSpan(
-                          text: "AVG ${avgPrice.toStringAsFixed(2)}",
+                          text: ref.watch(privacyProvider).mask(
+                              avgPrice.toStringAsFixed(2),
+                              prefix: "AVG "),
                           style: MyntWebTextStyles.para(
                             context,
                             fontWeight: MyntFonts.medium,
@@ -408,17 +419,21 @@ class _PositionHoldingsCardWebState
                   ),
                   // P&L value only (no percentage)
                   Text(
-                    pnl.toStringAsFixed(2),
+                    ref.watch(privacyProvider).mask(pnl.toStringAsFixed(2)),
                     style: MyntWebTextStyles.body(
                       context,
                       fontWeight: MyntFonts.semiBold,
-                      color: isProfit
+                      color: ref.watch(privacyProvider).isPrivate
                           ? resolveThemeColor(context,
-                              dark: MyntColors.profitDark,
-                              light: MyntColors.profit)
-                          : resolveThemeColor(context,
-                              dark: MyntColors.lossDark,
-                              light: MyntColors.loss),
+                              dark: MyntColors.textSecondaryDark,
+                              light: MyntColors.textSecondary)
+                          : isProfit
+                              ? resolveThemeColor(context,
+                                  dark: MyntColors.profitDark,
+                                  light: MyntColors.profit)
+                              : resolveThemeColor(context,
+                                  dark: MyntColors.lossDark,
+                                  light: MyntColors.loss),
                     ),
                   ),
                 ],
@@ -597,7 +612,9 @@ class _PositionHoldingsCardWebState
                       ),
                     ),
                     TextSpan(
-                      text: "+$currentQty ",
+                      text: ref
+                          .watch(privacyProvider)
+                          .mask("+$currentQty", suffix: " "),
                       style: MyntWebTextStyles.para(
                         context,
                         fontWeight: MyntFonts.medium,
@@ -607,7 +624,9 @@ class _PositionHoldingsCardWebState
                       ),
                     ),
                     TextSpan(
-                      text: "AVG ${avgPrice.toStringAsFixed(2)}",
+                      text: ref.watch(privacyProvider).mask(
+                          avgPrice.toStringAsFixed(2),
+                          prefix: "AVG "),
                       style: MyntWebTextStyles.para(
                         context,
                         fontWeight: MyntFonts.medium,
@@ -621,11 +640,15 @@ class _PositionHoldingsCardWebState
               ),
               // P&L value (no percentage)
               Text(
-                pnl.toStringAsFixed(2),
+                ref.watch(privacyProvider).mask(pnl.toStringAsFixed(2)),
                 style: MyntWebTextStyles.body(
                   context,
                   fontWeight: MyntFonts.semiBold,
-                  color: pnlColor,
+                  color: ref.watch(privacyProvider).isPrivate
+                      ? resolveThemeColor(context,
+                          dark: MyntColors.textSecondaryDark,
+                          light: MyntColors.textSecondary)
+                      : pnlColor,
                 ),
               ),
             ],
@@ -638,7 +661,9 @@ class _PositionHoldingsCardWebState
             children: [
               // Investment value
               Text(
-                "INV ${investmentValue.toStringAsFixed(2)}",
+                ref.watch(privacyProvider).mask(
+                    investmentValue.toStringAsFixed(2),
+                    prefix: "INV "),
                 style: MyntWebTextStyles.para(
                   context,
                   fontWeight: MyntFonts.medium,
@@ -1173,7 +1198,7 @@ class _PositionHoldingsCardWebState
 
   /// Cancel an open order
   Future<void> _cancelOrder(OrderBookModel order) async {
-    final symbol = order.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = order.displayName.trim();
 
     // Show confirmation dialog with iframe handling (same style as orders screen)
     final shouldCancel = await showDialog<bool>(

@@ -300,6 +300,26 @@ mixin MarketWatchApi on ApiCore {
     }
   }
 
+  /// Derivative contract master (NFO/BFO/MCX/NCOM): a flat map of "EXCH:token" ->
+  /// ready display name, fetched once on login and cached in DerivativeMaster so
+  /// every screen can resolve a contract's name from one source. [exchanges] are
+  /// the user's entitled derivative exchanges, sent as ?exch=NFO,BFO,MCX.
+  Future<Map<String, String>> getDerivativeMaster(
+      {required List<String> exchanges}) async {
+    try {
+      final uri = Uri.parse(
+          '${apiLinks.derivativeMaster}?exch=${exchanges.join(',')}');
+      final res = await apiClient.get(uri, headers: defaultHeaders);
+      final json = jsonDecode(res.body);
+      if (json is Map) {
+        return json.map((k, v) => MapEntry(k.toString(), v.toString()));
+      }
+      return <String, String>{};
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// Search scrip for Strategy Builder - properly encodes exchange filter array
   Future<SearchScripNewModel> searchScripForStrategyBuilder({
     required String searchText,

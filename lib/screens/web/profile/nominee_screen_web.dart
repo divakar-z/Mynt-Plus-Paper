@@ -227,7 +227,10 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   /// - account closed       → `clientData.isClientClosed`
   /// - non-individual       → `clientData.isIndividual == false`
   /// - inactive segment     → `mobStatus.accSgtAtveSts != 'active'`
-  /// - within 7 days        → `mobStatus.last7DaysCheck != true`
+  /// - within 7 days        → `mobStatus.last7DaysCheck != true`, and only when
+  ///   a nominee already exists. The 7-day post-activation block covers nominee
+  ///   *modification* but not *addition*, so a client with no nominee on record
+  ///   can declare one inside that window.
   String? _editDisabledReason() {
     final provider = ref.watch(profileAllDetailsProvider);
     final mobStatus = provider.mobEmailStatus;
@@ -249,7 +252,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       return 'Modification not allowed for inactive client codes. '
           'Please reactivate the account.';
     }
-    if (mobStatus.last7DaysCheck != true) {
+    if (_hasExistingNominee && mobStatus.last7DaysCheck != true) {
       return 'Modification request not allowed within 7 days of activation';
     }
     return null;

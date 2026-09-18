@@ -95,6 +95,9 @@ class ChartEngineTopBar extends ConsumerWidget {
                 ref.read(screenshotRequestProvider.notifier).request(activeIdx);
               },
             ),
+          // Pop out moved into the iframe top bar (web/chart-engine/topbar.js,
+          // next to the camera/gear buttons) — the Flutter bar is skipped
+          // entirely in embedded mode, so a button here would be invisible.
           // Indicators (fx) button moved into the iframe top bar. See [TopBarFlags].
           if (!TopBarFlags.kJsIndicatorsButton)
             _IndicatorsButton(onPopupVisibilityChanged: onPopupVisibilityChanged),
@@ -426,47 +429,6 @@ class _ViewOnChartTab extends ConsumerWidget {
           ),
           onTap: () => notifier.setPaneShowBarCountdown(
               paneIndex, !pane.showBarCountdown),
-        ),
-        const RefinedDivider(),
-        RefinedRow(
-          label: 'Key levels (pivots)',
-          description: 'PP, R1–R3, S1–S3 from prev session',
-          control: RefinedSwitch(
-            value: pane.showKeyLevels,
-            onChanged: (v) => notifier.setPaneShowKeyLevels(paneIndex, v),
-          ),
-          onTap: () =>
-              notifier.setPaneShowKeyLevels(paneIndex, !pane.showKeyLevels),
-        ),
-        // Show pivot variant control always so its current state is visible;
-        // dim it when key levels are off.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-          child: Opacity(
-            opacity: pane.showKeyLevels ? 1.0 : 0.55,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Pivot variant',
-                    style:
-                        MyntWebTextStyles.caption(context, color: mute)),
-                const SizedBox(height: 6),
-                RefinedSegmented<String>(
-                  value: pane.pivotVariant,
-                  onChanged: (v) =>
-                      notifier.setPanePivotVariant(paneIndex, v),
-                  options: const [
-                    RefinedSegmentOption(
-                        value: 'classical', label: 'Classical'),
-                    RefinedSegmentOption(
-                        value: 'fibonacci', label: 'Fibonacci'),
-                    RefinedSegmentOption(
-                        value: 'camarilla', label: 'Camarilla'),
-                  ],
-                ),
-              ],
-            ),
-          ),
         ),
         const RefinedDivider(),
         RefinedRow(

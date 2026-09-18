@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/res/res.dart';
 
 class TextWidget {
@@ -16,7 +16,7 @@ class TextWidget {
       maxLines: maxLines,
       overflow: textOverflow,
       textAlign: align,
-      style: GoogleFonts.inter(
+      style: dysInter(
           textStyle: TextStyle(
         fontSize: 20,
         color: (color != null)
@@ -48,7 +48,7 @@ class TextWidget {
       maxLines: maxLines,
       overflow: textOverflow,
       textAlign: align,
-      style: GoogleFonts.inter(
+      style: dysInter(
           textStyle: TextStyle(
         fontSize: 18,
         color: (color != null)
@@ -80,7 +80,7 @@ class TextWidget {
       maxLines: maxLines,
       overflow: textOverflow,
       textAlign: align,
-      style: GoogleFonts.inter(
+      style: dysInter(
           textStyle: TextStyle(
         fontSize: 14,
         color: (color != null)
@@ -119,7 +119,7 @@ class TextWidget {
       overflow: textOverflow,
       textAlign: align,
       softWrap: softWrap,
-      style: GoogleFonts.inter(
+      style: dysInter(
         textStyle: TextStyle(
           fontSize: 14,
           color: (color != null)
@@ -163,7 +163,7 @@ class TextWidget {
     maxLines: maxLines,
     overflow: textOverflow,
     textAlign: align,
-    style: GoogleFonts.inter(
+    style: dysInter(
       textStyle: TextStyle(
         fontSize: 12,
         color: (color != null)
@@ -202,7 +202,7 @@ class TextWidget {
       maxLines: maxLines,
       overflow: textOverflow,
       textAlign: align,
-      style: GoogleFonts.inter(
+      style: dysInter(
           textStyle: TextStyle(
         fontSize: 10,
         color: (color != null)
@@ -234,7 +234,7 @@ class TextWidget {
       maxLines: maxLines,
       overflow: textOverflow,
       textAlign: align,
-      style: GoogleFonts.inter(
+      style: dysInter(
           textStyle: TextStyle(
         fontSize: 8,
         color: (color != null)
@@ -269,7 +269,7 @@ class TextWidget {
       maxLines: maxLines,
       overflow: textOverflow,
       textAlign: align,
-      style: GoogleFonts.inter(
+      style: dysInter(
           textStyle: TextStyle(
         fontSize: fs.toDouble(),
         color: (color != null)
@@ -298,7 +298,7 @@ class TextWidget {
     double? letterSpacing,
     TextDecoration? decoration,
   }) {
-    return GoogleFonts.inter(
+    return dysInter(
       textStyle: TextStyle(
         fontSize: fontSize,
         color: color ?? (theme ? colors.colorWhite : colors.colorBlack),

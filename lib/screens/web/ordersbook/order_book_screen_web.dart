@@ -1,5 +1,6 @@
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/screens/web/ordersbook/basket/basket_list_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
@@ -28,6 +29,7 @@ import 'screens/trade_book_screen.dart';
 import 'screens/gtt_orders_screen.dart';
 import 'screens/sip_orders_screen_web.dart';
 import '../../../sharedWidget/common_search_fields_web.dart';
+import '../../../sharedWidget/custom_text_form_field.dart' show UpperCaseTextFormatter;
 import '../../../models/order_book_model/order_book_model.dart';
 import 'cancel_all_orders_dialog_web.dart';
 
@@ -549,6 +551,16 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                   controller: orderBook.orderSearchCtrl,
                   placeholder: 'Search orders',
                   leadingIcon: assets.searchIcon,
+                  // Same formatters as the positions search so typed text
+                  // displays identically (uppercase) on both screens.
+                  inputFormatters: [
+                    UpperCaseTextFormatter(),
+                    FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9& \-]')),
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      if (newValue.text.startsWith(' ')) return oldValue;
+                      return newValue;
+                    }),
+                  ],
                   onClear: () {
                     FocusScope.of(context).unfocus();
                     orderBook.clearOrderSearch();
@@ -896,7 +908,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                     shadcn.TabItem(
                       child: DefaultTextStyle(
                         style: TextStyle(
-                          fontFamily: 'Geist',
+                          fontFamily: dyslexiaFontOr('Geist'),
                           color: _mfTabIndex == 0
                               ? (theme.isDarkMode
                                   ? WebDarkColors.primary
@@ -910,7 +922,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                     shadcn.TabItem(
                       child: DefaultTextStyle(
                         style: TextStyle(
-                          fontFamily: 'Geist',
+                          fontFamily: dyslexiaFontOr('Geist'),
                           color: _mfTabIndex == 1
                               ? (theme.isDarkMode
                                   ? WebDarkColors.primary

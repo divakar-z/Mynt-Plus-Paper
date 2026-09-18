@@ -49,7 +49,11 @@ class CellFormatters {
     switch (status) {
       case 'OPEN':
         return 'Open';
+      // case 'COMPLETE':
+      // case 'EXECUTED':
+      //   return 'Executed';
       case 'COMPLETE':
+        return 'Complete'; // show API status as-is, same as detail panel + mobile
       case 'EXECUTED':
         return 'Executed';
       case 'REJECTED':
@@ -155,7 +159,8 @@ class CellFormatters {
 
   // Format instrument display text (Order)
   static String formatInstrumentText(OrderBookModel order) {
-    String symbol = order.tsym ?? '';
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    String symbol = order.masterName ?? (order.tsym ?? '');
     String exchange = order.exch ?? '';
     String displayText = symbol.trim();
     if (exchange.isNotEmpty && exchange.trim().isNotEmpty) {
@@ -166,6 +171,9 @@ class CellFormatters {
 
   // Format instrument display text (Trade)
   static String formatTradeInstrumentText(TradeBookModel trade) {
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = trade.masterName;
+    if (master != null && master.isNotEmpty) return master;
     final symbol = trade.symbol?.replaceAll("-EQ", "") ?? trade.tsym ?? 'N/A';
     final expDate = trade.expDate ?? '';
     final option = trade.option ?? '';
@@ -181,7 +189,8 @@ class CellFormatters {
 
   // Format instrument display text (GTT)
   static String formatGttInstrumentText(GttOrderBookModel gttOrder) {
-    String symbol = gttOrder.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    String symbol = gttOrder.masterName ?? (gttOrder.tsym?.replaceAll("-EQ", "") ?? 'N/A');
     String exchange = gttOrder.exch ?? '';
     String displayText = symbol.trim();
     if (exchange.isNotEmpty && exchange.trim().isNotEmpty) {

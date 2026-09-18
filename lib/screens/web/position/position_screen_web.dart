@@ -16,6 +16,7 @@ import 'package:mynt_plus/screens/web/position/group/create_group_web.dart';
 
 import '../../../../models/portfolio_model/position_book_model.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/res.dart';
@@ -74,8 +75,32 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
         _searchQuery.value = _searchController.text;
       }
     });
+    // TC_389 — exit selections are held against the FULL open position list,
+    // never the filtered one, and exitPosition() squares off everything still
+    // ticked. So a row that was ticked and is now hidden by the product filter
+    // or the search box would still be exited, with the button and the confirm
+    // dialog both showing the stale count. Clear the selection whenever the
+    // visible list changes. Listening on the notifiers rather than on the
+    // widgets catches every path that can change them, including any added
+    // later.
+    _searchQuery.addListener(_clearExitSelectionOnListChange);
+    _selectedFilter.addListener(_clearExitSelectionOnListChange);
     // Set up WebSocket subscription for live position updates (like mobile)
     _setupSocketSubscription();
+  }
+
+  /// Drops any pending exit selection when the visible position list changes.
+  /// Kept cheap: does nothing unless something is actually selected, so it
+  /// will not fire a provider notify on every keystroke.
+  void _clearExitSelectionOnListChange() {
+    if (!mounted) return;
+    final positionBook = ref.read(portfolioProvider);
+    if (!positionBook.hasExitSelection &&
+        positionBook.exitPositionQty == 0 &&
+        !positionBook.isExitAllPosition) {
+      return;
+    }
+    positionBook.resetExitPositionSelection();
   }
 
   void _setupSocketSubscription() {
@@ -127,6 +152,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     _verticalScrollController.dispose();
     _hoveredRowToken.dispose();
     _hoveredColumnIndex.dispose();
+    _searchQuery.removeListener(_clearExitSelectionOnListChange);
+    _selectedFilter.removeListener(_clearExitSelectionOnListChange);
     _searchQuery.dispose(); // ✅ Dispose search query ValueNotifier
     _searchController.dispose(); // Dispose TextEditingController
     _selectedFilter.dispose();
@@ -269,6 +296,18 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     required Color valueColor,
     required ThemesProvider theme,
   }) {
+    // Privacy Mode: hide the amount (and its sign/colour); the (%) shell
+    // stays so the layout doesn't shift.
+    final privacy = ref.watch(privacyProvider);
+    if (privacy.isPrivate) {
+      value = value.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask;
+      percentage = percentage == null ? null : kPrivacyMask;
+      valueColor = resolveThemeColor(
+        context,
+        dark: MyntColors.textPrimaryDark,
+        light: MyntColors.textPrimary,
+      );
+    }
     final horizontalPadding = context.responsive<double>(
       mobile: 8.0,
       tablet: 10.0,
@@ -507,7 +546,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             // Filter dropdown button
             SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             _buildFilterButton(theme),
-
+            SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             // Exit All Button - only show if there are open positions
             // Use Consumer to watch exitPositionQty which changes when selections change
             Consumer(
@@ -813,7 +852,10 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             ? positionBook.allPostionList
             : positionBook.openPosition ?? [];
 
-        final filteredPositions = _getFilteredPositionsFromList(positions);
+        // Download is the full list, same as Holdings and Orders —
+        // search, product filter and sort are not applied.
+        // final filteredPositions = _getFilteredPositionsFromList(positions);
+        final filteredPositions = positions.toList();
 
         if (filteredPositions.isEmpty) {
           warningMessage(context, 'No positions to download');
@@ -907,35 +949,73 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
 
     return Builder(
       builder: (buttonContext) {
-        return Tooltip(
-          message: 'Filter',
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => _showFilterPopup(buttonContext, theme),
-              child: Container(
-                width: buttonSize,
-                height: buttonSize,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Center(
-                  child: SvgPicture.asset(
-                    assets.searchFilter,
-                    width: iconSize,
-                    colorFilter: ColorFilter.mode(
-                      resolveThemeColor(
-                        context,
-                        dark: MyntColors.iconDark,
-                        light: MyntColors.icon,
+        // The icon used to look identical whether or not a product filter was
+        // on, so a filtered list was indistinguishable from a short one. Tint
+        // the icon and fill the button while a filter is active, and name the
+        // filter in the tooltip — same idea as the group filter button below.
+        return ValueListenableBuilder<String>(
+          valueListenable: _selectedFilter,
+          builder: (context, currentFilter, child) {
+            final isFiltered = currentFilter != 'All';
+            final activeColor = resolveThemeColor(
+              context,
+              dark: MyntColors.secondary,
+              light: MyntColors.primary,
+            );
+            return Tooltip(
+              message: isFiltered ? 'Filter: $currentFilter' : 'Filter',
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () => _showFilterPopup(buttonContext, theme),
+                  child: Container(
+                    width: buttonSize,
+                    height: buttonSize,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      // Clip.none so the dot can sit just outside the icon's
+                      // top-right corner. It stays well inside the button box,
+                      // so nothing is cut off.
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          SvgPicture.asset(
+                            assets.searchFilter,
+                            width: iconSize,
+                            colorFilter: ColorFilter.mode(
+                              isFiltered
+                                  ? activeColor
+                                  : resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.iconDark,
+                                      light: MyntColors.icon,
+                                    ),
+                              BlendMode.srcIn,
+                            ),
+                          ),
+                          if (isFiltered)
+                            Positioned(
+                              top: -5,
+                              right: -3,
+                              child: Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: activeColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                      BlendMode.srcIn,
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
@@ -1574,13 +1654,24 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     List<PositionBookModel> filtered = positions.toList();
 
     // Apply search filter - use ValueNotifier value
-    final searchQuery = _searchQuery.value;
+    final searchQuery = _searchQuery.value.toLowerCase().trim();
     if (searchQuery.isNotEmpty) {
       filtered = filtered.where((position) {
-        final symbol = position.symbol?.toLowerCase() ?? '';
-        final exch = position.exch?.toLowerCase() ?? '';
-        final searchLower = searchQuery.toLowerCase();
-        return symbol.contains(searchLower) || exch.contains(searchLower);
+        // Match the displayed contract name (master/dname/tsym) and its
+        // parsed parts so expiry ("JUL", "24 JUL 26") and strike/option
+        // ("270 CE") searches work, not just the underlying symbol.
+        // Keep in sync with the table filter in position_table.dart.
+        final searchable = [
+          position.masterName,
+          position.dname,
+          position.tsym,
+          position.symbol,
+          position.expDate,
+          position.option,
+          position.exch,
+        ];
+        return searchable.any(
+            (field) => (field ?? '').toLowerCase().contains(searchQuery));
       }).toList();
     }
 
@@ -2141,7 +2232,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     PortfolioProvider positionBook,
     String uniqueId,
   ) {
-    final displayText =
+    final displayText = position.masterName ??
         '${position.symbol ?? ''} ${position.exch ?? ''} ${position.expDate ?? ''} ${position.option ?? ''}';
 
     // ✅ Use ValueListenableBuilder to avoid rebuilding entire table on hover

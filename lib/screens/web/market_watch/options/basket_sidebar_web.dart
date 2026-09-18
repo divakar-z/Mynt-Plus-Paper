@@ -728,7 +728,8 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
       case 'placed':
         return 'PLACED';
       case 'complete':
-        return 'EXECUTED';
+        // return 'EXECUTED';
+        return 'COMPLETE';
       case 'rejected':
         return 'REJECTED';
       case 'canceled':

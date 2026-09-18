@@ -46,9 +46,10 @@ import '../../../provider/market_watch_provider.dart';
 import '../../../provider/network_state_provider.dart';
 import '../../../provider/order_provider.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/user_profile_provider.dart';
-import '../../../provider/version_provider.dart';
+// import '../../../provider/version_provider.dart'; // mobile-only store check
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/webview_chart_provider.dart';
 import '../../../provider/iop_provider.dart';
@@ -58,14 +59,17 @@ import '../../../provider/stocks_provider.dart';
 import '../../../provider/mf_provider.dart';
 import '../../../provider/web_subscription_manager.dart';
 import '../../../provider/dashboard_provider.dart';
+import 'sharedWidget/build_update_banner.dart';
 import 'profile/Reports/ca_events_screen_web.dart';
 import 'profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
 import 'profile/Reports/client_master_screen_web.dart';
 import '../../../res/res.dart';
+import '../../../provider/accessibility_provider.dart';
 import '../../../provider/sidebar_provider.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../res/web_colors.dart';
 
+import '../../../sharedWidget/accessibility/accessibility_panel.dart';
 import '../../../sharedWidget/internet_widget.dart';
 import '../../../sharedWidget/functions.dart';
 import '../../../utils/responsive_snackbar.dart';
@@ -89,6 +93,8 @@ import 'market_watch/watchlist_screen_web.dart';
 import 'holdings/holding_screen_web.dart';
 import 'position/position_screen_web.dart';
 import 'dashboard_screen_web.dart';
+import 'all_strategies_screen_web.dart';
+import 'all_algo_strategies_screen_web.dart';
 import 'trade_action_screen_web.dart';
 import 'portfolio_analysis_web.dart';
 // import '../Mobile/order_book/order_book_screen.dart';
@@ -113,6 +119,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../res/mynt_web_text_styles.dart';
 import 'market_watch/index/index_bottom_sheet_web.dart';
 import 'home/widgets/app_bar/profile_dropdown.dart';
+import 'home/widgets/portfolio_summary_ticker_strip.dart';
 import 'home/widgets/app_bar/navigation_drawer_web.dart';
 import '../../../res/responsive_extensions.dart';
 import 'scalper/scalper_screen_web.dart';
@@ -147,6 +154,24 @@ Future<void> toggleTickerVisibility() async {
   final newValue = !tickerVisibilityNotifier.value;
   await pref.setTickerVisible(newValue);
   tickerVisibilityNotifier.value = newValue;
+}
+
+/// Global ValueNotifier for watchlist (market watch) panel visibility.
+/// Reactive updates across the app so the split layout collapses/expands live.
+final watchlistVisibilityNotifier = ValueNotifier<bool>(true);
+
+/// Initialize watchlist visibility from preferences
+void initWatchlistVisibility() {
+  final Preferences pref = locator<Preferences>();
+  watchlistVisibilityNotifier.value = pref.isWatchlistVisible;
+}
+
+/// Toggle watchlist visibility and save to preferences
+Future<void> toggleWatchlistVisibility() async {
+  final Preferences pref = locator<Preferences>();
+  final newValue = !watchlistVisibilityNotifier.value;
+  await pref.setWatchlistVisible(newValue);
+  watchlistVisibilityNotifier.value = newValue;
 }
 
 /// Screen type parameter enum - used for URL routing
@@ -252,11 +277,23 @@ class _CustomizableSplitHomeScreenState
   final int _panelCount = 2; // Fixed to 2 panels
   bool _isInitialLoad = true; // Track if this is the initial load
   int _holdingsInitialTabIndex = 0; // Track initial tab for holdings screen
+  // Bumped on every navigation into Holdings so the screen honours the
+  // requested tab even when it is already open on another one.
+  int _holdingsTabRequestId = 0;
   bool _isScalperMode = false; // When true, hides watchlist and shows scalper full-width
   bool _isChartsMode = false; // When true, hides watchlist body and shows chart workspace full-width with slim index strip on left
 
   // Scaffold key for drawer control
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // Accessibility dropdown anchor + overlay
+  final GlobalKey _a11yAnchorKey = GlobalKey();
+  OverlayEntry? _a11yOverlay;
+
+  // Measures the watchlist index-strip height so the absolutely-positioned
+  // collapse toggle can center itself on the indices/search seam.
+  final GlobalKey _watchlistIndexStripKey = GlobalKey();
+  double _watchlistIndexStripHeight = 64;
 
   /// Breakpoint below which hamburger menu is shown
   static const double _mobileBreakpoint = 1200.0;
@@ -369,6 +406,9 @@ class _CustomizableSplitHomeScreenState
     // Initialize ticker visibility from preferences
     initTickerVisibility();
 
+    // Initialize watchlist visibility from preferences
+    initWatchlistVisibility();
+
     // Initialize with default panels
     _initializeDefaultPanels();
 
@@ -442,8 +482,9 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            // Mutual Fund tab is index 2 (Equity=0, MTF=1, MF=2, MF BETA=3).
-            _handleHoldingsTap(initialTabIndex: 2);
+            // Mutual Fund is the demat-backed tab at index 3; index 2 is the
+            // retired MF tab, which renders no chip and no table.
+            _handleHoldingsTap(initialTabIndex: 3);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();
@@ -492,6 +533,12 @@ class _CustomizableSplitHomeScreenState
             _navigateToScreen(ScreenType.mtfDetails);
           } else if (routeName == "myAccount") {
             _navigateToScreen(ScreenType.myAccount);
+          } else if (routeName == Routes.curatedStrategies ||
+              routeName == "curatedStrategies") {
+            _handleCuratedStrategiesTap();
+          } else if (routeName == Routes.algoStrategies ||
+              routeName == "algoStrategies") {
+            _handleAlgoStrategiesTap();
           }
         },
         replaceScreen: (routeName, {arguments}) {
@@ -520,8 +567,9 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            // Mutual Fund tab is index 2 (Equity=0, MTF=1, MF=2, MF BETA=3).
-            _handleHoldingsTap(initialTabIndex: 2);
+            // Mutual Fund is the demat-backed tab at index 3; index 2 is the
+            // retired MF tab, which renders no chip and no table.
+            _handleHoldingsTap(initialTabIndex: 3);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();
@@ -570,7 +618,13 @@ class _CustomizableSplitHomeScreenState
             _navigateToScreen(ScreenType.mtfDetails);
           } else if (routeName == "myAccount") {
             _navigateToScreen(ScreenType.myAccount);
-          } 
+          } else if (routeName == Routes.curatedStrategies ||
+              routeName == "curatedStrategies") {
+            _handleCuratedStrategiesTap();
+          } else if (routeName == Routes.algoStrategies ||
+              routeName == "algoStrategies") {
+            _handleAlgoStrategiesTap();
+          }
         },
         goBack: () {
           // Handle back navigation if needed
@@ -585,7 +639,9 @@ class _CustomizableSplitHomeScreenState
 
     ref.read(networkStateProvider).networkStream();
     ref.read(marketWatchProvider).fToast.init(context);
-    ref.read(versionProvider).checkVersion(context);
+    // Store-version check is mobile-only (compares against the strapi
+    // Play Store number); on web the build-update banner covers updates.
+    // ref.read(versionProvider).checkVersion(context);
 
     // Initialize websocket connection early to ensure real-time data is available
     if (mounted &&
@@ -619,6 +675,8 @@ class _CustomizableSplitHomeScreenState
       ConstantName.timer!.cancel();
       ConstantName.timer = null;
     }
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
     socketProvider.closeSocket(false);
     ConstantName.chartwebViewController?.dispose();
     super.dispose();
@@ -1011,6 +1069,8 @@ class _CustomizableSplitHomeScreenState
               screenType: BannerScreenType.homescreen,
               showImmediately: true,
             ),
+            // Floating "new build available" pill, top-center above all panes
+            const BuildUpdateBanner(),
             // DEBUG: Screen size overlay — remove after testing
             // Positioned(
             //   bottom: 8,
@@ -1134,9 +1194,28 @@ class _CustomizableSplitHomeScreenState
             builder: (context, ref, _) {
               final sidebarContent = ref.watch(sidebarProvider);
               if (sidebarContent == null) return const SizedBox.shrink();
+              // Width comes from whatever opened the panel. A conversation
+              // needs more room than a column of label/value rows, and the
+              // default is unchanged for everything that does not ask.
+              final width = ref.read(sidebarProvider.notifier).width;
               return Drawer(
-                width: 400,
-                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                width: width,
+                backgroundColor: resolveThemeColor(context,
+                    dark: MyntColors.cardDark, light: MyntColors.card),
+                // The scrim is transparent on purpose, so the page behind stays
+                // readable — which leaves nothing saying the panel sits above
+                // it. A shadow and a left edge do that job instead, and work
+                // whatever colour happens to be behind.
+                elevation: 16,
+                shadowColor: Colors.black.withValues(alpha: 0.35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                  side: BorderSide(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.borderMutedDark,
+                        light: MyntColors.borderMuted),
+                  ),
+                ),
                 child: sidebarContent,
               );
             },
@@ -1298,7 +1377,9 @@ class _CustomizableSplitHomeScreenState
                 Container(
                     width: 1,
                     color: shadcn.Theme.of(context).colorScheme.border),
+                // Old auto-scrolling position ticker:
                 const Expanded(child: PortfolioTickerStrip()),
+                // const Expanded(child: PortfolioSummaryTickerStrip()),
               ],
             ),
           ),
@@ -1325,14 +1406,29 @@ class _CustomizableSplitHomeScreenState
       // Watchlist on LEFT, Content on RIGHT
       return Row(
         children: [
-          // Left side: Watchlist (full height)
-          SizedBox(
-            width: watchlistWidth,
-            child: _buildWatchlistPanel(theme, panelIndex: 0),
+          // Left side: Watchlist (full height) — collapsible to a thin rail
+          ValueListenableBuilder<bool>(
+            valueListenable: watchlistVisibilityNotifier,
+            builder: (context, visible, _) {
+              if (!visible) {
+                return _buildWatchlistCollapsedRail(theme, onLeft: true);
+              }
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: watchlistWidth,
+                    child: _buildWatchlistPanel(theme,
+                        panelIndex: 0, onLeft: true),
+                  ),
+                  // Divider
+                  Container(
+                      width: 1,
+                      color: shadcn.Theme.of(context).colorScheme.border),
+                ],
+              );
+            },
           ),
-          // Divider
-          Container(
-              width: 1, color: shadcn.Theme.of(context).colorScheme.border),
           // Right side: AppBar + TextNugget + Ticker + Content
           Expanded(
             child: Column(
@@ -1341,7 +1437,9 @@ class _CustomizableSplitHomeScreenState
                 const AutoLoadTextNuggetWidget(
                   screenType: TextNuggetScreenType.homescreen,
                 ),
-                const PortfolioTickerStrip(),
+                // Old auto-scrolling position ticker:
+                // const PortfolioTickerStrip(),
+                const PortfolioSummaryTickerStrip(),
                 Expanded(
                   child: _buildContentPanel(theme, panelIndex: 1),
                 ),
@@ -1362,20 +1460,37 @@ class _CustomizableSplitHomeScreenState
                 const AutoLoadTextNuggetWidget(
                   screenType: TextNuggetScreenType.homescreen,
                 ),
-                const PortfolioTickerStrip(),
+                // Old auto-scrolling position ticker:
+                // const PortfolioTickerStrip(),
+                const PortfolioSummaryTickerStrip(),
                 Expanded(
                   child: _buildContentPanel(theme, panelIndex: 0),
                 ),
               ],
             ),
           ),
-          // Divider
-          Container(
-              width: 1, color: shadcn.Theme.of(context).colorScheme.border),
-          // Right side: Watchlist (full height)
-          SizedBox(
-            width: watchlistWidth,
-            child: _buildWatchlistPanel(theme, panelIndex: 1),
+          // Right side: Watchlist (full height) — collapsible to a thin rail
+          ValueListenableBuilder<bool>(
+            valueListenable: watchlistVisibilityNotifier,
+            builder: (context, visible, _) {
+              if (!visible) {
+                return _buildWatchlistCollapsedRail(theme, onLeft: false);
+              }
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Divider
+                  Container(
+                      width: 1,
+                      color: shadcn.Theme.of(context).colorScheme.border),
+                  SizedBox(
+                    width: watchlistWidth,
+                    child: _buildWatchlistPanel(theme,
+                        panelIndex: 1, onLeft: false),
+                  ),
+                ],
+              );
+            },
           ),
         ],
       );
@@ -1402,33 +1517,182 @@ class _CustomizableSplitHomeScreenState
     return panel.screens.contains(ScreenType.watchlist);
   }
 
-  /// Build watchlist panel (full height) with index slots on top
-  Widget _buildWatchlistPanel(ThemesProvider theme, {required int panelIndex}) {
+  /// Build watchlist panel (full height) with index slots on top.
+  /// [onLeft] controls which edge the collapse arrow points toward.
+  Widget _buildWatchlistPanel(ThemesProvider theme,
+      {required int panelIndex, bool onLeft = true}) {
     return Container(
       color: resolveThemeColor(context,
           dark: MyntColors.backgroundColorDark,
           light: MyntColors.backgroundColor),
-      child: Column(
+      // Stack lets the collapse toggle float (absolutely positioned) over the
+      // header without reflowing the indices row — it stays centered on the
+      // indices/search seam and flush to the panel's outer edge.
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          // Index slots at top of watchlist
-          _buildWatchlistIndexSlots(theme.isDarkMode),
-          // Watchlist content
-          Expanded(
-            child: _getScreenForType(ScreenType.watchlist),
+          Column(
+            children: [
+              // Index slots row (toggle is rendered separately as an overlay).
+              _buildWatchlistIndexSlots(theme.isDarkMode, measure: true),
+              // Watchlist content
+              Expanded(
+                child: _getScreenForType(ScreenType.watchlist),
+              ),
+            ],
+          ),
+          // Absolutely-positioned collapse toggle: vertically centered on the
+          // seam between the index strip and the search bar, hugging the outer
+          // (divider-facing) edge.
+          Positioned(
+            top: _watchlistIndexStripHeight - 30,
+            right: onLeft ? 0 : null,
+            left: onLeft ? null : 0,
+            child: _buildWatchlistCollapseButton(
+              onLeft: onLeft,
+              isDarkMode: theme.isDarkMode,
+            ),
           ),
         ],
       ),
     );
   }
 
-  /// Build index slots for watchlist panel (above search)
-  Widget _buildWatchlistIndexSlots(bool isDarkMode) {
+  Widget _buildWatchlistCollapseButton({
+    required bool onLeft,
+    required bool isDarkMode,
+  }) {
+    final scheme = shadcn.Theme.of(context).colorScheme;
+    const radius = Radius.circular(10);
+    final side = BorderSide(color: scheme.border);
+    final borderRadius = onLeft
+        ? const BorderRadius.only(topLeft: radius, bottomLeft: radius)
+        : const BorderRadius.only(topRight: radius, bottomRight: radius);
+    final border = onLeft
+        ? Border(left: side, top: side, bottom: side)
+        : Border(right: side, top: side, bottom: side);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Tooltip(
+        message: 'Hide watchlist',
+        child: Material(
+          color : const Color(0xFF0037B7),
+          borderRadius: borderRadius,
+          elevation: 1.5,
+          shadowColor: Colors.black.withValues(alpha: 0.18),
+          child: InkWell(
+            onTap: () => toggleWatchlistVisibility(),
+            borderRadius: borderRadius,
+            // hoverColor: scheme.accent,
+            child: Container(
+              width: 28,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: borderRadius,
+                border: border,
+              ),
+              child: Icon(
+                onLeft
+                    ? shadcn.LucideIcons.chevronsLeft
+                    : shadcn.LucideIcons.chevronsRight,
+                size: 18,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildWatchlistCollapsedRail(ThemesProvider theme,
+      {required bool onLeft}) {
+    final scheme = shadcn.Theme.of(context).colorScheme;
+    final divider = Container(width: 1, color: scheme.border);
+    final rail = Material(
+      color: scheme.muted.withValues(alpha: 0.5),
+      child: InkWell(
+        onTap: () => toggleWatchlistVisibility(),
+        child: SizedBox(
+          width: 36,
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              Tooltip(
+                message: 'Show watchlist',
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color : const Color(0xFF0037B7),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: scheme.border),
+                  ),
+                  // Lucide for the same cache reason as the collapse button.
+                  child: Icon(
+                    onLeft
+                        ? shadcn.LucideIcons.chevronsRight
+                        : shadcn.LucideIcons.chevronsLeft,
+                    size: 18,
+                    color : Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: RotatedBox(
+                  quarterTurns: onLeft ? 3 : 1,
+                  child: Center(
+                    child: Text(
+                      'WATCHLIST',
+                      maxLines: 1,
+                      overflow: TextOverflow.clip,
+                      style: TextStyle(
+                        fontSize: 11,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.foreground,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: onLeft ? [rail, divider] : [divider, rail],
+    );
+  }
+
+  /// Build index slots for watchlist panel (above search).
+  /// [measure] attaches the strip-height probe used to position the floating
+  /// collapse toggle (only the watchlist panel needs it, not charts mode).
+  Widget _buildWatchlistIndexSlots(bool isDarkMode, {bool measure = false}) {
     return Consumer(
       builder: (context, ref, _) {
         final indexProvider = ref.watch(indexListProvider);
         final marketWatch = ref.read(marketWatchProvider);
         final theme = ref.watch(themeProvider);
         final indexValues = indexProvider.defaultIndexList?.indValues;
+        if (measure) {
+          // After layout, capture the strip height so the overlaid toggle can
+          // center on the indices/search seam. Cheap: only setState on change.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final box = _watchlistIndexStripKey.currentContext
+                ?.findRenderObject() as RenderBox?;
+            final h = box?.size.height;
+            if (h != null && mounted && (h - _watchlistIndexStripHeight).abs() > 0.5) {
+              setState(() => _watchlistIndexStripHeight = h);
+            }
+          });
+        }
 
         if (indexValues == null || indexValues.isEmpty) {
           return const SizedBox.shrink();
@@ -1440,27 +1704,18 @@ class _CustomizableSplitHomeScreenState
             : indexValues;
 
         return Container(
+          key: measure ? _watchlistIndexStripKey : null,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: resolveThemeColor(context,
                 dark: MyntColors.backgroundColorDark,
                 light: MyntColors.backgroundColor),
-            // border: Border(
-            //   bottom: BorderSide(
-            //     color: isDarkMode
-            //         ? WebDarkColors.divider.withOpacity(0.3)
-            //         : MyntColors.divider.withOpacity(0.2),
-            //     width: 1,
-            //   ),
-            // ),
+            // border: Border(bottom: BorderSide(color: scheme.border)),
           ),
           child: Row(
             children: List.generate(
               displayIndices.length,
               (index) {
-                if (index >= displayIndices.length) {
-                  return const SizedBox.shrink();
-                }
                 final item = displayIndices[index];
                 return Expanded(
                   child: Padding(
@@ -1653,7 +1908,7 @@ class _CustomizableSplitHomeScreenState
           // Scanner / Orderflow / Charts hidden from the sidebar menu too, to
           // match the Options dropdown (features not ready for hosting).
           // Restore by putting the show* variables back / removing these.
-          showScanner: false,
+          showScanner: showScanner,
           showOrderflow: false,
           showCharts: false,
         ),
@@ -1666,18 +1921,31 @@ class _CustomizableSplitHomeScreenState
   Widget _buildRightSideAppBar(bool isDarkMode) {
     final screenWidth = MediaQuery.of(context).size.width;
 
+    // Accessibility widens the app-bar nav: a larger Font Size scale and the
+    // OpenDyslexic dyslexia face both need more horizontal room per item, so
+    // the fixed pixel breakpoints below would overflow the header off-screen.
+    // Inflate the thresholds by roughly the same factor the text grows by, so
+    // nav items collapse into the hamburger drawer a little earlier (they stay
+    // reachable there) instead of spilling past the right edge. Watched so the
+    // breakpoints recompute the moment the user toggles these options.
+    final a11y = ref.watch(accessibilityProvider);
+    // OpenDyslexic renders ~1.3x wider (wider glyphs + added letter spacing).
+    final a11yNavFactor =
+        a11y.textScale * (a11y.dyslexiaSupportEnabled ? 1.3 : 1.0);
+
     // Responsive breakpoints - Option 2 implementation
     final isMobileTablet = screenWidth < 900; // Full mobile/tablet mode
 
     // Left navigation - hide ALL at once when space is not available
-    final showAllLeftNav = screenWidth >= 1650; // Show MF, IPO, Bonds, Options together
+    final showAllLeftNav =
+        screenWidth >= 1650 * a11yNavFactor; // Show MF, IPO, Bonds, Options together
 
     // Right navigation - hide ALL at once (not one by one)
     // When left nav is visible: need more space, so hide right nav items earlier
     // When left nav is hidden: have more space, so can show right nav items longer
     final showAllRightNav = showAllLeftNav
-        ? (screenWidth >= 1550)  // If left nav visible, need 1550px to show all right nav
-        : (screenWidth >= 950);  // If left nav hidden, only need 950px to show all right nav
+        ? (screenWidth >= 1550 * a11yNavFactor)  // If left nav visible, need 1550px to show all right nav
+        : (screenWidth >= 950 * a11yNavFactor);  // If left nav hidden, only need 950px to show all right nav
 
     // Determine which items to show in hamburger drawer
     // Desktop mode: Show only hidden items in drawer
@@ -1720,7 +1988,11 @@ class _CustomizableSplitHomeScreenState
             if (showHamburger)
               Padding(
                 padding: const EdgeInsets.only(right: 12),
-                child: Material(
+                child: Semantics(
+                  button: true,
+                  label: 'Open navigation menu',
+                  excludeSemantics: true,
+                  child: Material(
                   color: Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                   child: InkWell(
@@ -1763,15 +2035,21 @@ class _CustomizableSplitHomeScreenState
                     ),
                   ),
                 ),
+                ),
               ),
 
             // Logo section
-            RepaintBoundary(
-              child: SvgPicture.asset(
-                assets.appLogoIcon,
-                width: context.responsive(mobile: 80.0, tablet: 90.0, desktop: 100.0),
-                height: 38,
-                fit: BoxFit.contain,
+            Semantics(
+              image: true,
+              label: 'Mynt by Zebu',
+              excludeSemantics: true,
+              child: RepaintBoundary(
+                child: SvgPicture.asset(
+                  assets.appLogoIcon,
+                  width: context.responsive(mobile: 80.0, tablet: 90.0, desktop: 100.0),
+                  height: 38,
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
 
@@ -1808,14 +2086,50 @@ class _CustomizableSplitHomeScreenState
               const SizedBox(width: 20),
             ],
 
+            // Accessibility options (always visible)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: A11yIconButton(
+                key: const ValueKey('a11y_icon_btn'),
+                anchorKey: _a11yAnchorKey,
+                isDarkMode: isDarkMode,
+                active: ref.watch(accessibilityProvider).screenReaderEnabled,
+                onTap: () => _toggleAccessibilityDropdown(isDarkMode),
+              ),
+            ),
+
             // Profile section (always visible)
-            RepaintBoundary(
-              child: _buildProfileSection(isDarkMode),
+            Semantics(
+              button: true,
+              label: 'Profile menu',
+              child: RepaintBoundary(
+                child: _buildProfileSection(isDarkMode),
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  void _toggleAccessibilityDropdown(bool isDarkMode) {
+    if (_a11yOverlay != null) {
+      _closeAccessibilityDropdown();
+      return;
+    }
+    if (_a11yAnchorKey.currentContext == null) return;
+    _a11yOverlay = buildAccessibilityOverlay(
+      context: context,
+      anchorKey: _a11yAnchorKey,
+      isDarkMode: isDarkMode,
+      onClose: _closeAccessibilityDropdown,
+    );
+    Overlay.of(context, rootOverlay: true).insert(_a11yOverlay!);
+  }
+
+  void _closeAccessibilityDropdown() {
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
   }
 
   _buildAppBar(bool isDarkMode) {
@@ -2265,6 +2579,16 @@ class _CustomizableSplitHomeScreenState
     _replaceScreenInPanel(ScreenType.instaOptions);
   }
 
+  void _handleCuratedStrategiesTap() {
+    // Show the Curated Strategies list in the panel like other full pages.
+    _replaceScreenInPanel(ScreenType.curatedStrategies);
+  }
+
+  void _handleAlgoStrategiesTap() {
+    // Show the Algo Strategies list in the panel like other full pages.
+    _replaceScreenInPanel(ScreenType.allAlgoStrategies);
+  }
+
   void _handleWebHookTap() {
     _replaceScreenInPanel(ScreenType.tradingViewWebHook);
   }
@@ -2628,6 +2952,9 @@ class _CustomizableSplitHomeScreenState
                                   lightColor: MyntColors.textPrimary,
                                 ),
                               ),
+                              // Scalper "Beta" badge removed — Scalper is no
+                              // longer beta. Kept commented for easy rollback.
+                              /*
                               const SizedBox(width: 4),
                               Transform.translate(
                                 offset: const Offset(0, -6),
@@ -2644,6 +2971,7 @@ class _CustomizableSplitHomeScreenState
                                   ).copyWith(fontSize: 10),
                                 ),
                               ),
+                              */
                             ],
                           ),
                         ),
@@ -2978,6 +3306,7 @@ class _CustomizableSplitHomeScreenState
             return HoldingScreenWeb(
               listofHolding: holdingsModel ?? [],
               initialTabIndex: _holdingsInitialTabIndex,
+              tabRequestId: _holdingsTabRequestId,
             );
           },
         );
@@ -3239,6 +3568,10 @@ class _CustomizableSplitHomeScreenState
         );
       case ScreenType.orderflow:
         return const OrderflowShellScreen();
+      case ScreenType.curatedStrategies:
+        return AllStrategiesScreenWeb(onBack: _handleDashboardTap);
+      case ScreenType.allAlgoStrategies:
+        return AllAlgoStrategiesScreenWeb(onBack: _handleDashboardTap);
       // caEvent and cpAction removed
     }
   }
@@ -3358,6 +3691,10 @@ class _CustomizableSplitHomeScreenState
         return 'Scanner';
       case ScreenType.orderflow:
         return 'Orderflow';
+      case ScreenType.curatedStrategies:
+        return 'Strategies';
+      case ScreenType.allAlgoStrategies:
+        return 'Algo Strategies';
       // caEvent and cpAction removed
     }
   }
@@ -3477,6 +3814,10 @@ class _CustomizableSplitHomeScreenState
         return Icons.radar;
       case ScreenType.orderflow:
         return Icons.show_chart;
+      case ScreenType.curatedStrategies:
+        return Icons.auto_awesome;
+      case ScreenType.allAlgoStrategies:
+        return Icons.smart_toy_outlined;
       // caEvent and cpAction removed
     }
   }
@@ -3931,6 +4272,12 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenType.orderflow:
         _replaceScreenInPanel(ScreenType.orderflow);
+        break;
+      case ScreenType.curatedStrategies:
+        _replaceScreenInPanel(ScreenType.curatedStrategies);
+        break;
+      case ScreenType.allAlgoStrategies:
+        _replaceScreenInPanel(ScreenType.allAlgoStrategies);
         break;
       // caEvent and cpAction removed
     }
@@ -5081,6 +5428,7 @@ class _CustomizableSplitHomeScreenState
     // Set loading state immediately
     setState(() {
       _holdingsInitialTabIndex = initialTabIndex;
+      _holdingsTabRequestId++;
       _screenLoadingStates[ScreenType.holdings] = true;
     });
 
@@ -5994,6 +6342,8 @@ enum ScreenType {
   instaOptions,
   scanner,
   orderflow,
+  curatedStrategies,
+  allAlgoStrategies,
 }
 
 // Hoverable navigation item widget
@@ -6614,6 +6964,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
   Widget _buildTickerContent(BuildContext context) {
     final theme = ref.watch(themeProvider);
     final portfolio = ref.watch(portfolioProvider);
+    final privacy = ref.watch(privacyProvider);
     // Commented out for future use - Holdings and Fund data
     // final fund = ref.watch(fundProvider);
     final isDarkMode = theme.isDarkMode;
@@ -6659,6 +7010,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
               groupPositionSym: groupPositionSym,
               totalPnL: totalPnL,
               isDarkMode: isDarkMode,
+              isPrivate: privacy.isPrivate,
             );
 
             // If no positions, show empty state message
@@ -6722,6 +7074,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
     required List<String> groupPositionSym,
     required double totalPnL,
     required bool isDarkMode,
+    required bool isPrivate,
   }) {
     final List<Widget> items = [];
 
@@ -6732,6 +7085,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
         value: totalPnL,
         isDarkMode: isDarkMode,
         showAsAmount: true,
+        isMasked: isPrivate,
         onTap: () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo(Routes.positionscreen);
@@ -6767,6 +7121,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
           value: pnl,
           isDarkMode: isDarkMode,
           showAsAmount: true,
+          isMasked: isPrivate,
           onTap: () {
             if (WebNavigationHelper.isAvailable) {
               WebNavigationHelper.navigateTo(Routes.positionscreen);
@@ -6869,6 +7224,8 @@ class _TickerItem extends StatefulWidget {
   final bool isDarkMode;
   final bool showAsAmount;
   final bool isNeutral;
+  // Privacy Mode: hides the amount (and its sign/colour) behind a mask.
+  final bool isMasked;
   final VoidCallback? onTap;
 
   const _TickerItem({
@@ -6877,6 +7234,7 @@ class _TickerItem extends StatefulWidget {
     required this.isDarkMode,
     this.showAsAmount = false,
     this.isNeutral = false,
+    this.isMasked = false,
     this.onTap,
   });
 
@@ -6891,11 +7249,11 @@ class _TickerItemState extends State<_TickerItem> {
   Widget build(BuildContext context) {
     final isPositive = widget.value >= 0;
     final displayValue = widget.showAsAmount
-        ? "₹${_formatAmount(widget.value.abs())}"
+        ? _formatAmount(widget.value.abs())
         : widget.value.toStringAsFixed(2);
 
     Color valueColor;
-    if (widget.isNeutral || widget.value == 0) {
+    if (widget.isMasked || widget.isNeutral || widget.value == 0) {
       valueColor = widget.isDarkMode
           ? MyntColors.textPrimaryDark
           : MyntColors.textPrimary;
@@ -6936,9 +7294,11 @@ class _TickerItemState extends State<_TickerItem> {
               ),
               const SizedBox(width: 8),
               Text(
-                widget.showAsAmount
-                    ? (isPositive ? displayValue : "-$displayValue")
-                    : displayValue,
+                widget.isMasked
+                    ? kPrivacyMask
+                    : (widget.showAsAmount
+                        ? (isPositive ? displayValue : "-$displayValue")
+                        : displayValue),
                 style: MyntWebTextStyles.body(
                   context,
                   fontWeight: MyntFonts.semiBold,

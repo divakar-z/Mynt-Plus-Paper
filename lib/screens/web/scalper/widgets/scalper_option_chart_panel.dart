@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../models/marketwatch_model/opt_chain_model.dart';
+import '../../../../sharedWidget/functions.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../res/mynt_web_text_styles.dart';
@@ -117,7 +118,9 @@ class _ScalperOptionChartPanelState
     Color changeColor,
   ) {
     final option = widget.option;
-    final tsym = option?.tsym ?? '';
+    // Prefer the backend display name (DerivativeMaster) for the contract title.
+    final tsym = DerivativeMaster.nameFor(option?.exch, option?.token) ??
+        (option?.tsym ?? '');
     final isExpanded = scalper.expandedChart == _chartType;
 
     return Container(

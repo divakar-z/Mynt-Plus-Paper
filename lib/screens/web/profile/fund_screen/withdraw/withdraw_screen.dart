@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/privacy_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/transcation_provider.dart';
 import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
@@ -189,6 +190,22 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
               const SizedBox(height: 4),
               Builder(
                 builder: (context) {
+                  // Privacy Mode: balance masked, colour neutralized.
+                  final privacy = ref.watch(privacyProvider);
+                  if (privacy.isPrivate) {
+                    return Text(
+                      "₹ $kPrivacyMask",
+                      style: MyntWebTextStyles.head(
+                        context,
+                        color: resolveThemeColor(
+                          context,
+                          dark: MyntColors.textPrimaryDark,
+                          light: MyntColors.textPrimary,
+                        ),
+                        fontWeight: MyntFonts.medium,
+                      ),
+                    );
+                  }
                   final amountValue =
                       double.tryParse(withdrawAmount) ?? 0.00;
                   final Color amountColor = amountValue > 0
@@ -476,7 +493,9 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
                   final amountValue =
                       double.tryParse(payout.withdrawAmount ?? '0') ?? 0.00;
                   return Text(
-                     "₹ ${payout.withdrawAmount ?? "0.00"}",
+                     ref.watch(privacyProvider).mask(
+                         payout.withdrawAmount ?? "0.00",
+                         prefix: "₹ "),
                     style: MyntWebTextStyles.head(
                       context,
                       color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
@@ -512,6 +531,9 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
 
   Widget _summaryRow(BuildContext context, String label, String value,
       {Color? valueColor}) {
+    // Privacy Mode: amount masked; any special colour (e.g. red Margin Used)
+    // is dropped so nothing leaks through colour.
+    final privacy = ref.watch(privacyProvider);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
@@ -527,11 +549,11 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
             ),
           ),
           Text(
-            value,
+            privacy.mask(value),
             style: MyntWebTextStyles.bodySmall(
               context,
               fontWeight: MyntFonts.semiBold,
-              color: valueColor ??
+              color: (privacy.isPrivate ? null : valueColor) ??
                   resolveThemeColor(context,
                       dark: MyntColors.textPrimaryDark,
                       light: MyntColors.textPrimary),
@@ -575,7 +597,9 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  "₹ ${widget.withdarw.withdrawstatus?[0].dUEAMT}",
+                  ref.watch(privacyProvider).mask(
+                      "${widget.withdarw.withdrawstatus?[0].dUEAMT}",
+                      prefix: "₹ "),
                   style: MyntWebTextStyles.title(
                     context,
                     fontWeight: MyntFonts.semiBold,
