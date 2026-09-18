@@ -181,6 +181,18 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     final positionBook = ref.watch(portfolioProvider);
     final theme = ref.read(themeProvider);
 
+    // Product filters are built from the positions actually held. If the
+    // selected product is no longer present (last CO/BO position squared off,
+    // fresh position book), fall back to All so the table never stays empty
+    // behind a filter that is no longer in the menu.
+    ref.listen(portfolioProvider, (previous, next) {
+      final selected = _selectedFilter.value;
+      if (selected == 'All') return;
+      if (!_availableProductFilters(next).contains(selected)) {
+        _selectedFilter.value = 'All';
+      }
+    });
+
     // Show full screen loader only on initial load (when no positions exist yet)
     if (positionBook.posloader ) {
       return Center(child: MyntLoader.simple());
@@ -1286,6 +1298,36 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     );
   }
 
+  // Product filters actually present in the current position book, in a fixed
+  // display order. CO and BO were missing from the old hardcoded menu, so a
+  // cover/bracket position could be seen but not filtered. Built from the data
+  // so the menu never shows a product the client does not hold.
+  static const List<String> _productFilterOrder = [
+    'MIS',
+    'NRML',
+    'CNC',
+    'CO',
+    'BO',
+  ];
+
+  List<String> _availableProductFilters(PortfolioProvider positionBook) {
+    // Same source the table renders from (see position_table.dart).
+    final positions = positionBook.allPostionList.isNotEmpty
+        ? positionBook.allPostionList
+        : positionBook.openPosition ?? [];
+
+    final present = <String>{};
+    for (final position in positions) {
+      final product = position.sPrdtAli?.toString().trim() ?? '';
+      if (product.isNotEmpty) present.add(product);
+    }
+
+    return [
+      'All',
+      ..._productFilterOrder.where(present.contains),
+    ];
+  }
+
   void _showFilterPopup(BuildContext context, ThemesProvider theme) {
     shadcn.showPopover(
       context: context,
@@ -1311,15 +1353,20 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             padding: const EdgeInsets.all(8),
             child: SizedBox(
               width: 160,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildFilterMenuItem('All', theme),
-                  _buildFilterMenuItem('MIS', theme),
-                  _buildFilterMenuItem('NRML', theme),
-                  _buildFilterMenuItem('CNC', theme),
-                ],
+              // Consumer so the menu picks up a newly added product while it
+              // is still open (new position placed, or one squared off).
+              child: Consumer(
+                builder: (context, ref, child) {
+                  final positionBook = ref.watch(portfolioProvider);
+                  final options = _availableProductFilters(positionBook);
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: options
+                        .map((option) => _buildFilterMenuItem(option, theme))
+                        .toList(),
+                  );
+                },
               ),
             ),
           ),
