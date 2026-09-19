@@ -1288,6 +1288,24 @@ class TranctionProvider extends DefaultChangeNotifier {
     }
   }
 
+  // Autofill the UPI ID using view_upi_id (client level, no bank details needed)
+  Future fetchViewUpiId() async {
+    try {
+      final upiDetails = await api.getUPI();
+      if (upiDetails.stat != "Ok" || (upiDetails.data?.isEmpty ?? true)) return;
+      final upi = "${upiDetails.data![0].upiId}";
+      if (upi.isEmpty || upi == "null") return;
+      upiid.text = upi;
+      ref.read(ipoProvide).viewupiid.text = upi;
+      notifyListeners();
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "fetchViewUpiId", "Error": "$e"});
+    }
+  }
+
   Future fetchPaymentWithDraw(
       String ip, String amount, String segment, BuildContext context) async {
     try {
