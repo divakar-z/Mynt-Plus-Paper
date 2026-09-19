@@ -80,6 +80,36 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
   MyntChangePasswordModel? _changepasswordmodel;
   MyntChangePasswordModel? get changepasswordmodel => _changepasswordmodel;
 
+// Masked mobile / email the generated password was sent to.
+
+  String? maskedMobile;
+  String? maskedEmail;
+
+
+  static String? maskMobile(dynamic raw) {
+    final digits = (raw?.toString() ?? '').replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return null;
+    if (digits.length <= 4) return 'X' * digits.length;
+    if (digits.length <= 6) return 'XX${digits.substring(digits.length - 4)}';
+    return '${digits.substring(0, 2)}'
+        '${'X' * (digits.length - 6)}'
+        '${digits.substring(digits.length - 4)}';
+  }
+
+
+  static String? maskEmail(dynamic raw) {
+    final email = (raw?.toString() ?? '').trim();
+    final at = email.lastIndexOf('@');
+    if (at <= 0 || at == email.length - 1) return null;
+    const stars = '***********';
+    final local = email.substring(0, at);
+    final domain = email.substring(at);
+    if (local.length <= 2) return '$stars$domain';
+    if (local.length <= 4) return '${local.substring(0, 1)}$stars$domain';
+    return '${local.substring(0, 2)}$stars'
+        '${local.substring(local.length - 2)}$domain';
+  }
+
 // Clear all text field values form change password screen
   void clearTextField() {
     _isDisableforgetbtn = true;
@@ -88,6 +118,8 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
     confirmPassword.clear();
     forGetloginMethCtrl.clear();
     forgotOtpController.clear();
+    maskedMobile = null;
+    maskedEmail = null;
     notifyListeners();
   }
 
@@ -243,10 +275,10 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
         missing.add("a number");
       }
       if (!RegExp(r'[#$\-*@]').hasMatch(value)) {
-        missing.add("a special character (#, \$, -, *, @)");
+        missing.add("one of these special characters: # \$ - * @");
       }
       if (value.length < 7) {
-        missing.add("at least 7 characters");
+        missing.add("minimum 7 characters");
       }
 
       if (missing.isNotEmpty) {
@@ -462,6 +494,10 @@ class ChangePasswordProvider extends DefaultChangeNotifier {
           userIdController.text =
               forGetloginMethCtrl.text.trim().toUpperCase();
         }
+        // Where the generated password was just sent. Masked immediately —
+        // the raw values are never stored or displayed.
+        maskedMobile = maskMobile(res['mobile']);
+        maskedEmail = maskEmail(res['email']);
         // Retired 18 Sep 2026 (client feedback): the "sent to your mobile
         // and email" message is now static text above the Generated Password
         // field on the Change Your Password screen, not a 4s toast.

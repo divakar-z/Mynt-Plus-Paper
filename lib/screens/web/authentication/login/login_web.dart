@@ -887,6 +887,51 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
     }
   }
 
+  /// The line above the Generated Password field telling the user where the
+  /// generated password went. /ForgetPasswordOtpVerify returns the mobile and
+  /// email (masked by the provider on arrival, 19 Sep 2026); if either is
+  /// missing the sentence falls back to the generic wording so the screen
+  /// still reads correctly.
+  ///
+  /// Returned as spans, not a plain string: the masked number and email are
+  /// the one thing the user has to check, so they carry the primary text
+  /// colour and a heavier weight while the sentence around them stays
+  /// secondary grey. The generic fallback has no value to point at, so it is
+  /// not highlighted.
+  List<InlineSpan> _generatedPasswordSentSpans() {
+    final forpass = ref.read(changePasswordProvider);
+    final mobile = forpass.maskedMobile;
+    final email = forpass.maskedEmail;
+
+    final highlight = MyntWebTextStyles.para(
+      context,
+      fontWeight: MyntFonts.semiBold,
+      color: resolveThemeColor(context,
+          dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
+    );
+
+    final destination = <InlineSpan>[];
+    if (mobile != null && email != null) {
+      destination.add(TextSpan(text: mobile, style: highlight));
+      destination.add(const TextSpan(text: ' and '));
+      destination.add(TextSpan(text: email, style: highlight));
+    } else if (mobile != null) {
+      destination.add(TextSpan(text: mobile, style: highlight));
+    } else if (email != null) {
+      destination.add(TextSpan(text: email, style: highlight));
+    } else {
+      destination.add(
+          const TextSpan(text: 'your registered mobile number and email'));
+    }
+
+    return [
+      const TextSpan(text: "We've sent a generated password to "),
+      ...destination,
+      const TextSpan(
+          text: '. Enter it below, then set a new password of your choice.'),
+    ];
+  }
+
   /// Handle change password submission for web
   Future<void> _handleChangePasswordSubmit() async {
     final forpass = ref.read(changePasswordProvider);
@@ -2113,8 +2158,9 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                             // Only the forgot-password flow sees it — the forced
                             // expiry flow asks for the user's own Old Password.
                             if (!_isPasswordExpired) ...[
-                              Text(
-                                "We've sent a generated password to your registered mobile number and email. Enter it below, then set a new password of your choice.",
+                              Text.rich(
+                                TextSpan(
+                                    children: _generatedPasswordSentSpans()),
                                 style: MyntWebTextStyles.para(
                                   context,
                                   fontWeight: MyntFonts.regular,
@@ -2390,7 +2436,7 @@ class _LoginScreenWebState extends ConsumerState<LoginScreenWeb> {
                             // field reads like the two around it.
                             if (_showNewPwdMaxLengthError)
                               Text(
-                                "Password must be exactly 12 characters",
+                                "Maximum 12 characters allowed",
                                 style: MyntWebTextStyles.para(
                                   context,
                                   color: resolveThemeColor(context,

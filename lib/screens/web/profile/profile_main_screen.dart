@@ -580,7 +580,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
 
   /// Triggered by the New Password field's custom inputFormatter when the
   /// user attempts to type/paste beyond 12 chars. Shows the inline red
-  /// "Password must be exactly 12 characters" error briefly, then auto-hides
+  /// "Maximum 12 characters allowed" error briefly, then auto-hides
   /// after 2 seconds so the message disappears once the user stops trying.
   // Only a RULES failure goes in the bubble. An empty field gets the same
   // inline red message as every other field on this screen.
@@ -1040,7 +1040,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
             Padding(
               padding: const EdgeInsets.only(top: 5),
               child: Text(
-                "Password must be exactly 12 characters",
+                "Maximum 12 characters allowed",
                 style: MyntWebTextStyles.caption(context,
                     color: resolveThemeColor(context,
                         dark: MyntColors.lossDark,
