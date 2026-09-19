@@ -232,12 +232,13 @@
   // error, or an exchange missing from the response) we use the SAME
   // values the web mobile chart hardcodes in feedFactory.js:224 — no
   // day mask, three buckets. Keeps mobile and web identical when both
-  // are running without Strapi.
+  // are running without Strapi. BCD shares the CDS currency window and
+  // the equity close is 15:40 — kept in step with web/tv/src/datafeed.js.
   function resolveSession(sessions, exchange) {
     if (sessions && sessions[exchange]) return sessions[exchange];
     if (exchange === 'MCX') return '0900-2330';
-    if (exchange === 'CDS') return '0900-1700';
-    return '0915-1530';
+    if (exchange === 'CDS' || exchange === 'BCD') return '0900-1700';
+    return '0915-1540';
   }
 
   function createDatafeed(user, usession, containerId, sessions) {
