@@ -198,6 +198,11 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
       addNewItem();
     });
     super.initState();
+    // Autofill the UPI ID from view_upi_id
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(transcationProvider).fetchViewUpiId();
+    });
   }
 
   void addNewItem() {
@@ -433,6 +438,19 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                     selectedChip = value;
                                   });
                                   ipo.chngCategoryType(value);
+                                  // Cut-off isn't offered for every category,
+                                  // so clear it before the checkbox is hidden
+                                  // or the bid price stays locked.
+                                  if (!isCutOffAllowed) {
+                                    for (final bid in addIpo) {
+                                      if (!bid.isChecked) continue;
+                                      if (isSME) {
+                                        ipo.smecutoffprice(bid, ipoData);
+                                      } else {
+                                        ipo.cutoffprice(bid, ipoData);
+                                      }
+                                    }
+                                  }
                                   await ipo.categoryOnChange(
                                     addIpo,
                                     ipo.maxUPIAmt,
