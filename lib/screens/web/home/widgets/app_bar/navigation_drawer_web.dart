@@ -222,28 +222,26 @@ class NavigationDrawerWeb extends StatelessWidget {
                       onTap: onOptionFlashTap!,
                     ),
                   if ((showScalper ?? (onScalperTap != null)) && onScalperTap != null)
-                    _buildDrawerItemWithBadge(
+                    _buildDrawerItem(
                       context: context,
                       title: 'Scalper',
                       icon: Icons.speed,
                       screenName: 'scalper',
-                      badge: 'Beta',
                       onTap: onScalperTap!,
                     ),
                   if ((showStrategyBuilder ?? (onStrategyBuilderTap != null)) && onStrategyBuilderTap != null)
-                    _buildDrawerItemWithBadge(
+                    _buildDrawerItem(
                       context: context,
                       title: 'Strategy Builder',
                       icon: Icons.show_chart,
                       screenName: 'strategyBuilder',
-                      badge: 'NEW',
                       onTap: onStrategyBuilderTap!,
                     ),
                   if ((showInstaOptions ?? (onInstaOptionsTap != null)) && onInstaOptionsTap != null)
-                    _buildDrawerItemWithBadge(
+                    _buildDrawerItem(
                       context: context,
-                      title: 'InstaOptions Analytics',
-                      icon: Icons.candlestick_chart,
+                      title: 'InstaOptions',
+                      icon: shadcn.LucideIcons.activity,
                       screenName: 'instaOptions',
                       badge: 'NEW',
                       onTap: onInstaOptionsTap!,
@@ -386,6 +384,7 @@ class NavigationDrawerWeb extends StatelessWidget {
     required IconData icon,
     required String screenName,
     required VoidCallback onTap,
+    String? badge,
   }) {
     final isActive = isScreenActive?.call(screenName) ?? false;
 
@@ -421,6 +420,20 @@ class NavigationDrawerWeb extends StatelessWidget {
                     fontWeight: isActive ? MyntFonts.bold : MyntFonts.medium,
                   ),
                 ),
+                if (badge != null) ...[
+                  const SizedBox(width: 4),
+                  Transform.translate(
+                    offset: const Offset(0, -6),
+                    child: Text(
+                      badge,
+                      style: MyntWebTextStyles.caption(
+                        context,
+                        color: Colors.red,
+                        fontWeight: MyntFonts.semiBold,
+                      ).copyWith(fontSize: 10),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -429,65 +442,4 @@ class NavigationDrawerWeb extends StatelessWidget {
     );
   }
 
-  Widget _buildDrawerItemWithBadge({
-    required BuildContext context,
-    required String title,
-    required IconData icon,
-    required String screenName,
-    required String badge,
-    required VoidCallback onTap,
-  }) {
-    final isActive = isScreenActive?.call(screenName) ?? false;
-
-    final activeColor = resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final textColor = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark,
-        light: MyntColors.textPrimary);
-    final hoverColor = resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withValues(alpha: 0.08);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      child: Material(
-        color: isActive ? hoverColor : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  color: isActive ? activeColor : textColor,
-                  size: 20,
-                ),
-                const SizedBox(width: 14),
-                Text(
-                  title,
-                  style: MyntWebTextStyles.body(
-                    context,
-                    color: isActive ? activeColor : textColor,
-                    fontWeight: isActive ? MyntFonts.bold : MyntFonts.medium,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Transform.translate(
-                  offset: const Offset(0, -6),
-                  child: Text(
-                    badge,
-                    style: MyntWebTextStyles.caption(
-                      context,
-                      color: Colors.red,
-                      fontWeight: MyntFonts.semiBold,
-                    ).copyWith(fontSize: 10),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

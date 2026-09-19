@@ -509,6 +509,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "instaOptions") {
+            _handleInstaOptionsTap();
           } else if (routeName == "charts") {
             _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
@@ -594,6 +596,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "instaOptions") {
+            _handleInstaOptionsTap();
           } else if (routeName == "charts") {
             _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
@@ -1795,6 +1799,14 @@ class _CustomizableSplitHomeScreenState
     final clientId = userDetail?.actid ?? clientDetail?.actid ?? pref.clientId ?? '';
     final userName = userDetail?.uname ?? '';
 
+    // The drawer floats above the TradingView chart iframes, which sit in the
+    // DOM on top of the Flutter canvas and would otherwise swallow the hover /
+    // clicks meant for the menu. Same guard the app-bar Options dropdown uses;
+    // held for as long as the drawer is open because MouseRegion.onExit does
+    // not fire when the drawer is dismissed with the pointer still inside it.
+    ChartIframeGuard.acquire();
+    _disableAllChartIframes();
+
     shadcn.openDrawer(
       context: context,
       position: shadcn.OverlayPosition.left,
@@ -1804,7 +1816,25 @@ class _CustomizableSplitHomeScreenState
       draggable: true,
       showDragHandle: false,
       builder: (drawerContext) {
-        return SizedBox(
+        return PointerInterceptor(
+          child: MouseRegion(
+            cursor: SystemMouseCursors.basic,
+            onEnter: (_) {
+              ChartIframeGuard.acquire();
+              _disableAllChartIframes();
+            },
+            onHover: (_) {
+              _disableAllChartIframes();
+            },
+            onExit: (_) {
+              ChartIframeGuard.release();
+              _enableAllChartIframes();
+            },
+            child: Listener(
+              onPointerMove: (_) {
+                _disableAllChartIframes();
+              },
+              child: SizedBox(
           width: 300,
           child: NavigationDrawerWeb(
           isDarkMode: theme.isDarkMode,
@@ -1912,9 +1942,15 @@ class _CustomizableSplitHomeScreenState
           showOrderflow: false,
           showCharts: false,
         ),
+              ),
+            ),
+          ),
         );
       },
-    );
+    ).whenComplete(() {
+      ChartIframeGuard.release();
+      _enableAllChartIframes();
+    });
   }
 
   /// Build app bar for right side only - with responsive navigation
@@ -2892,7 +2928,7 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
-                      // InstaOptions Analytics
+                      // InstaOptions
                       shadcn.MenuButton(
                         onPressed: (context) {
                           _handleInstaOptionsTap();
@@ -2912,12 +2948,24 @@ class _CustomizableSplitHomeScreenState
                               ),
                               const SizedBox(width: 14),
                               Text(
-                                'InstaOptions Analytics',
+                                'InstaOptions',
                                 style: MyntWebTextStyles.body(
                                   context,
                                   fontWeight: MyntFonts.medium,
                                   darkColor: MyntColors.textPrimaryDark,
                                   lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Transform.translate(
+                                offset: const Offset(0, -6),
+                                child: Text(
+                                  'NEW',
+                                  style: MyntWebTextStyles.caption(
+                                    context,
+                                    color: Colors.red,
+                                    fontWeight: MyntFonts.semiBold,
+                                  ).copyWith(fontSize: 10),
                                 ),
                               ),
                             ],
@@ -3686,7 +3734,7 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.closureDetails:
         return 'Closure';
       case ScreenType.instaOptions:
-        return 'InstaOptions Analytics';
+        return 'InstaOptions';
       case ScreenType.scanner:
         return 'Scanner';
       case ScreenType.orderflow:

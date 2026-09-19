@@ -1125,6 +1125,21 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       //     },
       //   },
       {
+        'title': 'InstaOptions',
+        'subtitle': 'OI • PCR • Buildup',
+        'description':
+            'Live open-interest analytics — option chain, PCR, buildup & strategy scans in one place.',
+        'accentColor': const Color(0xFF6366F1),
+        'badge': null,
+        'icon': shadcn.LucideIcons.activity,
+        'isIcon': true,
+        'onTap': () {
+          if (WebNavigationHelper.isAvailable) {
+            WebNavigationHelper.navigateTo('instaOptions');
+          }
+        },
+      },
+      {
         'title': 'WebHook Trading',
         'subtitle': 'TradingView • Auto Alert',
         'description':

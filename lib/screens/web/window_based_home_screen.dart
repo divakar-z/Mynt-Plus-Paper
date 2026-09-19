@@ -649,7 +649,7 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
       case ScreenType.closureDetails:
         return 'Closure';
       case ScreenType.instaOptions:
-        return 'InstaOptions Analytics';
+        return 'InstaOptions';
       case ScreenType.scanner:
         return 'Scanner';
       case ScreenType.orderflow:
