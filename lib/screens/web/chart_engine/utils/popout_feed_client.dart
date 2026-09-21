@@ -33,7 +33,7 @@ class PopoutFeedClient {
 
   static const String _mintUrl =
       'https://sess.mynt.in/generateSocketSession';
-  static const String _wsUrl = 'wss://ws.zebull.in/NorenWS/';
+  static const String _wsUrl = 'wss://ws.mynt.in/NorenWS/';
 
   final Set<String> _subs = <String>{}; // "EXCH|TOKEN"
   html.WebSocket? _ws;
