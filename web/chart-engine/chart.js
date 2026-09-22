@@ -1117,6 +1117,32 @@ class Chart {
     if (packet.o != null) this.tickState.dayOpen = +packet.o;
     if (packet.h != null) this.tickState.dayHigh = +packet.h;
     if (packet.l != null) this.tickState.dayLow = +packet.l;
+    // Previous-day close (`c` on the touchline) and the broker's day change
+    // (`chng` / `pc`, the values the watchlist shows) — drive the idle header,
+    // which reads "LTP  ±change (±%)" for the DAY while the crosshair is off
+    // the candles. See _dayQuote(). Redraw on change: after hours no candle
+    // update follows, so nothing else would repaint the header.
+    const _num = (x) => (x != null && x !== '' && isFinite(+x)) ? +x : null;
+    const prevClose = _num(packet.c);
+    const dayChg = _num(packet.chng);
+    const dayChgPct = _num(packet.pc);
+    let dayQuoteChanged = false;
+    if (prevClose != null && prevClose > 0 && prevClose !== this.tickState.prevClose) {
+      this.tickState.prevClose = prevClose; dayQuoteChanged = true;
+    }
+    if (dayChg != null && dayChg !== this.tickState.dayChg) {
+      this.tickState.dayChg = dayChg; dayQuoteChanged = true;
+    }
+    if (dayChgPct != null && dayChgPct !== this.tickState.dayChgPct) {
+      this.tickState.dayChgPct = dayChgPct; dayQuoteChanged = true;
+    }
+    // The idle header also shows LTP. Outside the session window this method
+    // returns before any candle update (so nothing else repaints), which
+    // would leave a post-close LTP change stale in the header.
+    if (lp != null && lp !== this._dayQuoteDrawnLp) {
+      this._dayQuoteDrawnLp = lp; dayQuoteChanged = true;
+    }
+    if (dayQuoteChanged) this.scheduleRedraw();
     const bid = packet.bp1 != null ? +packet.bp1 : null;
     const ask = packet.sp1 != null ? +packet.sp1 : null;
     let bidAskChanged = false;
@@ -2496,7 +2522,15 @@ class Chart {
       }
       const rect = wrap.getBoundingClientRect();
       const x = e.clientX - rect.left, y = e.clientY - rect.top;
-      const inside = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height;
+      // The box test alone is not enough: sibling UI laid over the chart — the
+      // left draw rail (`.draw-rail`) — sits inside wrap's rect but is NOT part
+      // of wrap. Moving chart → rail fires wrap's mouseleave (hover cleared),
+      // but this window listener then saw the rail as "inside" and turned the
+      // crosshair back on at the rail's x; leaving the frame from there sends no
+      // further event, so the crosshair (and the header's candle-OHLC mode)
+      // stuck until the pointer came back. Require the pointer to be over wrap.
+      const inside = x >= 0 && y >= 0 && x <= rect.width && y <= rect.height &&
+          (!e.target || !e.target.nodeType || wrap.contains(e.target));
       if (!this._dragMode) {
         if (inside) {
           // Sub-pane divider hover — ns-resize cursor when within 8px of the
@@ -3828,6 +3862,25 @@ class Chart {
     return (x - (plot.left + padLeft)) + padLeft + 4;
   }
 
+  // Day quote for the idle header: { lp, chg, pct } or null. Computed from the
+  // previous close when known so the change always agrees with the LTP shown
+  // beside it (the feed's chng/pc can arrive in a different packet than lp);
+  // falls back to the broker's chng/pc as-is.
+  _dayQuote() {
+    const ts = this.tickState || {};
+    const last = this.candles.length ? this.candles[this.candles.length - 1] : null;
+    const lp = ts.lp != null && isFinite(ts.lp) ? ts.lp : (last ? last.c : null);
+    if (lp == null) return null;
+    if (ts.prevClose > 0) {
+      const chg = lp - ts.prevClose;
+      return { lp, chg, pct: (chg / ts.prevClose) * 100 };
+    }
+    if (ts.dayChg != null && ts.dayChgPct != null) {
+      return { lp, chg: ts.dayChg, pct: ts.dayChgPct };
+    }
+    return null;
+  }
+
   _formatTimeframeLabel(m) {
     if (m % 1440 === 0) return (m / 1440) + 'D';
     if (m % 60 === 0) return (m / 60) + 'h';
@@ -3853,19 +3906,35 @@ class Chart {
     let c, dir, segs;
     if (haveCandles) {
       idx = this.candles.length - 1;
+      let hovering = false;
       if (this.hover.inside && this.hover.x != null) {
         const hi = this._candleAtX(this.hover.x);
-        if (hi >= 0) idx = hi;
+        if (hi >= 0) { idx = hi; hovering = true; }
       }
-      c = this.candles[idx];
-      dir = c.c >= c.o ? this.palette.bull : this.palette.bear;
-      segs = [
-        ['O', this._fmtPrice(c.o), dir],
-        ['H', this._fmtPrice(c.h), dir],
-        ['L', this._fmtPrice(c.l), dir],
-        ['C', this._fmtPrice(c.c), dir],
-        ['V', this._fmtVol(c.v), this.palette.ohlcValue],
-      ];
+      // Idle (crosshair not on a candle) → broker-style day quote:
+      // "LTP  ±change (±%)" for the session, not the last candle's OHLC.
+      // Hovering a candle keeps that candle's O/H/L/C/V. No previous close /
+      // day change known yet (first ticks not in) → fall back to OHLC.
+      const dq = hovering ? null : this._dayQuote();
+      if (dq) {
+        const col = dq.chg > 0 ? this.palette.bull
+            : dq.chg < 0 ? this.palette.bear : this.palette.ohlcValue;
+        const sign = dq.chg > 0 ? '+' : '';
+        segs = [
+          ['', this._fmtPrice(dq.lp), col],
+          ['', `${sign}${this._fmtPrice(dq.chg)} (${sign}${dq.pct.toFixed(2)}%)`, col],
+        ];
+      } else {
+        c = this.candles[idx];
+        dir = c.c >= c.o ? this.palette.bull : this.palette.bear;
+        segs = [
+          ['O', this._fmtPrice(c.o), dir],
+          ['H', this._fmtPrice(c.h), dir],
+          ['L', this._fmtPrice(c.l), dir],
+          ['C', this._fmtPrice(c.c), dir],
+          ['V', this._fmtVol(c.v), this.palette.ohlcValue],
+        ];
+      }
     }
 
     if (!chipText && !haveCandles) return;
@@ -3889,7 +3958,7 @@ class Chart {
       this.ctx.font = '600 11px Geist, sans-serif';
       const vw = this.ctx.measureText(value).width;
       ohlcLaid.push({ label, value, color, lw, vw });
-      ohlcTotalW += lw + 5 + vw + 14;
+      ohlcTotalW += lw + (lw ? 5 : 0) + vw + 14;
     }
     if (ohlcLaid.length) ohlcTotalW -= 14;  // trailing gap shouldn't pad bg
     const ohlcBgPadX = 6;
@@ -3918,7 +3987,7 @@ class Chart {
       this.ctx.font = '500 11px Geist, sans-serif';
       this.ctx.fillStyle = this._withAlpha(this.palette.ohlcLabel, 0.95);
       this.ctx.fillText(seg.label, x, ohlcRowY);
-      x += seg.lw + 5;
+      x += seg.lw + (seg.lw ? 5 : 0);
       this.ctx.font = '600 11px Geist, sans-serif';
       this.ctx.fillStyle = seg.color;
       this.ctx.fillText(seg.value, x, ohlcRowY);
