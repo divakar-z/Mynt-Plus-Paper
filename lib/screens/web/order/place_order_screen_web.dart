@@ -348,6 +348,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   // Stock exchange selection variables
   List<Equls> _stockExchangesList = [];
+  /// Token the NSE/BSE pair was fetched for. Captured before the user can tap
+  /// the toggle, because tapping it rewrites widget.scripInfo.token.
+  String _exchangeListToken = "";
   Equls stockExchangeSelected = Equls();
   OrderScreenArgs selectedStockSubscribe = OrderScreenArgs(exchange:"",token:"",tSym:"",prd:"",transType:true,perChange:"",lotSize:"",ltp:"",isExit:false,orderTpye:"",isModify:false,raw:{},holdQty:"");
 
@@ -390,6 +393,18 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   List priceTypes = ["Limit", "Market", "SL Limit", "SL MKT"];
   List<String> validityTypes = ["DAY", "IOC", "EOS"];
+
+  /// Whether the NSE/BSE toggle is offered instead of a plain exchange label.
+  /// It is not offered on an exit: that order is closing an existing position
+  /// on its own exchange, and switching it would leave the position open and
+  /// place a fresh opposite one on the other exchange instead. (TC_87)
+  bool get _showExchangeToggle =>
+      _isStock &&
+      !widget.orderArg.isExit &&
+      _stockExchangesList.isNotEmpty &&
+      (orderType == "Delivery" ||
+          orderType == "Intraday" ||
+          orderType == "CO - BO");
 
   /// True once the user has tapped a validity chip, so the exchange toggle
   /// stops overriding their choice.
@@ -670,7 +685,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     ref.read(ordInputProvider).clearTextField();
 
     ref.read(fundProvider).fetchFunds(context);
-    _stockExchangesList = ref.read(marketWatchProvider).equls ?? [];
+    _exchangeListToken = widget.scripInfo.token ?? "";
+    _stockExchangesList =
+        ref.read(marketWatchProvider).orderExchangeList(_exchangeListToken);
 
     userOrderPreference = ref.read(authProvider).savedOrderPreference;
     if (userOrderPreference.isNotEmpty && !widget.orderArg.isModify) {
@@ -712,6 +729,18 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       selectedStockSubscribe.tSym = widget.orderArg.tSym;
       selectedStockSubscribe.ltp = widget.orderArg.ltp ?? "";
       selectedStockSubscribe.perChange = widget.orderArg.perChange ?? "";
+
+      // Positions, Holdings and the order book open this screen without ever
+      // fetching linked scrips, so the toggle used to appear only when a
+      // Watchlist tap happened to have left this scrip in the provider. Fetch
+      // the pair here so it no longer depends on what was opened before.
+      // (TC_87)
+      if (_stockExchangesList.isEmpty && !widget.orderArg.isExit) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          ref.read(marketWatchProvider).fetchOrderExchangeList(
+              _exchangeListToken, widget.scripInfo.exch ?? "");
+        });
+      }
 
       // Subscribe to websocket for initial stock exchange
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1225,10 +1254,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
           int frezQtyOrderSliceMaxLimit =
               ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
 
-          // Watch equls so NSE/BSE toggle updates when linked scrips load
-          final latestEquls = ref.watch(marketWatchProvider).equls ?? [];
-          if (_isStock && _stockExchangesList.isEmpty && latestEquls.isNotEmpty &&
-              latestEquls.any((eq) => eq.token == widget.scripInfo.token)) {
+          // Watch the pair so the NSE/BSE toggle appears when it arrives
+          final latestEquls = ref
+              .watch(marketWatchProvider)
+              .orderExchangeList(_exchangeListToken);
+          if (_isStock && _stockExchangesList.isEmpty && latestEquls.isNotEmpty) {
             _stockExchangesList = latestEquls;
             final matchingExchange = _stockExchangesList.firstWhere(
               (exchange) => exchange.exch == widget.scripInfo.exch,
@@ -1448,7 +1478,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                 //     maxLines: 1),
                                                 // CustomExchBadge(
                                                 //     exch: " ${widget.scripInfo.exch}"),
-                                                if (_isStock && _stockExchangesList.isNotEmpty && (orderType == "Delivery" || orderType == "Intraday" || orderType == "CO - BO")) ...[
+                                                if (_showExchangeToggle) ...[
                                               const SizedBox(width: 4),
                                               SizedBox(
                                                 width: 100,
@@ -1522,14 +1552,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                             ),
                                             Row(
                                               children: [
-                                                if (!(_isStock &&
-                                                    _stockExchangesList
-                                                        .isNotEmpty &&
-                                                    (orderType == "Delivery" ||
-                                                        orderType ==
-                                                            "Intraday" ||
-                                                        orderType ==
-                                                            "CO - BO")))
+                                                if (!_showExchangeToggle)
                                                   Padding(
                                                     padding:
                                                         const EdgeInsets.only(

@@ -67,7 +67,7 @@ Widget _labelWithInfo(
 void showMarginInfoDialog(BuildContext context, bool isDark) {
   final provider = ProviderScope.containerOf(context, listen: false)
       .read(strategyBuilderProvider);
-  // Fire the SpanCalc calculation; the dialog watches the provider for results.
+  // Fire the margin calculation; the dialog watches the provider for results.
   provider.calculateMarginBenefit();
 
   final titleColor = isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack;
@@ -146,8 +146,20 @@ void showMarginInfoDialog(BuildContext context, bool isDark) {
           const Divider(height: 10),
           valueRow('As a single strategy', money(r.combined), strong: false),
           // const SizedBox(height: 10),
-          valueRow('Margin benefit', money(r.benefit),
-              strong: false, valueColor: profitColor),
+          // A benefit is what the legs save by offsetting each other, so it
+          // only means anything once there is more than one leg. On a single
+          // leg the figure is always zero, which read like a failure.
+          if (r.legs.length > 1)
+            valueRow('Margin benefit', money(r.benefit),
+                strong: false, valueColor: profitColor)
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 5, 0, 5),
+              child: Text(
+                'Margin benefit applies to strategies with more than one leg.',
+                style: MyntWebTextStyles.para(context, color: bodyColor),
+              ),
+            ),
         ],
       );
     },

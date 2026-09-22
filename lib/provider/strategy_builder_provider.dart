@@ -422,6 +422,57 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
   String? _marginBenefitError;
   String? get marginBenefitError => _marginBenefitError;
 
+  /// Funds required for [items] treated as one basket, from the SAME API that
+  /// feeds the MARGIN figure in the header (basketMargin, i.e. marginused
+  /// minus marginusedprev).
+  ///
+  /// This popup used to call the SPAN calculator instead, which reports only
+  /// SPAN plus exposure. A bought leg has neither — you pay premium — so it
+  /// came back as zero while the header showed that leg's premium, and the
+  /// popup never added up to the number it is supposed to explain. Reading
+  /// both from one API keeps every line reconciled.
+  Future<double?> _basketMarginFor(List<StrategyBasketItem> items) async {
+    if (items.isEmpty) return null;
+
+    // First leg is the main order, the rest ride along as the basket.
+    final basketList = <Map<String, dynamic>>[];
+    for (int i = 1; i < items.length; i++) {
+      final item = items[i];
+      final qty = item.ordlot * item.lotSize * _lotMultiplier;
+      basketList.add({
+        "exch": item.exch,
+        "tsym": item.tsym,
+        "qty": qty.toString(),
+        "prc": item.entryPrice.toString(),
+        "prd": "M", // NRML - matches order placement
+        "trantype": item.buySell == 'BUY' ? 'B' : 'S',
+        "prctyp": "MKT",
+        "trgprc": "0",
+      });
+    }
+
+    final first = items.first;
+    final firstQty = first.ordlot * first.lotSize * _lotMultiplier;
+    final input = OrderMarginInput(
+      exch: first.exch,
+      tsym: first.tsym,
+      qty: firstQty.toString(),
+      prc: first.entryPrice.toString(),
+      prd: 'M', // NRML - matches order placement
+      trantype: first.buySell == 'BUY' ? 'B' : 'S',
+      prctyp: 'MKT',
+      blprc: '',
+      bpprc: '',
+      trgprc: '0',
+      rorgqty: '',
+      rorgprc: '',
+    );
+
+    final response = await api.getBasketMargin(input, basketList);
+    if (response.stat != 'Ok') return null;
+    return response.basketMargin;
+  }
+
   Future<void> calculateMarginBenefit() async {
     final selectedItems = _basket.where((item) => item.checkbox).toList();
     if (selectedItems.isEmpty) {
@@ -438,46 +489,33 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     notifyListeners();
 
     try {
-      final positions = <SpanCalcPositionItem>[];
       final legs = <StrategyMarginLeg>[];
+      final symbol = _extractUnderlyingSymbol();
       double sumIndividual = 0;
 
+      // Each leg on its own.
       for (final item in selectedItems) {
-        // SpanCalc needs symname/instname (not stored on the basket item), so
-        // fetch a quick quote per leg — same as the mobile calculator.
-        final quote = await api.getScripQuote(item.token, item.exch);
-        final qty = item.ordlot * item.lotSize * _lotMultiplier;
-        final signedQty = (item.buySell == 'SELL' ? -qty : qty).toString();
-
-        final pos = SpanCalcPositionItem(
-          prd: 'M',
-          exch: item.exch,
-          tsym: item.tsym,
-          symname: quote.symname ?? '',
-          instname: quote.instname ?? '',
-          exd: quote.exd ?? item.expdate,
-          netqty: signedQty,
-          optt: quote.optt ?? item.optt,
-          strprc: quote.strprc ?? item.strprc,
-        );
-        positions.add(pos);
-
-        // Individual margin for this leg alone = span + expo.
-        final indResp = await api.spanCalc(actid: 'DEMOIT', positions: [pos]);
-        final indMargin = indResp.spanValue + indResp.expoValue;
-        sumIndividual += indMargin;
+        final legMargin = await _basketMarginFor([item]);
+        if (legMargin == null) {
+          _marginBenefitError = 'Could not calculate margin. Please try again.';
+          return;
+        }
+        sumIndividual += legMargin;
 
         final strike =
             double.tryParse(item.strprc)?.toStringAsFixed(0) ?? item.strprc;
-        final legName =
-            '${(quote.symname ?? '').trim()} $strike ${item.optt}'.trim();
-        legs.add(StrategyMarginLeg(legName, indMargin));
+        legs.add(
+            StrategyMarginLeg('$symbol $strike ${item.optt}'.trim(), legMargin));
       }
 
-      // Combined margin for all legs together = span + expo.
-      final combinedResp =
-          await api.spanCalc(actid: 'DEMOIT', positions: positions);
-      final combined = combinedResp.spanValue + combinedResp.expoValue;
+      // All legs together — this is the header's own figure, so the popup's
+      // "As a single strategy" line and the header always agree.
+      final combined = await _basketMarginFor(selectedItems);
+      if (combined == null) {
+        _marginBenefitError = 'Could not calculate margin. Please try again.';
+        return;
+      }
+
       final benefit = sumIndividual - combined;
 
       _marginBenefitResult = StrategyMarginBenefit(
@@ -494,6 +532,82 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
       notifyListeners();
     }
   }
+
+  // Retired 2026-09-22 — SPAN-calculator version. Kept for rollback: it is
+  // correct for sold legs but reports zero for bought legs, so it could not
+  // reconcile with the MARGIN figure in the header.
+  // Future<void> calculateMarginBenefit() async {
+  //   final selectedItems = _basket.where((item) => item.checkbox).toList();
+  //   if (selectedItems.isEmpty) {
+  //     _isCalcMarginBenefit = false;
+  //     _marginBenefitResult = null;
+  //     _marginBenefitError = 'Add at least one leg to see the margin benefit.';
+  //     notifyListeners();
+  //     return;
+  //   }
+  //
+  //   _isCalcMarginBenefit = true;
+  //   _marginBenefitResult = null;
+  //   _marginBenefitError = null;
+  //   notifyListeners();
+  //
+  //   try {
+  //     final positions = <SpanCalcPositionItem>[];
+  //     final legs = <StrategyMarginLeg>[];
+  //     double sumIndividual = 0;
+  //
+  //     for (final item in selectedItems) {
+  //       // SpanCalc needs symname/instname (not stored on the basket item), so
+  //       // fetch a quick quote per leg — same as the mobile calculator.
+  //       final quote = await api.getScripQuote(item.token, item.exch);
+  //       final qty = item.ordlot * item.lotSize * _lotMultiplier;
+  //       final signedQty = (item.buySell == 'SELL' ? -qty : qty).toString();
+  //
+  //       final pos = SpanCalcPositionItem(
+  //         prd: 'M',
+  //         exch: item.exch,
+  //         tsym: item.tsym,
+  //         symname: quote.symname ?? '',
+  //         instname: quote.instname ?? '',
+  //         exd: quote.exd ?? item.expdate,
+  //         netqty: signedQty,
+  //         optt: quote.optt ?? item.optt,
+  //         strprc: quote.strprc ?? item.strprc,
+  //       );
+  //       positions.add(pos);
+  //
+  //       // Individual margin for this leg alone = span + expo.
+  //       final indResp = await api.spanCalc(actid: 'DEMOIT', positions: [pos]);
+  //       final indMargin = indResp.spanValue + indResp.expoValue;
+  //       sumIndividual += indMargin;
+  //
+  //       final strike =
+  //           double.tryParse(item.strprc)?.toStringAsFixed(0) ?? item.strprc;
+  //       final legName =
+  //           '${(quote.symname ?? '').trim()} $strike ${item.optt}'.trim();
+  //       legs.add(StrategyMarginLeg(legName, indMargin));
+  //     }
+  //
+  //     // Combined margin for all legs together = span + expo.
+  //     final combinedResp =
+  //         await api.spanCalc(actid: 'DEMOIT', positions: positions);
+  //     final combined = combinedResp.spanValue + combinedResp.expoValue;
+  //     final benefit = sumIndividual - combined;
+  //
+  //     _marginBenefitResult = StrategyMarginBenefit(
+  //       legs: legs,
+  //       sumIndividual: sumIndividual,
+  //       combined: combined,
+  //       benefit: benefit > 0 ? benefit : 0,
+  //     );
+  //   } catch (e) {
+  //     _marginBenefitError = 'Could not calculate margin. Please try again.';
+  //     log('[MarginBenefit] error: $e');
+  //   } finally {
+  //     _isCalcMarginBenefit = false;
+  //     notifyListeners();
+  //   }
+  // }
 
   // Custom strategies (API-based leg builder)
   final List<PredefinedStrategy> _customStrategies = [];

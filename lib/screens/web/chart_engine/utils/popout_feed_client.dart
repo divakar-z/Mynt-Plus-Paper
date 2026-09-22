@@ -174,6 +174,10 @@ class PopoutFeedClient {
     if (frame['o'] != null) packet['o'] = _num(frame['o']);
     if (frame['h'] != null) packet['h'] = _num(frame['h']);
     if (frame['l'] != null) packet['l'] = _num(frame['l']);
+    // Previous close + day change / % for the idle chart header.
+    if (frame['c'] != null) packet['c'] = _num(frame['c']);
+    if (frame['chng'] != null) packet['chng'] = _num(frame['chng']);
+    if (frame['pc'] != null) packet['pc'] = _num(frame['pc']);
     final exch = frame['exch'] ?? frame['e'];
     if (exch != null) packet['exch'] = exch;
     _lastTickAtMs = DateTime.now().millisecondsSinceEpoch;

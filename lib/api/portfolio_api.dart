@@ -385,8 +385,14 @@ mixin PortfolioAPI on ApiCore {
 
 // Delete position group name
 
+  // The same contract can be held under two products (MIS and NRML), which
+  // are two separate rows in a group but share one tsym. Without the product
+  // the backend matched on tsym alone and removed both rows, so the product
+  // is sent to target the one the user actually removed. It goes as
+  // `s_prdt_ali` (MIS / NRML), the same field and the same values the add
+  // call stored on the row, not the raw `prd` code.
   Future<CreateGroupName> deletePositionGrpSym(
-      String grpName, String tsym) async {
+      String grpName, String tsym, String prdAli) async {
     try {
       final uri = Uri.parse(apiLinks.delpositiongrpSym);
       final res = await apiClient.post(uri,
@@ -394,7 +400,8 @@ mixin PortfolioAPI on ApiCore {
           body: jsonEncode({
             "clientid": "${prefs.clientId}",
             "posname": grpName,
-            "tsym": UrlUtils.encodeParameter(tsym)
+            "tsym": UrlUtils.encodeParameter(tsym),
+            "s_prdt_ali": prdAli
           }));
 
       // log("Delete Position Group Symbol => ${res.body}");

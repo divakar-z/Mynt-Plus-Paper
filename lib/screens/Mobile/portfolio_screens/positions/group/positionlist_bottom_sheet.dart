@@ -105,7 +105,7 @@ if (!positionBook.postionBookModel![index].isExitSelection!) {
    await positionBook.fetchAddGroupSymbol(
                                       grpName, context, data);
 } else {
-  await positionBook. fetchDeleteGroupSymbol(grpName,context,"${positionBook.postionBookModel![index].tsym}");
+  await positionBook. fetchDeleteGroupSymbol(grpName,context,"${positionBook.postionBookModel![index].tsym}","${positionBook.postionBookModel![index].sPrdtAli ?? ''}");
 }
                                  
                                 },

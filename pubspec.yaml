@@ -101,6 +101,7 @@ dependencies:
   package_info_plus: ^9.0.0
   data_table_2: ^2.7.2
   syncfusion_flutter_datagrid: ^27.1.48
+  syncfusion_flutter_xlsio: ^27.1.48
   pointer_interceptor: ^0.10.1
   image_picker: ^1.1.2
   image: ^4.1.7

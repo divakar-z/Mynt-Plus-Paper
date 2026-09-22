@@ -210,25 +210,36 @@ mixin SupportClientApi on ApiCore, UserProfileAPI {
 
   // --- Endpoints -----------------------------------------------------------
 
-  /// Help topics a client may raise under.
-  ///
-  /// Needs the access token like everything else, despite being reference data.
-  Future<List<SupportTopic>> fetchSupportTopics() async {
-    final data = await getData('/topics');
-    if (data is! List) return const [];
-    return data
-        .whereType<Map>()
-        .map((e) => SupportTopic.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
-  }
+  // Retired: the client no longer chooses a help topic, so there is nothing to
+  // show from `GET /topics`. The server files every ticket raised from the app
+  // under General, and `GET /tickets/form` answers with General's own fields.
+  // Kept here rather than deleted — re-exposing a topic picker needs it back
+  // exactly as it was.
+  //
+  // /// Help topics a client may raise under.
+  // ///
+  // /// Needs the access token like everything else, despite being reference data.
+  // Future<List<SupportTopic>> fetchSupportTopics() async {
+  //   final data = await getData('/topics');
+  //   if (data is! List) return const [];
+  //   return data
+  //       .whereType<Map>()
+  //       .map((e) => SupportTopic.fromJson(Map<String, dynamic>.from(e)))
+  //       .toList();
+  // }
 
-  /// The fields to render for [topicId].
+  /// The fields to render on "Raise a Ticket".
   ///
-  /// `topic_id` is required — omitting it is a `422` — and a topic outside the
-  /// public set is a `404`. Never assume a fixed set of fields: help topics
-  /// change in the admin panel without a release.
-  Future<List<SupportTicketField>> fetchTicketForm(int topicId) async {
-    final data = await getData('/tickets/form', {'topic_id': topicId});
+  /// **No parameters.** The server files every ticket raised from the app under
+  /// help topic General with product General and answers with General's own
+  /// fields; a `topic_id` is ignored if sent. The client's only choice is the
+  /// sub-issue — the [subIssueFieldName] field, whose `choices` are already
+  /// narrowed to General's sub-issues.
+  ///
+  /// Never cached and never hard-coded: support edits the sub-issue list in the
+  /// admin panel with no release, so it is read fresh every time the form opens.
+  Future<List<SupportTicketField>> fetchTicketForm() async {
+    final data = await getData('/tickets/form');
     final fields = data is Map ? data['fields'] : null;
     if (fields is! List) return const [];
     return fields
@@ -243,21 +254,24 @@ mixin SupportClientApi on ApiCore, UserProfileAPI {
   /// through [uploadTicketAttachment], one per request, which is also why a
   /// failed upload can never fail the ticket itself.
   ///
-  /// Every key in [customFields] must be a field the topic offers **and** be
-  /// editable; an unknown or locked one is a `422` naming the field. Send
-  /// choice **keys**, not the labels the API hands back on read.
+  /// No topic and no product are sent: the server files every ticket from this
+  /// app under General / General and ignores both if they arrive. The only
+  /// thing the client chooses is the sub-issue, which rides along in
+  /// [customFields] as [subIssueFieldName].
+  ///
+  /// Every key in [customFields] must be a field `GET /tickets/form` returned
+  /// **and** marks editable; an unknown or locked one is a `422` naming the
+  /// field. Send choice **keys**, not the labels the API hands back on read.
   ///
   /// Rate limited to 8 per 10 minutes, keyed by trading client code — a fresh
   /// exchange does not reset it. The limit is checked after validation, so a
   /// rejected request costs the client nothing.
   Future<SupportTicket> createTicket({
-    required int topicId,
     required String subject,
     required String message,
     Map<String, String> customFields = const {},
   }) async {
     final data = await postData('/tickets', {
-      'topic_id': topicId,
       'subject': subject,
       'message': message,
       if (customFields.isNotEmpty) 'custom_fields': customFields,
