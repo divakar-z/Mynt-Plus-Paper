@@ -1125,10 +1125,10 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
       //     },
       //   },
       {
-        'title': 'InstaOptions',
-        'subtitle': 'OI • PCR • Buildup',
+        'title': 'Option Analysis',
+        'subtitle': 'OI • PCR • Build-up',
         'description':
-            'Live open-interest analytics — option chain, PCR, buildup & strategy scans in one place.',
+            'Live open interest analytics: option chain, PCR, build-up and strategy scans in one place.',
         'accentColor': const Color(0xFF6366F1),
         'badge': null,
         'icon': shadcn.LucideIcons.activity,

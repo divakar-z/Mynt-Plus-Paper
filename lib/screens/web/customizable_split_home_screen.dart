@@ -2948,7 +2948,7 @@ class _CustomizableSplitHomeScreenState
                               ),
                               const SizedBox(width: 14),
                               Text(
-                                'InstaOptions',
+                                'Option Analysis',
                                 style: MyntWebTextStyles.body(
                                   context,
                                   fontWeight: MyntFonts.medium,
@@ -3734,7 +3734,7 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.closureDetails:
         return 'Closure';
       case ScreenType.instaOptions:
-        return 'InstaOptions';
+        return 'Option Analysis';
       case ScreenType.scanner:
         return 'Scanner';
       case ScreenType.orderflow:
