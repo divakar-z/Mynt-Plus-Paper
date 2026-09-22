@@ -133,7 +133,8 @@ class _MyTicketsViewState extends ConsumerState<MyTicketsView> {
     final query = _query.trim().toLowerCase();
     return widget.tickets.where((ticket) {
       if (!_matchesFilter(ticket, _filter)) return false;
-      if (_topicFilter.value != null && ticket.topic != _topicFilter.value) {
+      if (_topicFilter.value != null &&
+          ticket.categoryPath != _topicFilter.value) {
         return false;
       }
       if (query.isEmpty) return true;
@@ -156,15 +157,18 @@ class _MyTicketsViewState extends ConsumerState<MyTicketsView> {
       ? widget.tickets.length
       : widget.tickets.where((t) => _matchesFilter(t, filter)).length;
 
-  /// Every distinct topic present, for the funnel menu — same reasoning.
+  /// Every distinct category present, for the funnel menu — same reasoning.
+  ///
+  /// Keyed on [SupportTicket.categoryPath], the same value the column shows,
+  /// so picking an option always matches the rows it was read off. The help
+  /// topic alone stopped separating anything the day the server began filing
+  /// every ticket raised in the app under General.
   // ignore: unused_element
   List<String> get _topicOptions {
     final seen = <String>[];
     for (final ticket in widget.tickets) {
-      final topic = ticket.topic;
-      if (topic != null && topic.isNotEmpty && !seen.contains(topic)) {
-        seen.add(topic);
-      }
+      final path = ticket.categoryPath;
+      if (path.isNotEmpty && !seen.contains(path)) seen.add(path);
     }
     return seen;
   }
@@ -654,7 +658,12 @@ class _MyTicketsViewState extends ConsumerState<MyTicketsView> {
                 0,
               ),
               cell(text(ticket.subject, secondary: false), 1),
-              cell(text(ticket.topic ?? '—'), 2),
+              // "General · Brokerage" — the help topic and the category the
+              // client picked. The topic on its own is General on every row.
+              cell(
+                text(ticket.categoryPath.isEmpty ? '—' : ticket.categoryPath),
+                2,
+              ),
               cell(_statusPill(ticket), 3),
               cell(text(_formatDate(ticket.created)), 4),
               cell(text(_formatDate(ticket.updated)), 5),

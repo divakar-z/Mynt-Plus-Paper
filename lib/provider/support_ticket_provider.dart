@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -11,6 +12,7 @@ import '../models/support_ticket_model/support_html.dart';
 import '../models/support_ticket_model/support_ticket.dart';
 import '../models/support_ticket_model/support_ticket_context.dart';
 import '../models/support_ticket_model/support_ticket_exception.dart';
+import '../models/support_ticket_model/support_ticket_validation.dart';
 import 'core/default_change_notifier.dart';
 
 final supportTicketProvider =
@@ -33,8 +35,12 @@ class SupportTicketProvider extends DefaultChangeNotifier {
 
   /// Client-side caps. A convenience only — the API validates independently
   /// and is the real control.
-  static const int kSubjectMaxLength = 120;
-  static const int kMessageMaxLength = 2000;
+  ///
+  /// Forwarded from [TicketTextRules], which also carries the floors, so the
+  /// screen has one place to read a limit from and the rules cannot drift —
+  /// nor drift from mobile, which reads the same numbers.
+  static const int kSubjectMaxLength = TicketTextRules.subjectMaxLength;
+  static const int kMessageMaxLength = TicketTextRules.descriptionMaxLength;
 
   /// Largest single attachment.
   static const int kAttachmentMaxBytes = 8 * 1024 * 1024;
@@ -46,49 +52,135 @@ class SupportTicketProvider extends DefaultChangeNotifier {
   static String formatMb(int bytes) =>
       '${(bytes / (1024 * 1024)).round()} MB';
 
-  // --- Topics and the topic's own form -------------------------------------
+  // --- The create form -----------------------------------------------------
 
-  /// The one topic every client ticket is raised under.
-  ///
-  /// The client is **not** asked to choose. Support triages and re-routes from
-  /// their side, which they can do far better than a trading client picking
-  /// between "MII-s" and "Partner/AP" — categories that mean nothing to
-  /// someone whose order just failed. So the picker is not rendered at all.
-  ///
-  /// `1` is General's `topic_id` on the live install. Matches mobile.
-  static const SupportTopic kFixedTopic =
-      SupportTopic(id: 1, name: 'General');
+  // Was: a hard-coded General topic, posted as `topic_id: 1`.
+  //
+  // static const SupportTopic kFixedTopic =
+  //     SupportTopic(id: 1, name: 'General');
+  //
+  // Retired — the server now files every ticket raised from the app under
+  // General itself and ignores a `topic_id` that arrives. Pinning the id here
+  // meant a rename or re-number in the admin panel would have failed every
+  // create with nothing on screen to explain it.
 
-  /// Fields the form fills in silently rather than asking for.
+  /// Fields the form fills in silently, or drops, rather than asking for.
   ///
   ///  * `clientid` — the signed-in trading code, taken from [Preferences] and
   ///    never typed. An agent triaging the queue reads the field on the ticket,
   ///    not the session behind it, so the code has to be on the ticket itself.
   ///    (Previously left blank on the reasoning that the session already
   ///    identified the requester; it reached the desk empty. Mobile fills it.)
-  ///  * `products` — General offers exactly one option, so asking is a dead
-  ///    choice; it is resolved from the form and sent automatically.
-  static const Set<String> _silentFields = {'clientid', 'products'};
+  ///  * `products` — the server sets it to General on every ticket and no
+  ///    longer returns it on the form. Filtered anyway, so an install that
+  ///    still offers it cannot put a dead one-option picker on the screen.
+  ///
+  /// Compared lower-cased: field names come from the admin panel, where the
+  /// same field is as likely to be `ClientID` as `clientid`.
+  static const Set<String> _silentFields = {'clientid', productFieldName};
 
   /// What the client is actually asked to fill.
   ///
-  /// Anything else a help topic defines is still rendered, so an admin adding a
-  /// required field does not silently start failing every create.
-  List<SupportTicketField> get collectableFields => _topicFields
-      .where((f) => f.editable && !_silentFields.contains(f.name.toLowerCase()))
-      .toList();
+  /// The category comes first: it is the one filing decision the client makes
+  /// and it belongs above the free text, whatever order the admin panel happens
+  /// to return the fields in. Anything else the form defines is still rendered
+  /// after it, so an admin adding a required field does not silently start
+  /// failing every create.
+  List<SupportTicketField> get collectableFields {
+    final fields = _topicFields
+        .where(
+            (f) => f.editable && !_silentFields.contains(f.name.toLowerCase()))
+        .toList();
+    final subIssue = fields.indexWhere(_isSubIssue);
+    if (subIssue > 0) fields.insert(0, fields.removeAt(subIssue));
+    return fields;
+  }
 
-  /// Help topics, from the API. Never hard-coded: admins change the set from
-  /// the admin panel with no release on our side.
-  List<SupportTopic> _topics = const [];
-  List<SupportTopic> get topics => _topics;
+  static bool _isSubIssue(SupportTicketField field) =>
+      field.name.trim().toLowerCase() == subIssueFieldName;
 
+  /// The category picker, or null while the form is still loading or if this
+  /// install does not offer one.
+  ///
+  /// Read rather than assumed: its label, whether it is required and every one
+  /// of its options live in the admin panel, and support changes them with no
+  /// release on our side.
+  SupportTicketField? get subIssueField {
+    for (final field in _topicFields) {
+      if (_isSubIssue(field) && field.editable) return field;
+    }
+    return null;
+  }
 
-  /// The chosen topic. Required — it is what routes the ticket to a department.
-  SupportTopic? _topic;
-  SupportTopic? get topic => _topic;
+  /// The chosen category's **key** — what `POST /tickets` takes — or `''`.
+  String get selectedSubIssueKey {
+    final field = subIssueField;
+    if (field == null) return '';
+    return (_customFieldAnswers[field.name] ?? '').trim();
+  }
 
-  /// The chosen topic's own fields, which vary per topic and can be required.
+  /// The chosen category's label, for the picker to display. Null when nothing
+  /// is chosen, or when the stored key is no longer one the form offers — a
+  /// stale key must read as "not chosen" rather than blank-looking.
+  String? get selectedSubIssueLabel {
+    final key = selectedSubIssueKey;
+    if (key.isEmpty) return null;
+    final label = subIssueField?.choices?[key];
+    return (label == null || label.trim().isEmpty) ? null : label;
+  }
+
+  /// What to print above a field.
+  ///
+  /// The category is shown as [subIssueDisplayLabel] rather than the helpdesk's
+  /// own "Sub Issue Categories": the client never sees the topic it sits under,
+  /// so to them it is just the category. Every other field keeps the label the
+  /// admin panel gave it.
+  String fieldLabel(SupportTicketField field) => _isSubIssue(field)
+      ? subIssueDisplayLabel
+      : (field.label.isEmpty ? field.name : field.label);
+
+  /// Whether a field must be answered before the ticket can be sent.
+  ///
+  /// The category is mandatory here **whatever the form says**. The install
+  /// marks it optional, which lets every ticket arrive with no category at all
+  /// and land on the desk as one undifferentiated pile — the thing this picker
+  /// exists to stop. Being stricter than the API is safe in this direction: a
+  /// ticket that carries a category is always accepted.
+  bool fieldRequired(SupportTicketField field) =>
+      field.required || _isSubIssue(field);
+
+  /// Chooses the category by its choice key. No-op when the form offers no
+  /// category field, so a caller never has to check first.
+  void selectSubIssue(String choiceKey) {
+    final field = subIssueField;
+    if (field == null) return;
+    setCustomField(field.name, choiceKey);
+  }
+
+  /// Set when the server refused the category that was sent — a key that went
+  /// stale while the form was open. Shown against the picker, which by then has
+  /// been refetched, so the client picks again from the current list.
+  String? _subIssueError;
+  String? get subIssueError => _subIssueError;
+
+  // Was: the help-topic list and the client's chosen topic.
+  //
+  // List<SupportTopic> _topics = const [];
+  // List<SupportTopic> get topics => _topics;
+  // SupportTopic? _topic;
+  // SupportTopic? get topic => _topic;
+  //
+  // Retired with the topic picker — the server chooses the topic now. Kept as
+  // comments because re-exposing the picker is otherwise a rewrite rather than
+  // an un-comment.
+
+  /// The create form's fields, from `GET /tickets/form`. They are defined in
+  /// the admin panel and change without a release, so they are always rendered
+  /// from this list and never hard-coded.
+  ///
+  /// There is no topic or product picker: the server files every ticket under
+  /// General / General and the client's only filing choice is the category,
+  /// which is one of these fields — see [subIssueField].
   List<SupportTicketField> _topicFields = const [];
   List<SupportTicketField> get topicFields => _topicFields;
 
@@ -106,15 +198,12 @@ class SupportTicketProvider extends DefaultChangeNotifier {
   Map<String, String> get customFieldAnswers =>
       Map.unmodifiable(_customFieldAnswers);
 
-  /// True while the topic list is in flight.
-  bool _loadingTopics = false;
-  bool get loadingTopics => _loadingTopics;
+  // Was: a separate flag for the topic-list fetch, which no longer happens.
+  //
+  // bool _loadingTopics = false;
+  // bool get loadingTopics => _loadingTopics;
 
-  /// True while *a topic's own fields* are in flight.
-  ///
-  /// Separate from [loadingTopics] on purpose: they overlap, and one flag for
-  /// both meant fetching the topic list also blanked the fields area of a topic
-  /// already chosen.
+  /// True while the create form is in flight.
   bool _loadingFields = false;
   bool get loadingFields => _loadingFields;
 
@@ -485,46 +574,84 @@ class SupportTicketProvider extends DefaultChangeNotifier {
   /// answers with an inline error, matching the login screen.
   bool get submitting => loading;
 
-  // --- Topic selection -----------------------------------------------------
+  // --- The create form -----------------------------------------------------
 
-  /// Loads the topic list. Safe to call on every open — returns early once the
-  /// list is held.
+  /// Bumped on every fetch so a slow response cannot overwrite a newer one.
+  ///
+  /// Two fetches can be in flight at once: the retry link and the refetch that
+  /// follows a rejected category both start one, and without this the older
+  /// answer wins whenever it happens to land second.
+  int _formGeneration = 0;
+
+  /// Fetches the create form — the category picker and anything else the admin
+  /// panel defines.
+  ///
+  /// No topic is passed and none is chosen: the server files under General and
+  /// answers with General's own fields. There is deliberately NO hard-coded
+  /// fallback list of categories; a made-up choice key is a `422` that would
+  /// fail the create, so when the fetch fails the form says so and the picker
+  /// stays empty.
+  ///
+  /// [force] refetches a form that is already held — what the retry link and
+  /// the stale-category recovery need. Without it an open dialog would keep
+  /// showing the list it opened with.
   ///
   /// This is also what establishes the support session, since it is the first
   /// authenticated call: the exchange happens underneath it.
-  Future<void> loadTopics({void Function(String message)? onError}) async {
-    if (_topicFields.isNotEmpty || _loadingFields) return;
-    _topic = kFixedTopic;
+  Future<void> loadFormFields({
+    void Function(String message)? onError,
+    bool force = false,
+  }) async {
+    if (!force && (_topicFields.isNotEmpty || _loadingFields)) return;
+    final generation = ++_formGeneration;
     _formError = null;
+    _subIssueError = null;
     _loadingFields = true;
     notifyListeners();
     try {
-      // Straight to the fixed topic's form. The topic list is not fetched at
-      // all now that nothing offers a choice — one fewer call on open, and one
-      // fewer thing to fail.
+      final fetched = await api.fetchTicketForm();
+      // A newer fetch started while this was in flight; its answers win.
+      if (generation != _formGeneration) return;
+      // The answers go with the old fields. A choice key the refreshed form no
+      // longer offers has to leave with it — kept, it sits in the map behind a
+      // picker that renders it blank, and only the submit guards stop it being
+      // posted. [_refetchFormKeepingText] is what puts back the answers that
+      // were never the problem.
+      _customFieldAnswers.clear();
       _disposeFieldControllers();
-      _topicFields = await api.fetchTicketForm(kFixedTopic.id);
+      _topicFields = fetched;
     } on SupportTicketException catch (e) {
+      if (generation != _formGeneration) return;
       _formError = e.message;
       onError?.call(e.message);
     } catch (_) {
+      if (generation != _formGeneration) return;
       _formError = "Couldn't load the support form.";
       onError?.call("Couldn't load the support form — please try again.");
     } finally {
-      _loadingFields = false;
-      notifyListeners();
+      if (generation == _formGeneration) {
+        _loadingFields = false;
+        notifyListeners();
+      }
     }
   }
+
+  // Was: loadTopics(), which seeded the hard-coded General topic and fetched
+  // `GET /tickets/form?topic_id=1`. Renamed rather than kept as an alias — the
+  // name described a call that is not made any more.
+  //
+  // Future<void> loadTopics({void Function(String message)? onError}) =>
+  //     loadFormFields(onError: onError);
 
   /// Resolves the fields the client is never shown.
   ///
   /// `clientid` is answered from the signed-in session, so the agent opening
   /// the ticket can see whose account it is without asking.
   ///
-  /// A single-choice field is answered with its only option — General's
-  /// `products` is exactly that, and leaving it blank would either fail a
-  /// required check or land the ticket unclassified. A field with several
-  /// options is left alone: guessing one would be inventing an answer.
+  /// `products` is not resolved any more and not sent: the server sets it to
+  /// General on every ticket. It stays in [_silentFields] only so an install
+  /// that still returns the field cannot put a dead one-option picker on the
+  /// screen.
   Map<String, String> _resolveSilentFields() {
     final resolved = <String, String>{};
     for (final field in _topicFields) {
@@ -544,10 +671,16 @@ class SupportTicketProvider extends DefaultChangeNotifier {
         if (code.isNotEmpty && !field.isChoice) resolved[field.name] = code;
         continue;
       }
-      final choices = field.choices;
-      if (choices != null && choices.length == 1) {
-        resolved[field.name] = choices.keys.first;
-      }
+      // Was: a single-choice silent field was answered with its only option,
+      // which is how `products` used to reach the ticket.
+      //
+      // final choices = field.choices;
+      // if (choices != null && choices.length == 1) {
+      //   resolved[field.name] = choices.keys.first;
+      // }
+      //
+      // Dropped — the server assigns the product itself, and posting one it
+      // did not ask for is a 422 that fails the whole create.
     }
     return resolved;
   }
@@ -582,6 +715,9 @@ class SupportTicketProvider extends DefaultChangeNotifier {
       _customFieldAnswers[name] = value;
     }
     _clearError(name);
+    // A fresh answer clears the "pick one again" notice the server's rejection
+    // put up; leaving it would accuse the new choice of the old one's fault.
+    if (name.trim().toLowerCase() == subIssueFieldName) _subIssueError = null;
     notifyListeners();
   }
 
@@ -723,28 +859,51 @@ class SupportTicketProvider extends DefaultChangeNotifier {
 
   /// Client-side checks, per field rather than one banner at the top.
   ///
-  /// Topic, subject and description are required. Attachments are not: plenty
-  /// of issues have nothing to photograph — a payout that has not arrived, a
-  /// charge someone disputes — and forcing a file there means attaching
-  /// something irrelevant to get past the form, or giving up and phoning.
-  Map<String, String> _validate() {
-    final subjectText = subject.text.trim();
-    final messageText = message.text.trim();
-    return {
-        // Whatever the chosen topic itself demands. Not ours to guess — a topic
-      // can require "Account Name", and create fails without it.
-      for (final field in collectableFields)
-        if (field.required && (_customFieldAnswers[field.name] ?? '').isEmpty)
-          field.name: '${field.label} is required',
-      if (subjectText.isEmpty)
-        'subject': 'Subject is required'
-      else if (subjectText.length > kSubjectMaxLength)
-        'subject': 'Keep the subject under $kSubjectMaxLength characters',
-      if (messageText.isEmpty)
-        'message': 'Description is required'
-      else if (messageText.length > kMessageMaxLength)
-        'message': 'Keep the description under $kMessageMaxLength characters',
-    };
+  /// Category, subject and description are required. Attachments are not:
+  /// plenty of issues have nothing to photograph — a payout that has not
+  /// arrived, a charge someone disputes — and forcing a file there means
+  /// attaching something irrelevant to get past the form, or giving up and
+  /// phoning.
+  ///
+  /// Both free-text fields have to say something, not merely be filled. The
+  /// desk was being handed chat-length tickets — "not working", "please check"
+  /// — that cost a round trip before work could even start, so the rules in
+  /// [TicketTextRules] are enforced here rather than left to an agent to chase.
+  Map<String, String> _validate() => {
+        // Whatever the form itself demands, plus the category, which is
+        // mandatory even where the install marks it optional — see
+        // [fieldRequired].
+        for (final field in collectableFields)
+          if (fieldRequired(field)) ...{
+            if (_answerMissing(field)) field.name: _missingFieldMessage(field),
+          },
+        if (validateTicketSubject(subject.text) case final error?)
+          'subject': error,
+        if (validateTicketDescription(message.text) case final error?)
+          'message': error,
+      };
+
+  /// True when a required field has no usable answer.
+  ///
+  /// A choice key the refreshed form no longer offers counts as unanswered:
+  /// the picker already renders it blank, and sending it would be a 422 for an
+  /// option that is not on screen to be corrected.
+  bool _answerMissing(SupportTicketField field) {
+    final answer = (_customFieldAnswers[field.name] ?? '').trim();
+    if (answer.isEmpty) return true;
+    return field.isChoice && !(field.choices?.containsKey(answer) ?? false);
+  }
+
+  /// "Select a category" for a picker, "Enter account name" for a box.
+  ///
+  /// Telling someone to enter a dropdown is how a form reads when it was
+  /// written against a field list rather than against what is on screen.
+  String _missingFieldMessage(SupportTicketField field) {
+    final label = fieldLabel(field);
+    final what = label.isEmpty
+        ? 'a value'
+        : '${field.isChoice ? 'a ' : ''}${label.toLowerCase()}';
+    return '${field.isChoice ? 'Select' : 'Enter'} $what';
   }
 
   // --- Submit --------------------------------------------------------------
@@ -781,7 +940,6 @@ class SupportTicketProvider extends DefaultChangeNotifier {
       // screen, build and browser without a round trip.
       final context = await SupportTicketContext.capture(screen: screen);
       final ticket = await api.createTicket(
-        topicId: _topic!.id,
         subject: subject.text.trim(),
         // The body is stored and rendered as HTML, so the client's own line
         // breaks need converting too — not just the footer's. Escaped on the
@@ -790,7 +948,7 @@ class SupportTicketProvider extends DefaultChangeNotifier {
         // message: '${message.text.trim()}\n\n${context.asMessageFooter()}',
         message: '${supportTextToHtml(message.text.trim())}<br><br>'
             '${context.asMessageFooter()}',
-        customFields: {..._resolveSilentFields(), ..._customFieldAnswers},
+        customFields: {..._resolveSilentFields(), ..._safeCustomFieldAnswers()},
       );
 
       // Files go up only once the ticket exists, one request each. A failure
@@ -816,6 +974,26 @@ class SupportTicketProvider extends DefaultChangeNotifier {
       loadTickets(force: true);
       return ticket;
     } on SupportTicketException catch (e) {
+      if (_rejectedSubIssue(e)) {
+        // The key went stale while the form was open — support edited the list
+        // in the admin panel. Refetching is the only way back: the ticket text
+        // is still on screen, so the client picks again and resubmits rather
+        // than retyping.
+        _subIssueError = 'That option is no longer available. Pick one again.';
+        notifyListeners();
+        unawaited(_refetchFormKeepingText());
+        return null;
+      }
+      if (e.statusCode == 500) {
+        // One cause here is worth naming: General has been disabled or renamed
+        // in the admin panel, so there is nowhere to file the ticket. That is
+        // not something the client can fix by editing their text, and the raw
+        // message would send them round the form looking for a mistake that is
+        // not theirs.
+        onError?.call('Support is temporarily unavailable. '
+            'Please try again later.');
+        return null;
+      }
       if (e.isValidationFailure && e.fields.isNotEmpty) {
         // The server keys these inconsistently: by field name for some
         // failures, by numeric field id for others — a missing required custom
@@ -853,6 +1031,64 @@ class SupportTicketProvider extends DefaultChangeNotifier {
     }
   }
 
+  /// Only answers the current form still offers.
+  ///
+  /// Guards the one value the server validates against a list it can change
+  /// under us: a choice key the form no longer offers is a 422 that fails the
+  /// whole create, so a stale one is dropped rather than sent. A free-text
+  /// answer is never dropped — there is no list for it to fall off.
+  Map<String, String> _safeCustomFieldAnswers() {
+    final byName = {for (final field in _topicFields) field.name: field};
+    final out = <String, String>{};
+    for (final entry in _customFieldAnswers.entries) {
+      final value = entry.value.trim();
+      if (value.isEmpty) continue;
+      final field = byName[entry.key];
+      if (field != null &&
+          field.isChoice &&
+          !(field.choices?.containsKey(value) ?? false)) {
+        continue;
+      }
+      out[entry.key] = value;
+    }
+    return out;
+  }
+
+  /// True when the server refused the category itself — a validation failure
+  /// whose `fields` names it.
+  ///
+  /// Narrow on purpose: a rejection of something the client typed must surface
+  /// as its own message, not send them back to the picker.
+  bool _rejectedSubIssue(SupportTicketException e) =>
+      e.isValidationFailure &&
+      e.fields.keys.any((k) => k.trim().toLowerCase() == subIssueFieldName);
+
+  /// Refetches the form after the server rejected the category, keeping what
+  /// the client wrote.
+  ///
+  /// [loadFormFields] clears every answer, which for a free-text field the
+  /// admin panel defines would throw away typing that was never the problem —
+  /// so those answers are put back, and only choices the refreshed form still
+  /// offers are restored.
+  Future<void> _refetchFormKeepingText() async {
+    final previous = Map<String, String>.from(_customFieldAnswers);
+    final notice = _subIssueError;
+    await loadFormFields(force: true);
+    for (final field in _topicFields) {
+      final answer = previous[field.name];
+      if (answer == null || answer.trim().isEmpty) continue;
+      // A choice key is only restored when it is still on offer; the stale one
+      // that caused this is exactly what must not come back.
+      if (field.isChoice && !(field.choices?.containsKey(answer) ?? false)) {
+        continue;
+      }
+      _customFieldAnswers[field.name] = answer;
+      if (!field.isChoice) fieldController(field.name).text = answer;
+    }
+    _subIssueError = notice;
+    notifyListeners();
+  }
+
   /// Uploads every attached file, returning the names that did not make it.
   ///
   /// One request each, because the route takes a single `file` part. Sequential
@@ -884,15 +1120,15 @@ class SupportTicketProvider extends DefaultChangeNotifier {
   /// Clears the form. [keepResult] retains the raised ticket so the success
   /// state can still name its number.
   ///
-  /// [topics] survives: it is reference data, not form input, and refetching it
-  /// on every open costs a round trip for a list that rarely changes.
+  /// The fields go with it: the category list is not reference data, support
+  /// edits it in the admin panel with no release, and the next open refetches
+  /// it rather than offering options that may no longer exist.
   void reset({bool keepResult = false}) {
     subject.clear();
     message.clear();
-    // [kFixedTopic] is not cleared: it is not a choice the client made, and
-    // clearing it would leave the next create with no topic to raise against.
     _topicFields = const [];
     _formError = null;
+    _subIssueError = null;
     _customFieldAnswers.clear();
     _disposeFieldControllers();
     _attachments.clear();

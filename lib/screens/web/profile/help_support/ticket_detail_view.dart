@@ -193,6 +193,31 @@ class TicketDetailView extends ConsumerWidget {
                     ),
                     const SizedBox(width: 8),
                     SupportStatusBadge(ticket.status, dense: true),
+                    // The category the client picked when raising it, after
+                    // the help topic it was filed under — "General ·
+                    // Brokerage". The one filing choice they make, and until
+                    // now the panel showed it nowhere: it arrives inside
+                    // `custom_fields` as a label, which nothing here rendered.
+                    //
+                    // Flexible, not Expanded: it takes only the width it needs
+                    // and gives the rest back, so a ticket with no category
+                    // does not leave a gap beside the status badge.
+                    if (ticket.categoryPath.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          ticket.categoryPath,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: MyntWebTextStyles.bodySmall(
+                            context,
+                            fontWeight: MyntFonts.regular,
+                            darkColor: MyntColors.textSecondaryDark,
+                            lightColor: MyntColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ],
