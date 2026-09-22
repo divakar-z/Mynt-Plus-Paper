@@ -7,6 +7,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../../locator/locator.dart';
 import '../../../../locator/preference.dart';
 import '../../../../models/support_ticket_model/support_ticket.dart';
+import '../../../../models/support_ticket_model/support_ticket_validation.dart';
 import '../../../../provider/support_ticket_provider.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../res/mynt_web_text_styles.dart';
@@ -34,14 +35,18 @@ Future<void> showRaiseTicketDialog(
 }) {
   final provider = ref.read(supportTicketProvider);
 
-  // Topics have to be fetched before the picker has anything to draw, and this
+  // The category picker has nothing to draw until the form arrives, and this
   // is also the call that establishes the support session — so a failure here
   // is what tells the client support is unreachable, rather than the form
   // silently offering no choices.
   //
-  // Not awaited: the dialog opens immediately and fills in when the list
+  // `GET /topics` is not called at all: the server files every ticket under
+  // General, so there is no topic to choose and no failure to inherit from
+  // fetching a list nothing offers.
+  //
+  // Not awaited: the dialog opens immediately and fills in when the form
   // arrives, which reads better than a blank pause after the button click.
-  provider.loadTopics(
+  provider.loadFormFields(
     onError: (message) {
       if (context.mounted) error(context, message);
     },
@@ -140,6 +145,10 @@ class _RaiseTicketDialog extends ConsumerWidget {
 
   Widget _form(
       BuildContext context, WidgetRef ref, SupportTicketProvider provider) {
+    // Built once: the list is also what decides whether a gap belongs above
+    // Subject, and building it twice would run the whole loop on every
+    // keystroke for an answer already in hand.
+    final formFields = _topicFields(context, provider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -147,11 +156,21 @@ class _RaiseTicketDialog extends ConsumerWidget {
         // No topic picker. Every client ticket is raised under General and
         // support re-routes it — a client whose order just failed should not
         // have to decide between "MII-s" and "Partner/AP". Same as mobile.
+        //
+        // What the client does choose is the Category, and it comes first: it
+        // is the one filing decision they make, and a picker placed after the
+        // description reads as an afterthought to text already written.
+        // [SupportTicketProvider.collectableFields] puts it at the head of the
+        // list whatever order the admin panel returns.
+        ...formFields,
+        // Only when something was drawn above. An install whose form defines
+        // no visible fields would otherwise open on 16px of empty space.
+        if (formFields.isNotEmpty) const SizedBox(height: 16),
         _label(context, 'Subject'),
         const SizedBox(height: 10),
         MyntFormTextField(
           controller: provider.subject, 
-          placeholder: 'Order page not loading',
+          placeholder: 'Buy order for RELIANCE rejected',
           height: 40,
           // Capped with a formatter rather than `maxLength`, which would draw a
           // character counter below the input. MyntTextField clamps its height
@@ -170,8 +189,8 @@ class _RaiseTicketDialog extends ConsumerWidget {
         MyntFormTextField(
           controller: provider.message,
           placeholder:
-              'Tell us what you did and what happened. Anything you saw on '
-              'screen helps.',
+              'Example: Buy order for 10 RELIANCE at 10:15 AM was rejected '
+              'with "RMS: margin shortfall".',
           maxLines: 5,
           // Capped with a formatter, not `maxLength`. The counter `maxLength`
           // draws sits below the input but *inside* the field's fixed-height
@@ -191,10 +210,7 @@ class _RaiseTicketDialog extends ConsumerWidget {
           onChanged: provider.onMessageChanged,
         ),
         _error(context, provider.fieldErrors['message']),
-        // Anything the topic itself defines beyond the silent ones. Usually
-        // nothing under General — but rendered rather than assumed, so an admin
-        // adding a required field does not silently break every create.
-        ..._topicFields(context, provider),
+        _descriptionProgress(context, provider),
         const SizedBox(height: 16),
         // Once files are listed the picker moves up beside the label: the list
         // owns the space below, and a control stranded under a long list is
@@ -251,67 +267,117 @@ class _RaiseTicketDialog extends ConsumerWidget {
   /// MII-s offers twelve Products, which wraps to four rows and pushes the
   /// rest of the form off screen. A dropdown costs one click and stays one
   /// line whatever the list length.
-  Widget _dropdown<T>(
-    BuildContext context, {
-    required T? value,
-    required List<DropdownMenuItem<T>> items,
-    required ValueChanged<T?> onChanged,
-    required String hint,
-    bool enabled = true,
-  }) {
-    final borderColor = resolveThemeColor(context,
-        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
-    final primaryColor = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
-
-    OutlineInputBorder border(Color color) => OutlineInputBorder(
-          borderRadius: BorderRadius.circular(5),
-          borderSide: BorderSide(color: color),
-        );
-
-    return DropdownButtonFormField<T>(
-      // `initialValue` only seeds the first build; the widget is rebuilt with a
-      // new value each time the provider changes, which is what keeps it in
-      // step with a topic cleared by reset().
-      initialValue: value,
-      isExpanded: true,
-      items: items,
-      onChanged: enabled ? onChanged : null,
-      hint: Text(
-        hint,
-        style: MyntWebTextStyles.body(
-          context,
-          fontWeight: MyntFonts.regular,
-          darkColor: MyntColors.textSecondaryDark,
-          lightColor: MyntColors.textSecondary,
-        ),
-      ),
-      decoration: InputDecoration(
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        border: border(borderColor),
-        enabledBorder: border(borderColor),
-        focusedBorder: border(primaryColor),
-        disabledBorder: border(borderColor),
-      ),
-    );
-  }
-
-  DropdownMenuItem<T> _item<T>(BuildContext context, T value, String label) =>
-      DropdownMenuItem<T>(
-        value: value,
-        child: Text(
-          label,
-          overflow: TextOverflow.ellipsis,
-          style: MyntWebTextStyles.body(
-            context,
-            fontWeight: MyntFonts.regular,
-            darkColor: MyntColors.textPrimaryDark,
-            lightColor: MyntColors.textPrimary,
-          ),
-        ),
-      );
+  // Retired: the Material dropdown these two built.
+  //
+  // Its menu is a full-width overlay that covers the dialog it was opened
+  // from, and it marks the current option by tinting the whole row rather
+  // than colouring the text. Replaced by [_choiceField], which is the
+  // picker Create SIP uses — a popover anchored under the field and sized
+  // to it.
+  //
+  // Kept commented rather than deleted: nothing else on this form needs a
+  // select today, and the next one that does should read what was wrong
+  // with this before reaching for it again.
+  //
+  //   /// A select that reads as one of this form's fields.
+  //   ///
+  //   /// Every value here is lifted from [MyntFormTextField], which is what sits
+  //   /// directly under it — a stock [DropdownButtonFormField] is transparent
+  //   /// where those are filled, pads a further 2px, and turns its border the
+  //   /// primary colour on focus, none of which the text fields do. Beside them it
+  //   /// read as a control borrowed from somewhere else.
+  //   ///
+  //   /// Matched rather than replaced with a shadcn select: the neighbours are
+  //   /// Mynt fields, and the thing a picker has to agree with is the field above
+  //   /// and below it, not the dialog's frame.
+  //   Widget _dropdown<T>(
+  //     BuildContext context, {
+  //     required T? value,
+  //     required List<DropdownMenuItem<T>> items,
+  //     required ValueChanged<T?> onChanged,
+  //     required String hint,
+  //     bool enabled = true,
+  //   }) {
+  //     // MyntTextField's own fill and border, read off the same theme resolution
+  //     // so a change there does not leave this one behind.
+  //     final fillColor = resolveThemeColor(
+  //       context,
+  //       dark: const Color(0xffB5C0CF).withValues(alpha: .15),
+  //       light: const Color(0xffF1F3F8),
+  //     );
+  //     final borderColor = resolveThemeColor(
+  //       context,
+  //       dark: MyntColors.textSecondaryDark,
+  //       light: MyntColors.primary,
+  //     );
+  //
+  //     // One border for every state. The text fields do not brighten on focus,
+  //     // and a picker that does is the single loudest thing on the form.
+  //     OutlineInputBorder border() => OutlineInputBorder(
+  //           borderRadius: BorderRadius.circular(5),
+  //           borderSide: BorderSide(color: borderColor, width: 1),
+  //         );
+  //
+  //     return SizedBox(
+  //       // The 40 the neighbouring fields are given, so the three line up.
+  //       height: 40,
+  //       child: DropdownButtonFormField<T>(
+  //         // `initialValue` only seeds the first build; the widget is rebuilt with
+  //         // a new value each time the provider changes, which is what keeps it in
+  //         // step with a form cleared by reset().
+  //         initialValue: value,
+  //         isExpanded: true,
+  //         isDense: true,
+  //         items: items,
+  //         onChanged: enabled ? onChanged : null,
+  //         style: MyntWebTextStyles.bodyMedium(context),
+  //         // The menu itself, which otherwise opens stock white over a dark form.
+  //         dropdownColor: resolveThemeColor(
+  //           context,
+  //           dark: MyntColors.backgroundColorDark,
+  //           light: MyntColors.backgroundColor,
+  //         ),
+  //         borderRadius: BorderRadius.circular(5),
+  //         icon: Icon(
+  //           Icons.keyboard_arrow_down_rounded,
+  //           size: 18,
+  //           color: resolveThemeColor(
+  //             context,
+  //             dark: MyntColors.textSecondaryDark,
+  //             light: MyntColors.textSecondary,
+  //           ),
+  //         ),
+  //         hint: Text(hint, style: MyntWebTextStyles.placeholder(context)),
+  //         decoration: InputDecoration(
+  //           isDense: true,
+  //           filled: true,
+  //           fillColor: fillColor,
+  //           // The text fields' padding exactly — 12 across, 10 down.
+  //           contentPadding:
+  //               const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+  //           border: border(),
+  //           enabledBorder: border(),
+  //           focusedBorder: border(),
+  //           disabledBorder: border(),
+  //         ),
+  //       ),
+  //     );
+  //   }
+  //
+  //   DropdownMenuItem<T> _item<T>(BuildContext context, T value, String label) =>
+  //       DropdownMenuItem<T>(
+  //         value: value,
+  //         child: Text(
+  //           label,
+  //           overflow: TextOverflow.ellipsis,
+  //           style: MyntWebTextStyles.body(
+  //             context,
+  //             fontWeight: MyntFonts.regular,
+  //             darkColor: MyntColors.textPrimaryDark,
+  //             lightColor: MyntColors.textPrimary,
+  //           ),
+  //         ),
+  //       );
 
   /// The attached files, and the control that adds more.
   ///
@@ -487,7 +553,7 @@ class _RaiseTicketDialog extends ConsumerWidget {
   /// the field would silently make a required answer unfillable.
   List<Widget> _topicFields(
       BuildContext context, SupportTicketProvider provider) {
-    // Switching topics clears the old fields and fetches the new ones. Without
+    // A refetch clears the old fields before the new ones arrive. Without
     // something here the section collapses to nothing and pops back a moment
     // later, which reads as the form glitching rather than working.
     if (provider.loadingFields) {
@@ -502,7 +568,7 @@ class _RaiseTicketDialog extends ConsumerWidget {
             ),
             const SizedBox(width: 8),
             Text(
-              'Loading the fields for this topic…',
+              'Loading the support form…',
               style: MyntWebTextStyles.caption(
                 context,
                 fontWeight: MyntFonts.regular,
@@ -532,13 +598,17 @@ class _RaiseTicketDialog extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: 8),
-            // A topic can require a field, so submitting without one that
-            // failed to load would just be refused server-side.
+            // Worth its own tap: with no form there is no category to pick,
+            // and the category is required — so a form that failed to load
+            // means no ticket at all, not merely a missing optional answer.
             MyntTextButton(
               label: 'Retry',
-              onPressed: () => provider.loadTopics(onError: (m) {
-                if (context.mounted) error(context, m);
-              }),
+              onPressed: () => provider.loadFormFields(
+                force: true,
+                onError: (m) {
+                  if (context.mounted) error(context, m);
+                },
+              ),
             ),
           ],
         ),
@@ -551,7 +621,10 @@ class _RaiseTicketDialog extends ConsumerWidget {
     return [
       for (final field in fields) ...[
         const SizedBox(height: 16),
-        _label(context, field.label),
+        // From the provider so the label on screen and the label inside the
+        // validation message can never disagree — the category is shown as
+        // "Category", not the helpdesk's own "Sub Issue Categories".
+        _label(context, provider.fieldLabel(field)),
         const SizedBox(height: 10),
         if (field.isChoice)
           _choiceField(context, provider, field)
@@ -567,7 +640,16 @@ class _RaiseTicketDialog extends ConsumerWidget {
             maxLines: field.type == 'memo' ? 3 : 1,
             onChanged: (value) => provider.setCustomField(field.name, value),
           ),
-        _error(context, provider.fieldErrors[field.name]),
+        // The server's own rejection outranks the local "you did not pick
+        // one": it is about the choice that was actually sent, and by now the
+        // list on screen has been refetched.
+        _error(
+          context,
+          provider.fieldErrors[field.name] ??
+              (field.name.trim().toLowerCase() == subIssueFieldName
+                  ? provider.subIssueError
+                  : null),
+        ),
       ],
     ];
   }
@@ -576,22 +658,187 @@ class _RaiseTicketDialog extends ConsumerWidget {
   ///
   /// The item shows the label but carries the **key** — the API hands back
   /// labels on read and expects keys on write, and sending a label is a `422`.
+  /// A choice field — the Category, and anything else the helpdesk's form
+  /// defines with options.
+  ///
+  /// Built the way Create SIP builds its Frequency picker: a 40px box that
+  /// matches the text fields around it, opening a popover anchored under
+  /// itself and sized to its own width. A [DropdownButtonFormField] was tried
+  /// first and was wrong twice over — its menu is a full-width overlay that
+  /// covers the dialog it was opened from, and it marks the current option by
+  /// greying its row rather than colouring its text.
   Widget _choiceField(BuildContext context, SupportTicketProvider provider,
       SupportTicketField field) {
-    final selected = provider.customFieldAnswers[field.name];
+    final selectedKey = provider.customFieldAnswers[field.name];
+    // Only a label the current form still offers. A key that went stale while
+    // the dialog was open has to read as "nothing picked", not as blank text
+    // beside a chevron.
+    final selectedLabel = selectedKey == null ? null : field.choices?[selectedKey];
+    final hasValue = selectedLabel != null && selectedLabel.isNotEmpty;
+    final enabled = !provider.submitting;
 
-    return _dropdown<String>(
-      context,
-      value: selected,
-      hint: 'Select ${field.label.toLowerCase()}',
-      enabled: !provider.submitting,
-      items: [
-        for (final choice in field.choices!.entries)
-          _item(context, choice.key, choice.value),
-      ],
-      onChanged: (key) {
-        if (key != null) provider.setCustomField(field.name, key);
-      },
+    return Builder(
+      builder: (btnContext) => GestureDetector(
+        onTap: enabled ? () => _showChoicePopup(btnContext, provider, field) : null,
+        child: Container(
+          // The height, fill, radius and border the neighbouring Mynt text
+          // fields use, so the three controls line up down the form.
+          height: 40,
+          decoration: BoxDecoration(
+            color: resolveThemeColor(
+              context,
+              dark: MyntColors.transparent,
+              light: const Color(0xffF1F3F8),
+            ),
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(
+              color: resolveThemeColor(
+                context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.primary,
+              ),
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  hasValue
+                      ? selectedLabel
+                      : 'Select ${provider.fieldLabel(field).toLowerCase()}',
+                  overflow: TextOverflow.ellipsis,
+                  style: hasValue
+                      ? MyntWebTextStyles.body(
+                          context,
+                          fontWeight: MyntFonts.medium,
+                          darkColor: MyntColors.textPrimaryDark,
+                          lightColor: MyntColors.textPrimary,
+                        )
+                      : MyntWebTextStyles.placeholder(context),
+                ),
+              ),
+              Icon(
+                Icons.keyboard_arrow_down,
+                size: 20,
+                color: resolveThemeColor(
+                  context,
+                  dark: MyntColors.textSecondaryDark,
+                  light: MyntColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The options, in a popover under the field and no wider than it.
+  ///
+  /// Scrolls past a handful of rows. Category carries a dozen on the live
+  /// install and a column that long runs off the bottom of the dialog, taking
+  /// the last options with it.
+  void _showChoicePopup(
+    BuildContext btnContext,
+    SupportTicketProvider provider,
+    SupportTicketField field,
+  ) {
+    final btnWidth = (btnContext.findRenderObject() as RenderBox).size.width;
+    final selectedKey = provider.customFieldAnswers[field.name];
+
+    shadcn.showPopover(
+      context: btnContext,
+      alignment: Alignment.topCenter,
+      offset: const Offset(0, 4),
+      overlayBarrier: shadcn.OverlayBarrier(
+        borderRadius: shadcn.Theme.of(btnContext).borderRadiusLg,
+      ),
+      builder: (popoverContext) => Container(
+        decoration: BoxDecoration(
+          borderRadius: shadcn.Theme.of(popoverContext).borderRadiusLg,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 12,
+              spreadRadius: 2,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: shadcn.ModalContainer(
+          padding: const EdgeInsets.all(4),
+          child: SizedBox(
+            width: btnWidth - 8,
+            child: ConstrainedBox(
+              // About seven rows. Enough that a short list never scrolls, low
+              // enough that a long one cannot outgrow the dialog behind it.
+              constraints: const BoxConstraints(maxHeight: 300),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final choice in field.choices!.entries)
+                      _choiceRow(
+                        btnContext,
+                        label: choice.value,
+                        selected: choice.key == selectedKey,
+                        onTap: () {
+                          shadcn.closeOverlay(popoverContext);
+                          provider.setCustomField(field.name, choice.key);
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One option. The current one is named in the primary colour rather than
+  /// given a tinted row — the same way Create SIP marks its frequency.
+  Widget _choiceRow(
+    BuildContext context, {
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        splashColor: resolveThemeColor(
+          context,
+          dark: MyntColors.rippleDark,
+          light: MyntColors.rippleLight,
+        ),
+        highlightColor: resolveThemeColor(
+          context,
+          dark: MyntColors.highlightDark,
+          light: MyntColors.highlightLight,
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Text(
+            label,
+            style: MyntWebTextStyles.body(
+              context,
+              fontWeight: selected ? MyntFonts.semiBold : MyntFonts.medium,
+              color: selected
+                  ? resolveThemeColor(context,
+                      dark: MyntColors.primaryDark, light: MyntColors.primary)
+                  : resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -669,6 +916,56 @@ class _RaiseTicketDialog extends ConsumerWidget {
   }
 
   // --- Shared bits ---------------------------------------------------------
+
+  /// The live line under the description: how far short of the minimum it
+  /// still is on the left, and the character count on the right.
+  ///
+  /// The count runs up to the cap, the hint counts down to the floor — a ticket
+  /// has never been stalled by being too long, so the number worth nudging on
+  /// is the one the client has not reached yet.
+  ///
+  /// Listens to the controller directly rather than through the provider, so a
+  /// keystroke repaints this line alone instead of the whole dialog.
+  Widget _descriptionProgress(
+      BuildContext context, SupportTicketProvider provider) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: provider.message,
+      builder: (context, value, _) {
+        final progress = ticketDescriptionProgress(value.text);
+        // Nothing to say on an empty field: the placeholder is still showing
+        // and "40 more characters" under it reads as a complaint about a box
+        // nobody has touched yet.
+        if (progress == null && value.text.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final style = MyntWebTextStyles.caption(
+          context,
+          fontWeight: MyntFonts.regular,
+          darkColor: MyntColors.textSecondaryDark,
+          lightColor: MyntColors.textSecondary,
+        );
+        return Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  progress == null ? '' : '$progress to go',
+                  style: style,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${value.text.characters.length}/'
+                '${SupportTicketProvider.kMessageMaxLength}',
+                style: style,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   Widget _label(BuildContext context, String text) {
     return Text(
