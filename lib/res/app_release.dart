@@ -19,7 +19,7 @@ class AppRelease {
   static const String build = '1.0.572';
 
   /// e.g. `3 Sep 2026`.
-  static const String releasedOn = '19 Sep 2026';
+  static const String releasedOn = '21 Sep 2026';
 
   /// Short form for the login footer.
   static const String short = 'Version $version';
