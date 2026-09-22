@@ -363,6 +363,11 @@ class _ChartEngineShellScreenState
         if (entry['o'] != null) 'o': entry['o'],
         if (entry['h'] != null) 'h': entry['h'],
         if (entry['l'] != null) 'l': entry['l'],
+        // Previous close + day change / % — the idle chart header shows
+        // "LTP  ±change (±%)" for the day while no candle is hovered.
+        if (entry['c'] != null) 'c': entry['c'],
+        if (entry['chng'] != null) 'chng': entry['chng'],
+        if (entry['pc'] != null) 'pc': entry['pc'],
       };
       if (packet.length <= 1) continue;
       _post(encodeTick(token, packet));
@@ -1509,6 +1514,11 @@ class _ChartEngineShellScreenState
         if (entry['o'] != null) 'o': entry['o'],
         if (entry['h'] != null) 'h': entry['h'],
         if (entry['l'] != null) 'l': entry['l'],
+        // Previous close + day change / % — the idle chart header shows
+        // "LTP  ±change (±%)" for the day while no candle is hovered.
+        if (entry['c'] != null) 'c': entry['c'],
+        if (entry['chng'] != null) 'chng': entry['chng'],
+        if (entry['pc'] != null) 'pc': entry['pc'],
       };
       if (packet.length > 1) _post(encodeTick(token, packet));
     }
