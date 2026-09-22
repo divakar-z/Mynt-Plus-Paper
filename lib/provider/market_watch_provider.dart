@@ -424,6 +424,35 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   List<Futures>? _fut = [];
   List<OptionExp>? _optExp = [];
   List<Equls>? get equls => _equls;
+
+  // ── NSE/BSE pair for the order screen ──────────────────────────────────
+  // Place Order needs a stock's linked NSE/BSE pair to draw the exchange
+  // toggle, but it can be opened from Positions, Holdings or the order book,
+  // where nothing has fetched linked scrips — so the toggle only ever showed
+  // if a Watchlist tap happened to have left that scrip in _equls (TC_87).
+  // This keeps its own per-token cache instead of calling fetchLinkeScrip,
+  // which would also overwrite _equls, _fut and _optExp while the scrip
+  // detail or option chain screens are reading them under the dialog.
+  final Map<String, List<Equls>> _orderExchangeList = {};
+
+  List<Equls> orderExchangeList(String token) =>
+      _orderExchangeList[token] ?? const [];
+
+  Future<void> fetchOrderExchangeList(String token, String exch) async {
+    if (token.isEmpty || _orderExchangeList.containsKey(token)) return;
+    try {
+      final linked = await api.getLinkedScrip(token, exch);
+      if (linked.stat == "Ok") {
+        _orderExchangeList[token] = linked.equls ?? [];
+        notifyListeners();
+      }
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Order Exchange List", "Error": "$e"});
+    }
+  }
   List<Futures>? get fut => _fut;
   List<OptionExp>? get optExp => _optExp;
   OptionChainModel? _optionChainModel;
@@ -2769,6 +2798,13 @@ getOptionawait(String exch, String token) {
           ref.read(authProvider).ifSessionExpired(context);
         }
       }
+      // Share the pair with the order screen's cache so opening Place Order
+      // from the Watchlist doesn't fetch the same linked scrips twice. Only
+      // seeded when it actually has data, so a failed call still retries.
+      if ((_equls ?? []).isNotEmpty) {
+        _orderExchangeList[token] = _equls!;
+      }
+
       notifyListeners();
       return _linkedScrips;
     } catch (e) {
