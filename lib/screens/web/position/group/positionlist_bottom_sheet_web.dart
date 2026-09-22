@@ -265,7 +265,8 @@ class _PositionListBottomSheetState
                                               .fetchDeleteGroupSymbol(
                                                   widget.grpName,
                                                   context,
-                                                  "${position.tsym}");
+                                                  "${position.tsym}",
+                                                  "${position.sPrdtAli ?? ''}");
                                         }
                                       },
                                       hoverColor: isDarkMode(context)

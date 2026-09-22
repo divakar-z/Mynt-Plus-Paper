@@ -213,9 +213,13 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
       showResponsiveWarningMessage(context, "Unable to remove this position");
       return;
     }
+    // Product goes with it — the same contract can sit in the group twice
+    // under two products, and tsym alone would remove both rows. Same field
+    // the Product column reads, so the value matches what was stored.
+    final prdAli = groupItem['s_prdt_ali']?.toString() ?? '';
     await ref
         .read(portfolioProvider)
-        .fetchDeleteGroupSymbol(widget.groupSymbol, context, tsym);
+        .fetchDeleteGroupSymbol(widget.groupSymbol, context, tsym, prdAli);
   }
 
   // Remove button revealed on row hover, styled like the Positions screen

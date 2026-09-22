@@ -2269,7 +2269,7 @@ changeHoldingsTabIndex(int index) {
 
         final groupName = group.posname ?? '';
         final syncedPositions = <PositionBookModel>[];
-        final staleSymbols = <String>[];
+        final staleSymbols = <Map<String, String>>[];
 
         for (var savedPos in group.posdata!) {
           // Find matching live position by token + prd
@@ -2282,15 +2282,21 @@ changeHoldingsTabIndex(int index) {
             syncedPositions.add(livePos);
           } else if (savedPos.tsym != null && groupName.isNotEmpty) {
             // Position no longer exists — queue for server cleanup
-            staleSymbols.add(savedPos.tsym!);
+            staleSymbols.add({
+              'tsym': savedPos.tsym!,
+              's_prdt_ali': savedPos.sPrdtAli ?? ''
+            });
           }
         }
 
         group.posdata = syncedPositions;
 
         // Remove stale positions from server in background (fire-and-forget)
-        for (var tsym in staleSymbols) {
-          api.deletePositionGrpSym(groupName, tsym).ignore();
+        for (var stale in staleSymbols) {
+          api
+              .deletePositionGrpSym(
+                  groupName, stale['tsym']!, stale['s_prdt_ali'] ?? '')
+              .ignore();
         }
       }
 
@@ -2377,9 +2383,9 @@ changeHoldingsTabIndex(int index) {
 
 // Fetching data from the api and stored in a variable
   Future fetchDeleteGroupSymbol(
-      String name, BuildContext c, String tsym) async {
+      String name, BuildContext c, String tsym, String prdAli) async {
     try {
-      _groupName = await api.deletePositionGrpSym(name, tsym);
+      _groupName = await api.deletePositionGrpSym(name, tsym, prdAli);
 
       if (_groupName!.status == "symbol removed") {
         await fetchPosGroupSymbol(name, false);

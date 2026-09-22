@@ -259,6 +259,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
     bool alignRight = false,
     bool isClosed = false,
     dynamic position, // Pass position data for automatic row tap handling
+    VoidCallback? onCellTap, // Tap for cells that do not open the detail screen
   }) {
     final isFirstColumn = columnIndex == 0; // Select checkbox column
     final isInstrumentColumn = columnIndex == 2; // Instrument column (now index 2)
@@ -347,6 +348,15 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                   _hoveredRowIndex.value = null;
                   _showPositionDetail(position);
                 },
+                behavior: HitTestBehavior.opaque,
+                child: container,
+              );
+            }
+            // Cells with their own action — the Select column, where the tap
+            // toggles the row instead of opening the detail screen.
+            if (onCellTap != null) {
+              return GestureDetector(
+                onTap: onCellTap,
                 behavior: HitTestBehavior.opaque,
                 child: container,
               );
@@ -993,6 +1003,12 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                                     isClosed: isClosed,
                                     // Pass position for clickable cells (not Select column)
                                     position: isClickable ? position : null,
+                                    // Select column: the whole cell toggles the
+                                    // row, so the target is not just the box.
+                                    onCellTap: (header == 'Select' && !isClosed)
+                                        ? () => _toggleSelect(
+                                            position, positionBook)
+                                        : null,
                                     child: _buildCellContent(
                                       context,
                                       header,
@@ -1364,6 +1380,22 @@ class _PositionTableState extends ConsumerState<PositionTable> {
         ],
       ),
     );
+  }
+
+  // Toggle a row's exit selection from anywhere in the Select column, not just
+  // the 18px box. Matched by token AND product, the same way the checkbox cell
+  // does, so MIS and NRML rows of one symbol stay independent. Closed rows are
+  // never wired up — their checkbox is disabled, so the cell stays dead.
+  void _toggleSelect(
+    PositionBookModel position,
+    PortfolioProvider positionBook,
+  ) {
+    final openPositions = positionBook.openPosition ?? [];
+    final index = openPositions.indexWhere(
+        (p) => p.token == position.token && p.sPrdtAli == position.sPrdtAli);
+    if (index >= 0) {
+      positionBook.selectExitPosition(index);
+    }
   }
 
   // Build checkbox cell
