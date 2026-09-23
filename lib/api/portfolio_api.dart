@@ -326,6 +326,30 @@ mixin PortfolioAPI on ApiCore {
     }
   }
 
+  /// Turns a group-endpoint response into a [CreateGroupName].
+  ///
+  /// These endpoints answer `{"status": "..."}` when the call works and
+  /// FastAPI's `{"detail": "..."}` when it does not - a duplicate group name
+  /// comes back that way. A 5xx can also arrive as an HTML error page, which
+  /// used to throw inside `jsonDecode` and be swallowed by the provider, so
+  /// the body is decoded defensively and the HTTP code is kept as the message
+  /// of last resort. Anything is better than the old "Unknown error".
+  CreateGroupName _groupResult(int statusCode, String body) {
+    try {
+      final json = jsonDecode(body);
+      if (json is Map<String, dynamic>) {
+        final result = CreateGroupName.fromJson(json);
+        if (result.status == null && result.detail == null) {
+          result.detail = 'Request failed (HTTP $statusCode)';
+        }
+        return result;
+      }
+    } catch (_) {
+      // Body was not JSON - an HTML error page, or an empty 500.
+    }
+    return CreateGroupName(detail: 'Request failed (HTTP $statusCode)');
+  }
+
   // Create custom group Name for position
 
   Future<CreateGroupName> createGroupName(String name) async {
@@ -336,9 +360,7 @@ mixin PortfolioAPI on ApiCore {
           body: jsonEncode({"clientid": "${prefs.clientId}", "posname": name}));
 
       // log("Position Group Name => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }
@@ -358,9 +380,7 @@ mixin PortfolioAPI on ApiCore {
           }));
 
       // log("Add symbol Group Name => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }
@@ -375,9 +395,7 @@ mixin PortfolioAPI on ApiCore {
       final res = await apiClient.get(uri, headers: defaultHeaders);
 
       // log("Delete vPosition Group  Name => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }
@@ -405,9 +423,7 @@ mixin PortfolioAPI on ApiCore {
           }));
 
       // log("Delete Position Group Symbol => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }

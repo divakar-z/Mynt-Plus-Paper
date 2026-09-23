@@ -1039,7 +1039,29 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       stopLossCtrl.text = orderRawValue['blprc'] ?? "0";
       targetCtrl.text = orderRawValue['bpprc'] ?? "0";
       trailingTicksCtrl.text = orderRawValue['trailprc'] ?? "";
-      validityType = orderRawValue['ret'] ?? '';
+      // Disclosed Qty was the one field never restored here, while the same
+      // `dscqty` is read just below to tick the validity/disclosed checkbox.
+      // The field therefore showed 0 under a ticked checkbox, and because a
+      // basket edit deletes the leg and re-adds it from these controllers, a
+      // leg saved with 100 disclosed came back as 0. Repeat Order lost it the
+      // same way. SafeParse keeps a missing or junk value at "0".
+      discQtyCtrl.text =
+          SafeParse.toInt(orderRawValue['dscqty']).toString();
+      // A stored leg can carry an empty, missing or mis-cased `ret`, and the
+      // chips compare against "DAY"/"IOC"/"EOS" exactly, so anything else left
+      // both chips unselected. The order still went out as DAY because the
+      // basket place path fills an empty `ret` in itself (order_provider), so
+      // the screen and the payload disagreed. Falling back to the same default
+      // a fresh screen uses keeps them in step, and re-saving the leg writes
+      // the value back.
+      final String rawExch = widget.orderArg.exchange;
+      final String rawRet =
+          (orderRawValue['ret'] ?? '').toString().trim().toUpperCase();
+      // EOS is only offered on BSE/BFO, so an EOS carried onto any other
+      // exchange has no chip to land on and is treated as unusable too.
+      final bool retIsUsable = validityTypes.contains(rawRet) &&
+          (rawRet != "EOS" || rawExch == "BSE" || rawExch == "BFO");
+      validityType = retIsUsable ? rawRet : _defaultValidityFor(rawExch);
       triggerPriceCtrl.text = orderRawValue['trgprc'] ?? "0";
       mktProtCtrl.text =
           (double.tryParse(orderRawValue['mkt_protection']?.toString() ?? '5')
