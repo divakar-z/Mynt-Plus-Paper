@@ -2331,8 +2331,11 @@ changeHoldingsTabIndex(int index) {
         successMessage(c, "Group '$name' created successfully");
         // Navigator.pop is already called in create_group_web.dart before this method
       } else {
-        // Handle error cases
-        final status = _groupName!.status ?? "Unknown error";
+        // Handle error cases. A rejected create carries no `status` - the
+        // reason is in `detail` ("Name already exists"), which is what the
+        // duplicate branch below matches on.
+        final status =
+            _groupName!.status ?? _groupName!.detail ?? "Unknown error";
         if (status.toLowerCase().contains("already exists") ||
             status.toLowerCase().contains("duplicate")) {
           warningMessage(c, "Group name '$name' already exists");
@@ -2356,8 +2359,15 @@ changeHoldingsTabIndex(int index) {
         successMessage(c, "Symbol added to group '$name' successfully");
         // Navigator.pop(c);
       } else {
-        final status = _groupName!.status ?? "Unknown error";
-        error(c, "$status to group '$name'");
+        // The backend's own `status` reads as a sentence with the group
+        // appended ("symbol not added to group 'X'"). A `detail` is a
+        // standalone message, so it is shown as it came.
+        final status = _groupName!.status;
+        if (status != null) {
+          error(c, "$status to group '$name'");
+        } else {
+          error(c, _groupName!.detail ?? "Unknown error");
+        }
       }
     } catch (e) {}
   }
@@ -2373,7 +2383,8 @@ changeHoldingsTabIndex(int index) {
         successMessage(c, "Group '$name' deleted successfully");
         // Navigator.pop(c);
       } else {
-        final status = _groupName!.status ?? "Unknown error";
+        final status =
+            _groupName!.status ?? _groupName!.detail ?? "Unknown error";
         error(c, status);
       }
     } finally {
@@ -2392,7 +2403,8 @@ changeHoldingsTabIndex(int index) {
         successMessage(c, "Symbol '$tsym' removed from group '$name'");
         // Navigator.pop(c);
       } else {
-        final status = _groupName!.status ?? "Unknown error";
+        final status =
+            _groupName!.status ?? _groupName!.detail ?? "Unknown error";
         error(c, status);
       }
     } catch (e) {}
