@@ -9,6 +9,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/models/client_profile_all_details/profile_all_details_model.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
@@ -75,11 +77,6 @@ class _ProfileDetailsScreenWebState
       setState(() => _kraProcessLoading = true);
       await _handleDigilockerAddressChange(code, state);
     }
-  }
-
-  /// Navigate same window to Digilocker OAuth (like Vue: window.location.href = url)
-  void _launchDigilockerFlow() {
-    launchDigilockerAuth();
   }
 
   Future<void> _handleDigilockerAddressChange(String code, String state) async {
@@ -658,39 +655,27 @@ class _ProfileDetailsScreenWebState
     );
   }
 
-  // ─── Address Change Dialog ───
+  // ─── Address Change ───
+  // Address modification is handled by the profile portal. The portal
+  // auto-logs-in from the uid + session token passed on the query string.
   void _showAddressChangeDialog() {
     final block = _personalInfoEditBlock(checkRekyc: false);
     if (block != null) {
       if (block.tooltip != null) warningMessage(context, block.tooltip!);
       return;
     }
-    final profileProvider = ref.read(profileAllDetailsProvider);
-    final clientData = profileProvider.clientAllDetails.clientData;
-    final themeVal = ref.watch(themeProvider);
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return _AddressChangeDialog(
-          profileProvider: profileProvider,
-          clientData: clientData!,
-          isDarkMode: themeVal.isDarkMode,
-          onDone: () {
-            Navigator.of(ctx).pop();
-            // Refresh to get esign details then show esign pending dialog
-            profileProvider.fetchMobEmailStatus().then((_) {
-              _showEsignPendingDialog('address');
-            });
-          },
-          onAadhaarTap: () {
-            // Dialog is already popped in the button handler
-            _launchDigilockerFlow();
-          },
-        );
-      },
-    );
+    final pref = locator<Preferences>();
+    final clientData = ref.read(profileAllDetailsProvider).clientAllDetails.clientData;
+    final uid = (clientData?.cLIENTID ?? pref.clientId ?? '').trim();
+    final token = (pref.clientSession ?? '').trim();
+    if (uid.isEmpty || token.isEmpty) {
+      warningMessage(context, 'Session expired, please login again');
+      return;
+    }
+    // page=app tells the portal the request originated from app.mynt.in.
+    final url = Uri.https('profile.mynt.in', '/',
+        {'uid': uid, 'token': token, 'page': 'app'}).toString();
+    html.window.open(url, '_blank');
   }
 
   // ─── Annual Income edit-gate
@@ -2729,7 +2714,6 @@ class _AddressChangeDialog extends StatefulWidget {
   final ClientData clientData;
   final bool isDarkMode;
   final VoidCallback onDone;
-  final VoidCallback? onAadhaarTap;
   final bool startWithManual;
 
   const _AddressChangeDialog({
@@ -2737,7 +2721,6 @@ class _AddressChangeDialog extends StatefulWidget {
     required this.clientData,
     required this.isDarkMode,
     required this.onDone,
-    this.onAadhaarTap,
     this.startWithManual = false,
   });
 
@@ -3013,7 +2996,7 @@ class _AddressChangeDialogState extends State<_AddressChangeDialog> {
                   child: ElevatedButton(
                     onPressed: () {
                       Navigator.pop(context);
-                      widget.onAadhaarTap?.call();
+                      launchDigilockerAuth();
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: resolveThemeColor(context,
