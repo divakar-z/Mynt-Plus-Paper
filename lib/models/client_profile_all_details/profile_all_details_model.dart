@@ -82,6 +82,35 @@ class ClientData {
   
   bool get isIndividual => cATEGORY == 'I';
 
+  /// True when BIRTH_DATE shows the holder is under 18.
+  /// Accepts yyyy-MM-dd[...], dd/MM/yyyy, dd-MM-yyyy and dd-MMM-yyyy;
+  /// an unparseable date is treated as not minor.
+  bool get isMinor {
+    final dob = _parseBirthDate(bIRTHDATE);
+    if (dob == null) return false;
+    final now = DateTime.now();
+    final eighteenth = DateTime(dob.year + 18, dob.month, dob.day);
+    return now.isBefore(eighteenth);
+  }
+
+  static DateTime? _parseBirthDate(String? raw) {
+    final s = raw?.trim() ?? '';
+    if (s.isEmpty || s == 'null') return null;
+    final iso = DateTime.tryParse(s);
+    if (iso != null) return iso;
+    final parts = s.split(RegExp(r'[/\-\s]+'));
+    if (parts.length < 3) return null;
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+        'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    final day = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]) ??
+        (months.indexOf(parts[1].toLowerCase().substring(
+                0, parts[1].length < 3 ? parts[1].length : 3)) + 1);
+    final year = int.tryParse(parts[2]);
+    if (day == null || year == null || month < 1 || month > 12) return null;
+    return DateTime(year, month, day);
+  }
+
   /// Derived account-closed flag
   /// Scans segments_data[].inactivetype_DESC for closure markers
   /// ("Close Client-Close" / "close-Close"), normalized for case + whitespace.
