@@ -240,7 +240,7 @@ class NavigationDrawerWeb extends StatelessWidget {
                   if ((showInstaOptions ?? (onInstaOptionsTap != null)) && onInstaOptionsTap != null)
                     _buildDrawerItem(
                       context: context,
-                      title: 'InstaOptions',
+                      title: 'Option Analysis',
                       icon: shadcn.LucideIcons.activity,
                       screenName: 'instaOptions',
                       badge: 'NEW',
