@@ -1508,6 +1508,7 @@ class _ProfileSectionScreenWebState
     // Account-level gates for the Activate DDPI button.
     final bool isClientClosed = clientData?.isClientClosed ?? false;
     final bool isIndividual = clientData?.isIndividual ?? true;
+    final bool isMinor = clientData?.isMinor ?? false;
     final bool isAccountActive =
         (mobStatus?.accSgtAtveSts ?? '').toLowerCase() == 'active';
 
@@ -1775,12 +1776,15 @@ class _ProfileSectionScreenWebState
               final ddpiBusy = _ddpiActivateLoading ||
                   ddpiStatus == 'e-signed pending' ||
                   ddpiStatus == 'e-signed completed';
-              // Visual disable per spec: closed account, non-individual, inactive.
+              // Visual disable per spec: closed account, non-individual,
+              // inactive, minor.
               final ddpiDisabled = ddpiBusy ||
                   isClientClosed ||
                   !isIndividual ||
-                  !isAccountActive;
-              // Tooltip priority per spec: non-individual → inactive.
+                  !isAccountActive ||
+                  isMinor;
+              // Tooltip priority per spec: non-individual → inactive → closed
+              // → minor.
               final ddpiTooltip = !isIndividual
                   ? "Non-individual accounts can't modify data here. "
                       "Please contact support at (+91) 93 8010 8010 for help."
@@ -1789,7 +1793,9 @@ class _ProfileSectionScreenWebState
                           "Please reactivate the account."
                       : isClientClosed
                           ? "Your trading account is closed."
-                          : "";
+                          : isMinor
+                              ? "DDPI activation is not allowed for minor accounts."
+                              : "";
               final ddpiButton = Material(
               color: Colors.transparent,
               child: InkWell(
