@@ -16,10 +16,10 @@ class AppRelease {
   static const String version = '3.0.3';
 
   /// e.g. `1.0.554`.
-  static const String build = '1.0.572';
+  static const String build = '1.0.577';
 
   /// e.g. `3 Sep 2026`.
-  static const String releasedOn = '21 Sep 2026';
+  static const String releasedOn = '24 Sep 2026';
 
   /// Short form for the login footer.
   static const String short = 'Version $version';
