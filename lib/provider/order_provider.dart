@@ -1830,10 +1830,29 @@ class OrderProvider extends DefaultChangeNotifier {
   /// Toggle between pending and triggered GTT orders
   void toggleTriggeredGtt(bool show, BuildContext context) {
     _showTriggeredGtt = show;
-    if (show && (_triggeredGttOrders == null || _triggeredGttOrders!.isEmpty)) {
+    // Always refetch the tab's own list so switching tabs shows fresh data
+    // if (show && (_triggeredGttOrders == null || _triggeredGttOrders!.isEmpty)) {
+    //   fetchTriggeredGTTOrders(context);
+    // }
+    if (show) {
       fetchTriggeredGTTOrders(context);
+    } else {
+      fetchGTTOrderBook(context, "");
     }
     notifyListeners();
+  }
+
+  /// Sortable ISO key from norentm — accepts "HH:mm:ss dd-MM-yyyy" or ISO,
+  /// returns "" instead of throwing so unparseable rows sink to the bottom.
+  String _triggeredGttSortKey(String? norentm) {
+    final value = norentm?.trim() ?? '';
+    if (value.isEmpty) return '';
+    if (value.contains('T')) return value;
+    try {
+      return convertToISOFormat(value);
+    } catch (_) {
+      return '';
+    }
   }
 
   /// Fetch triggered GTT orders from API
@@ -1861,7 +1880,9 @@ class OrderProvider extends DefaultChangeNotifier {
             element.symbol = "${spilitSymbol["symbol"]}";
             element.expDate = "${spilitSymbol["expDate"]}";
             element.option = "${spilitSymbol["option"]}";
-            element.ordDate = convertToISOFormat("${element.norentm}");
+            // element.ordDate = convertToISOFormat("${element.norentm}");
+            // Guarded parse: one odd norentm must not throw and skip the sort
+            element.ordDate = _triggeredGttSortKey(element.norentm);
             // For triggered orders, use 'stat' as the display status
             if (element.stat != null && element.stat!.isNotEmpty) {
               element.gttOrderCurrentStatus = element.stat;

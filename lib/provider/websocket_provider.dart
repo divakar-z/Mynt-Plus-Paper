@@ -1290,6 +1290,7 @@ class WebSocketProvider extends ChangeNotifier {
       ref.read(orderProvider).fetchOrderBook(context, true);
       ref.read(orderProvider).fetchTradeBook(context);
       ref.read(orderProvider).fetchGTTOrderBook(context, "");
+      ref.read(orderProvider).fetchTriggeredGTTOrders(context);
       ref.read(fundProvider).fetchFunds(context);
 
       
