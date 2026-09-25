@@ -20,6 +20,22 @@ class PortfolioResponse {
     this.message,
   });
 
+  /// Marker carried by [PortfolioResponse.empty] so the provider can tell a
+  /// genuinely empty portfolio from a payload. Not shown to the client.
+  static const String noDataMessage = 'No data found';
+
+  /// The account has nothing to analyse — a normal outcome, not a failure.
+  factory PortfolioResponse.empty() => PortfolioResponse(
+        xirrResult: 0.0,
+        accountAllocation: {},
+        marketCapAllocation: {},
+        sectorAllocation: {},
+        topStocks: [],
+        fundamentals: [],
+        chartData: null,
+        message: noDataMessage,
+      );
+
   factory PortfolioResponse.fromJson(Map<String, dynamic> json) {
     return PortfolioResponse(
       xirrResult: (json['xirr_result'] ?? 0.0).toDouble(),
@@ -274,4 +290,63 @@ class ChartData {
           .cast<double>(),
     );
   }
+}
+
+/// Thrown by `fetchPortfolioAnalysis` when the insights call genuinely fails.
+///
+/// An account with nothing to analyse is **not** a failure — that comes back as
+/// a normal [PortfolioResponse] carrying [PortfolioResponse.noDataMessage], so
+/// the screen can say "no data" only when the server actually said so.
+///
+/// [message] is what the client reads. [backendMessage] is the API's raw `emsg`
+/// ("Error occured" and the like) — internal wording, kept for logs only.
+class PortfolioAnalysisException implements Exception {
+  PortfolioAnalysisException({
+    required this.statusCode,
+    required this.message,
+    this.backendMessage = '',
+  });
+
+  /// HTTP status, or 0 if the request never reached the server.
+  final int statusCode;
+
+  /// User-presentable message.
+  final String message;
+
+  /// The API's raw `emsg`. Never shown to the client.
+  final String backendMessage;
+
+  /// Network-level failure (DNS, connection refused, timeout). On web a blocked
+  /// CORS preflight also lands here, indistinguishable from the service being
+  /// down.
+  factory PortfolioAnalysisException.network(Object cause) =>
+      PortfolioAnalysisException(
+        statusCode: 0,
+        message: "Couldn't reach the server — check your connection and try "
+            'again.',
+      );
+
+  /// A non-2xx, or a body that was not the JSON object we expect.
+  factory PortfolioAnalysisException.server(int statusCode) =>
+      PortfolioAnalysisException(
+        statusCode: statusCode,
+        message: 'Something went wrong at our end — please try again.',
+      );
+
+  /// `stat: Not_Ok` with an `emsg` other than the empty-portfolio one.
+  ///
+  /// The account exists and has holdings; the analysis itself failed to build,
+  /// so a retry is worth offering.
+  factory PortfolioAnalysisException.analysisFailed(
+          int statusCode, String emsg) =>
+      PortfolioAnalysisException(
+        statusCode: statusCode,
+        message: "We couldn't build your portfolio insights right now — "
+            'please try again.',
+        backendMessage: emsg,
+      );
+
+  @override
+  String toString() => 'PortfolioAnalysisException($statusCode): $message'
+      '${backendMessage.isEmpty ? '' : ' [$backendMessage]'}';
 }

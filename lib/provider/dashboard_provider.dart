@@ -81,25 +81,65 @@ class DashboardProvider extends DefaultChangeNotifier {
   // Portfolio getters
   String? get portfolioError => _portfolioError;
 
+  /// Loads Portfolio Insights.
+  ///
+  /// Ends in exactly one of three states, which the screen renders separately:
+  ///   loading            - [isPortfolioLoading]
+  ///   failed             - [portfolioError] set, data null. Offer a retry.
+  ///   empty / loaded     - [portfolioError] null; data null means the server
+  ///                        said there is nothing to analyse.
+  ///
+  /// The in-flight guard matters: the screen fetches from its own initState,
+  /// so without it a second caller fired a duplicate request whose result
+  /// could overwrite the first one's.
   Future getPortfolioAnalysis() async {
+    if (_isPortfolioLoading) return;
     try {
       portfolioloader(true);
       final portfolioAnalysis = await api.fetchPortfolioAnalysis(
           "${pref.clientId}", "${pref.clientSession}");
-    if(portfolioAnalysis.message == "No data found"){
-      _portfolioAnalysis = null;
-      return;
-    }
+      if (portfolioAnalysis.message == PortfolioResponse.noDataMessage) {
+        // Genuinely nothing to show — not an error, so clear any stale one.
+        _portfolioAnalysis = null;
+        _portfolioError = null;
+        return;
+      }
       _portfolioAnalysis = portfolioAnalysis;
       _portfolioError = null;
-    } catch (e) {
-      _portfolioError = e.toString();
-      rethrow;
+    } on PortfolioAnalysisException catch (e) {
+      _portfolioAnalysis = null;
+      _portfolioError = e.message;
+    } catch (_) {
+      _portfolioAnalysis = null;
+      _portfolioError = 'Something went wrong — please try again.';
     } finally {
       portfolioloader(false);
       notifyListeners();
     }
   }
+
+  // Retired 25 Sep 2026 — kept for rollback. Left the error unread by any
+  // widget and rethrew into an unawaited call, so every failure reached the
+  // screen as a bare null and was drawn as "No Data Found".
+  // Future getPortfolioAnalysis() async {
+  //   try {
+  //     portfolioloader(true);
+  //     final portfolioAnalysis = await api.fetchPortfolioAnalysis(
+  //         "${pref.clientId}", "${pref.clientSession}");
+  //   if(portfolioAnalysis.message == "No data found"){
+  //     _portfolioAnalysis = null;
+  //     return;
+  //   }
+  //     _portfolioAnalysis = portfolioAnalysis;
+  //     _portfolioError = null;
+  //   } catch (e) {
+  //     _portfolioError = e.toString();
+  //     rethrow;
+  //   } finally {
+  //     portfolioloader(false);
+  //     notifyListeners();
+  //   }
+  // }
 
   clearPortfolioAnalysis() {
     _portfolioAnalysis = null;

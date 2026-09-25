@@ -84,13 +84,32 @@ class PositionTable extends ConsumerStatefulWidget {
   final String? searchQuery;
   final String filterType;
 
-  const PositionTable({super.key, this.searchQuery, this.filterType = 'All'});
+  /// Sort to start with, and where to report a change to.
+  ///
+  /// The sort used to live only in this widget's State, so a Refresh — which
+  /// swaps the whole table for a loader — destroyed it while the search box
+  /// and the filter chip, both owned by the screen, survived. The screen now
+  /// owns all three, so Refresh keeps the user's view intact.
+  final int? initialSortColumnIndex;
+  final bool initialSortAscending;
+  final void Function(int? columnIndex, bool ascending)? onSortChanged;
+
+  const PositionTable({
+    super.key,
+    this.searchQuery,
+    this.filterType = 'All',
+    this.initialSortColumnIndex,
+    this.initialSortAscending = true,
+    this.onSortChanged,
+  });
 
   @override
   ConsumerState<PositionTable> createState() => _PositionTableState();
 }
 
 class _PositionTableState extends ConsumerState<PositionTable> {
+  // Seeded from the screen in initState so a Refresh, which rebuilds this
+  // widget from scratch, comes back with the same sort still applied.
   int? _sortColumnIndex;
   bool _sortAscending = true;
   // PERFORMANCE FIX: Use ValueNotifier for hover instead of setState
@@ -119,6 +138,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
   @override
   void initState() {
     super.initState();
+    _sortColumnIndex = widget.initialSortColumnIndex;
+    _sortAscending = widget.initialSortAscending;
     _verticalScrollController = ScrollController();
     _horizontalScrollController = ScrollController();
 
@@ -468,6 +489,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
         _sortAscending = true;
       }
     });
+    // Hand the new sort to the screen, which outlives a Refresh.
+    widget.onSortChanged?.call(_sortColumnIndex, _sortAscending);
   }
 
   // Get column index for header

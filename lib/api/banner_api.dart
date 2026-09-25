@@ -9,7 +9,7 @@ mixin BannerApi on ApiCore {
   Future<void> testBannerApiConnection() async {
     try {
       log('Testing banner API connectivity...');
-      final uri = Uri.parse('https://besim.zebull.in/banner/banners/homescreen');
+      final uri = Uri.parse('https://besim.mynt.in/banner/banners/homescreen');
 
       final res = await apiClient.get(uri, headers: {
         'Content-Type': 'application/json',
@@ -25,7 +25,7 @@ mixin BannerApi on ApiCore {
 
   Future<BannerResponse?> fetchBanners() async {
     try {
-      final uri = Uri.parse('https://besim.zebull.in/banner/banners/screens');
+      final uri = Uri.parse('https://besim.mynt.in/banner/banners/screens');
 
       log("Fetching all banners from: $uri");
 
@@ -77,7 +77,7 @@ mixin BannerApi on ApiCore {
 
   Future<bool> markBannerSeen({required String bannerId}) async {
     try {
-      final uri = Uri.parse('https://besim.zebull.in/banner/banners/$bannerId/seen');
+      final uri = Uri.parse('https://besim.mynt.in/banner/banners/$bannerId/seen');
 
       final data = {
         "user_id": prefs.clientId ?? '',
@@ -130,7 +130,7 @@ mixin BannerApi on ApiCore {
   // Text Nugget API Methods
   Future<TextNuggetResponse?> fetchTextNuggets() async {
     try {
-      final uri = Uri.parse('https://besim.zebull.in/banner/texts/screens');
+      final uri = Uri.parse('https://besim.mynt.in/banner/texts/screens');
 
       log("Fetching all text nuggets from: $uri");
 
@@ -182,7 +182,7 @@ mixin BannerApi on ApiCore {
 
   Future<bool> markTextNuggetSeen({required String textId}) async {
     try {
-      final uri = Uri.parse('https://besim.zebull.in/banner/texts/$textId/seen');
+      final uri = Uri.parse('https://besim.mynt.in/banner/texts/$textId/seen');
 
       final data = {
         "user_id": prefs.clientId ?? '',

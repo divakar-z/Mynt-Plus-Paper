@@ -57,7 +57,8 @@ import '../../../provider/ledger_provider.dart';
 import '../../../provider/stocks_provider.dart';
 import '../../../provider/mf_provider.dart';
 import '../../../provider/web_subscription_manager.dart';
-import '../../../provider/dashboard_provider.dart';
+// import '../../../provider/dashboard_provider.dart'; // unused since the
+// duplicate portfolio-analysis fetch moved out of _handlePortfolioAnalysisTap
 import 'sharedWidget/build_update_banner.dart';
 import 'profile/Reports/ca_events_screen_web.dart';
 import 'profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
@@ -5684,7 +5685,6 @@ class _CustomizableSplitHomeScreenState
       if (!mounted) return;
 
       final portfolio = ref.read(portfolioProvider);
-      final dashboard = ref.read(dashboardProvider);
 
       portfolio.cancelTimer();
 
@@ -5695,10 +5695,13 @@ class _CustomizableSplitHomeScreenState
           .read(orderProvider)
           .requestWSOrderBook(context: context, isSubscribe: false);
 
-      // Fetch portfolio analysis data
-      if (dashboard.portfolioAnalysis == null) {
-        await dashboard.getPortfolioAnalysis();
-      }
+      // Portfolio analysis is fetched by PortfolioDashboardScreen's own
+      // initState. Fetching here too sent the request twice on every open —
+      // the guard below never held, because the data is still null at this
+      // point — and the second response could overwrite the first one's.
+      // if (dashboard.portfolioAnalysis == null) {
+      //   await dashboard.getPortfolioAnalysis();
+      // }
 
       // Clear loading state
       if (mounted) {

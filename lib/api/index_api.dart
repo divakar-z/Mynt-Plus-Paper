@@ -20,7 +20,7 @@ mixin IndexApi on ApiCore {
         ConstantName.msgToken = await FirebaseMessaging.instance.getToken();
       }
 
-      final uri = Uri.parse("https://besim.zebull.in/nlog/addtoken");
+      final uri = Uri.parse("https://besim.mynt.in/nlog/addtoken");
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body: jsonEncode({

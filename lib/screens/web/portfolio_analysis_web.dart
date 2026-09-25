@@ -24,7 +24,9 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import 'package:syncfusion_flutter_treemap/treemap.dart';
 import '../../../../models/explore_model/portfolioanalisys_models.dart';
 import '../../../../provider/market_watch_provider.dart';
-import '../../../../sharedWidget/no_data_found.dart';
+// import '../../../../sharedWidget/no_data_found.dart'; // mobile widget —
+// both uses on this screen now go through NoDataFoundWeb
+import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import '../../../../locator/preference.dart';
 import '../../../../sharedWidget/common_search_fields_web.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
@@ -124,10 +126,20 @@ class _PortfolioDashboardScreenState
                     ),
                   );
                 }
+                // A failed call is not an empty portfolio. Showing both as
+                // "No Data Found" hid a server-side failure (TC_280) and left
+                // the client no way to try again.
+                if (portfolio.portfolioError != null &&
+                    portfolio.portfolioAnalysis == null) {
+                  return Center(child: _errorState(portfolio));
+                }
                 if (portfolio.portfolioAnalysis == null &&
                     portfolio.isPortfolioLoading == false) {
                   return const Center(
-                    child: NoDataFound(
+                    child: NoDataFoundWeb(
+                      title: 'No Data Found',
+                      subtitle: "There's nothing to analyse in this account "
+                          'yet.',
                       secondaryEnabled: false,
                     ),
                   );
@@ -138,6 +150,23 @@ class _PortfolioDashboardScreenState
               },
             ),
           )),
+    );
+  }
+
+  /// Shown when the insights call failed, as opposed to returning nothing.
+  ///
+  /// The subtitle is the provider's own wording, never the API's `emsg` — that
+  /// reads "Error occured" and means nothing to a client.
+  Widget _errorState(DashboardProvider portfolio) {
+    return NoDataFoundWeb(
+      title: "Couldn't load insights",
+      subtitle: portfolio.portfolioError,
+      assetIcon: assets.documentIcon,
+      iconSize: 120,
+      primaryEnabled: true,
+      primaryLabel: 'Retry',
+      onPrimary: () => portfolio.getPortfolioAnalysis(),
+      secondaryEnabled: false,
     );
   }
 
@@ -888,6 +917,30 @@ class _PortfolioDashboardScreenState
       );
     }
 
+    // Empty result — a filter or a search that matched nothing.
+    //
+    // Returned here, ahead of the table, exactly as hold_table.dart does. The
+    // empty state used to live inside the LayoutBuilder below as a Column with
+    // an Expanded child, which cannot work: SliverToBoxAdapter gives its child
+    // unbounded height, so the Expanded collapsed and the box drew blank
+    // instead of saying anything. Keeping the two branches apart also stops
+    // the table's render objects being reused across the swap.
+    if (sortedHoldings.isEmpty) {
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: const shadcn.OutlinedContainer(
+            child: NoDataFoundWeb(
+              title: 'No Holdings Found',
+              subtitle: 'No holdings match the current filter.',
+              primaryEnabled: false,
+              secondaryEnabled: false,
+            ),
+          ),
+        ),
+      );
+    }
+
     return SliverMainAxisGroup(
       slivers: [
         // Table container using shadcn.OutlinedContainer (matches hold_table.dart)
@@ -910,37 +963,43 @@ class _PortfolioDashboardScreenState
                     4: shadcn.FixedTableSize(unitWidth * 2), // P&L % (flex 2)
                   };
 
-                  // Check if no data
-                  if (sortedHoldings.isEmpty) {
-                    return Column(
-                      children: [
-                        // Header Row (always show)
-                        shadcn.Table(
-                          columnWidths: columnWidths,
-                          defaultRowHeight: const shadcn.FixedTableSize(50),
-                          rows: [
-                            shadcn.TableHeader(
-                              cells: [
-                                buildHeaderCell('Stock Name', 0),
-                                buildHeaderCell('Qty', 1, true),
-                                buildHeaderCell('Invested', 2, true),
-                                buildHeaderCell('Allocation', 3, true),
-                                buildHeaderCell('P&L %', 4, true),
-                              ],
-                            ),
-                          ],
-                        ),
-                        // No Data Found inside table body area
-                        Expanded(
-                          child: Center(
-                            child: const NoDataFound(
-                              secondaryEnabled: false,
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
+                  // Empty is handled above, before this sliver is built.
+                  //
+                  // Retired 25 Sep 2026 — kept for rollback. The Expanded had
+                  // no bounded height to resolve against inside the
+                  // SliverToBoxAdapter, so this drew an empty box rather than
+                  // the empty state, and the header Table was shared with the
+                  // branch below.
+                  // if (sortedHoldings.isEmpty) {
+                  //   return Column(
+                  //     children: [
+                  //       // Header Row (always show)
+                  //       shadcn.Table(
+                  //         columnWidths: columnWidths,
+                  //         defaultRowHeight: const shadcn.FixedTableSize(50),
+                  //         rows: [
+                  //           shadcn.TableHeader(
+                  //             cells: [
+                  //               buildHeaderCell('Stock Name', 0),
+                  //               buildHeaderCell('Qty', 1, true),
+                  //               buildHeaderCell('Invested', 2, true),
+                  //               buildHeaderCell('Allocation', 3, true),
+                  //               buildHeaderCell('P&L %', 4, true),
+                  //             ],
+                  //           ),
+                  //         ],
+                  //       ),
+                  //       // No Data Found inside table body area
+                  //       Expanded(
+                  //         child: Center(
+                  //           child: const NoDataFound(
+                  //             secondaryEnabled: false,
+                  //           ),
+                  //         ),
+                  //       ),
+                  //     ],
+                  //   );
+                  // }
 
                   // Table with fixed header and scrollable body
                   return Column(
@@ -963,7 +1022,11 @@ class _PortfolioDashboardScreenState
                       ),
                       // Table Body (no scroll - uses page scroll)
                       shadcn.Table(
-                        key: ValueKey('table_${_tableSortColumnIndex}_$_tableSortAscending'),
+                        // Row count is part of the identity: without it the same table
+                        // render objects were reused across a filter or search
+                        // change, which tripped the relayout-boundary assertion.
+                        key: ValueKey(
+                            'table_${_tableSortColumnIndex}_${_tableSortAscending}_${sortedHoldings.length}'),
                         columnWidths: columnWidths,
                         defaultRowHeight: const shadcn.FixedTableSize(50),
                         rows: [
