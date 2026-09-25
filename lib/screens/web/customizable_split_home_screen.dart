@@ -33,6 +33,7 @@ import 'package:mynt_plus/screens/web/profile/nominee_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/form_download_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/profile_details_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/profile_section_screen_web.dart';
+import 'package:mynt_plus/screens/web/insta_options/insta_options_shell.dart';
 import 'package:mynt_plus/screens/web/strategy_builder/strategy_builder_screen.dart';
 import 'package:mynt_plus/screens/web/webhook/webhook_tradingview_screen.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
@@ -205,6 +206,7 @@ enum ScreenTypeParam {
   saveBasketStrategy,
   profileDetails,
   caBuyback,
+  instaOptions,
   scanner,
   orderflow,
   charts
@@ -508,6 +510,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "instaOptions") {
+            _handleInstaOptionsTap();
           } else if (routeName == "charts") {
             _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
@@ -593,6 +597,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "instaOptions") {
+            _handleInstaOptionsTap();
           } else if (routeName == "charts") {
             _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
@@ -816,6 +822,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenTypeParam.caBuyback:
         _handleCABuybackTap();
+        break;
+      case ScreenTypeParam.instaOptions:
+        _handleInstaOptionsTap();
         break;
       case ScreenTypeParam.scanner:
         _replaceScreenInPanel(ScreenType.scanner);
@@ -1791,6 +1800,14 @@ class _CustomizableSplitHomeScreenState
     final clientId = userDetail?.actid ?? clientDetail?.actid ?? pref.clientId ?? '';
     final userName = userDetail?.uname ?? '';
 
+    // The drawer floats above the TradingView chart iframes, which sit in the
+    // DOM on top of the Flutter canvas and would otherwise swallow the hover /
+    // clicks meant for the menu. Same guard the app-bar Options dropdown uses;
+    // held for as long as the drawer is open because MouseRegion.onExit does
+    // not fire when the drawer is dismissed with the pointer still inside it.
+    ChartIframeGuard.acquire();
+    _disableAllChartIframes();
+
     shadcn.openDrawer(
       context: context,
       position: shadcn.OverlayPosition.left,
@@ -1800,7 +1817,25 @@ class _CustomizableSplitHomeScreenState
       draggable: true,
       showDragHandle: false,
       builder: (drawerContext) {
-        return SizedBox(
+        return PointerInterceptor(
+          child: MouseRegion(
+            cursor: SystemMouseCursors.basic,
+            onEnter: (_) {
+              ChartIframeGuard.acquire();
+              _disableAllChartIframes();
+            },
+            onHover: (_) {
+              _disableAllChartIframes();
+            },
+            onExit: (_) {
+              ChartIframeGuard.release();
+              _enableAllChartIframes();
+            },
+            child: Listener(
+              onPointerMove: (_) {
+                _disableAllChartIframes();
+              },
+              child: SizedBox(
           width: 300,
           child: NavigationDrawerWeb(
           isDarkMode: theme.isDarkMode,
@@ -1876,6 +1911,10 @@ class _CustomizableSplitHomeScreenState
             shadcn.closeDrawer(drawerContext);
             _handleStrategyBuilderTap();
           },
+          onInstaOptionsTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleInstaOptionsTap();
+          },
           onThemeToggle: () {
             shadcn.closeDrawer(drawerContext);
             ref.read(themeProvider.notifier).toggleTheme(
@@ -1904,9 +1943,15 @@ class _CustomizableSplitHomeScreenState
           showOrderflow: false,
           showCharts: false,
         ),
+              ),
+            ),
+          ),
         );
       },
-    );
+    ).whenComplete(() {
+      ChartIframeGuard.release();
+      _enableAllChartIframes();
+    });
   }
 
   /// Build app bar for right side only - with responsive navigation
@@ -2186,7 +2231,7 @@ class _CustomizableSplitHomeScreenState
                 const SizedBox(width: 12),
                 _buildNavItem('StrBuilder', isDarkMode, ScreenType.strategyBuilder,
                     () => _handleStrategyBuilderTap()),
-             
+
 
                 const Spacer(),
 
@@ -2567,6 +2612,10 @@ class _CustomizableSplitHomeScreenState
     _replaceScreenInPanel(ScreenType.strategyBuilder);
   }
 
+  void _handleInstaOptionsTap() {
+    _replaceScreenInPanel(ScreenType.instaOptions);
+  }
+
   void _handleCuratedStrategiesTap() {
     // Show the Curated Strategies list in the panel like other full pages.
     _replaceScreenInPanel(ScreenType.curatedStrategies);
@@ -2874,6 +2923,50 @@ class _CustomizableSplitHomeScreenState
                                   fontWeight: MyntFonts.medium,
                                   darkColor: MyntColors.textPrimaryDark,
                                   lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // InstaOptions
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleInstaOptionsTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.activity,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Option Analysis',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Transform.translate(
+                                offset: const Offset(0, -6),
+                                child: Text(
+                                  'NEW',
+                                  style: MyntWebTextStyles.caption(
+                                    context,
+                                    color: Colors.red,
+                                    fontWeight: MyntFonts.semiBold,
+                                  ).copyWith(fontSize: 10),
                                 ),
                               ),
                             ],
@@ -3515,6 +3608,8 @@ class _CustomizableSplitHomeScreenState
         return FormDownloadScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: _goBackInRightPanel);
+      case ScreenType.instaOptions:
+        return const InstaOptionsShell();
       case ScreenType.scanner:
         return ScannerShellScreen(
           initialSubPage: widget.initialScannerSubPage,
@@ -3639,6 +3734,8 @@ class _CustomizableSplitHomeScreenState
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.instaOptions:
+        return 'Option Analysis';
       case ScreenType.scanner:
         return 'Scanner';
       case ScreenType.orderflow:
@@ -3760,6 +3857,8 @@ class _CustomizableSplitHomeScreenState
         return Icons.download;
       case ScreenType.closureDetails:
         return Icons.cancel;
+      case ScreenType.instaOptions:
+        return Icons.candlestick_chart;
       case ScreenType.scanner:
         return Icons.radar;
       case ScreenType.orderflow:
@@ -4214,6 +4313,8 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.formDownload:
         break;
       case ScreenType.closureDetails:
+        break;
+      case ScreenType.instaOptions:
         break;
       case ScreenType.scanner:
         _replaceScreenInPanel(ScreenType.scanner);
@@ -6289,6 +6390,7 @@ enum ScreenType {
   nomineeDetails,
   formDownload,
   closureDetails,
+  instaOptions,
   scanner,
   orderflow,
   curatedStrategies,

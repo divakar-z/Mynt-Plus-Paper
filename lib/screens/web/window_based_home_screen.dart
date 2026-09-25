@@ -12,6 +12,7 @@ import 'package:mynt_plus/models/marketwatch_model/market_watch_scrip_model.dart
 import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/screens/web/market_watch/tv_chart/webview_chart.dart';
 // import 'package:mynt_plus/screens/web/chart/web_chart_overlay.dart'; // Commented out - using panel chart only
+import 'package:mynt_plus/screens/web/insta_options/insta_options_shell.dart';
 import 'package:mynt_plus/screens/web/ordersbook/order_book_screen_web.dart';
 import 'package:mynt_plus/screens/web/scanner/scanner_shell_screen.dart';
 import 'package:mynt_plus/screens/web/orderflow/orderflow_shell_screen.dart';
@@ -526,6 +527,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return FormDownloadScreenWeb(onBack: () => _showScreenInWindow(ScreenType.myAccount));
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: () => _showScreenInWindow(ScreenType.myAccount));
+      case ScreenType.instaOptions:
+        return const InstaOptionsShell();
       case ScreenType.scanner:
         return const ScannerShellScreen();
       case ScreenType.orderflow:
@@ -645,6 +648,8 @@ class _WindowBasedHomeScreenState extends ConsumerState<WindowBasedHomeScreen>
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.instaOptions:
+        return 'InstaOptions';
       case ScreenType.scanner:
         return 'Scanner';
       case ScreenType.orderflow:
