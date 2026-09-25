@@ -98,6 +98,7 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen>
         ref.read(orderProvider).fetchOrderBook(context, false);
         ref.read(orderProvider).fetchTradeBook(context);
         ref.read(orderProvider).fetchGTTOrderBook(context, "");
+        ref.read(orderProvider).fetchTriggeredGTTOrders(context);
         ref.read(orderProvider).fetchSipOrderHistory(context);
         ref.read(marketWatchProvider).fetchPendingAlert(context);
         ref

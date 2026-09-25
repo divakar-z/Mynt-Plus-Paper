@@ -372,7 +372,8 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                   rows: [
                     shadcn.TableHeader(
                       cells: [
-                        buildHeaderCell('Created on', 0),
+                        // Triggered tab shows trigger/cancel time instead of date
+                        buildHeaderCell(showTriggered ? 'Time' : 'Created on', 0),
                         buildHeaderCell('Instrument', 1),
                         buildHeaderCell('Product', 2),
                         buildHeaderCell('Type', 3),
@@ -442,7 +443,9 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                                         columnIndex: 0,
                                         onTap: () => _showGttOrderDetail(gttOrder),
                                         child: Text(
-                                          _formatCreatedDate(gttOrder),
+                                          showTriggered
+                                              ? _formatTriggeredTime(gttOrder)
+                                              : _formatCreatedDate(gttOrder),
                                           style: _getTextStyle(context),
                                         ),
                                       ),
@@ -790,7 +793,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
     const sortIconWidth = 24.0;
 
     final headers = [
-      'Created on',
+      showStatus ? 'Time' : 'Created on',
       'Instrument',
       'Product',
       'Type',
@@ -810,8 +813,10 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
       for (final order in gttOrders.take(5)) {
         String cellText = '';
         switch (col) {
-          case 0: // Created on
-            cellText = _formatCreatedDate(order);
+          case 0: // Created on / Time (triggered tab)
+            cellText = showStatus
+                ? _formatTriggeredTime(order)
+                : _formatCreatedDate(order);
             break;
           case 1: // Instrument
             final symbol =
@@ -1446,6 +1451,14 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
     return 'N/A';
   }
 
+  // Triggered tab: time part of norentm ("HH:mm:ss dd-MM-yyyy" or ISO)
+  String _formatTriggeredTime(GttOrderBookModel gttOrder) {
+    final norentm = gttOrder.norentm?.trim() ?? '';
+    if (norentm.isEmpty) return 'N/A';
+    if (norentm.contains('T')) return norentm.split('T')[1];
+    return norentm.split(' ')[0];
+  }
+
   // Build Type cell with "SINGLE / BUY" or "OCO / SELL" format
   Widget _buildTypeCell(GttOrderBookModel gttOrder) {
     // Determine if SINGLE or OCO based on placeOrderParamsLeg2
@@ -1720,6 +1733,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
 
       // Refresh GTT order book after successful cancel
       await ref.read(orderProvider).fetchGTTOrderBook(context, "");
+       ref.read(orderProvider).fetchTriggeredGTTOrders(context);
 
       // Note: Success snackbar is already shown by cancelGttOrder in provider
     } catch (e) {

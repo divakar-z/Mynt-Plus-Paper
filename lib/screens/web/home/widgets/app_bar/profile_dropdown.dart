@@ -11,6 +11,7 @@ import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/notification_provider.dart';
 import 'package:mynt_plus/provider/privacy_provider.dart';
+import 'package:mynt_plus/screens/web/market_watch/state/trade_from_chart_mode_provider.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
@@ -604,6 +605,13 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
             textColor: textColor,
           ),
 
+          // Chart preference — ZChart (in-house chart) or TradingView
+          _buildChartPreferenceMenuItem(
+            context,
+            iconColor: iconColor,
+            textColor: textColor,
+          ),
+
           // Position PiP Toggle
           if (PipService.isSupported)
             _buildPipToggleMenuItem(
@@ -884,6 +892,121 @@ class _ProfileDropdownMenuState extends ConsumerState<ProfileDropdownMenu> {
                       ),
                     ),
                   ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Client's preferred chart in symbol details, saved per client id. Same
+  // preference as the chart pill there, so both stay in sync. The menu stays
+  // open so the client sees the radio change.
+  MenuButton _buildChartPreferenceMenuItem(
+    BuildContext context, {
+    required Color iconColor,
+    required Color textColor,
+  }) {
+    final chartMode = ref.watch(tradeFromChartModeProvider);
+    final isZChart = chartMode.isOn;
+
+    Widget radio(String label, bool selected, bool value) {
+      final activeColor = resolveThemeColor(context,
+          dark: MyntColors.secondary, light: MyntColors.primary);
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            chartMode.set(value);
+            setState(() {}); // Refresh the menu to show updated state
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 1),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected
+                          ? activeColor
+                          : Colors.grey.withValues(alpha: 0.6),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: selected
+                      ? Center(
+                          child: Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: activeColor,
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: MyntWebTextStyles.body(
+                    context,
+                    fontWeight: MyntFonts.medium,
+                    color: textColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return MenuButton(
+      autoClose: false,
+      onPressed: (ctx) {},
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.candlestick_chart_outlined,
+                  size: 22,
+                  color: iconColor,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    'Chart',
+                    style: MyntWebTextStyles.body(
+                      context,
+                      fontWeight: MyntFonts.medium,
+                      color: textColor,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            // Options on their own line, aligned under the "Chart" label
+            Padding(
+              padding: const EdgeInsets.only(left: 36),
+              child: Row(
+                children: [
+                  radio('ZChart', isZChart, true),
+                  const SizedBox(width: 20),
+                  radio('TradingView', !isZChart, false),
                 ],
               ),
             ),

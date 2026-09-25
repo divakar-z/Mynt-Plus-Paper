@@ -1240,7 +1240,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     // Overview (index 0) and Chart (index 1) tabs - show chart via persistent portal
     // UNLESS the user has toggled "Trade from Chart" on, in which case the
     // in-house chart engine replaces the TradingView portal here.
-    final tradeFromChart = ref.watch(tradeFromChartModeProvider);
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider).isOn;
     if (tradeFromChart) {
       // Hide the TradingView portal so it doesn't bleed through behind the
       // embedded iframe. The portal stays mounted (its state persists) —
@@ -1307,7 +1307,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final theme = shadcn.Theme.of(context);
     final isDark = isDarkMode(context);
 
-    final tradeFromChart = ref.watch(tradeFromChartModeProvider);
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider).isOn;
     // The Trade from Chart pill only makes sense when the chart area is
     // actually visible — Overview (0) and Chart (1) tabs. Hidden on
     // Options / Stock Report tabs where the chart isn't shown.
@@ -1365,7 +1365,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
           cursor: SystemMouseCursors.click,
           child: GestureDetector(
             onTap: () =>
-                ref.read(tradeFromChartModeProvider.notifier).toggle(),
+                ref.read(tradeFromChartModeProvider).toggle(),
             child: Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1390,7 +1390,8 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                     ),
                   const SizedBox(width: 6),
                   Text(
-                    'Trade from Chart',
+                    // 'Trade from Chart',
+                    'ZChart',
                     style: MyntWebTextStyles.body(
                       context,
                         fontWeight: tradeFromChart
@@ -1402,22 +1403,23 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             : theme.colorScheme.mutedForeground,
                       ),
                   ),
-                  const SizedBox(width: 4),
-                  Transform.translate(
-                    offset: const Offset(0, -6),
-                    child: Text(
-                      'Beta',
-                      style: MyntWebTextStyles.caption(
-                        context,
-                        color: resolveThemeColor(
-                          context,
-                          dark: MyntColors.primaryDark,
-                          light: MyntColors.primary,
-                        ),
-                        fontWeight: MyntFonts.semiBold,
-                      ).copyWith(fontSize: 10),
-                    ),
-                  ),
+                  // Beta label removed — Trade from Chart is now the default chart
+                  // const SizedBox(width: 4),
+                  // Transform.translate(
+                  //   offset: const Offset(0, -6),
+                  //   child: Text(
+                  //     'Beta',
+                  //     style: MyntWebTextStyles.caption(
+                  //       context,
+                  //       color: resolveThemeColor(
+                  //         context,
+                  //         dark: MyntColors.primaryDark,
+                  //         light: MyntColors.primary,
+                  //       ),
+                  //       fontWeight: MyntFonts.semiBold,
+                  //     ).copyWith(fontSize: 10),
+                  //   ),
+                  // ),
                 ],
               ),
             ),
