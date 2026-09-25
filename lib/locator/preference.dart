@@ -609,6 +609,14 @@ class Preferences {
 
   bool getPrivacyMode(String userId) =>
       _prefInstance?.getBool('${_privacyMode}_$userId') ?? false;
+
+  // Preferred chart in symbol details — "tfc" (Trade from Chart) or "tv"
+  // (TradingView). Stored per client id; defaults to Trade from Chart.
+  Future setChartPreference(String userId, String chart) async =>
+      await _prefInstance!.setString('${_chartPreference}_$userId', chart);
+
+  String getChartPreference(String userId) =>
+      _prefInstance?.getString('${_chartPreference}_$userId') ?? 'tfc';
 }
 
 const String _userTheme = 'userTheme';
@@ -750,3 +758,5 @@ const String _chartEngineSession = 'chartEngineSessionV1';
 const String _accessibilitySettings = 'accessibilitySettingsV1';
 
 const String _privacyMode = "privacyMode";
+
+const String _chartPreference = "chartPreference";
