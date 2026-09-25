@@ -154,6 +154,10 @@ class _MFWatchlistScreenState extends ConsumerState<MFWatchlistScreenWeb> {
         }
         return _sortAscending ? compareResult : -compareResult;
       });
+    } else {
+      // Default order: highest 3Y return first
+      filteredList.sort((a, b) => (double.tryParse(b.tHREEYEARDATA ?? '0') ?? 0)
+          .compareTo(double.tryParse(a.tHREEYEARDATA ?? '0') ?? 0));
     }
 
     return MyntLoaderOverlay(

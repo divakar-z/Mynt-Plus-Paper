@@ -39,13 +39,20 @@ class MFCategoryListScreenWeb extends ConsumerStatefulWidget {
       _MFCategoryListScreenState();
 }
 
-class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  late ScrollController _scrollController;
-  late ScrollController _horizontalScrollController;
+class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb> {
+  final ScrollController _scrollController = ScrollController();
+  final ScrollController _horizontalScrollController = ScrollController();
+  // Dedicated to the category tab strip - sharing one controller across two
+  // scroll views makes position/offset lookups throw.
+  final ScrollController _tabScrollController = ScrollController();
   int selectedTab = 0;
   List<String> tabTitles = [];
+  bool _tabsReady = false;
+
+  // Tab overflow arrows
+  bool _canScrollLeft = false;
+  bool _canScrollRight = true;
+  BoxConstraints? _lastConstraints;
   // String selectedReturn = '3Y Returns'; // Removed
 
   // Sorting state
@@ -68,7 +75,12 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
     // Listen to hover changes for popover management
     _hoveredRowIndex.addListener(_onHoverChanged);
 
-    // Initialize tab titles based on the category data
+    _tabScrollController.addListener(_updateScrollArrows);
+
+    // Initialize tab titles based on the category data. Done synchronously so
+    // the first frame already has the tabs when the category data is cached,
+    // instead of flashing the empty state for one frame.
+    _initializeTabs(notify: false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeTabs();
     });
@@ -117,7 +129,10 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
     }
   }
 
-  void _initializeTabs() {
+  // [notify] is false when called from initState, where setState is illegal.
+  void _initializeTabs({bool notify = true}) {
+    if (_tabsReady || !mounted) return;
+
     final mfData = ref.read(mfProvider);
     final categoryData = mfData.mFCategoryTypesStatic;
 
@@ -125,41 +140,19 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
     for (var category in categoryData) {
       if (category['title'] == widget.title) {
         List<dynamic> subTabs = category['sub'] ?? [];
-        setState(() {
-          // Remove duplicates and convert to list
-          tabTitles = subTabs.map((tab) => tab.toString()).toSet().toList();
-        });
+        // Sub-tabs are filled by the category API; bail out and retry on the
+        // next provider update if the response hasn't arrived yet.
+        if (subTabs.isEmpty) return;
+        // Remove duplicates and convert to list
+        tabTitles = subTabs.map((tab) => tab.toString()).toSet().toList();
+        _tabsReady = true;
+        if (notify) setState(() {});
         break;
       }
     }
 
-    // Initialize TabController after we have the tabs
     if (tabTitles.isNotEmpty) {
-      _tabController =
-          TabController(length: tabTitles.length, vsync: this, initialIndex: 0);
-      _scrollController = ScrollController();
-      _horizontalScrollController = ScrollController();
       selectedTab = 0;
-
-      _tabController.animation!.addListener(() {
-        final newIndex = _tabController.animation!.value.round();
-        if (selectedTab != newIndex) {
-          setState(() {
-            selectedTab = newIndex;
-          });
-          // Update the selected chip in provider
-          if (newIndex < tabTitles.length) {
-            ref.read(mfProvider).changetitle(tabTitles[newIndex]);
-            ref
-                .read(mfProvider)
-                .fetchcatdatanew(widget.title, tabTitles[newIndex]);
-          }
-          // Scroll to center the active tab
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _scrollToActiveTab(newIndex);
-          });
-        }
-      });
 
       // Scroll to center the initial tab after the widget is built
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -172,16 +165,61 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
   void dispose() {
     _cancelPopoverCloseTimer();
     _hoveredRowIndex.removeListener(_onHoverChanged);
-    _tabController.dispose();
+    _tabScrollController.removeListener(_updateScrollArrows);
     _scrollController.dispose();
     _horizontalScrollController.dispose();
+    _tabScrollController.dispose();
     _hoveredRowIndex.dispose();
 
     super.dispose();
   }
 
+  void _updateScrollArrows() {
+    if (!mounted) return;
+    // Additional safety check to prevent setState after dispose
+    try {
+      if (!_tabScrollController.hasClients) return;
+      final newCanScrollLeft = _tabScrollController.offset > 0;
+      final newCanScrollRight = _tabScrollController.offset <
+          _tabScrollController.position.maxScrollExtent;
+
+      // Only call setState if values actually changed
+      if (_canScrollLeft != newCanScrollLeft ||
+          _canScrollRight != newCanScrollRight) {
+        setState(() {
+          _canScrollLeft = newCanScrollLeft;
+          _canScrollRight = newCanScrollRight;
+        });
+      }
+    } catch (e) {
+      // Silently handle any errors during scroll position access
+      // This prevents crashes when widget is being disposed
+    }
+  }
+
+  void _scrollTabs({required bool left}) {
+    if (!_tabScrollController.hasClients) return;
+    final contentSize = _tabScrollController.position.viewportDimension;
+    final maxScroll = _tabScrollController.position.maxScrollExtent;
+    final currentScroll = _tabScrollController.offset;
+    final scrollAmount = contentSize * 0.8; // Scroll 80% of view width
+
+    double target;
+    if (left) {
+      target = (currentScroll - scrollAmount).clamp(0.0, maxScroll);
+    } else {
+      target = (currentScroll + scrollAmount).clamp(0.0, maxScroll);
+    }
+
+    _tabScrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
   void _scrollToActiveTab(int index) {
-    if (_scrollController.hasClients) {
+    if (_tabScrollController.hasClients) {
       // Calculate cumulative width up to the current tab
       final double totalWidthUpToIndex = _calculateTotalWidthUpToIndex(index);
       final double currentTabWidth = _calculateTabWidth(tabTitles[index]);
@@ -191,8 +229,9 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
       final double scrollPosition =
           totalWidthUpToIndex - (screenWidth / 2) + (currentTabWidth / 2);
 
-      _scrollController.animateTo(
-        scrollPosition.clamp(0.0, _scrollController.position.maxScrollExtent),
+      _tabScrollController.animateTo(
+        scrollPosition.clamp(
+            0.0, _tabScrollController.position.maxScrollExtent),
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
@@ -200,14 +239,14 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
   }
 
   double _calculateTabWidth(String text) {
-    // Base width for padding and minimum space
-    const double baseWidth = 24.0; // Reduced from 30.0
+    // Pill chrome: 16px horizontal padding either side + 8px right margin
+    const double baseWidth = 40.0;
     // Approximate character width (adjust based on your font)
     const double charWidth = 7.0;
     // Calculate width based on text length
     double textWidth = text.length * charWidth;
     // Add base width and ensure minimum width
-    return (textWidth + baseWidth).clamp(100.0, 250.0);
+    return (textWidth + baseWidth).clamp(60.0, 300.0);
   }
 
   double _calculateTotalWidthUpToIndex(int index) {
@@ -223,28 +262,175 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
     final theme = ref.watch(themeProvider);
     final mfData = ref.watch(mfProvider);
 
+    // The category API fills the sub-tabs asynchronously, so keep retrying
+    // until they arrive instead of settling on an empty screen.
+    if (!_tabsReady) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _initializeTabs());
+    }
+
+    // Still waiting on the category response - show the loader, not "no data".
+    // fetchmfallcatnew() clears every 'sub' list before refilling it, so a
+    // non-null mfallcatnewlist does not mean the sub-tabs are available yet.
+    final categoriesPending = !_tabsReady &&
+        (mfData.categoryDataLoader || mfData.mfallcatnewlist == null);
+
     return Scaffold(
       body: SafeArea(
         child: Column(
           children: [
             _buildCustomHeader(context, theme),
+            if (tabTitles.isNotEmpty) _buildTabBar(context, theme, mfData),
             Expanded(
               child: MyntLoaderOverlay(
                 // Show loader when tab data is loading or when fund detail is loading
-                isLoading: (tabTitles.isEmpty && (mfData.bestmfloader ?? false)) || mfData.fundDetailLoader,
-                child: tabTitles.isEmpty
-                    ? const Center(
-                        child: NoDataFound(
-                        secondaryEnabled: false,
-                      ))
-                    : _buildFundList(
-                        tabTitles.isNotEmpty ? tabTitles[selectedTab] : '',
-                        mfData,
-                        theme,
-                        context),
+                isLoading: categoriesPending ||
+                    (tabTitles.isEmpty && (mfData.bestmfloader ?? false)) ||
+                    mfData.fundDetailLoader,
+                child: categoriesPending
+                    ? const SizedBox.expand()
+                    : tabTitles.isEmpty
+                        ? const Center(
+                            child: NoDataFound(
+                            secondaryEnabled: false,
+                          ))
+                        : _buildFundList(
+                            tabTitles[selectedTab],
+                            mfData,
+                            theme,
+                            context),
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabBar(
+      BuildContext context, ThemesProvider theme, dynamic mfData) {
+    return Container(
+      width: double.infinity,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Only update scroll arrows when constraints actually change
+          if (_lastConstraints != constraints) {
+            _lastConstraints = constraints;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _updateScrollArrows();
+            });
+          }
+
+          // Arrows only appear once the pills no longer fit the row
+          final bool isOverflowing =
+              _calculateTotalWidthUpToIndex(tabTitles.length) >
+                  constraints.maxWidth;
+
+          return Row(
+            children: [
+              if (isOverflowing)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: InkWell(
+                    onTap: _canScrollLeft ? () => _scrollTabs(left: true) : null,
+                    customBorder: const CircleBorder(),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2.0),
+                      child: Icon(
+                        Icons.chevron_left,
+                        size: 20,
+                        color: _canScrollLeft
+                            ? (theme.isDarkMode ? Colors.white : Colors.black)
+                            : Colors.grey,
+                      ),
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  controller: _tabScrollController,
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(
+                      tabTitles.length,
+                      (tab) => MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () {
+                            if (selectedTab == tab) return;
+                            setState(() {
+                              selectedTab = tab;
+                            });
+                            mfData.changetitle(tabTitles[tab]);
+                            mfData.fetchcatdatanew(
+                                widget.title, tabTitles[tab]);
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              _scrollToActiveTab(tab);
+                            });
+                          },
+                          child:
+                              _tabConstruct(context, tabTitles[tab], theme, tab),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (isOverflowing)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8.0),
+                  child: InkWell(
+                    onTap:
+                        _canScrollRight ? () => _scrollTabs(left: false) : null,
+                    customBorder: const CircleBorder(),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2.0),
+                      child: Icon(
+                        Icons.chevron_right,
+                        size: 20,
+                        color: _canScrollRight
+                            ? (theme.isDarkMode ? Colors.white : Colors.black)
+                            : Colors.grey,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _tabConstruct(
+      BuildContext context, String title, ThemesProvider theme, int tab) {
+    final isActive = selectedTab == tab;
+
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: isActive
+            ? (theme.isDarkMode
+                ? Colors.white.withValues(alpha: 0.1)
+                : Colors.black.withValues(alpha: 0.05))
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        title,
+        overflow: TextOverflow.ellipsis,
+        maxLines: 1,
+        style: MyntWebTextStyles.body(
+          context,
+          fontWeight: isActive ? MyntFonts.semiBold : MyntFonts.medium,
+        ).copyWith(
+          color: isActive
+              ? shadcn.Theme.of(context).colorScheme.foreground
+              : shadcn.Theme.of(context).colorScheme.mutedForeground,
         ),
       ),
     );
@@ -764,6 +950,13 @@ class _MFCategoryListScreenState extends ConsumerState<MFCategoryListScreenWeb>
               break;
           }
           return _sortAscending ? compareResult : -compareResult;
+        });
+      } else {
+        // Default order: highest 3Y return first
+        sortedList.sort((a, b) {
+          if (a == null || b == null) return 0;
+          return (double.tryParse(b.s3Year ?? '0') ?? 0)
+              .compareTo(double.tryParse(a.s3Year ?? '0') ?? 0);
         });
       }
     }
