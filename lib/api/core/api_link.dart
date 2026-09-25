@@ -347,7 +347,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   //fund urlss///
   String get viewupiid => 'https://fundapi.mynt.in/withdraw/view_upi_id';
 // Bonds
-  String get bondBaseURL => "$dashBoardURL/ipo"; // 'https://besim.zebull.in';
+  String get bondBaseURL => "$dashBoardURL/ipo"; // 'https://besim.mynt.in';
   String get getSGB => "$bondBaseURL/getcurrentSGBdetails";
   String get getGSec => "$bondBaseURL/getcurrentNCB_Gsecdetails";
   String get getTBill => "$bondBaseURL/getcurrentNCB_TBilldetails";

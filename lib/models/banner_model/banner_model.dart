@@ -34,7 +34,7 @@ class BannerModel {
     String imageUrl = json['image_url'] ?? '';
     // Prepend base URL if it's a relative path
     if (imageUrl.isNotEmpty && imageUrl.startsWith('/')) {
-      imageUrl = 'https://besim.zebull.in/banner$imageUrl'; // Remove the extra slash
+      imageUrl = 'https://besim.mynt.in/banner$imageUrl'; // Remove the extra slash
     }
 
     return BannerModel(

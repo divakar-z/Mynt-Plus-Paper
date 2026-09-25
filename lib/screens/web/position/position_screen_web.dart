@@ -58,6 +58,16 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
       ValueNotifier<String>('All'); // Filter options: All, MIS, NRML, CNC
   int? _sortColumnIndex;
   bool _sortAscending = true;
+
+  // Active sort for the positions table, held here rather than inside it.
+  //
+  // Refresh replaces the table with a loader, so anything the table owned was
+  // destroyed and rebuilt — which is why the sort used to clear while the
+  // search box and filter chip, both owned by this screen, survived. Kept
+  // separate from the two fields above, which belong to the retired
+  // DataTable2 path.
+  int? _positionsSortColumnIndex;
+  bool _positionsSortAscending = true;
   // ✅ Use ValueNotifier instead of setState to avoid rebuilding entire widget
   final ValueNotifier<String?> _hoveredRowToken = ValueNotifier<String?>(null);
   final ValueNotifier<int?> _hoveredColumnIndex = ValueNotifier<int?>(null);
@@ -1688,6 +1698,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             return PositionTable(
               searchQuery: searchQuery,
               filterType: filterType,
+              initialSortColumnIndex: _positionsSortColumnIndex,
+              initialSortAscending: _positionsSortAscending,
+              onSortChanged: (columnIndex, ascending) {
+                _positionsSortColumnIndex = columnIndex;
+                _positionsSortAscending = ascending;
+              },
             );
           },
         );

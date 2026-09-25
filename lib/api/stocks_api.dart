@@ -39,32 +39,81 @@ mixin StocksAPI on ApiCore {
 
    
   }
-  Future< PortfolioResponse> fetchPortfolioAnalysis(String clientId, String session) async {
- 
+
+  Future<PortfolioResponse> fetchPortfolioAnalysis(
+      String clientId, String session) async {
+    final uri = Uri.parse(
+        '${apiLinks.portfolioAnalysisURL}?client_id=$clientId&session=$session');
+
+    final Response res;
     try {
-      final uri = Uri.parse('${apiLinks.portfolioAnalysisURL}?client_id=$clientId&session=$session');
-      final res = await apiClient.get(uri);
-      final json = jsonDecode(res.body);
-      if(json['stat'] == 'Not_Ok'){
-        return PortfolioResponse(
-          xirrResult: 0.0,
-          accountAllocation: {},
-          marketCapAllocation: {},
-          sectorAllocation: {},
-          topStocks: [],
-          fundamentals: [],
-          chartData: null,
-          message: "No data found",
-        );
-      }
-        
-     return PortfolioResponse.fromJson(json as Map<String, dynamic>);
-      } catch (e) {
-       rethrow;
+      res = await apiClient.get(uri);
+    } catch (e) {
+      throw PortfolioAnalysisException.network(e);
     }
 
-   
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw PortfolioAnalysisException.server(res.statusCode);
+    }
+
+    dynamic json;
+    try {
+      json = jsonDecode(res.body);
+    } catch (_) {
+      // A 200 carrying an HTML error page, or an empty body.
+      throw PortfolioAnalysisException.server(res.statusCode);
+    }
+    if (json is! Map<String, dynamic>) {
+      throw PortfolioAnalysisException.server(res.statusCode);
+    }
+
+    // Case-insensitive: an exact "Not_Ok" match let "Not_ok" through to be
+    // parsed as a success, which rendered a screen of zeros.
+    if ('${json['stat'] ?? ''}'.toLowerCase() == 'not_ok') {
+      final emsg = '${json['emsg'] ?? ''}'.trim();
+      if (emsg.toLowerCase().contains('no data')) {
+        return PortfolioResponse.empty();
+      }
+      throw PortfolioAnalysisException.analysisFailed(res.statusCode, emsg);
+    }
+
+    try {
+      return PortfolioResponse.fromJson(json);
+    } catch (_) {
+      // A field arriving in a shape the model cannot convert is our problem,
+      // not an empty portfolio.
+      throw PortfolioAnalysisException.server(res.statusCode);
+    }
   }
+
+  // Retired 25 Sep 2026 — kept for rollback. Collapsed every failure into an
+  // empty response, ignored res.statusCode, and decoded the body unguarded.
+  // Future< PortfolioResponse> fetchPortfolioAnalysis(String clientId, String session) async {
+  //
+  //   try {
+  //     final uri = Uri.parse('${apiLinks.portfolioAnalysisURL}?client_id=$clientId&session=$session');
+  //     final res = await apiClient.get(uri);
+  //     final json = jsonDecode(res.body);
+  //     if(json['stat'] == 'Not_Ok'){
+  //       return PortfolioResponse(
+  //         xirrResult: 0.0,
+  //         accountAllocation: {},
+  //         marketCapAllocation: {},
+  //         sectorAllocation: {},
+  //         topStocks: [],
+  //         fundamentals: [],
+  //         chartData: null,
+  //         message: "No data found",
+  //       );
+  //     }
+  //
+  //    return PortfolioResponse.fromJson(json as Map<String, dynamic>);
+  //     } catch (e) {
+  //      rethrow;
+  //   }
+  //
+  //
+  // }
   Future<ReferralRewards> fetchReferralBonus(String clientId) async {
     try {
       final uri = Uri.parse(apiLinks.referralBonusURL);

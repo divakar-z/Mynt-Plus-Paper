@@ -82,6 +82,17 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
   final ValueNotifier<String> _mtfSearchQuery = ValueNotifier<String>('');
   final ValueNotifier<String> _mfSearchQuery = ValueNotifier<String>('');
   final ValueNotifier<String> _mfDematSearchQuery = ValueNotifier<String>('');
+
+  // Active sort per tab, held here rather than inside the table.
+  //
+  // Refresh replaces the table with a loader, so anything the table owned was
+  // destroyed and rebuilt — which is why the sort used to clear while the
+  // search box and filter chip, both owned by this screen, survived. Equity
+  // and MTF keep their own, since they are two separate lists.
+  int? _stocksSortColumnIndex;
+  bool _stocksSortAscending = true;
+  int? _mtfSortColumnIndex;
+  bool _mtfSortAscending = true;
   final TextEditingController _stocksSearchController = TextEditingController();
   final TextEditingController _mtfSearchController = TextEditingController();
   final TextEditingController _mfSearchController = TextEditingController();
@@ -887,6 +898,12 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                             return TableExample1(
                               searchQuery: searchQuery,
                               filterType: filterType,
+                              initialSortColumnIndex: _stocksSortColumnIndex,
+                              initialSortAscending: _stocksSortAscending,
+                              onSortChanged: (columnIndex, ascending) {
+                                _stocksSortColumnIndex = columnIndex;
+                                _stocksSortAscending = ascending;
+                              },
                             );
                           },
                         );
@@ -899,6 +916,12 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
                         return TableExample1(
                           searchQuery: searchQuery,
                           isMtf: true,
+                          initialSortColumnIndex: _mtfSortColumnIndex,
+                          initialSortAscending: _mtfSortAscending,
+                          onSortChanged: (columnIndex, ascending) {
+                            _mtfSortColumnIndex = columnIndex;
+                            _mtfSortAscending = ascending;
+                          },
                         );
                       },
                     ),
