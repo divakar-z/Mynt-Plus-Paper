@@ -105,6 +105,49 @@ mixin MarketWatchApi on ApiCore {
     }
   }
 
+  /// Fetch the single in-progress candle for [interval] (minutes).
+  ///
+  /// [tpseries] returns only CLOSED candles, so a chart opened mid-candle is
+  /// missing the seconds already elapsed in it — the chart shows a gap until
+  /// the next tick, and that tick can only set the close (the elapsed
+  /// open/high/low are lost). This hits [tpseriesLive] with
+  /// `st` = [candleStartEpoch] and no `et`, which returns the forming candle.
+  ///
+  /// Returns null on ANY failure, so callers fall back to closed-candle
+  /// history — the pre-existing behaviour.
+  Future<Data?> getLiveCandle({
+    required String exchange,
+    required String token,
+    required String interval,
+    required int candleStartEpoch,
+  }) async {
+    try {
+      final uri = Uri.parse(apiLinks.tpseriesLive);
+      // Hard timeout: an erroring endpoint is caught below, but a HANGING one
+      // would stall the whole history response and leave the chart empty.
+      // Timing out returns null, i.e. closed-candle history exactly as before.
+      final res = await apiClient
+          .post(
+            uri,
+            headers: defaultHeaders,
+            body:
+                '''jData={"uid":"${prefs.clientId}","exch":"$exchange","token":"$token","st":"$candleStartEpoch","intrv":"$interval"}&jKey=${prefs.clientSession}''',
+          )
+          .timeout(const Duration(seconds: 3));
+      final json = jsonDecode(res.body);
+      if (json is! List || json.isEmpty) return null;
+      // Newest-first; the in-progress candle is the first row.
+      final row = Data.fromJson(json.first as Map<String, dynamic>);
+      if (row.stat == 'Not_Ok' || row.ssboe == null) return null;
+      // Only accept the candle we asked for — if the feed rolled over
+      // mid-request the stale one would land in the wrong slot.
+      if (int.tryParse(row.ssboe!) != candleStartEpoch) return null;
+      return row;
+    } catch (_) {
+      return null;
+    }
+  }
+
 // Edit watchlist name from kambala
 
   Future<WatchlistRenameModel> getWatchListRename(

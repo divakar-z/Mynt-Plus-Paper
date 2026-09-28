@@ -53,6 +53,64 @@
   // single-line change instead of four drifting URLs.
   var NOREN_BASE = 'https://go.mynt.in/NorenWClientWeb';
 
+  // Live (in-progress) candle endpoint.
+  //
+  // NOREN_BASE + '/TPSeries' only returns CLOSED candles, so a chart opened
+  // at 10:10:10 gets history up to 10:09 and nothing for the 10 seconds
+  // already elapsed in the 10:10 candle. The chart then sits one candle
+  // short until the next tick arrives, and that tick can only set the close
+  // — the open/high/low of the elapsed seconds are gone. On an illiquid
+  // scrip the hole can last minutes.
+  //
+  // This endpoint returns the candle in progress when called with
+  // st = that candle's start (no `et`). Same jData/jKey body shape.
+  var LIVE_CANDLE_URL = 'https://ws.mynt.in/chart/TPSeries';
+  var LIVE_CANDLE_TIMEOUT_MS = 2500;
+
+  // Resolve the in-progress candle for `resolution` (minutes) as a TV bar.
+  // NEVER rejects: on any failure it resolves null and the caller just
+  // delivers the closed-candle history exactly as before.
+  function fetchLiveCandle(user, usession, exch, token, resolution, toBar) {
+    // Strict digits-only: parseInt('1D') is 1, which would silently fetch a
+    // 1-minute candle for a daily series. Daily/weekly/monthly take the other
+    // getBars branch today, so this is belt-and-braces.
+    if (!/^[0-9]+$/.test(String(resolution)) || !exch || !token) {
+      return Promise.resolve(null);
+    }
+    var mins = parseInt(resolution, 10);
+    if (mins <= 0) return Promise.resolve(null);
+    var stepSec = mins * 60;
+    var st = Math.floor(Date.now() / 1000 / stepSec) * stepSec;
+    var body = 'jData={"uid":"' + user + '","exch":"' + exch + '","token":"' +
+        token + '","st":"' + st + '","intrv":"' + mins + '"}&jKey=' + usession;
+    // Hard timeout. An erroring endpoint is caught below, but a HANGING one
+    // would never settle and history would never be delivered — the chart
+    // would sit empty. Losing the race just yields null, i.e. exactly the
+    // pre-existing behaviour. Deliberately NOT fetchRetry: this is a
+    // best-effort garnish on history that must never delay the candles.
+    var timeout = new Promise(function (resolve) {
+      setTimeout(function () { resolve(null); }, LIVE_CANDLE_TIMEOUT_MS);
+    });
+    var req = fetch(LIVE_CANDLE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!Array.isArray(d) || d.length === 0) return null;
+        // Newest-first; the in-progress candle is the first row.
+        var row = d[0];
+        if (!row || row.stat === 'Not_Ok' || row.ssboe == null) return null;
+        // Only accept the candle we asked for — if the feed rolled over
+        // mid-request, the stale one would land at the wrong slot.
+        if (parseInt(row.ssboe, 10) !== st) return null;
+        return toBar(row);
+      })
+      .catch(function () { return null; });
+    return Promise.race([req, timeout]);
+  }
+
   // OI overlay marker — a symbol resolved with this suffix returns bars
   // whose `close` is the open-interest value, not price. Used by the OI
   // study on the desktop web chart. Mirrors `$OISYMBOL` handling in
@@ -726,17 +784,57 @@
               var bars = data.map(toBar)
                 .sort(function (a, b) { return a.time - b.time; });
 
-              // Cache the last bar for subscribeBars (only if this is still the desired symbol)
-              if (periodParams.firstDataRequest && bars.length > 0) {
-                var desired = desiredSymbols[containerId];
-                if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
-                  lastBarByResolution[resolution] = bars[bars.length - 1];
-                } else {
-                  console.log('ScalperCharts: Stale getBars (intraday) for', symbolInfo.name, '- desired:', desired);
+              function deliver() {
+                // Cache the last bar for subscribeBars (only if this is still the desired symbol)
+                if (periodParams.firstDataRequest && bars.length > 0) {
+                  var desired = desiredSymbols[containerId];
+                  if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
+                    lastBarByResolution[resolution] = bars[bars.length - 1];
+                  } else {
+                    console.log('ScalperCharts: Stale getBars (intraday) for', symbolInfo.name, '- desired:', desired);
+                  }
                 }
+
+                onHistoryCallback(bars, { noData: false });
               }
 
-              onHistoryCallback(bars, { noData: false });
+              // Deliver history IMMEDIATELY — never await the live candle
+              // here. Delaying onHistoryCallback re-opens the stale-symbol
+              // race the guards above exist for: on a fast symbol switch the
+              // late callback lands after TV has moved on and paints the old
+              // scrip's bars onto the new series (seen live as a Nifty Next 50
+              // candle carrying NIFTY TOTAL MKT's low, and a price axis
+              // spanning both instruments).
+              deliver();
+
+              // Then fill the in-progress candle through the realtime path,
+              // exactly as a tick would. Only on the initial load — scroll-back
+              // requests ask for older windows that never contain it.
+              if (!periodParams.firstDataRequest) return;
+              var wantSymbol = symbolInfo.name;
+              fetchLiveCandle(
+                  user, usession,
+                  symData.exch || symbolInfo.exchange, symData.Token || '',
+                  resolution, toBar)
+                .then(function (live) {
+                  if (!live) return;
+                  // The symbol may have changed while this was in flight.
+                  var desired = desiredSymbols[containerId];
+                  if (desired && desired !== wantSymbol) return;
+                  var entry = subscriptions[containerId];
+                  var sub = entry && entry.main;
+                  if (!sub || !sub.callback || sub.resolution !== resolution) return;
+                  if (sub.symbolName && sub.symbolName !== wantSymbol) return;
+                  // Never rewind: a tick may already have advanced the bar.
+                  if (sub.lastBar && live.time < sub.lastBar.time) return;
+                  sub.lastBar = live;
+                  sub.callback(live);
+                  nchart('liveCandleSeeded', {
+                    symbol: wantSymbol,
+                    resolution: resolution,
+                    at: new Date(live.time).toISOString()
+                  });
+                });
             })
             .catch(function (e) {
               console.error('getBars intraday error:', e);

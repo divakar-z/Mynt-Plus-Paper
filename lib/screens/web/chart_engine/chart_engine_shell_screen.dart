@@ -1390,6 +1390,29 @@ class _ChartEngineShellScreenState
     }
     try {
       final candles = <Map<String, dynamic>>[];
+      // Kick the in-progress-candle fetch off NOW, in parallel with the
+      // history call below, and await it only after history has been parsed.
+      // Doing it sequentially would add its latency to the history response,
+      // and the engine's onHistoryResult replaces the whole candle array
+      // without checking the request id — so a slower response makes it more
+      // likely that a stale result for the PREVIOUS symbol lands after a fast
+      // symbol switch and overwrites the new one. Parallel keeps the response
+      // time (and that race window) as it is today.
+      //
+      // Only intraday: int.tryParse('1D') is null, so daily/weekly/monthly
+      // skip it. Only when the requested window reaches the current candle —
+      // scroll-back requests ask for older windows that never contain it.
+      final stepSec = (int.tryParse(interval) ?? 0) * 60;
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final candleStart = stepSec > 0 ? (nowSec ~/ stepSec) * stepSec : 0;
+      final liveFuture = (stepSec > 0 && end >= nowSec - stepSec)
+          ? locator<ApiExporter>().getLiveCandle(
+              exchange: exch,
+              token: token,
+              interval: interval,
+              candleStartEpoch: candleStart,
+            )
+          : null;
       // Daily (and anything aggregated from daily — weekly / monthly) uses
       // the EODChartData endpoint; it returns much longer history reliably
       // than tpseries' intraday-tuned 1D path. Intraday (1m / 5m) stays on
@@ -1432,6 +1455,32 @@ class _ChartEngineShellScreenState
             continue;
           }
           candles.add({'ts': ts, 'o': o, 'h': h, 'l': l, 'c': c, 'v': v});
+        }
+      }
+      // Merge the in-progress candle (started in parallel above). tpseries
+      // returns only CLOSED candles, so a chart opened at 10:10:10 arrives
+      // missing the 10 seconds already elapsed in the 10:10 candle — a visible
+      // gap until the next tick, and that tick can only set the close (the
+      // elapsed open/high/low are gone).
+      if (liveFuture != null) {
+        final live = await liveFuture;
+        final ts = int.tryParse(live?.ssboe ?? '');
+        final o = double.tryParse(live?.into ?? '');
+        final h = double.tryParse(live?.inth ?? '');
+        final l = double.tryParse(live?.intl ?? '');
+        final c = double.tryParse(live?.intc ?? '');
+        if (ts != null && o != null && h != null && l != null && c != null) {
+          // Replace rather than append — the closed-candle call may already
+          // have returned this slot, and the live copy is the fresher one.
+          candles.removeWhere((e) => e['ts'] == ts);
+          candles.add({
+            'ts': ts,
+            'o': o,
+            'h': h,
+            'l': l,
+            'c': c,
+            'v': double.tryParse(live?.intv ?? '') ?? 0,
+          });
         }
       }
       // Normalize to oldest-first regardless of source.
