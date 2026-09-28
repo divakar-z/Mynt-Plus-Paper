@@ -26,6 +26,8 @@ extension type _ScalperChartsBridge._(JSObject _) implements JSObject {
   external bool hasChart(String containerId);
   external void pushTick(String containerId, JSObject tickData);
   external void resetData(String containerId);
+  external bool hasGap(String containerId);
+  external bool resyncIfStale(String containerId, int awayMs, String trigger);
   external void removeChart(String containerId);
 }
 
@@ -93,6 +95,8 @@ class WebChartManager {
   String? _currentDispName;
   bool _currentDarkMode = false;
   bool _isVisible = false;
+  /// Last time the chart was known to be on screen — drives [markChartVisible].
+  DateTime? _lastVisibleAt;
 
   bool get isVisible => _isVisible;
   String? get currentToken => _currentToken;
@@ -106,6 +110,10 @@ class WebChartManager {
 
   // ── WebSocket stream wiring ───────────────────────────────────────────
   StreamSubscription? _tickStreamSub;
+  WebSocketProvider? _wsProvider;
+  VoidCallback? _wsStateListener;
+  /// When the socket last went down; null while connected.
+  DateTime? _wsDownSince;
 
   // ── Public API ────────────────────────────────────────────────────────
 
@@ -184,6 +192,29 @@ class WebChartManager {
         'l': (tick['l'] ?? '0').toString(),
       });
     });
+
+    // Ticks lost during a socket outage never come back, so the chart shows
+    // a hole after reconnect. Re-fetch history once the socket is back,
+    // passing how long it was down (the JS side ignores short blips).
+    final oldProvider = _wsProvider;
+    final oldListener = _wsStateListener;
+    if (oldProvider != null && oldListener != null) {
+      oldProvider.removeListener(oldListener);
+    }
+    _wsProvider = wsProvider;
+    _wsDownSince = wsProvider.wsConnected ? null : DateTime.now();
+    _wsStateListener = () {
+      if (!wsProvider.wsConnected) {
+        _wsDownSince ??= DateTime.now();
+        return;
+      }
+      final downSince = _wsDownSince;
+      if (downSince == null) return;
+      _wsDownSince = null;
+      _resync(DateTime.now().difference(downSince).inMilliseconds,
+          'ws-reconnect');
+    };
+    wsProvider.addListener(_wsStateListener!);
   }
 
   /// Change (or initially create) the chart's symbol.
@@ -300,6 +331,55 @@ class WebChartManager {
       bridge.pushTick(containerId, tickData.jsify() as JSObject);
     } catch (_) {
       // Silently swallow tick errors to avoid flooding logs.
+    }
+  }
+
+  /// Re-fetch history if the chart has been off-screen long enough to have
+  /// missed candles.
+  ///
+  /// The chart lives in a persistent portal, so leaving the Chart tab for
+  /// Option Chain only hides it — coming back calls [changeSymbol] with the
+  /// same symbol, which is a no-op, and nothing re-requests the candles that
+  /// formed meanwhile. The result is a chart with a hole in it plus one live
+  /// candle stranded on the right (client report, 25 Sep 2026).
+  ///
+  /// Call this whenever the chart becomes visible. It is safe to call on
+  /// every rebuild: the JS side ignores short absences and applies its own
+  /// cooldown, so a re-fetch happens at most once per real return.
+  void markChartVisible() {
+    final now = DateTime.now();
+    final lastSeen = _lastVisibleAt;
+    _lastVisibleAt = now;
+    if (lastSeen == null) return; // first paint — history is already fresh
+
+    _resync(now.difference(lastSeen).inMilliseconds, 'options-tab');
+  }
+
+  /// Ask the bridge to re-fetch history after [awayMs] of missed ticks.
+  /// [trigger] only labels the Nchart console log.
+  void _resync(int awayMs, String trigger) {
+    final containerId = _containerId;
+    if (containerId == null || !_bridgeLoaded) return;
+    final bridge = _scalperChartsBridge;
+    if (bridge == null) return;
+    try {
+      bridge.resyncIfStale(containerId, awayMs, trigger);
+    } catch (e) {
+      log('WebChartManager: resyncIfStale error: $e');
+    }
+  }
+
+  /// True when the live stream has skipped candles since the last re-fetch,
+  /// i.e. the chart is currently showing a hole. Diagnostic only.
+  bool get hasMissingCandles {
+    final containerId = _containerId;
+    if (containerId == null || !_bridgeLoaded) return false;
+    final bridge = _scalperChartsBridge;
+    if (bridge == null) return false;
+    try {
+      return bridge.hasGap(containerId);
+    } catch (e) {
+      return false;
     }
   }
 

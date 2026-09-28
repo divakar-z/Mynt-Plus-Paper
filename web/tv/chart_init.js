@@ -59,6 +59,79 @@
   // feedFactory.js (resolveSymbol + getBars).
   var OI_SUFFIX = '$OISYMBOL';
 
+  // ---- Network-drop recovery -------------------------------------------
+  // TradingView never re-requests history after onErrorCallback: a chart
+  // whose getBars rejected stays blurred and "loading" forever, and only
+  // recovers when the user changes the symbol or the timeframe. So any
+  // Wi-Fi blip, hotspot drop or VPN reconnect that lands mid-load leaves
+  // the client permanently stuck (smoke test T7, 25 Sep 2026).
+  //
+  // A fetch() *rejection* means the request never reached the server (DNS,
+  // socket, offline) — it is safe to send again. An HTTP error status
+  // resolves instead, so real 4xx/5xx responses fall straight through to
+  // the existing handling untouched.
+  var FETCH_RETRIES = 4;
+  var FETCH_BACKOFF_MS = [400, 1200, 3000, 8000];
+  var OFFLINE_WAIT_MS = 30000;
+
+  // Resolves as soon as the browser reports it is back online, or after
+  // `ms`, whichever comes first — so we don't burn the retry budget while
+  // the tab is provably offline, and we fire the moment the link returns.
+  function waitForOnline(ms) {
+    if (navigator.onLine !== false) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var settled = false;
+      var timer = null;
+      function finish() {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener('online', finish);
+        if (timer) clearTimeout(timer);
+        resolve();
+      }
+      timer = setTimeout(finish, ms);
+      window.addEventListener('online', finish);
+    });
+  }
+
+  function delay(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  // Drop-in replacement for fetch() that survives a transient network loss.
+  // `label` only names the call in the console.
+  function fetchRetry(url, opts, label) {
+    var attempt = 0;
+    function run() {
+      return fetch(url, opts).catch(function (e) {
+        if (attempt >= FETCH_RETRIES) {
+          nchart('network', {
+            call: label,
+            result: 'gave up',
+            retries: FETCH_RETRIES,
+            online: navigator.onLine !== false,
+            error: String(e)
+          });
+          throw e;
+        }
+        var wait = FETCH_BACKOFF_MS[attempt];
+        attempt++;
+        nchart('network', {
+          call: label,
+          result: 'retrying',
+          attempt: attempt + '/' + FETCH_RETRIES,
+          waitMs: wait,
+          online: navigator.onLine !== false,
+          error: String(e)
+        });
+        return waitForOnline(OFFLINE_WAIT_MS)
+          .then(function () { return delay(wait); })
+          .then(run);
+      });
+    }
+    return run();
+  }
+
   // Exchange holiday calendar — TradingView uses this to grey out closed
   // days on the time axis. Mirrors feedFactory.js:622-651 exactly. Note:
   // the dates here are 2024 — same as web; refresh annually.
@@ -106,6 +179,60 @@
   // new list to /storeindicators. Two-way sync keeps a user's "always show
   // RSI" preference identical on web and mobile.
   var indicatorSyncTimers = {}; // containerId -> setInterval id
+
+  // ---- Missing-candle detection ----------------------------------------
+  // The chart is a persistent portal: leaving the Chart tab for Option Chain
+  // hides it but never unmounts it, and coming back calls changeSymbol with
+  // the SAME symbol, which is a no-op (web_chart_manager.dart:265-274). So
+  // nothing re-requests history and the candles that formed while the user
+  // was away are simply absent.
+  //
+  // You cannot spot this by checking whether the last bar is old: the first
+  // live tick after returning lands in a brand-new bucket and pushTick
+  // creates a bar at "now", so lastBar.time immediately looks current. The
+  // hole is only visible at the moment of the jump — a live stream steps
+  // exactly one candle at a time, so a step of more than one interval means
+  // candles are missing in between. That is what gets recorded here.
+  //
+  // Note a flagged gap is not always a bug: an illiquid scrip that simply
+  // did not trade for 20 minutes has no candles on the server either, and
+  // an overnight hold jumps from yesterday's close to today's open. The
+  // cooldown below keeps those cases to one wasted re-fetch at most.
+  // Every diagnostic from the gap/retry work is printed under one key so it
+  // can be filtered in the DevTools console by typing "Nchart", and the same
+  // records stay on `window.Nchart` so the whole history can be read back
+  // after the fact (type `Nchart` in the console, or `copy(Nchart)` to grab
+  // it for a bug report).
+  var NCHART_KEY = 'Nchart';
+  var NCHART_LIMIT = 300;
+  var nchartLog = [];
+  try { window.Nchart = nchartLog; } catch (e) { /* non-browser host */ }
+
+  function nchart(event, data) {
+    var rec = { event: event, time: new Date().toLocaleTimeString() };
+    if (data) {
+      for (var k in data) {
+        if (Object.prototype.hasOwnProperty.call(data, k)) rec[k] = data[k];
+      }
+    }
+    nchartLog.push(rec);
+    if (nchartLog.length > NCHART_LIMIT) nchartLog.shift();
+    console.log(NCHART_KEY, rec);
+    return rec;
+  }
+
+  var gapFlags = {};        // containerId -> { missing, from, to, resolution, symbol }
+  var lastResyncAt = {};    // containerId -> Date.now() of last auto re-fetch
+  var RESYNC_COOLDOWN_MS = 60000;
+  // Ignore jitter: only treat it as a hole when the stream skipped clear of
+  // the next bucket. 1.5 intervals is past the next candle but short of two.
+  var GAP_TOLERANCE = 1.5;
+  // TV aggregates every intraday view from 1-minute bars, so subscribeBars
+  // always reports resolution "1" no matter what the user is looking at.
+  // A quiet option skips single minutes constantly and the server has no
+  // candles there either, so only a run of missing minutes is worth
+  // reporting — below this it is just a thin scrip, not a lost session.
+  var MIN_GAP_CANDLES = 3;
 
   function fetchJson(url) {
     return fetch(url).then(function (r) { return r.json(); }).catch(function () { return null; });
@@ -400,7 +527,10 @@
         if (seeded && seeded.Token) {
           symDataPromise = Promise.resolve(seeded);
         } else {
-          symDataPromise = fetch('https://be.mynt.in/getSymbolinfo?tsym=' + encodeURIComponent(cleanName))
+          symDataPromise = fetchRetry(
+              'https://be.mynt.in/getSymbolinfo?tsym=' + encodeURIComponent(cleanName),
+              undefined,
+              'getSymbolinfo ' + cleanName)
             .then(function (r) { return r.json(); });
         }
 
@@ -416,11 +546,12 @@
             var tokenForApi = symData.Token || '';
 
             var raw = 'jData={"uid":"' + user + '","exch":"' + exchForApi + '","token":"' + tokenForApi + '"}&jKey=' + usession;
-            return fetch(NOREN_BASE + '/GetSecurityInfo', {
+            return fetchRetry(NOREN_BASE + '/GetSecurityInfo', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: raw
-            }).then(function (r) { return r.json(); }).then(function (info) {
+            }, 'GetSecurityInfo ' + symbolName)
+              .then(function (r) { return r.json(); }).then(function (info) {
               return { info: info, symData: symData };
             });
           })
@@ -544,11 +675,11 @@
           var index = symData.index || lookupKey;
           var reqBody = 'jData=' + JSON.stringify({ sym: index, from: periodParams.from, to: periodParams.to }) + '&jKey=' + usession;
 
-          fetch(NOREN_BASE + '/EODChartData', {
+          fetchRetry(NOREN_BASE + '/EODChartData', {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
             body: reqBody
-          })
+          }, 'EODChartData ' + index)
             .then(function (r) { return r.json(); })
             .then(function (data) {
               if (!data || data.stat === 'Not_Ok' || data.length === 0) {
@@ -581,11 +712,11 @@
           // would include the colon.
           var raw = 'jData={"uid":"' + user + '","exch":"' + (symData.exch || symbolInfo.exchange) + '","token":"' + (symData.Token || '') + '","st":"' + (periodParams.from - 320000) + '","et":"' + periodParams.to + '","intrv":"' + resolution + '"}&jKey=' + usession;
 
-          fetch(NOREN_BASE + '/TPSeries', {
+          fetchRetry(NOREN_BASE + '/TPSeries', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: raw
-          })
+          }, 'TPSeries ' + symbolInfo.name + ' ' + resolution)
             .then(function (r) { return r.json(); })
             .then(function (data) {
               if (!data || data.stat === 'Not_Ok' || data.length === 0) {
@@ -749,6 +880,19 @@
     }
 
     return timeMs;
+  }
+
+  /**
+   * Candle length in ms for an intraday resolution. Daily/weekly/monthly
+   * return 0 — their roll is handled by the EOD branch in pushTick, not by
+   * the gap check below.
+   */
+  function resolutionMs(resolution) {
+    if (resolution === 'D' || resolution === '1D' ||
+        resolution === '1W' || resolution === '1M') return 0;
+    var mins = parseInt(resolution, 10);
+    if (!mins || mins < 1) mins = 1;
+    return mins * 60 * 1000;
   }
 
   /**
@@ -1274,6 +1418,36 @@
           };
           sub.preVolume = curVolume;
         } else if (time > lastBar.time) {
+          // Stream stepped forward. More than one interval means the candles
+          // in between were never drawn — record it so resyncIfStale() can
+          // pull the real history back. Main series only: study subscriptions
+          // run their own resolutions and would just add noise.
+          var step = resolutionMs(sub.resolution);
+          if (step > 0 && sub === entry.main) {
+            var jump = time - lastBar.time;
+            var missing = (jump > step * GAP_TOLERANCE)
+                ? Math.max(1, Math.round(jump / step) - 1)
+                : 0;
+            if (missing >= MIN_GAP_CANDLES) {
+              gapFlags[containerId] = {
+                missing: missing,
+                from: lastBar.time,
+                to: time,
+                resolution: sub.resolution,
+                symbol: sub.symbolName || ''
+              };
+              nchart('gap', {
+                symbol: sub.symbolName || '',
+                container: containerId,
+                resolution: sub.resolution + 'm',
+                missingCandles: missing,
+                gapMinutes: Math.round(jump / 60000),
+                lastCandle: new Date(lastBar.time).toLocaleTimeString(),
+                newCandle: new Date(time).toLocaleTimeString(),
+                note: 'candles between these two times were never drawn'
+              });
+            }
+          }
           // New candle - price crossed into next time bucket. For daily this
           // is the roll into "today" from yesterday's EOD bar — seed full
           // OHLC from the broker's day stats instead of a flat single-tick.
@@ -1330,11 +1504,102 @@
           // called." (IChartWidgetApi.resetData).
           widget.resetCache();
           widget.activeChart().resetData();
-          console.log('ScalperCharts: resetData (cache+data) -', containerId);
+          nchart('refetch', {
+            container: containerId,
+            symbol: desiredSymbols[containerId] || '',
+            result: 'history re-requested (cache cleared)'
+          });
         } catch (e) {
-          console.error('ScalperCharts: resetData error -', containerId, e);
+          nchart('refetch', {
+            container: containerId,
+            symbol: desiredSymbols[containerId] || '',
+            result: 'failed',
+            error: String(e)
+          });
         }
       }
+    },
+
+    /**
+     * True if the live stream has skipped candles on this chart since the
+     * last re-fetch — i.e. the chart is showing a hole. Diagnostic; read it
+     * from the console as ScalperCharts.hasGap('<containerId>').
+     */
+    hasGap: function (containerId) {
+      return !!gapFlags[containerId];
+    },
+
+    /**
+     * Re-pull history if the chart has been away from the screen long enough
+     * to have missed candles. `awayMs` is how long the chart was hidden —
+     * Dart knows this, the chart does not.
+     *
+     * Blind re-fetching on every return would be expensive (a 1-minute view
+     * pulls ~1.1 MB), so this is bounded twice: the caller's away time must
+     * clear one candle, and a cooldown stops repeat rebuilds of the same
+     * screen from re-downloading. Returns true if a re-fetch was issued.
+     *
+     * `trigger` names who asked, for the Nchart log only: 'options-tab'
+     * (Dart, chart shown again), 'tab-return' / 'wake' (browser listeners
+     * below), 'ws-reconnect' (Dart, socket came back).
+     */
+    resyncIfStale: function (containerId, awayMs, trigger) {
+      var gap = gapFlags[containerId];
+      var awaySeconds = Math.round(awayMs / 1000);
+      var base = {
+        container: containerId,
+        trigger: trigger || 'options-tab',
+        symbol: (gap && gap.symbol) || desiredSymbols[containerId] || '',
+        awaySeconds: awaySeconds,
+        hadGap: !!gap,
+        missingCandles: gap ? gap.missing : 0
+      };
+
+      if (!charts[containerId]) {
+        base.action = 'skipped';
+        base.reason = 'no chart on this container';
+        nchart('return', base);
+        return false;
+      }
+      // A symbol change is loading fresh history already. Re-fetching on top
+      // of it races that getBars (scalper_screen_web.dart:180), so leave it.
+      var entry = subscriptions[containerId];
+      if (changeSymbolTimers[containerId] || !entry || !entry.main) {
+        if (awayMs >= RESYNC_COOLDOWN_MS) {
+          base.action = 'skipped';
+          base.reason = 'chart still loading';
+          nchart('return', base);
+        }
+        return false;
+      }
+      if (!(awayMs >= RESYNC_COOLDOWN_MS)) {
+        // Too brief to have missed a candle — stay quiet unless the stream
+        // says otherwise, so ordinary rebuilds don't spam the console.
+        if (gap) {
+          base.action = 'skipped';
+          base.reason = 'away under ' + (RESYNC_COOLDOWN_MS / 1000) + 's';
+          nchart('return', base);
+        }
+        return false;
+      }
+
+      var last = lastResyncAt[containerId] || 0;
+      var sinceLast = Date.now() - last;
+      if (sinceLast < RESYNC_COOLDOWN_MS) {
+        base.action = 'skipped';
+        base.reason = 'cooldown, re-fetched ' + Math.round(sinceLast / 1000) + 's ago';
+        nchart('return', base);
+        return false;
+      }
+
+      base.action = 're-fetch';
+      base.reason = 'away long enough to miss candles';
+      nchart('return', base);
+
+      lastResyncAt[containerId] = Date.now();
+      delete gapFlags[containerId];
+      this.resetData(containerId);
+      return true;
     },
 
     /**
@@ -1351,6 +1616,8 @@
       }
       delete desiredSymbols[containerId];
       delete lastNotifiedSymbol[containerId];
+      delete gapFlags[containerId];
+      delete lastResyncAt[containerId];
       var widget = charts[containerId];
       if (widget) {
         try { widget.remove(); } catch (e) { }
@@ -1366,6 +1633,56 @@
       return !!charts[containerId];
     }
   };
+
+  // ---- Background-tab and sleep recovery -------------------------------
+  // Two ways to miss candles while the chart looks open, neither of which
+  // Dart sees: (1) the browser tab sits in the background — Chrome throttles
+  // it and ticks arrive late or not at all; (2) the PC sleeps or idles with
+  // the tab still "visible" — the page is frozen and wakes with no idea time
+  // passed. Both end in the same resyncIfStale call, so its 60s threshold,
+  // cooldown and "still loading" guard apply unchanged.
+  var WAKE_CHECK_MS = 10000;
+  var hiddenAt = null;          // Date.now() when the tab went to background
+  var lastBeat = Date.now();    // last wake-check tick
+
+  function resyncAllCharts(awayMs, trigger) {
+    for (var id in charts) {
+      if (!Object.prototype.hasOwnProperty.call(charts, id)) continue;
+      try {
+        window.ScalperCharts.resyncIfStale(id, awayMs, trigger);
+      } catch (e) {
+        nchart('return', { container: id, trigger: trigger, action: 'failed', error: String(e) });
+      }
+    }
+  }
+
+  try {
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') {
+        if (hiddenAt === null) hiddenAt = Date.now();
+        return;
+      }
+      // Restart the wake check too, so the throttled beat from the hidden
+      // period is not mistaken for a sleep.
+      lastBeat = Date.now();
+      if (hiddenAt === null) return;
+      var away = Date.now() - hiddenAt;
+      hiddenAt = null;
+      resyncAllCharts(away, 'tab-return');
+    });
+
+    // A timer that fires every 10s but finds far more time has passed means
+    // the page was frozen (sleep / lock / idle freeze). Only acted on while
+    // visible — a background tab is throttled on purpose and is handled by
+    // the visibilitychange listener above instead.
+    setInterval(function () {
+      var now = Date.now();
+      var gap = now - lastBeat;
+      lastBeat = now;
+      if (document.visibilityState !== 'visible') return;
+      if (gap >= RESYNC_COOLDOWN_MS) resyncAllCharts(gap, 'wake');
+    }, WAKE_CHECK_MS);
+  } catch (e) { /* non-browser host */ }
 
   console.log('ScalperCharts bridge loaded');
 })();

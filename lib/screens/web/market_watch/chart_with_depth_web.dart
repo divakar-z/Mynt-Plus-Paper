@@ -1272,6 +1272,11 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
               _chartLayerLink,
               Size(constraints.maxWidth, constraints.maxHeight),
             );
+            // The portal is never unmounted, so returning from Option Chain
+            // leaves the old candles in place and the changeSymbol above is a
+            // no-op for an unchanged symbol. Tell the manager the chart is on
+            // screen again — it re-fetches only after a real absence.
+            webChartManager.markChartVisible();
           }
         });
 
