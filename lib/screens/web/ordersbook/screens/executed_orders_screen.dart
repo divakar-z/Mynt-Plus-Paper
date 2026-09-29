@@ -446,10 +446,12 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
                                         columnIndex: 7,
                                         alignRight: true,
                                         onTap: () => actionHandler.openOrderDetail(order),
+                                        // Tooltip only when the API gives a real
+                                        // reason — a blank/whitespace rejreason
+                                        // rendered an empty tooltip box, and the
+                                        // status fallback just repeated the badge.
                                         child: Tooltip(
-                                          message: (order.rejreason != null && order.rejreason!.isNotEmpty)
-                                              ? order.rejreason!
-                                              : _getStatusText(order),
+                                          message: order.rejreason?.trim() ?? '',
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                             decoration: BoxDecoration(

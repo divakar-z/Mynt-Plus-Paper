@@ -47,6 +47,18 @@ class _PledgeApproveListScreenState extends State<PledgeApproveListScreen> {
   void initState() {
     super.initState();
     _tableScrollController.addListener(_onScroll);
+    // TC_344 — the search field's X button empties the controller without
+    // firing onChanged/onClear, so the filter kept the old query. Reset it
+    // (and pagination) whenever the field becomes empty, same as Positions.
+    _searchController.addListener(() {
+      if (!mounted) return;
+      if (_searchController.text.isEmpty && _searchQuery.isNotEmpty) {
+        setState(() {
+          _searchQuery = '';
+          _resetPagination();
+        });
+      }
+    });
   }
 
   void _onScroll() {

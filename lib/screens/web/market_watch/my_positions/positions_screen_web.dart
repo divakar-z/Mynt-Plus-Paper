@@ -184,9 +184,12 @@ class _PositionCardWebState extends ConsumerState<_PositionCardWeb> {
                     try {
                       setState(() => _isNavigating = true);
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
-                        ref
-                            .read(marketWatchProvider)
-                            .setIsDepthVisibleWeb(false);
+                        // Depth visibility is managed by chart_with_depth_web.dart
+                        // (same as the watchlist row). Hiding it here closed depth
+                        // on a re-click of the same scrip with nothing to reopen it.
+                        // ref
+                        //     .read(marketWatchProvider)
+                        //     .setIsDepthVisibleWeb(false);
 
                         DepthInputArgs depthArgs = DepthInputArgs(
                           exch: _exch,
