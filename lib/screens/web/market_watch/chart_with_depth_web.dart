@@ -48,6 +48,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
   VoidCallback?
       _tabControllerListener; // Store listener reference for proper cleanup
   int _selectedTabIndex = 0; // 0 for Overview, 1 for Chart, 2 for Options (if hasOptions), 2/3 for Stock Report
+  // Whether the current TabController was built with an Options tab. Needed
+  // because index 2 means Options when true but Stock Report when false.
+  bool _controllerHasOptions = false;
   bool _isBasketMode = false; // Track basket mode from OptionChainSSWeb
   VoidCallback? _toggleBasketModeCallback; // Callback to toggle basket mode
   BuildContext? _storedContext; // Store context for cleanup in dispose
@@ -95,8 +98,11 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     // Check if isOption flag changed (even for the same scrip)
     if (oldWidget.wlValue.isOption != widget.wlValue.isOption) {
       if (_tabController != null) {
-        // Options tab is now at index 2 (Overview=0, Chart=1, Options=2)
-        final targetIndex = widget.wlValue.isOption ? 2 : 0;
+        // Options tab is now at index 2 (Overview=0, Chart=1, Options=2).
+        // TC_17 — only jump to index 2 when the controller actually has an
+        // Options tab; otherwise index 2 is Stock Report (or out of range).
+        final targetIndex =
+            widget.wlValue.isOption && _controllerHasOptions ? 2 : 0;
         if (_tabController!.index != targetIndex) {
           _tabController!.animateTo(targetIndex);
         }
@@ -226,9 +232,21 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     if (hasOptions) targetLength++; // +1 for Options
     if (hasFundamentalData) targetLength++; // +1 for Stock Report
 
-    if (_tabController == null || _tabController!.length != targetLength) {
+    // Also rebuild when Options availability flips at the same tab count
+    // (e.g. [Overview, Chart, Options] -> [Overview, Chart, Stock Report]),
+    // otherwise index 2 silently switches from Options to Stock Report.
+    if (_tabController == null ||
+        _tabController!.length != targetLength ||
+        _controllerHasOptions != hasOptions) {
       // Preserve the current selected tab index if possible
       final previousIndex = _selectedTabIndex;
+      // TC_17 — the user was on the Options tab and the new scrip has no
+      // Options: land on Overview instead of whichever tab now sits at/near
+      // index 2 (Chart or Stock Report).
+      final lostOptionsTab = _tabController != null &&
+          _controllerHasOptions &&
+          !hasOptions &&
+          previousIndex == 2;
 
       // Remove old listener before disposing to prevent memory leaks
       if (_tabController != null && _tabControllerListener != null) {
@@ -246,6 +264,8 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         // Force the Chart tab (index 1) even across controller recreations that
         // happen while scrip data loads; the flag is cleared after the panel settles.
         initialIndex = 1;
+      } else if (lostOptionsTab) {
+        initialIndex = 0;
       } else if (previousIndex > 0 && previousIndex < targetLength) {
         // Preserve current tab if it's still valid
         initialIndex = previousIndex;
@@ -259,7 +279,24 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
 
       _tabController = TabController(
           length: targetLength, vsync: this, initialIndex: initialIndex);
+      _controllerHasOptions = hasOptions;
       _selectedTabIndex = _tabController!.index;
+
+      // A rebuilt controller does not fire the tab listener, so the Overview
+      // depth panel would stay hidden (it was hidden when the user moved to
+      // Options). Show it the same way the listener does for index 0.
+      if (lostOptionsTab && initialIndex == 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _selectedTabIndex != 0) return;
+          ref.read(marketWatchProvider).setIsDepthVisibleWeb(
+                true,
+                context: context,
+                exch: widget.wlValue.exch,
+                token: widget.wlValue.token,
+                tsym: widget.wlValue.tsym,
+              );
+        });
+      }
       // Store listener reference for proper cleanup
       _tabControllerListener = () {
         // Update UI when tab changes (for search icon visibility)
@@ -707,7 +744,11 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                           // Sidebar toggle icon — always visible. The depth
                           // panel is user-controlled and stays open/closed
                           // independent of the Trade-from-Chart mode.
-                          Material(
+                          Tooltip(
+                            message: mw.isDepthVisible
+                                ? "Hide Market Depth"
+                                : "Show Market Depth",
+                            child: Material(
                             color: Colors.transparent,
                             child: InkWell(
                               customBorder: const CircleBorder(),
@@ -746,6 +787,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                                 ),
                               ),
                             ),
+                          ),
                           ),
                         ],
                       ),
