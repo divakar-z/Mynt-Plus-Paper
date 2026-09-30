@@ -633,7 +633,14 @@ class _ChartIndicatorsMixin {
   }
 
   // Phase 22 — Ichimoku Cloud. Default conversion=9, base=26, span=52,
-  // displacement=26. Returns {tenkan, kijun, spanA, spanB, chikou} arrays.
+  // displacement=26. Returns {tenkan, kijun, spanA, spanB, chikou, shift}.
+  //
+  // Plotted like TradingView: the leading spans are drawn `shift` =
+  // displacement-1 bars AHEAD of the bar they are computed on (the current
+  // bar counts as the first of the 26), so spanA/spanB run `shift` slots past
+  // the last candle — the forward cloud. The lagging span is the close drawn
+  // `shift` bars BACK. tenkan/kijun/chikou have one slot per candle;
+  // spanA/spanB have candles + shift.
   _computeIchimoku(arg) {
     const p = (arg && typeof arg === 'object') ? (arg.params || {}) : {};
     const conv = Math.max(2, (+p.tenkan || 9) | 0);
@@ -644,25 +651,43 @@ class _ChartIndicatorsMixin {
     const low   = this.candles.map((c) => c.l);
     const close = this.candles.map((c) => c.c);
     const N = close.length;
+    const shift = disp - 1;
+    const M = N + shift;
     const hh = (i, w) => { let m = -Infinity; for (let j = i - w + 1; j <= i; j++) if (j >= 0 && high[j] > m) m = high[j]; return m; };
     const ll = (i, w) => { let m =  Infinity; for (let j = i - w + 1; j <= i; j++) if (j >= 0 && low[j]  < m) m = low[j];  return m; };
     const tenkan = new Array(N).fill(null);
     const kijun  = new Array(N).fill(null);
-    const spanA  = new Array(N).fill(null);
-    const spanB  = new Array(N).fill(null);
+    const spanA  = new Array(M).fill(null);
+    const spanB  = new Array(M).fill(null);
     const chikou = new Array(N).fill(null);
     for (let i = 0; i < N; i++) {
       if (i >= conv - 1) tenkan[i] = (hh(i, conv) + ll(i, conv)) / 2;
       if (i >= base - 1) kijun[i]  = (hh(i, base) + ll(i, base)) / 2;
-      if (tenkan[i] != null && kijun[i] != null && i + disp < N) {
-        spanA[i + disp] = (tenkan[i] + kijun[i]) / 2;
+      // Leading spans: kept even when they land past the last candle — that
+      // forward part is the future cloud (it used to be dropped).
+      if (tenkan[i] != null && kijun[i] != null) {
+        spanA[i + shift] = (tenkan[i] + kijun[i]) / 2;
       }
-      if (i >= span - 1 && i + disp < N) {
-        spanB[i + disp] = (hh(i, span) + ll(i, span)) / 2;
+      if (i >= span - 1) {
+        spanB[i + shift] = (hh(i, span) + ll(i, span)) / 2;
       }
-      if (i + disp < N) chikou[i + disp] = close[i];
+      // Lagging span: today's close drawn `shift` bars back (it was shifted
+      // forward, and never drawn).
+      if (i - shift >= 0) chikou[i - shift] = close[i];
     }
-    return { tenkan, kijun, spanA, spanB, chikou };
+    return { tenkan, kijun, spanA, spanB, chikou, shift };
+  }
+
+  // The five Ichimoku lines, in TradingView's legend order. Shared by the
+  // drawing and the legend values so their colours always agree.
+  _ichimokuSeries(ic) {
+    return [
+      { key: 'tenkan', vals: ic.tenkan, color: '#3B82F6', w: 1.25 },
+      { key: 'kijun',  vals: ic.kijun,  color: '#EF4444', w: 1.25 },
+      { key: 'chikou', vals: ic.chikou, color: '#8B5CF6', w: 1.25 },
+      { key: 'spanA',  vals: ic.spanA,  color: '#10B981', w: 1   },
+      { key: 'spanB',  vals: ic.spanB,  color: '#F59E0B', w: 1   },
+    ];
   }
 
   // Phase 22 — Volatility Stop (ATR-based trailing stop). When price is above
@@ -1364,35 +1389,51 @@ class _ChartIndicatorsMixin {
         if (ind.hidden) continue;
         if (ind.kind !== 'ichi') continue;
         const ic = this._computeIchimoku(ind);
-        // Cloud fill
+        // The cloud runs past the last candle, so keep everything inside the
+        // plot — never over the price axis when the chart is panned.
         this.ctx.save();
         this.ctx.beginPath();
-        let firstX = null;
-        for (let i = 0; i < ic.spanA.length; i++) {
-          const a = ic.spanA[i], b = ic.spanB[i];
-          if (a == null || b == null) continue;
-          const x = this._candleXCenter(i, plot);
-          if (firstX == null) { this.ctx.moveTo(x, priceToY(a)); firstX = x; }
-          else this.ctx.lineTo(x, priceToY(a));
+        this.ctx.rect(plot.left, plot.top, plot.right - plot.left, plot.bottom - plot.top);
+        this.ctx.clip();
+        // Only the slots on screen (a 1s chart has tens of thousands).
+        const W = this.view.cellW || 1;
+        const inView = (x) => x >= plot.left - W && x <= plot.right + W;
+        // Cloud fill, coloured by direction like TradingView: green where
+        // Span A is above Span B, red where below. Each gap between two slots
+        // is one quad; where the spans cross, it splits into two triangles at
+        // the crossing. One path per colour so adjacent pieces leave no seams.
+        const up = new Path2D();
+        const dn = new Path2D();
+        const tri = (path, pts) => {
+          path.moveTo(pts[0][0], pts[0][1]);
+          for (let k = 1; k < pts.length; k++) path.lineTo(pts[k][0], pts[k][1]);
+          path.closePath();
+        };
+        for (let i = 0; i + 1 < ic.spanA.length; i++) {
+          const a0 = ic.spanA[i], b0 = ic.spanB[i];
+          const a1 = ic.spanA[i + 1], b1 = ic.spanB[i + 1];
+          if (a0 == null || b0 == null || a1 == null || b1 == null) continue;
+          const x0 = this._candleXCenter(i, plot);
+          const x1 = this._candleXCenter(i + 1, plot);
+          if (!inView(x0) && !inView(x1)) continue;
+          const d0 = a0 - b0, d1 = a1 - b1;
+          if ((d0 >= 0 && d1 >= 0) || (d0 <= 0 && d1 <= 0)) {
+            tri((d0 + d1) >= 0 ? up : dn, [[x0, priceToY(a0)], [x1, priceToY(a1)],
+                [x1, priceToY(b1)], [x0, priceToY(b0)]]);
+          } else {
+            const t = d0 / (d0 - d1);
+            const xc = x0 + t * (x1 - x0);
+            const yc = priceToY(a0 + t * (a1 - a0));
+            tri(d0 > 0 ? up : dn, [[x0, priceToY(a0)], [xc, yc], [x0, priceToY(b0)]]);
+            tri(d1 > 0 ? up : dn, [[xc, yc], [x1, priceToY(a1)], [x1, priceToY(b1)]]);
+          }
         }
-        for (let i = ic.spanB.length - 1; i >= 0; i--) {
-          const a = ic.spanA[i], b = ic.spanB[i];
-          if (a == null || b == null) continue;
-          const x = this._candleXCenter(i, plot);
-          this.ctx.lineTo(x, priceToY(b));
-        }
-        this.ctx.closePath();
-        this.ctx.fillStyle = 'rgba(34,197,94,0.10)';
-        this.ctx.fill();
-        this.ctx.restore();
-        // Tenkan + Kijun + SpanA + SpanB lines
-        const ichiSeries = [
-          { vals: ic.tenkan, color: '#3B82F6', w: 1.25 },
-          { vals: ic.kijun,  color: '#EF4444', w: 1.25 },
-          { vals: ic.spanA,  color: '#10B981', w: 1   },
-          { vals: ic.spanB,  color: '#F59E0B', w: 1   },
-        ];
-        for (const s of ichiSeries) {
+        this.ctx.fillStyle = 'rgba(34,197,94,0.14)';
+        this.ctx.fill(up);
+        this.ctx.fillStyle = 'rgba(239,68,68,0.14)';
+        this.ctx.fill(dn);
+        // Tenkan + Kijun + Chikou + SpanA + SpanB lines.
+        for (const s of this._ichimokuSeries(ic)) {
           this.ctx.strokeStyle = s.color;
           this.ctx.lineWidth = s.w;
           this.ctx.beginPath();
@@ -1401,12 +1442,15 @@ class _ChartIndicatorsMixin {
             const v = s.vals[i];
             if (v == null || !isFinite(v)) { started = false; continue; }
             const x = this._candleXCenter(i, plot);
+            if (x < plot.left - W) continue;
+            if (x > plot.right + W) break;
             const y = priceToY(v);
             if (!started) { this.ctx.moveTo(x, y); started = true; }
             else this.ctx.lineTo(x, y);
           }
           this.ctx.stroke();
         }
+        this.ctx.restore();
       }
 
       // Phase 22 — Volatility Stop: dotted line in current trend color.

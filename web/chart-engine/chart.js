@@ -807,6 +807,7 @@ class Chart {
   resetView() {
     // Full reset — most-recent candles, default zoom, auto Y fit.
     this.view.offsetX = 0;
+    this._rightRoomPx = 0;
     this.view.priceCenter = null;
     this.view.pricePerPx = null;
     this.view.autoFollow = true;
@@ -975,6 +976,7 @@ class Chart {
     // the latest columns are visible.
     if (wasRenko || wasRebin || this._isRebinnedStyle(next)) {
       this.view.offsetX = 0;
+      this._rightRoomPx = 0;
       this.view.priceCenter = null; // re-arm vertical auto-fit
     }
     this.scheduleRedraw();
@@ -1455,6 +1457,7 @@ class Chart {
     this.view.priceCenter = null;
     this.view.pricePerPx = null;
     this.view.offsetX = 0;
+    this._rightRoomPx = 0;
     this.view.autoFollow = true;
     this.view.autoFitY = true;
     this._pendingExtendId = null;
@@ -2882,19 +2885,85 @@ class Chart {
     return 'pan';
   }
 
+  // The candle plot rect exactly as draw() builds it (sub-panes, rail gutter,
+  // price-axis gutter). The y↔price helpers must use THIS, not a re-derivation.
+  _candlePlotRect() {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    const topPad = 8;
+    const innerH = h - topPad - 24;
+    const candleH = innerH - this._subPaneTotalH(innerH);
+    const railGutter = this._liteMode ? 0
+        : (this._leftGutter != null ? this._leftGutter : 40);
+    const plot = { left: 8 + railGutter, top: topPad, right: w - 64, bottom: topPad + candleH };
+    plot.width = plot.right - plot.left;
+    plot.height = plot.bottom - plot.top;
+    return plot;
+  }
+
+  // Auto-fit price range for the columns on screen, padded 8% each side.
+  // draw() and the y↔price helpers BOTH call this: they used to compute it
+  // separately and the helpers padded 4% while draw padded 8% (and ignored
+  // renko / rebinned styles), so on an auto-fitted chart an order line being
+  // dragged trailed the cursor and drawings landed off the click — up to
+  // ~19 px near the top/bottom edges. null when nothing is on screen.
+  _autoFitRange(plot) {
+    let lo = Infinity, hi = -Infinity;
+    if (this.candleStyle === 'renko') {
+      const bricks = this._renkoBricks;
+      // Fit only the columns currently on screen (not all of history) so the
+      // y-axis zooms to the visible action.
+      const [first, last] = this._visibleIndexRange(plot, bricks.length);
+      for (let i = first; i <= last && i < bricks.length; i++) {
+        const v1 = bricks[i].openPrice;
+        const v2 = bricks[i].closePrice;
+        if (v1 < lo) lo = v1; if (v2 < lo) lo = v2;
+        if (v1 > hi) hi = v1; if (v2 > hi) hi = v2;
+      }
+      // Guard against empty bricks (no bricks yet).
+      if (hi === -Infinity) { lo = 0; hi = 1; }
+    } else if (this._isRebinnedStyle(this.candleStyle)
+        && this._rebinnedStyle === this.candleStyle
+        && this._rebinned.length > 0) {
+      // Phase 26/30 — auto-fit scans only the VISIBLE rebinned columns so the
+      // y-axis follows the on-screen window (scanning the whole array made
+      // recent columns squish into a sliver against the full-history range).
+      const arr = this._rebinned;
+      const [first, last] = this._visibleIndexRange(plot, arr.length);
+      for (let i = first; i <= last && i < arr.length; i++) {
+        const b = arr[i];
+        if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h;
+      }
+      if (hi === -Infinity) { lo = 0; hi = 1; }
+    } else {
+      const visible = this._visibleCandles();
+      if (visible.length === 0) return null;
+      for (const c of visible) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
+    }
+    const pad = (hi - lo) * 0.08 || 1;
+    return { lo: lo - pad, hi: hi + pad };
+  }
+
+  // The price range the plot shows right now: auto-fit, or the manual
+  // centre + scale once the user has dragged / zoomed the price axis.
+  _priceRange(plot) {
+    if (this.view.priceCenter == null) return this._autoFitRange(plot);
+    const half = (plot.height / 2) * this.view.pricePerPx;
+    return { lo: this.view.priceCenter - half, hi: this.view.priceCenter + half };
+  }
+
   // On the first manual Y interaction, capture the current auto-fit values so
-  // subsequent drags are smooth and not snap-jumpy.
+  // subsequent drags are smooth and not snap-jumpy. Uses the real plot height
+  // (it guessed canvas-32, ignoring sub-panes, so the chart jumped on the
+  // first price-axis drag whenever an RSI/MACD pane was open).
   _snapshotYToManual() {
     if (this.candles.length === 0) return;
-    const visible = this._visibleCandles();
-    if (visible.length === 0) return;
-    let lo = Infinity, hi = -Infinity;
-    for (const c of visible) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
-    if (!isFinite(lo) || !isFinite(hi)) return;
-    const pad = (hi - lo) * 0.08 || 1;
-    const plotH = this.canvas.clientHeight - 32; // approx plot height
-    this.view.priceCenter = (lo + hi) / 2;
-    this.view.pricePerPx = ((hi - lo) + 2 * pad) / plotH;
+    const plot = this._candlePlotRect();
+    if (plot.height <= 0) return;
+    const r = this._autoFitRange(plot);
+    if (!r || !isFinite(r.lo) || !isFinite(r.hi)) return;
+    this.view.priceCenter = (r.lo + r.hi) / 2;
+    this.view.pricePerPx = (r.hi - r.lo) / plot.height;
   }
 
   _visibleCandles() {
@@ -3050,6 +3119,8 @@ class Chart {
     plot.width = plot.right - plot.left;
     plot.height = plot.bottom - plot.top;
 
+    this._applyRightRoom();
+
     // Phase 30 — clamp the horizontal pan so the series can never be scrolled
     // entirely off-screen (which left the pane blank). Skipped while a Lab
     // projection is active — those intentionally pan far right to show the
@@ -3101,46 +3172,9 @@ class Chart {
       return;
     }
 
-    let lo, hi;
-    if (this.view.priceCenter == null) {
-      // Auto-fit.
-      lo = Infinity; hi = -Infinity;
-      if (this.candleStyle === 'renko') {
-        const bricks = this._renkoBricks;
-        // Fit only the columns currently on screen (not all of history) so the
-        // y-axis zooms to the visible action.
-        const [first, last] = this._visibleIndexRange(plot, bricks.length);
-        for (let i = first; i <= last; i++) {
-          const v1 = bricks[i].openPrice;
-          const v2 = bricks[i].closePrice;
-          if (v1 < lo) lo = v1; if (v2 < lo) lo = v2;
-          if (v1 > hi) hi = v1; if (v2 > hi) hi = v2;
-        }
-        // Guard against empty bricks (no bricks yet).
-        if (hi === -Infinity) { lo = 0; hi = 1; }
-      } else if (this._isRebinnedStyle(this.candleStyle)
-          && this._rebinnedStyle === this.candleStyle
-          && this._rebinned.length > 0) {
-        // Phase 26/30 — auto-fit scans only the VISIBLE rebinned columns so the
-        // y-axis follows the on-screen window (scanning the whole array made
-        // recent columns squish into a sliver against the full-history range).
-        const arr = this._rebinned;
-        const [first, last] = this._visibleIndexRange(plot, arr.length);
-        for (let i = first; i <= last; i++) {
-          const b = arr[i];
-          if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h;
-        }
-        if (hi === -Infinity) { lo = 0; hi = 1; }
-      } else {
-        for (const c of visible) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
-      }
-      const pad = (hi - lo) * 0.08 || 1;
-      lo -= pad; hi += pad;
-    } else {
-      const half = (plot.height / 2) * this.view.pricePerPx;
-      lo = this.view.priceCenter - half;
-      hi = this.view.priceCenter + half;
-    }
+    // One source of truth for the price range, shared with the y↔price
+    // helpers (drag-modify, drawings, magnet, quick-place) — see _priceRange.
+    const { lo, hi } = this._priceRange(plot);
 
     const priceToY = (p) => plot.top + plot.height * (hi - p) / (hi - lo);
     const yToPrice = (y) => hi - (y - plot.top) * (hi - lo) / plot.height;
@@ -3372,6 +3406,17 @@ class Chart {
           label = '';
         }
         if (label) this._drawTimeChip(this.hover.x, this.canvas.clientHeight - 18, label);
+      } else {
+        // Past the last candle, over Ichimoku's forward cloud.
+        const nFuture = this._futureBars();
+        const N = this._seriesLength();
+        const plotRight = this.canvas.clientWidth - 64;
+        const k = Math.round(N - 0.5 - (plotRight + this.view.offsetX - this.hover.x) / this.view.cellW) - (N - 1);
+        if (nFuture > 0 && k >= 1 && k <= nFuture) {
+          const times = this._futureBarTimes(nFuture);
+          this._drawTimeChip(this.hover.x, this.canvas.clientHeight - 18,
+              this._fmtHoverTime(times[k - 1]));
+        }
       }
     }
     this._drawOhlc(plot);
@@ -4029,6 +4074,21 @@ class Chart {
   // Latest computed value for indicators that draw a single overlay line.
   // Returns null for indicators whose value isn't easily a single number
   // (RSI/MACD/BB/etc.) — those just show kind+params in the legend.
+  // Several coloured values for indicators with more than one line —
+  // Ichimoku shows its five like TradingView's legend: conversion, base,
+  // lagging (today's close), lead 1 and lead 2 at the current bar. null for
+  // everything else (single-value path below).
+  _indicatorLastValues(ind) {
+    if (ind.kind !== 'ichi' || !this.candles.length) return null;
+    const ic = this._computeIchimoku(ind);
+    const i = this.candles.length - 1;
+    const pick = { tenkan: ic.tenkan[i], kijun: ic.kijun[i], chikou: this.candles[i].c,
+        spanA: ic.spanA[i], spanB: ic.spanB[i] };
+    return this._ichimokuSeries(ic)
+        .filter((s) => pick[s.key] != null && isFinite(pick[s.key]))
+        .map((s) => ({ v: pick[s.key], color: s.color }));
+  }
+
   _indicatorLastValue(ind) {
     if (!this.candles.length) return null;
     if (ind.kind === 'sma') {
@@ -4147,15 +4207,22 @@ class Chart {
 
     for (const ind of this._indicators) {
       const kindLabel = (ind.kind || '').toUpperCase();
-      const paramsLabel = ind.period && ind.period > 0
+      const multi = this._indicatorLastValues(ind);
+      // Multi-line indicators list their inputs (Ichimoku: 9 26 52 26), not
+      // the single `period` the store gives every indicator.
+      const paramsLabel = !multi && ind.period && ind.period > 0
           ? String(ind.period)
           : this._indicatorParamsLabel(ind);
-      const lastVal = this._indicatorLastValue(ind);
+      const lastVal = multi ? null : this._indicatorLastValue(ind);
       const valLabel = lastVal != null ? this._fmtPrice(lastVal) : '';
       const indColor = ind.color || '#3B82F6';
       const textColor = ind.hidden ? textMuted : textActive;
       const paramsColor = ind.hidden ? iconDim : textMuted;
       const valColor = ind.hidden ? iconDim : indColor;
+      // Value segments: one per line for multi-line indicators, else one.
+      const valSegs = multi
+          ? multi.map((m) => ({ text: this._fmtPrice(m.v), color: ind.hidden ? iconDim : m.color }))
+          : (valLabel ? [{ text: valLabel, color: valColor }] : []);
 
       // Inline measurement — kind + " " + params + " " + value
       const kindW = ctx.measureText(kindLabel).width;
@@ -4163,9 +4230,7 @@ class Chart {
       const paramsW = paramsLabel
           ? ctx.measureText(paramsLabel).width + sp
           : 0;
-      const valW = valLabel
-          ? ctx.measureText(valLabel).width + sp
-          : 0;
+      const valW = valSegs.reduce((w, seg) => w + ctx.measureText(seg.text).width + sp, 0);
       const labelW = kindW + paramsW + valW;
 
       const x = plot.left + 6;
@@ -4217,10 +4282,11 @@ class Chart {
         ctx.fillText(paramsLabel, lx, y + rowH / 2);
         lx += paramsW - sp;
       }
-      if (valLabel) {
+      for (const seg of valSegs) {
         lx += sp;
-        ctx.fillStyle = valColor;
-        ctx.fillText(valLabel, lx, y + rowH / 2);
+        ctx.fillStyle = seg.color;
+        ctx.fillText(seg.text, lx, y + rowH / 2);
+        lx += ctx.measureText(seg.text).width;
       }
 
       // Icons render only on row hover — high contrast against the
@@ -4533,32 +4599,11 @@ class Chart {
   // way draw() does so the conversion matches exactly.
   _yToPriceForDrag(y) {
     if (this.candles.length === 0) return null;
-    const h = this.canvas.clientHeight;
-    const bottomGutter = 24;
-    const topPad = 8;
-    const innerH = h - topPad - bottomGutter;
-    // Account for sub-panes that eat from the candle area — see _subPaneTotalH.
-    const candleH = innerH - this._subPaneTotalH(innerH);
-    const plotTop = topPad;
-    const plotBottom = topPad + candleH;
-    const plotHeight = plotBottom - plotTop;
-    if (plotHeight <= 0) return null;
-    // Use the same lo/hi that draw() would compute. Re-derive via the same
-    // logic: if priceCenter is null, auto-fit visible candles.
-    let lo, hi;
-    if (this.view.priceCenter == null) {
-      const visible = this._visibleCandles();
-      if (visible.length === 0) return null;
-      lo = Infinity; hi = -Infinity;
-      for (const c of visible) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
-      const pad = (hi - lo) * 0.04;
-      lo -= pad; hi += pad;
-    } else {
-      const half = (plotHeight / 2) * this.view.pricePerPx;
-      lo = this.view.priceCenter - half;
-      hi = this.view.priceCenter + half;
-    }
-    return hi - (y - plotTop) * (hi - lo) / plotHeight;
+    const plot = this._candlePlotRect();
+    if (plot.height <= 0) return null;
+    const r = this._priceRange(plot);   // the same range draw() used
+    if (!r) return null;
+    return r.hi - (y - plot.top) * (r.hi - r.lo) / plot.height;
   }
 
   _snapPrice(price) {
@@ -4572,33 +4617,12 @@ class Chart {
   // price is outside the visible range or the plot cannot be determined.
   _yForPriceForDrag(price) {
     if (this.candles.length === 0) return null;
-    const h = this.canvas.clientHeight;
-    const bottomGutter = 24;
-    const topPad = 8;
-    const innerH = h - topPad - bottomGutter;
-    const candleH = innerH - this._subPaneTotalH(innerH);
-    const plotTop = topPad;
-    const plotBottom = topPad + candleH;
-    const plotHeight = plotBottom - plotTop;
-    if (plotHeight <= 0) return null;
-    let lo, hi;
-    if (this.view.priceCenter == null) {
-      const visible = this._visibleCandles();
-      if (visible.length === 0) return null;
-      lo = Infinity; hi = -Infinity;
-      for (const c of visible) {
-        if (c.l < lo) lo = c.l;
-        if (c.h > hi) hi = c.h;
-      }
-      const pad = (hi - lo) * 0.04;
-      lo -= pad; hi += pad;
-    } else {
-      const half = (plotHeight / 2) * this.view.pricePerPx;
-      lo = this.view.priceCenter - half;
-      hi = this.view.priceCenter + half;
-    }
-    if (price < lo || price > hi) return null;
-    return plotTop + plotHeight * (hi - price) / (hi - lo);
+    const plot = this._candlePlotRect();
+    if (plot.height <= 0) return null;
+    const r = this._priceRange(plot);   // the same range draw() used
+    if (!r) return null;
+    if (price < r.lo || price > r.hi) return null;
+    return plot.top + plot.height * (r.hi - price) / (r.hi - r.lo);
   }
 
   // ---- Phase 14: keyboard shortcut helpers ----
@@ -5174,6 +5198,77 @@ class Chart {
     }
   }
 
+  // Bars an indicator draws PAST the last candle — today only Ichimoku's
+  // leading spans (the forward cloud). Plain candle styles only: renko and the
+  // rebinned styles re-index the x axis, so future slots mean nothing there.
+  _futureBars() {
+    if (this.candleStyle === 'renko' || this._isRebinnedStyle(this.candleStyle)) return 0;
+    if (!this.candles.length) return 0;
+    let n = 0;
+    for (const ind of this._indicators || []) {
+      if (ind.hidden || ind.kind !== 'ichi') continue;
+      const disp = Math.max(1, (+(ind.params || {}).displacement || 26) | 0);
+      if (disp - 1 > n) n = disp - 1;
+    }
+    return n;
+  }
+
+  // While the view follows the newest bar (fresh load, reset — the user has
+  // not panned or zoomed), keep empty room on the right for the forward cloud
+  // so it is visible without panning, as on TradingView. Applied as a DELTA
+  // on offsetX so other contributors (Lab projection) are left intact, and
+  // removed again when the indicator goes away.
+  _applyRightRoom() {
+    const f = this._futureBars();
+    const want = f > 0 ? -(f + 2) * (this.view.cellW || 1) : 0;
+    const had = this._rightRoomPx || 0;
+    if (!this.view.autoFollow || want === had) return;
+    this.view.offsetX = (this.view.offsetX || 0) - had + want;
+    this._rightRoomPx = want;
+  }
+
+  // Timestamps of the next `n` bars after the last candle, for the time axis
+  // and crosshair only (drawing placement keeps its linear _xToTs/_tsToX
+  // pair). Session-aware like TradingView: after the close the next bar is
+  // the next session's open, skipping weekends.
+  _futureBarTimes(n) {
+    const N = this.candles.length;
+    if (!N || n <= 0) return [];
+    const last = this.candles[N - 1].ts;
+    const tf = this.timeframeMinutes;
+    const key = last + '|' + tf + '|' + n;
+    if (this._futureTimesKey === key) return this._futureTimes;
+    const out = [];
+    const IST = 19800;
+    const dow = (t) => new Date((t + IST) * 1000).getUTCDay();
+    let ts = last;
+    for (let k = 0; k < n; k++) {
+      if (tf >= 43200) {
+        const d = new Date((ts + IST) * 1000);
+        ts = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 1000 - IST;
+      } else if (tf >= 10080) {
+        ts += 7 * 86400;
+      } else if (tf >= 1440) {
+        do { ts += 86400; } while (dow(ts) === 0 || dow(ts) === 6);
+      } else {
+        ts += Math.max(1, Math.round(tf * 60));
+        if (!this._isSessionWindow(ts)) {
+          // Jump to the next session open (today's if still ahead, else the
+          // next weekday's). Unmapped exchanges are always in session.
+          for (let d = 0; d < 8; d++) {
+            const open = this._sessionOpenTodaySec(ts + d * 86400);
+            if (open == null) break;
+            if (open >= ts && this._isSessionWindow(open)) { ts = open; break; }
+          }
+        }
+      }
+      out.push(ts);
+    }
+    this._futureTimesKey = key;
+    this._futureTimes = out;
+    return out;
+  }
+
   _drawTimeAxis(plot, visible) {
     if (visible.length === 0) return;
     this.ctx.fillStyle = this.palette.axisText;
@@ -5216,6 +5311,33 @@ class Chart {
         }
       }
       this.ctx.fillText(label, xCenter, yAxis);
+    }
+    // Future slots (Ichimoku's forward cloud) get labels on the same cadence.
+    const nFuture = this._futureBars();
+    if (nFuture > 0) {
+      const times = this._futureBarTimes(nFuture);
+      const N = this.candles.length;
+      for (let k = 1; k <= times.length; k++) {
+        const absIdx = N - 1 + k;
+        if (absIdx % labelCadence !== 0) continue;
+        const xCenter = this._candleXCenter(absIdx, plot);
+        if (xCenter < plot.left + 16 || xCenter > plot.right - 8) continue;
+        const ist = new Date(times[k - 1] * 1000 + (5.5 * 3600 * 1000));
+        let label;
+        if (this.timeframeMinutes >= 1440) {
+          label = ist.getUTCDate() + ' ' + months[ist.getUTCMonth()];
+        } else {
+          label = String(ist.getUTCHours()).padStart(2, '0') + ':' +
+              String(ist.getUTCMinutes()).padStart(2, '0');
+          const prevTs = k === 1 ? this.candles[N - 1].ts : times[k - 2];
+          const prev = new Date(prevTs * 1000 + (5.5 * 3600 * 1000));
+          if (prev.getUTCDate() !== ist.getUTCDate() ||
+              prev.getUTCMonth() !== ist.getUTCMonth()) {
+            label = ist.getUTCDate() + '/' + (ist.getUTCMonth() + 1) + ' ' + label;
+          }
+        }
+        this.ctx.fillText(label, xCenter, yAxis);
+      }
     }
   }
 
