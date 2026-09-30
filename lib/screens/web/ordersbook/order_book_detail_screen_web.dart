@@ -269,10 +269,11 @@ class _OrderBookDetailScreenWebState
                         // Details Section
                         _buildDetailsSection(theme),
 
-                        // Reason Section
-                        if (_orderData.rejreason != null &&
-                            _orderData.rejreason!.isNotEmpty) ...[
-                          _buildReasonWidget(theme, _orderData.rejreason!),
+                        // Reason Section — only when the API gives real text;
+                        // a blank/whitespace rejreason rendered an empty row.
+                        if ((_orderData.rejreason?.trim() ?? '').isNotEmpty) ...[
+                          _buildReasonWidget(
+                              theme, _orderData.rejreason!.trim()),
                         ],
 
                         // Order History Header & Section
