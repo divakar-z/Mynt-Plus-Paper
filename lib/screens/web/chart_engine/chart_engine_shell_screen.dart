@@ -171,6 +171,11 @@ class _ChartEngineShellScreenState
   // ticks even though our local set still thinks it's subscribed.
   bool _lastWsConnected = false;
   VoidCallback? _wsListener;
+  // Cached while mounted: dispose() must not ref.read (Riverpod 3 throws and
+  // wedges the app), but it has to release this chart's depth claims.
+  WebSocketProvider? _wsCache;
+  // This chart's id in WebSocketProvider's depth-owner registry.
+  String get _depthOwner => 'chart:$_iframeId';
   // Stream subscription on `socketDataStream` covers index ticks
   // that the ChangeNotifier `addListener` path doesn't reliably wake on
   // (NIFTY 50 / SENSEX spot updates were stale because their `hasUpdates`
@@ -262,6 +267,7 @@ class _ChartEngineShellScreenState
       // single forward pass. Critical when many panes are open — without
       // coalescing the shell was iterating every subscribed key 5-10×
       // per second, posting 30+ messages/sec to the iframe per pane.
+      _wsCache = ws;
       _wsListener = _wsForwardCoalesced;
       ws.addListener(_wsListener!);
       _wsStreamSub =
@@ -296,8 +302,14 @@ class _ChartEngineShellScreenState
       html.window.removeEventListener('message', _windowMessageRef);
       _windowMessageRef = null;
     }
+    // Release every depth feed this chart claimed. Before the owner registry
+    // the chart never released depth at all, so each scrip it had shown kept
+    // streaming until the socket dropped.
+    if (_wsCache != null && _subscribedKeys.isNotEmpty) {
+      try { _wsCache!.releaseDepth(_depthOwner, _subscribedKeys.toList()); } catch (_) {}
+    }
     if (_wsListener != null) {
-      try { ref.read(websocketProvider).removeListener(_wsListener!); } catch (_) {}
+      try { _wsCache?.removeListener(_wsListener!); } catch (_) {}
     }
     _wsStreamSub?.cancel();
     _wsStreamSub = null;
@@ -1505,8 +1517,11 @@ class _ChartEngineShellScreenState
     final ws = ref.read(websocketProvider);
     for (final key in _subscribedKeys) {
       ws.establishConnection(channelInput: key, task: 't', context: context);
-      ws.establishConnection(channelInput: key, task: 'd', context: context);
     }
+    // Depth comes back via WebSocketProvider's owner registry on connect.
+    // Re-claim anyway in case a legacy path released it meanwhile — a no-op
+    // when this chart already owns it and the feed is live.
+    ws.acquireDepth(_depthOwner, _subscribedKeys.toList(), context);
   }
 
   void _handleSubscribe(dynamic value) {
@@ -1536,11 +1551,7 @@ class _ChartEngineShellScreenState
     // and the bid/ask header strip needs them. Both subs share the same
     // socketDatas entry — fields merge — so the iframe sees both LTP and
     // bid/ask through the existing forwarder.
-    ws.establishConnection(
-      channelInput: key,
-      task: 'd',
-      context: context,
-    );
+    ws.acquireDepth(_depthOwner, [key], context);
     // Phase 18.2 — prime the iframe with whatever the WS already has for
     // this token. The WS listener only fires on FUTURE updates, so a token
     // that the app already had cached (e.g. NIFTY 50 because the watchlist
@@ -1592,6 +1603,15 @@ class _ChartEngineShellScreenState
     // overhead for symbols the chart no longer needs; the WS-level cleanup
     // belongs in WebSubscriptionManager, not us.
     _subscribedKeys.remove(key);
+    // Depth is different: the registry counts owners, so releasing here drops
+    // the feed only if the depth panel / another chart is not also using it.
+    // Uses the cached provider: the engine posts these unsubscribes while its
+    // iframe unloads, i.e. while this widget is disposing, and ref.read then
+    // throws (Riverpod 3) — the release was swallowed and the key, already
+    // removed above, was never released by dispose either.
+    try {
+      _wsCache?.releaseDepth(_depthOwner, [key], mounted ? context : null);
+    } catch (_) {}
   }
 
   void _pushAll({bool force = false}) {

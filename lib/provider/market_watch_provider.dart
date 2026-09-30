@@ -876,6 +876,7 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   bool get isDepthVisible => _isDepthVisible;
   bool _depthDataLoaded = false; // Track if depth data has been loaded
   String? _currentDepthSymbol; // Track current depth subscription (exch|token)
+  static const String _depthOwner = 'depth-panel'; // WebSocketProvider depth-owner id
   String? get currentDepthSymbol => _currentDepthSymbol; // Public getter for WebSubscriptionManager
 
   /// Lazy load market depth data when user opens depth panel
@@ -937,10 +938,11 @@ class MarketWatchProvider extends DefaultChangeNotifier {
       // sent-subscription tracking while these provider flags stay set — leaving
       // us "loaded" in state but with no "d" on the wire. Gating on the socket's
       // actual state is what makes returning to Overview re-send the "d".
-      final depthLiveOnSocket =
-          ref.read(websocketProvider).hasDepthSubscription(depthSymbol);
+      final ws = ref.read(websocketProvider);
+      final depthLiveOnSocket = ws.hasDepthSubscription(depthSymbol);
       if (_currentDepthSymbol == depthSymbol &&
           _depthDataLoaded &&
+          ws.ownsDepth(_depthOwner, depthSymbol) &&
           depthLiveOnSocket) {
         debugPrint('[DEPTH_TRACK] SKIPPED: depth already live on socket for $depthSymbol');
         return;
@@ -948,11 +950,9 @@ class MarketWatchProvider extends DefaultChangeNotifier {
 
 
       debugPrint('[DEPTH_TRACK] SUBSCRIBING depth "d" for $depthSymbol');
-      await ref.read(websocketProvider).establishConnection(
-            channelInput: depthSymbol,
-            task: "d",
-            context: context,
-          );
+      // Through the depth-owner registry: the chart may already hold depth for
+      // this scrip, and releasing it later must not cut the chart's feed.
+      ws.acquireDepth(_depthOwner, [depthSymbol], context);
 
       _currentDepthSymbol = depthSymbol;
       _depthDataLoaded = true;
@@ -988,24 +988,16 @@ class MarketWatchProvider extends DefaultChangeNotifier {
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
 
-      // On a forced (page-dispose) teardown the context is usually already
-      // unmounted, so don't gate on context.mounted — the ud send needs the
-      // live WS channel, not a mounted widget.
-      if (context != null && (force || context.mounted)) {
-        try {
-          // Route through WebSubscriptionManager so the ud is skipped when the
-          // symbol is still needed by the watchlist / holdings / positions /
-          // indices / ticker (touchline). [force] bypasses that protection when
-          // the page is closing so the depth feed is actually released.
-          await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
-                tokensToCheck: {depthSymbol},
-                context: context,
-                source: 'depth',
-                bypassProtection: force,
-              );
-        } catch (e) {
-          // If unsubscribe fails, it's okay - we've already cleared tracking
-        }
+      // Release only the panel's claim. The registry sends "ud" when no other
+      // owner (an in-house chart on the same scrip, Insta Options) still needs
+      // the depth feed. Touchline is untouched: a depth release must never
+      // remove the scrip from the touchline restore list — doing that froze
+      // the watchlist row and header ticker of every scrip the user had opened
+      // and left, from the next reconnect on.
+      try {
+        ref.read(websocketProvider).releaseDepth(_depthOwner, [depthSymbol], context);
+      } catch (e) {
+        // If unsubscribe fails, it's okay - we've already cleared tracking
       }
     } catch (e) {
       _currentDepthSymbol = null;

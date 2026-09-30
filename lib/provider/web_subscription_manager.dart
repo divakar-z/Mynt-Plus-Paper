@@ -356,15 +356,9 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
           });
         }
 
-        // Depth ("d") bypasses the master list and is re-sent only as touchline
-        // above, so an active Overview depth feed would silently stay gone after
-        // a reconnect (the socket's sent-subscription tracking was cleared).
-        // Restore it explicitly from the currently-tracked depth symbol.
-        Future.microtask(() {
-          if (ref.read(websocketProvider).wsConnected) {
-            _restoreDepthSubscription();
-          }
-        });
+        // Depth ("d") is restored by WebSocketProvider's depth-owner registry
+        // on every new socket — for the depth panel, each chart and Insta
+        // Options alike — so it is not re-sent from here any more.
       }
 
       _lastKnownWsConnected = isNowConnected;
@@ -596,33 +590,6 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     }
   }
 
-  /// Re-send the depth ("d") subscription for the currently-active Overview
-  /// scrip after a reconnect. Depth bypasses the master list (it is owned by
-  /// MarketWatchProvider via subscribeToDepthData), so the touchline resend in
-  /// [_sendAllSubscriptionsFromMasterList] does not cover it. Driven by
-  /// currentDepthSymbol, which is null when no depth panel is open, so a closed
-  /// depth panel is never wrongly re-subscribed.
-  void _restoreDepthSubscription() {
-    try {
-      final depthSymbol = ref.read(marketWatchProvider).currentDepthSymbol;
-      if (depthSymbol == null || depthSymbol.isEmpty) return;
-
-      final context = _getValidContext();
-      if (context == null) {
-        log('WebSubscriptionManager: No valid context to restore depth subscription');
-        return;
-      }
-
-      ref.read(websocketProvider).connectTouchLine(
-            task: "d",
-            input: depthSymbol,
-            context: context,
-          );
-      log('WebSubscriptionManager: Restored depth subscription for $depthSymbol');
-    } catch (e) {
-      log('WebSubscriptionManager: Error restoring depth subscription: $e');
-    }
-  }
 
   /// Initialize which subscription type each screen needs
   void _initializeSubscriptionTypes() {
@@ -1545,9 +1512,15 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         context: context,
       );
 
-      // Remove from tracking
-      _currentWebSocketSubscriptions.removeAll(tokensToUnsubscribe);
-      _activeSubscriptions.removeAll(tokensToUnsubscribe);
+      // Remove from tracking — touchline only. A depth "ud" releases just the
+      // depth feed and leaves the touchline subscription live on the socket,
+      // so the scrip must stay in the touchline restore list. Removing it here
+      // silently dropped it from the next reconnect: the watchlist row and
+      // header ticker of every scrip the user had opened and left froze.
+      if (source != 'depth') {
+        _currentWebSocketSubscriptions.removeAll(tokensToUnsubscribe);
+        _activeSubscriptions.removeAll(tokensToUnsubscribe);
+      }
 
 
     } catch (e) {

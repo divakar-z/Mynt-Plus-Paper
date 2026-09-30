@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
-import 'package:mynt_plus/main.dart' show rootNavigatorKey;
+import 'package:mynt_plus/main.dart' show rootNavigatorKey, getNavigatorContext;
 import 'package:mynt_plus/provider/fund_provider.dart';
 import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/provider/network_state_provider.dart';
@@ -317,6 +317,9 @@ class WebSocketProvider extends ChangeNotifier {
     // BEFORE the reconnect actually completed. Move it to the success edge
     // so toast suppression matches reality.
     if (_isTabSwitchReconnect) _isTabSwitchReconnect = false;
+    // Every depth owner (depth panel, charts, Insta Options) gets its feed
+    // back on the new socket — touchline is restored by WebSubscriptionManager.
+    _restoreOwnedDepth();
   }
 
   void _onEnterBackoffWait() {
@@ -409,7 +412,11 @@ class WebSocketProvider extends ChangeNotifier {
     if (_state == SocketState.connected) return;
     final ctx = _safeContext();
     if (ctx == null) {
-      log('⚠️  Socket: no valid context for connect, aborting');
+      // Retry on the backoff timer rather than abort. Returning here left the
+      // state machine parked in backoffWait with no timer armed, so nothing
+      // ever reconnected — external reconnect() calls see "already attempting".
+      log('⚠️  Socket: no valid context for connect, retrying after backoff');
+      _transitionTo(SocketState.backoffWait);
       return;
     }
     // Clear legacy mirrors. State machine still represents the truth; once
@@ -559,6 +566,17 @@ class WebSocketProvider extends ChangeNotifier {
   BuildContext? _safeContext() {
     try {
       if (_context?.mounted == true) return _context;
+    } catch (_) {}
+    // `_context` is whichever widget last subscribed — often a screen the user
+    // has since left, so it is unmounted. rootNavigatorKey is only attached on
+    // MOBILE; on web it is always null, so this used to return null there and
+    // the reconnect aborted ("no valid context") and never retried: after
+    // leaving a scrip page, the next socket drop silently killed every price
+    // in the app. getNavigatorContext() is platform-aware (web router's
+    // navigator on web, rootNavigatorKey on mobile) and always mounted.
+    try {
+      final nav = getNavigatorContext();
+      if (nav != null) return nav;
     } catch (_) {}
     return rootNavigatorKey.currentContext;
   }
@@ -740,11 +758,19 @@ class WebSocketProvider extends ChangeNotifier {
       return;
     }
 
+    _subscriptionTimers.remove(key);
+    // Nothing cancels these timers when data arrives, so they fire for every
+    // subscription — and an index's depth or an illiquid option legitimately
+    // stays quiet. While the socket is connected that is not a failed attempt:
+    // counting it ate the reconnect budget ("attempt 3" on the first real drop)
+    // without ever reconnecting (reconnect() is a no-op while connected). The
+    // web probe timer is what detects a genuinely dead socket.
+    if (_state == SocketState.connected) return;
+
     // Only increment counter if we're not already reconnecting
     if (!_reconnecting) {
       _connectionCount++;
     }
-    _subscriptionTimers.remove(key);
 
     if (_connectionCount < _maxReconnectAttempts) {
       reconnect(context);
@@ -1504,6 +1530,88 @@ class WebSocketProvider extends ChangeNotifier {
   /// their own cached flag.
   bool hasDepthSubscription(String depthSymbol) =>
       _sentSubscriptions.contains("d:$depthSymbol");
+
+  // ── Depth ("d") ownership ────────────────────────────────────────────────
+  // Depth has several independent owners on web — the Overview depth panel,
+  // each in-house chart, Insta Options — but the socket carries exactly ONE
+  // depth subscription per scrip. With nobody counting owners:
+  //  * one owner's "ud" silently killed the feed another owner still showed;
+  //  * so the chart and Insta Options avoided releasing at all, and their depth
+  //    feeds piled up for every scrip they had ever shown;
+  //  * after a reconnect only the depth panel's scrip was restored, so Insta
+  //    Options prices froze.
+  // Every depth subscription goes through here instead: "d" is sent when the
+  // first owner arrives, "ud" when the last one leaves, and a new socket gets
+  // every scrip that still has an owner.
+  final Map<String, Set<String>> _depthOwners = {};
+
+  /// Scrips that currently have at least one depth owner.
+  Set<String> get depthScripsInUse => _depthOwners.keys.toSet();
+
+  /// Whether [owner] currently holds depth for [scrip].
+  bool ownsDepth(String owner, String scrip) =>
+      _depthOwners[scrip]?.contains(owner) ?? false;
+
+  /// Register [owner]'s need for depth on [scrips] (each "EXCH|TOKEN").
+  void acquireDepth(String owner, Iterable<String> scrips, [BuildContext? context]) {
+    final ctx = context ?? _safeContext();
+    final fresh = <String>[];
+    for (final k in scrips) {
+      if (k.isEmpty) continue;
+      final owners = _depthOwners.putIfAbsent(k, () => <String>{});
+      final wasUnowned = owners.isEmpty;
+      owners.add(owner);
+      // Also re-send for an owned scrip the socket no longer carries (e.g. a
+      // legacy path released it); connectTouchLine skips it if it is live.
+      if (wasUnowned || !hasDepthSubscription(k)) fresh.add(k);
+    }
+    if (fresh.isEmpty || ctx == null) return;
+    if (_state == SocketState.disconnected && !_connecting) {
+      // No socket at all — open one; the request rides along as pending.
+      establishConnection(channelInput: fresh.join('#'), task: 'd', context: ctx);
+    } else {
+      connectTouchLine(task: 'd', input: fresh.join('#'), context: ctx);
+    }
+  }
+
+  /// Drop [owner]'s need for depth on [scrips]; "ud" goes out only for the
+  /// scrips no other owner still needs.
+  void releaseDepth(String owner, Iterable<String> scrips, [BuildContext? context]) {
+    final gone = <String>[];
+    for (final k in scrips) {
+      final owners = _depthOwners[k];
+      if (owners == null || !owners.remove(owner)) continue;
+      if (owners.isEmpty) {
+        _depthOwners.remove(k);
+        gone.add(k);
+      }
+    }
+    if (gone.isEmpty) return;
+    // The legacy reconnect replay must not resurrect a released scrip.
+    if (gone.contains(ConstantName.lastSubscribeDepth)) {
+      ConstantName.lastSubscribeDepth = '';
+    }
+    final ctx = context ?? _safeContext();
+    if (ctx != null) {
+      connectTouchLine(task: 'ud', input: gone.join('#'), context: ctx);
+      return;
+    }
+    // No context at all (a disposing widget, nothing mounted): the socket does
+    // not need one — release directly rather than silently keep the feed.
+    for (final k in gone) {
+      _sentSubscriptions.remove('d:$k');
+    }
+    _sendToWebSocket('ud', gone.join('#'));
+  }
+
+  /// A fresh socket carries nothing: re-send depth for every owned scrip.
+  void _restoreOwnedDepth() {
+    if (_depthOwners.isEmpty) return;
+    final ctx = _safeContext();
+    if (ctx == null) return;
+    log('WebSocket: restoring depth for ${_depthOwners.length} owned scrip(s)');
+    connectTouchLine(task: 'd', input: _depthOwners.keys.join('#'), context: ctx);
+  }
   // Per-task debounce timers. Keyed by task ("t" / "d") so a depth ("d")
   // subscribe queued right after a touchline ("t") batch cannot cancel the
   // touchline flush — a single shared timer would only ever fire the last

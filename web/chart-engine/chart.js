@@ -93,6 +93,7 @@ class Chart {
 
     // Data
     this.candles = [];           // aggregated target-timeframe candles
+    this._synthFromSec = null;   // first bucket the empty-candle fill may create (live time only)
     this.tickState = { lp: null, v: null, ft: null, bid: null, ask: null, oi: null };
     this.aggState = { prevCumVol: null, prevPrice: null, prevMs: null };
 
@@ -1229,6 +1230,7 @@ class Chart {
       for (const c of this.candles) byTs.set(c.ts, c);
       for (const c of fresh) byTs.set(c.ts, c);
       this.candles = Array.from(byTs.values()).sort((a, b) => a.ts - b.ts);
+      this._markLiveFrom();
       this._noMoreHistory = false;
       if (this.candleStyle === 'renko') {
         this._rebuildRenko();
@@ -1290,6 +1292,7 @@ class Chart {
       // A later _refreshRecent (tab-return / reconnect) backfills real bars once
       // at least one live candle exists. Still subscribe so ticks arrive.
       this.candles = [];
+      this._markLiveFrom();
       this._noMoreHistory = true; // nothing older to fetch
       this.scheduleRedraw();
       if (this.scrip) {
@@ -1302,6 +1305,7 @@ class Chart {
     // Bucketing then collapses any same-bucket candles correctly.
     this.candles = bucketCandles(
         this._sessionFilterIntraday(candles), this.timeframeMinutes, this.scrip && this.scrip.exch);
+    this._markLiveFrom();
     this._noMoreHistory = false;  // fresh series — extend is allowed again
     if (this.candleStyle === 'renko') {
       this._rebuildRenko();
@@ -4716,6 +4720,17 @@ class Chart {
   // append flat continuation bars (O=H=L=C=lastClose, V=0) up to the
   // current wall-clock bucket. Skips daily+ timeframes (calendar-bucketed,
   // not modular) and out-of-session time so nothing forms overnight.
+  // Called whenever API history lands (initial load, empty result, refresh):
+  // the first bucket the empty-candle fill may create is the one AFTER the
+  // bucket that is current right now. Everything up to here came from the API.
+  _markLiveFrom() {
+    if (!this.scrip || this.timeframeMinutes >= 1440) { this._synthFromSec = null; return; }
+    const nowSec = Math.floor(Date.now() / 1000);
+    const targetSec = this.timeframeMinutes * 60;
+    this._synthFromSec = _intradayBucketStart(
+        nowSec, targetSec, _sessionOpenMinFor(this.scrip.exch)) + targetSec;
+  }
+
   _advanceEmptyBarsIfNeeded() {
     if (!this.scrip) return;
     if (this.timeframeMinutes >= 1440) return; // daily/weekly/monthly
@@ -4735,7 +4750,13 @@ class Chart {
     if (last.ts >= currentBucket) return;
     // Cap synthesis at 200 bars per call so a long-idle session doesn't
     // create thousands of empty bars in one tick.
-    let nextBucket = last.ts + targetSec;
+    // Fill only time the chart has watched live. Gaps in API history are real
+    // (no trades in those buckets) and must stay gaps: starting from the last
+    // API candle filled every minute since a scrip last traded — a deep
+    // out-of-the-money option got 2,400 invented flat bars in six seconds,
+    // spanning days, with indicators computed over them.
+    if (this._synthFromSec == null) return;       // no history has landed yet
+    let nextBucket = Math.max(last.ts + targetSec, this._synthFromSec);
     let appended = 0;
     let lastClose = last.c;
     while (nextBucket <= currentBucket && appended < 200) {
