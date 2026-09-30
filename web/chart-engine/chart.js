@@ -4723,7 +4723,14 @@ class Chart {
     if (!this._isSessionLive()) return;        // closed/holiday → never fabricate
     const nowSec = Math.floor(Date.now() / 1000);
     const targetSec = this.timeframeMinutes * 60;
-    const currentBucket = nowSec - (nowSec % targetSec);
+    // Anchor to the session open exactly like the tick path (aggregator.js
+    // ingestTickIntoBucket). A plain `nowSec % targetSec` is the UTC-epoch grid,
+    // which sits 15-45 min off the 09:15 NSE grid for 30m/60m/120m (IST is
+    // UTC+5:30): the loop below steps from a session-aligned last.ts but stopped
+    // at an epoch-aligned bucket, so an idle chart only got its next empty
+    // candle up to 45 min late (NSE 60m) and looked frozen in the meantime.
+    const currentBucket = _intradayBucketStart(
+        nowSec, targetSec, _sessionOpenMinFor(this.scrip.exch));
     const last = this.candles[this.candles.length - 1];
     if (last.ts >= currentBucket) return;
     // Cap synthesis at 200 bars per call so a long-idle session doesn't

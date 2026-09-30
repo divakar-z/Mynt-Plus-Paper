@@ -325,6 +325,9 @@ class WebSocketProvider extends ChangeNotifier {
     _channelSubscription = null;
     _channel?.sink.close();
     _channel = null;
+    // The unexpected-close path (onDone / onError) lands here, so this is the
+    // clear that actually fixes the frozen-watchlist-after-reconnect bug.
+    _forgetSentSubscriptions();
 
     _connectionCount++;
     if (_connectionCount > _maxReconnectAttempts) {
@@ -362,6 +365,7 @@ class WebSocketProvider extends ChangeNotifier {
     _channelSubscription = null;
     _channel?.sink.close();
     _channel = null;
+    _forgetSentSubscriptions();
   }
 
   void _onEnterZombie() {
@@ -371,6 +375,23 @@ class WebSocketProvider extends ChangeNotifier {
     _channelSubscription = null;
     _channel?.sink.close();
     _channel = null;
+    _forgetSentSubscriptions();
+  }
+
+  /// `_sentSubscriptions` records what has been sent on the CURRENT socket, so
+  /// it has to be emptied the moment that socket is gone — a new socket starts
+  /// with nothing subscribed. Only `closeSocket` and the tab-return path used to
+  /// clear it, so after an unexpected close (onDone/onError → backoff →
+  /// reconnect) the old entries survived: every re-subscribe was then skipped as
+  /// "already subscribed" (the cached prices satisfy the has-data check too),
+  /// no touchline frame went out, and the watchlist and chart froze on a socket
+  /// that looked healthy. Pending (not yet sent) requests live in
+  /// `_pendingSubscriptions` and are deliberately left alone.
+  void _forgetSentSubscriptions() {
+    if (_sentSubscriptions.isEmpty) return;
+    log('WebSocket: socket gone — forgetting ${_sentSubscriptions.length} sent '
+        'subscriptions so the next socket re-sends them');
+    _sentSubscriptions.clear();
   }
 
   /// Drives the connect attempt from the state machine. Mirrors the path
