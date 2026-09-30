@@ -50,6 +50,14 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
     super.initState();
     _horizontalScrollController = ScrollController();
     _tableScrollController = ScrollController();
+    // The search field's X empties the controller without firing onChanged,
+    // so reset the query whenever the field becomes empty (same as TC_344).
+    _searchController.addListener(() {
+      if (!mounted) return;
+      if (_searchController.text.isEmpty && _searchQuery.isNotEmpty) {
+        setState(() => _searchQuery = '');
+      }
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ledger = ref.read(ledgerProvider);
@@ -94,13 +102,26 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
       }).toList();
     }
 
-    // Search filter
-    if (_searchQuery.isNotEmpty) {
+    // Search filter — match what the Instrument cell shows (symbol, expiry,
+    // strike/option, e.g. "NIFTY 24 JUL 26 24500 CE") plus the raw tsym and
+    // exchange, same as the main Positions search.
+    final query = _searchQuery.toLowerCase().trim();
+    if (query.isNotEmpty) {
       list = list.where((p) {
-        final symbol = (p.tsym?.toString() ?? '').toLowerCase();
-        final exchange = (p.exch?.toString() ?? '').toLowerCase();
-        final query = _searchQuery.toLowerCase();
-        return symbol.contains(query) || exchange.contains(query);
+        final tsym = p.tsym?.toString() ?? '';
+        final parsed = spilitTsym(value: tsym);
+        final symbolText = '${parsed["symbol"]}'.replaceAll('-EQ', '');
+        final displaySymbol =
+            '$symbolText ${parsed["expDate"]} ${parsed["option"]}'.trim();
+        final searchable = [
+          displaySymbol,
+          symbolText,
+          '${parsed["expDate"]}',
+          '${parsed["option"]}',
+          tsym,
+          p.exch?.toString() ?? '',
+        ];
+        return searchable.any((f) => f.toLowerCase().contains(query));
       }).toList();
     }
 
@@ -427,7 +448,7 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
         SizedBox(
           width: 220,
           height: 36,
-          child: MyntSearchTextField(
+          child: MyntSearchTextField.withSmartClear(
             controller: _searchController,
             placeholder: 'Search',
             leadingIcon: 'assets/icon/search.svg',
@@ -655,39 +676,26 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final double totalWidth = constraints.maxWidth;
-        // 11 columns
-        final double instrumentWidth = totalWidth * 0.14;
-        final double qtyWidth = totalWidth * 0.06;
-        final double avgPriceWidth = totalWidth * 0.10;
-        final double ltpWidth = totalWidth * 0.08;
-        final double pnlWidth = totalWidth * 0.10;
-        final double buyQtyWidth = totalWidth * 0.07;
-        final double sellQtyWidth = totalWidth * 0.07;
-        final double buyAvgWidth = totalWidth * 0.09;
-        final double buyAmtWidth = totalWidth * 0.10;
-        final double sellAvgWidth = totalWidth * 0.09;
-        final double sellAmtWidth = totalWidth * 0.10;
-
+        // 11 columns. Each column is at least as wide as its header and its
+        // widest value, so the instrument name is never cut off. Spare width
+        // is shared in the old proportions; when the minimums don't fit, the
+        // table scrolls horizontally instead of truncating.
+        final widths = _fitColumnWidths(context, totalWidth, sortedList);
         final columnWidths = {
-          0: shadcn.FixedTableSize(instrumentWidth),
-          1: shadcn.FixedTableSize(qtyWidth),
-          2: shadcn.FixedTableSize(avgPriceWidth),
-          3: shadcn.FixedTableSize(ltpWidth),
-          4: shadcn.FixedTableSize(pnlWidth),
-          5: shadcn.FixedTableSize(buyQtyWidth),
-          6: shadcn.FixedTableSize(sellQtyWidth),
-          7: shadcn.FixedTableSize(buyAvgWidth),
-          8: shadcn.FixedTableSize(buyAmtWidth),
-          9: shadcn.FixedTableSize(sellAvgWidth),
-          10: shadcn.FixedTableSize(sellAmtWidth),
+          for (int i = 0; i < widths.length; i++)
+            i: shadcn.FixedTableSize(widths[i]),
         };
+        // Same as main Positions/Holdings: keep the horizontal scrollbar
+        // visible only while the columns are wider than the screen.
+        final bool needsHorizontalScroll =
+            widths.fold<double>(0, (a, b) => a + b) > totalWidth;
 
         return Padding(
           padding: EdgeInsets.zero,
           child: shadcn.OutlinedContainer(
             child: Scrollbar(
               controller: _horizontalScrollController,
-              thumbVisibility: false,
+              thumbVisibility: needsHorizontalScroll,
               child: SingleChildScrollView(
                 controller: _horizontalScrollController,
                 scrollDirection: Axis.horizontal,
@@ -756,36 +764,113 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
     );
   }
 
+  static const List<String> _headers = [
+    'Instrument', 'Qty', 'Avg Price', 'LTP', 'P&L', 'Buy Qty', 'Sell Qty',
+    'Buy Avg', 'Buy Amt', 'Sell Avg', 'Sell Amt',
+  ];
+  // Previous fixed split - now only used to share out spare width.
+  static const List<double> _columnWeights = [
+    0.14, 0.06, 0.10, 0.08, 0.10, 0.07, 0.07, 0.09, 0.10, 0.09, 0.10,
+  ];
+
+  /// Text of every cell in a row, in column order. [0] is the display
+  /// symbol (exchange is drawn after it separately). Shared by the row and
+  /// the column-width measurement so they can't disagree.
+  List<String> _cellTexts(dynamic p) {
+    final parsed = spilitTsym(value: p.tsym?.toString() ?? '');
+    final symbolText = '${parsed["symbol"]}'.replaceAll('-EQ', '');
+    final displaySymbol =
+        '$symbolText ${parsed["expDate"]} ${parsed["option"]}'.trim();
+    final netqty = _safeDouble(p.netqty);
+    final pnl = _showMtm ? _safeDouble(p.rmtm) : _safeDouble(p.rpnl);
+    return [
+      displaySymbol,
+      netqty > 0 ? '+${netqty.toInt()}' : '${netqty.toInt()}',
+      _showMtm ? _fmt(p.netavgpricemtm) : _fmt(p.netAvgPrc),
+      _fmt(p.ltp),
+      pnl.toStringAsFixed(2),
+      (double.tryParse(p.buyQuantity ?? '0') ?? 0).toStringAsFixed(0),
+      (double.tryParse(p.sellQuantity ?? '0') ?? 0).toStringAsFixed(0),
+      _showMtm ? _fmt(p.buypricemtm) : _fmt(p.buyPrice),
+      _showMtm ? _fmt(p.buyvaluemtm) : _fmt(p.buyValue),
+      _showMtm ? _fmt(p.sellPricemtm) : _fmt(p.sellPrice),
+      _showMtm ? _fmt(p.sellValuemtm) : _fmt(p.sellValue),
+    ];
+  }
+
+  double _textWidth(BuildContext context, String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    return painter.width;
+  }
+
+  List<double> _fitColumnWidths(
+      BuildContext context, double available, List<dynamic> rows) {
+    const sortIcon = 20.0; // 16 icon + 4 gap, shown on the sorted column
+    const safety = 4.0; // sub-pixel rounding headroom
+    final cellStyle = _getTextStyle(context);
+    final nameStyle = _getTextStyle(context, fontWeight: MyntFonts.semiBold);
+    final exchStyle = MyntWebTextStyles.caption(context,
+        darkColor: MyntColors.textSecondaryDark,
+        lightColor: MyntColors.textSecondary);
+    final headerStyle = _getHeaderStyle(context);
+    final last = _headers.length - 1;
+
+    // Same horizontal padding as _buildHeaderCell / _buildDataCell.
+    double headerPad(int i) => i == 0 || i == last ? 24 : 12;
+    double cellPad(int i) => i == 0 || i == last ? 28 : 24;
+
+    final mins = List<double>.generate(
+        _headers.length,
+        (i) =>
+            _textWidth(context, _headers[i], headerStyle) +
+            sortIcon +
+            headerPad(i) +
+            safety);
+
+    for (final p in rows) {
+      final texts = _cellTexts(p);
+      final exchange = p.exch?.toString() ?? '';
+      for (int i = 0; i < texts.length; i++) {
+        double w = i == 0
+            ? _textWidth(context, texts[0], nameStyle) +
+                _textWidth(context, ' $exchange', exchStyle)
+            : _textWidth(context, texts[i], cellStyle);
+        w += cellPad(i) + safety;
+        if (w > mins[i]) mins[i] = w;
+      }
+    }
+
+    final totalMin = mins.fold<double>(0, (a, b) => a + b);
+    if (totalMin >= available) return mins; // scrolls horizontally
+    final extra = available - totalMin;
+    final weightSum = _columnWeights.fold<double>(0, (a, b) => a + b);
+    return [
+      for (int i = 0; i < mins.length; i++)
+        mins[i] + extra * _columnWeights[i] / weightSum,
+    ];
+  }
+
   shadcn.TableRow _buildDataRow(
       BuildContext context, int index, dynamic p) {
-    final parsed = spilitTsym(value: p.tsym?.toString() ?? '');
-    final symbolText =
-        '${parsed["symbol"]}'.replaceAll('-EQ', '');
-    final expText = '${parsed["expDate"]}';
-    final optionText = '${parsed["option"]}';
+    final t = _cellTexts(p);
     final exchange = p.exch?.toString() ?? '';
-    final displaySymbol = '$symbolText $expText $optionText'.trim();
+    final displaySymbol = t[0];
 
     final netqty = _safeDouble(p.netqty);
-    final avgPrice = _showMtm
-        ? _fmt(p.netavgpricemtm)
-        : _fmt(p.netAvgPrc);
-    final ltp = _fmt(p.ltp);
+    final avgPrice = t[2];
+    final ltp = t[3];
     final pnl = _showMtm ? _safeDouble(p.rmtm) : _safeDouble(p.rpnl);
-    final buyQty = (double.tryParse(p.buyQuantity ?? '0') ?? 0).toStringAsFixed(0);
-    final sellQty = (double.tryParse(p.sellQuantity ?? '0') ?? 0).toStringAsFixed(0);
-    final buyAvg = _showMtm
-        ? _fmt(p.buypricemtm)
-        : _fmt(p.buyPrice);
-    final buyAmt = _showMtm
-        ? _fmt(p.buyvaluemtm)
-        : _fmt(p.buyValue);
-    final sellAvg = _showMtm
-        ? _fmt(p.sellPricemtm)
-        : _fmt(p.sellPrice);
-    final sellAmt = _showMtm
-        ? _fmt(p.sellValuemtm)
-        : _fmt(p.sellValue);
+    final buyQty = t[5];
+    final sellQty = t[6];
+    final buyAvg = t[7];
+    final buyAmt = t[8];
+    final sellAvg = t[9];
+    final sellAmt = t[10];
 
     final qtyColor = netqty > 0
         ? resolveThemeColor(context,
@@ -831,7 +916,7 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
           columnIndex: 1,
           alignRight: true,
           child: Text(
-            netqty > 0 ? '+${netqty.toInt()}' : '${netqty.toInt()}',
+            t[1],
             style: _getTextStyle(context, color: qtyColor),
           ),
         ),
@@ -855,7 +940,7 @@ class _PositionScreenState extends ConsumerState<PositionScreen> {
           columnIndex: 4,
           alignRight: true,
           child: Text(
-            pnl.toStringAsFixed(2),
+            t[4],
             style: _getTextStyle(context, color: pnlColor),
           ),
         ),

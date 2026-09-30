@@ -34,6 +34,31 @@
   var dispNames = {};
   var changeSymbolTimers = {}; // containerId -> debounce timer
   var lastNotifiedSymbol = {}; // containerId -> last symbol sent to Dart via onChartSymbolChanged (dedup)
+  // containerId -> [{ symbol, at }] — symbols Dart asked for via changeSymbol
+  // that TV hasn't confirmed yet. onSymbolChanged fires for these too; they
+  // are echoes, not user searches, and must not reach Dart as an external
+  // change (a stale echo landing after a newer watchlist click would switch
+  // the scrip page back). Entries expire so one that never echoes (TV no-op)
+  // can't swallow a later genuine search for the same symbol.
+  var dartRequestedSymbols = {};
+  var DART_ECHO_TTL_MS = 10000;
+
+  function isDartEcho(containerId, symbolName) {
+    var list = dartRequestedSymbols[containerId];
+    if (!list || !list.length) return false;
+    var now = Date.now();
+    list = list.filter(function (e) { return now - e.at < DART_ECHO_TTL_MS; });
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].symbol === symbolName) { idx = i; break; }
+    }
+    // Consume only the match. Older entries stay until they echo or expire —
+    // TV can confirm an earlier setSymbol AFTER a later one, and that late
+    // echo must still be recognised as ours.
+    if (idx !== -1) list.splice(idx, 1);
+    dartRequestedSymbols[containerId] = list;
+    return idx !== -1;
+  }
 
   // Noren app path. Match the app that issued the jKey we forward as
   // `usession`:
@@ -253,11 +278,16 @@
     if (lastNotifiedSymbol[containerId] === symbolName) return;
     lastNotifiedSymbol[containerId] = symbolName;
     var seeded = symbolDataCache[symbolName] || {};
+    var colon = symbolName.indexOf(':');
     var payload = {
       containerId: containerId,
       symbol: symbolName,
       exch: seeded.exch || '',
-      token: seeded.Token || ''
+      token: seeded.Token || '',
+      tsym: seeded.searchTsym ||
+        (colon !== -1 ? symbolName.substring(colon + 1) : symbolName),
+      // Only known when the symbol came from the chart's search box.
+      instname: seeded.searchInstname || ''
     };
     try {
       if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
@@ -454,6 +484,22 @@
               COM: 'Commodity', UNDIND: 'Index'
             };
             var results = data.values.map(function (v) {
+              // Seed exch + Token from the search row (same shape as
+              // seedSymbolData) so picking a result resolves without the
+              // getSymbolinfo lookup — which returns {} for NFO/BFO/MCX —
+              // and Dart gets the token/instname to reload the scrip page.
+              // Never overwrite an entry that already has a Token.
+              var seedKey = v.exch + ':' + String(v.tsym || '').toUpperCase();
+              var existing = symbolDataCache[seedKey];
+              if (v.token && !(existing && existing.Token)) {
+                symbolDataCache[seedKey] = { exch: v.exch, Token: String(v.token) };
+              }
+              if (symbolDataCache[seedKey]) {
+                if (v.instname) symbolDataCache[seedKey].searchInstname = v.instname;
+                // Original-case tsym ("Nifty 50") — the result symbol is
+                // upper-cased, but Dart's APIs expect the broker's casing.
+                if (v.tsym) symbolDataCache[seedKey].searchTsym = String(v.tsym);
+              }
               var stype = typeMap[v.instname] || 'Stock';
               var desc = v.cname;
               var match = v.tsym.match(/(\d{1,2})[a-zA-Z]{3}(\d{2,4})?/g);
@@ -1135,6 +1181,13 @@
                   try {
                     var newSym = ch.symbol();
                     if (!newSym) return;
+                    // Echo of a Dart-requested change — Dart already knows.
+                    // Record it as current so a later search back to the
+                    // previous symbol isn't deduped away.
+                    if (isDartEcho(containerId, newSym)) {
+                      lastNotifiedSymbol[containerId] = newSym;
+                      return;
+                    }
                     desiredSymbols[containerId] = newSym;
                     notifyDartOfSymbolChange(containerId, newSym);
                   } catch (e) { /* widget mid-tear-down */ }
@@ -1252,6 +1305,8 @@
             // is still resolving from a previous setSymbol call.
             var res = '5';
             try { res = widget.activeChart().resolution(); } catch (_) { }
+            (dartRequestedSymbols[containerId] = dartRequestedSymbols[containerId] || [])
+              .push({ symbol: symbol, at: Date.now() });
             widget.setSymbol(symbol, res, function () { });
             console.log('ScalperCharts: Symbol changed -', containerId, symbol);
           } catch (e) {
@@ -1616,6 +1671,7 @@
       }
       delete desiredSymbols[containerId];
       delete lastNotifiedSymbol[containerId];
+      delete dartRequestedSymbols[containerId];
       delete gapFlags[containerId];
       delete lastResyncAt[containerId];
       var widget = charts[containerId];

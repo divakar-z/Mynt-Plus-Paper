@@ -17,7 +17,14 @@ import 'package:mynt_plus/sharedWidget/functions.dart';
 /// The shell's own postMessage pipeline then reloads the iframe's chart.
 class EmbeddedChartView extends ConsumerStatefulWidget {
   final DepthInputArgs wlValue;
-  const EmbeddedChartView({super.key, required this.wlValue});
+
+  /// Scrip picked from the chart's own search box — lets the details page
+  /// follow the chart. The page's resulting `wlValue` update comes back
+  /// through [_ensureSync] as the same symbol, which setPaneSymbol no-ops.
+  final void Function(ChartScrip scrip)? onSymbolPicked;
+
+  const EmbeddedChartView(
+      {super.key, required this.wlValue, this.onSymbolPicked});
 
   @override
   ConsumerState<EmbeddedChartView> createState() => _EmbeddedChartViewState();
@@ -83,6 +90,9 @@ class _EmbeddedChartViewState extends ConsumerState<EmbeddedChartView> {
     // Hot-trigger any pending sync (covers the case where the iframe
     // mounted before our didUpdateWidget fired).
     WidgetsBinding.instance.addPostFrameCallback((_) => _ensureSync());
-    return const ChartEngineShellScreen(embedded: true);
+    return ChartEngineShellScreen(
+      embedded: true,
+      onSymbolPicked: widget.onSymbolPicked,
+    );
   }
 }

@@ -442,6 +442,28 @@ class WebChartManager {
     show();
   }
 
+  // ── External symbol change (chart search box) ─────────────────────────
+
+  void Function(ExternalChartSymbol)? _externalSymbolListener;
+
+  /// Called when the user switches the chart's symbol from inside the chart
+  /// (TradingView's type-to-search box), so the owning scrip page can reload
+  /// its quotes/depth/tabs for the same scrip. One listener at a time — the
+  /// latest registration wins.
+  void setExternalSymbolListener(void Function(ExternalChartSymbol) listener) {
+    _externalSymbolListener = listener;
+  }
+
+  /// Clear [listener] if it's still the registered one. A newer page may
+  /// have registered before the old one disposed — leave that one alone.
+  void clearExternalSymbolListener(void Function(ExternalChartSymbol) listener) {
+    // `==`, not identical: method tear-offs of the same instance are equal
+    // but not guaranteed identical.
+    if (_externalSymbolListener == listener) {
+      _externalSymbolListener = null;
+    }
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────
 
   /// Install [_handleChartSymbolChanged] as the global JS callback the chart
@@ -460,17 +482,26 @@ class WebChartManager {
   }
 
   /// Called from `chart_init.js` (web) when TradingView changes the symbol
-  /// outside Dart's control — currently only a saved-layout load (TV's header
-  /// search box is disabled on web). Re-points the shared-socket tick filter
+  /// outside Dart's control — the type-to-search box (header search button
+  /// is disabled, but typing on the chart still opens it) or a saved-layout
+  /// load. Re-points the shared-socket tick filter
   /// ([_currentToken]/[_currentExch]/[_currentSymbol]) so live price follows
-  /// the displayed scrip. The echo of a Dart-initiated change is ignored
-  /// (symbol already current).
+  /// the displayed scrip, then tells [_externalSymbolListener] so the scrip
+  /// page follows too. Echoes of Dart-initiated changes are filtered in JS
+  /// and again here (symbol already current).
   void _handleChartSymbolChanged(String payloadJson) {
     try {
       final map = jsonDecode(payloadJson) as Map<String, dynamic>;
       final symbol = (map['symbol'] as String?)?.trim() ?? '';
       final exch = (map['exch'] as String?)?.trim() ?? '';
       final token = (map['token'] as String?)?.trim() ?? '';
+      final tsym = (map['tsym'] as String?)?.trim() ?? '';
+      final instname = (map['instname'] as String?)?.trim() ?? '';
+      final containerId = (map['containerId'] as String?)?.trim() ?? '';
+
+      // The bridge is shared with the scalper charts, which fire this same
+      // global for their own containers — only react to this chart's.
+      if (containerId.isNotEmpty && containerId != _containerId) return;
 
       // Echo of a change we initiated via changeSymbol() — already applied.
       if (symbol.isEmpty || symbol == _currentSymbol) return;
@@ -486,6 +517,17 @@ class WebChartManager {
       if (exch.isNotEmpty) _currentExch = exch;
       _currentToken = token;
       log('WebChartManager: external symbol change -> $symbol (token $token)');
+
+      // Let the scrip page follow the chart (Kite behaviour, TC_180).
+      final listener = _externalSymbolListener;
+      if (listener != null && (exch.isNotEmpty || _currentExch != null)) {
+        listener(ExternalChartSymbol(
+          exch: exch.isNotEmpty ? exch : _currentExch!,
+          token: token,
+          tsym: tsym,
+          instname: instname,
+        ));
+      }
     } catch (e) {
       log('WebChartManager: onChartSymbolChanged parse error: $e');
     }
@@ -585,3 +627,20 @@ class WebChartManager {
 
 /// Global instance for easy access. Preserved from old manager.
 final webChartManager = WebChartManager();
+
+/// A symbol the user picked from inside the chart (see
+/// [WebChartManager.setExternalSymbolListener]). [instname] is empty when the
+/// change didn't come from the chart's search box (e.g. a saved layout).
+class ExternalChartSymbol {
+  final String exch;
+  final String token;
+  final String tsym;
+  final String instname;
+
+  const ExternalChartSymbol({
+    required this.exch,
+    required this.token,
+    required this.tsym,
+    required this.instname,
+  });
+}
