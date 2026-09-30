@@ -1566,9 +1566,12 @@ class Chart {
       if (!isWeekend(start)) back--;
     }
     while (isWeekend(start)) { start -= 86400; past = true; }
-    if (!past) return { start, end: nowSec };
     const b = _sessionBoundsFor(this.scrip.exch, start);
-    return { start, end: start + (b.closeMin - b.openMin) * 60 - 1 };
+    const sessionEnd = start + (b.closeMin - b.openMin) * 60 - 1;
+    // Today: up to now, but never past the close — the time after it has no
+    // candles and only counts against the endpoint's 30,000-candle range cap.
+    if (!past) return { start, end: Math.min(nowSec, sessionEnd) };
+    return { start, end: sessionEnd };
   }
 
   _showOverlay(title, detail) {
