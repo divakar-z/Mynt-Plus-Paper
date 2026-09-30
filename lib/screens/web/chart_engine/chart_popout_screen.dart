@@ -35,7 +35,7 @@ class ChartPopoutScreen extends ConsumerStatefulWidget {
   final String exch;
   final String token;
   final String tsym;
-  final int timeframeMinutes;
+  final num timeframeMinutes;
 
   /// Per-popout slot (`n` in the URL) — keeps the alternate-feed uid unique so
   /// multiple popouts (and the main socket) never collide.

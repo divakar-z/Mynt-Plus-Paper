@@ -660,7 +660,15 @@
   root.appendChild(symWrap);
 
   // ── Timeframe dropdown ──────────────────────────────────────────────────
+  // Second timeframes are fractional minutes (5s = 5/60) so every consumer of
+  // `minutes` keeps working; the engine converts back with _tfSec().
   const TIMEFRAMES = [
+    { label: '1s', minutes: 1 / 60 },
+    { label: '5s', minutes: 5 / 60 },
+    { label: '10s', minutes: 10 / 60 },
+    { label: '15s', minutes: 15 / 60 },
+    { label: '30s', minutes: 30 / 60 },
+    { label: '45s', minutes: 45 / 60 },
     { label: '1m', minutes: 1 },
     { label: '2m', minutes: 2 },
     { label: '3m', minutes: 3 },
@@ -677,6 +685,7 @@
   ];
   function timeframeLabel(min) {
     for (const t of TIMEFRAMES) if (t.minutes === min) return t.label;
+    if (min > 0 && min < 1) return Math.round(min * 60) + 's';
     if (min % 1440 === 0) return (min / 1440) + 'D';
     if (min % 60 === 0) return (min / 60) + 'h';
     return min + 'm';
@@ -700,6 +709,10 @@
   activePaneSubs.push(repaintTimeframe);
 
   function longTimeframeLabel(min) {
+    if (min < 1) {
+      const s = Math.round(min * 60);
+      return s + (s === 1 ? ' second' : ' seconds');
+    }
     if (min < 60) return min + (min === 1 ? ' minute' : ' minutes');
     if (min < 1440) {
       const h = Math.floor(min / 60);
@@ -711,13 +724,15 @@
     return d + (d === 1 ? ' day' : ' days');
   }
   const TF_GROUPS = [
-    { title: 'MINUTES', items: TIMEFRAMES.filter(t => t.minutes < 60) },
+    { title: 'SECONDS', items: TIMEFRAMES.filter(t => t.minutes < 1) },
+    { title: 'MINUTES',
+      items: TIMEFRAMES.filter(t => t.minutes >= 1 && t.minutes < 60) },
     { title: 'HOURS',
       items: TIMEFRAMES.filter(t => t.minutes >= 60 && t.minutes < 1440) },
     { title: 'DAYS', items: TIMEFRAMES.filter(t => t.minutes >= 1440) },
   ];
   const tfSectionExpanded = {
-    MINUTES: true, HOURS: true, DAYS: true,
+    SECONDS: true, MINUTES: true, HOURS: true, DAYS: true,
   };
 
   tfBtn.addEventListener('click', () => {

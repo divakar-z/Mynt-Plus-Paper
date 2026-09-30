@@ -129,7 +129,7 @@ class _ChartEngineShellScreenState
   // see the scrip. Without this, re-selecting a futures/commodity with a
   // lot-less scrip left qty=1 and the order was rejected.
   final Map<String, ({int? ls, double? ti, int? frz})> _scripMetaCache = {};
-  final Map<int, int> _pushedTimeframe = {};
+  final Map<int, num> _pushedTimeframe = {};
   final Map<int, String> _pushedOverlaysJson = {};
   final Map<int, String> _pushedPaneOverlaysJson = {};
   final Map<int, int> _pushedQty = {};
@@ -935,7 +935,7 @@ class _ChartEngineShellScreenState
         if (v is Map && v['minutes'] is num) {
           final session = ref.read(chartEngineSessionProvider);
           ref.read(chartEngineSessionProvider.notifier).setPaneTimeframe(
-              session.activePaneIndex, (v['minutes'] as num).toInt());
+              session.activePaneIndex, v['minutes'] as num);
         }
         break;
       }
@@ -1448,13 +1448,24 @@ class _ChartEngineShellScreenState
           });
         }
       } else {
-        final resp = await locator<ApiExporter>().getTPSeriesChart(
-          exchange: exch,
-          token: token,
-          interval: interval,
-          startEpoch: start,
-          endEpoch: end,
-        );
+        // Second timeframes ('1s', '5s', …) — only the seconds endpoint has
+        // them. The engine asks for one session from its open; live ticks
+        // carry the chart on from there.
+        final resp = interval.endsWith('s')
+            ? await locator<ApiExporter>().getSecondsSeries(
+                exchange: exch,
+                token: token,
+                interval: interval,
+                startEpoch: start,
+                endEpoch: end,
+              )
+            : await locator<ApiExporter>().getTPSeriesChart(
+                exchange: exch,
+                token: token,
+                interval: interval,
+                startEpoch: start,
+                endEpoch: end,
+              );
         final raw = resp.data ?? const [];
         for (final d in raw) {
           final ts = int.tryParse(d.ssboe ?? '');

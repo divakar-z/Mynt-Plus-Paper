@@ -132,6 +132,143 @@ t('resets baseline on huge jump (dv > 50k) without applying', () => {
   assert.strictEqual(candles[0].v, 10);        // candle unchanged
 });
 
+console.log('seconds timeframes');
+t('source interval: the exact served interval', () => {
+  assert.strictEqual(SOURCE_INTERVAL_FOR_MINUTES(1 / 60), '1s');
+  assert.strictEqual(SOURCE_INTERVAL_FOR_MINUTES(5 / 60), '5s');
+  assert.strictEqual(SOURCE_INTERVAL_FOR_MINUTES(10 / 60), '10s');
+  assert.strictEqual(SOURCE_INTERVAL_FOR_MINUTES(15 / 60), '15s');
+  assert.strictEqual(SOURCE_INTERVAL_FOR_MINUTES(30 / 60), '30s');
+  assert.strictEqual(SOURCE_INTERVAL_FOR_MINUTES(45 / 60), '45s');
+  assert.strictEqual(SOURCE_INTERVAL_FOR_MINUTES(1), '1');
+});
+
+// 30 Sep 2026 09:15:00 IST — NSE session open.
+const OPEN = 1790739900;
+t('rolls 1s into 5s on the session-open grid', () => {
+  const src = [];
+  for (let i = 0; i < 10; i++) src.push({ ts: OPEN + i, o: 100 + i, h: 101 + i, l: 99 + i, c: 100.5 + i, v: 1 });
+  const out = bucketCandles(src, 5 / 60, 'NSE');
+  assert.strictEqual(out.length, 2);
+  assert.deepStrictEqual(out[0], { ts: OPEN, o: 100, h: 105, l: 99, c: 104.5, v: 5 });
+  assert.strictEqual(out[1].ts, OPEN + 5);
+});
+
+t('tick opens a new 1s bar in the next second', () => {
+  const candles = [{ ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 0 }];
+  const state = { prevCumVol: 10, prevPrice: 100, prevMs: OPEN * 1000 };
+  const r = ingestTickIntoBucket(candles,
+      { lp: 101, v: 12, ft: OPEN + 1, _ftFresh: true }, state, 1000, 'NSE');
+  assert.strictEqual(r, 'applied');
+  assert.strictEqual(candles.length, 2);
+  assert.strictEqual(candles[1].ts, OPEN + 1);
+  assert.strictEqual(candles[1].v, 2);
+});
+
+t('late tick lands in its own second and re-levels the empty bars after it', () => {
+  const candles = [
+    { ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 3 },
+    { ts: OPEN + 1, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+    { ts: OPEN + 2, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+  ];
+  const state = { prevCumVol: 10, prevPrice: 100, prevMs: OPEN * 1000 };
+  const r = ingestTickIntoBucket(candles,
+      { lp: 102, v: 15, ft: OPEN + 1, _ftFresh: true }, state, 1000, 'NSE');
+  assert.strictEqual(r, 'applied');
+  assert.strictEqual(candles.length, 3);
+  assert.deepStrictEqual([candles[1].o, candles[1].h, candles[1].l, candles[1].c, candles[1].v],
+      [102, 102, 102, 102, 5]);
+  assert.strictEqual(candles[2].c, 102);   // empty bar after it carries the price
+  assert.strictEqual(state.prevCumVol, 15);
+});
+
+t('first trade in a pre-drawn empty second becomes its open', () => {
+  const candles = [
+    { ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 3 },
+    { ts: OPEN + 1, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+  ];
+  const state = { prevCumVol: 10, prevPrice: 100, prevMs: OPEN * 1000 };
+  ingestTickIntoBucket(candles,
+      { lp: 101, v: 12, ft: OPEN + 1, _ftFresh: true }, state, 1000, 'NSE');
+  ingestTickIntoBucket(candles,
+      { lp: 100.5, v: 13, ft: OPEN + 1, _ftFresh: true }, state, 1000, 'NSE');
+  assert.deepStrictEqual([candles[1].o, candles[1].h, candles[1].l, candles[1].c, candles[1].v],
+      [101, 101, 100.5, 100.5, 3]);
+});
+
+t('depth-frame price (old ft) does not steal the next trade\'s open', () => {
+  const candles = [
+    { ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 3 },
+    { ts: OPEN + 1, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+  ];
+  const state = { prevCumVol: 10, prevPrice: 100, prevMs: OPEN * 1000 };
+  // Depth frame: no v, no fresh ft (tickState keeps the last trade's ft).
+  ingestTickIntoBucket(candles,
+      { lp: 100.5, v: 0, ft: OPEN, _lpOnly: true, _ftFresh: false, _volSeen: true }, state, 1000, 'NSE');
+  ingestTickIntoBucket(candles,
+      { lp: 99, v: 12, ft: OPEN + 1, _ftFresh: true, _volSeen: true }, state, 1000, 'NSE');
+  assert.deepStrictEqual([candles[1].o, candles[1].h, candles[1].l, candles[1].c],
+      [99, 99, 99, 99]);
+});
+
+t('depth frame WITH the current ft does not steal the trade open either', () => {
+  const candles = [
+    { ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 3 },
+    { ts: OPEN + 1, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+  ];
+  const state = { prevCumVol: 10, prevPrice: 100, prevMs: OPEN * 1000 };
+  ingestTickIntoBucket(candles,
+      { lp: 100, v: 0, ft: OPEN + 1, _lpOnly: true, _ftFresh: true, _volSeen: true }, state, 1000, 'NSE');
+  ingestTickIntoBucket(candles,
+      { lp: 101, v: 12, ft: OPEN + 1, _ftFresh: true, _volSeen: true }, state, 1000, 'NSE');
+  assert.deepStrictEqual([candles[1].o, candles[1].h, candles[1].l, candles[1].c, candles[1].v],
+      [101, 101, 101, 101, 2]);
+});
+
+t('index (never any volume): each price frame is the trade', () => {
+  const candles = [
+    { ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 0 },
+    { ts: OPEN + 1, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+  ];
+  const state = { prevCumVol: null, prevPrice: 100, prevMs: OPEN * 1000 };
+  ingestTickIntoBucket(candles,
+      { lp: 102, v: 0, ft: OPEN + 1, _lpOnly: true, _ftFresh: true }, state, 1000, 'NSE');
+  assert.deepStrictEqual([candles[1].o, candles[1].c], [102, 102]);
+});
+
+t('late tick stops re-levelling at a bar a real tick already touched', () => {
+  const candles = [
+    { ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 3 },
+    { ts: OPEN + 1, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+    { ts: OPEN + 2, o: 100, h: 104, l: 100, c: 104, v: 2, _synth: true, _ticked: true },
+  ];
+  const state = { prevCumVol: 10, prevPrice: 104, prevMs: (OPEN + 2) * 1000 };
+  ingestTickIntoBucket(candles,
+      { lp: 102, v: 11, ft: OPEN + 1, _ftFresh: true }, state, 1000, 'NSE');
+  assert.strictEqual(candles[1].c, 102);
+  assert.strictEqual(candles[2].c, 104);   // untouched
+});
+
+t('late tick WITHOUT its own ft keeps the old behaviour (skipped)', () => {
+  const candles = [
+    { ts: OPEN, o: 100, h: 100, l: 100, c: 100, v: 3 },
+    { ts: OPEN + 1, o: 100, h: 100, l: 100, c: 100, v: 0, _synth: true },
+  ];
+  const state = { prevCumVol: 10, prevPrice: 100, prevMs: OPEN * 1000 };
+  const r = ingestTickIntoBucket(candles,
+      { lp: 102, v: 15, ft: OPEN, _ftFresh: false }, state, 1000, 'NSE');
+  assert.strictEqual(r, 'skipped');
+  assert.strictEqual(candles[0].c, 100);
+});
+
+t('minute timeframes still drop a late non-price-only tick', () => {
+  const candles = [{ ts: OPEN + 60, o: 100, h: 100, l: 100, c: 100, v: 5 }];
+  const state = { prevCumVol: 10, prevPrice: 100, prevMs: (OPEN + 60) * 1000 };
+  const r = ingestTickIntoBucket(candles,
+      { lp: 99, v: 12, ft: OPEN + 30, _ftFresh: true }, state, 60_000, 'NSE');
+  assert.strictEqual(r, 'skipped');
+});
+
 console.log();
 console.log(`${pass} passed · ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

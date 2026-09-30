@@ -148,6 +148,41 @@ mixin MarketWatchApi on ApiCore {
     }
   }
 
+  /// Second candles ([interval] like `1s`, `5s`, `30s`) for
+  /// [startEpoch]..[endEpoch]. Only [tpseriesLive] serves seconds (valid:
+  /// 1s,3s,5s,10s,30s,45s); rows come newest-first. A full 1s session is
+  /// 22,500 rows (~4.4 MB), so the timeout is generous — on expiry it throws
+  /// and the chart shows its "click to retry" overlay instead of hanging.
+  Future<TpSeries> getSecondsSeries({
+    required String exchange,
+    required String token,
+    required String interval,
+    required int startEpoch,
+    required int endEpoch,
+  }) async {
+    final uri = Uri.parse(apiLinks.tpseriesLive);
+    final res = await apiClient
+        .post(
+          uri,
+          headers: defaultHeaders,
+          body:
+              '''jData={"uid":"${prefs.clientId}","exch":"$exchange","token":"$token","st":"$startEpoch","et":"$endEpoch","intrv":"$interval"}&jKey=${prefs.clientSession}''',
+        )
+        .timeout(const Duration(seconds: 30));
+    final json = jsonDecode(res.body);
+    if (json is List) return TpSeries.fromJson({"data": json});
+    if (json is Map) {
+      if (json['stat'] == 'Not_Ok') {
+        // An empty window (holiday, pre-open, a scrip that did not trade) is
+        // "no data" — return empty so the chart steps back a trading day.
+        if (json['emsg'] == 'no data') return TpSeries.fromJson({"data": []});
+        throw Exception(json['emsg'] ?? 'Seconds data unavailable');
+      }
+      return TpSeries.fromJson(json as Map<String, dynamic>);
+    }
+    throw Exception("Unexpected JSON type: ${json.runtimeType}");
+  }
+
 // Edit watchlist name from kambala
 
   Future<WatchlistRenameModel> getWatchListRename(
