@@ -89,11 +89,17 @@ class ChartEngineShellScreen extends ConsumerStatefulWidget {
   /// Popout-only live feed over the alternate socket. Non-null iff [popout].
   final PopoutFeedClient? feed;
 
+  /// Embedded only: fired when the user picks a scrip from the chart's own
+  /// search box, so the host scrip page can follow it (TC_180, Kite
+  /// behaviour). Not fired for watchlist / details-driven symbol pushes.
+  final void Function(ChartScrip scrip)? onSymbolPicked;
+
   const ChartEngineShellScreen({
     super.key,
     this.embedded = false,
     this.popout = false,
     this.feed,
+    this.onSymbolPicked,
   });
 
   @override
@@ -1070,6 +1076,7 @@ class _ChartEngineShellScreenState
           ref
               .read(chartEngineSessionProvider.notifier)
               .setPaneSymbol(session.activePaneIndex, scrip);
+          if (widget.embedded) widget.onSymbolPicked?.call(scrip);
         }
         break;
       }

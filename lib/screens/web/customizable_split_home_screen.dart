@@ -3439,6 +3439,7 @@ class _CustomizableSplitHomeScreenState
               return ChartWithDepthWeb(
                 // Don't use dynamic key - it destroys/recreates the widget (and chart iframe)
                 // Instead, let didUpdateWidget handle symbol changes via postMessage
+                followChartSymbolSearch: true,
                 wlValue: DepthInputArgs(
                   exch: exch,
                   token: token,
@@ -3453,6 +3454,7 @@ class _CustomizableSplitHomeScreenState
             // Don't use dynamic key - let didUpdateWidget handle symbol changes via postMessage
             return ChartWithDepthWeb(
               wlValue: args,
+              followChartSymbolSearch: true,
             );
           },
         );

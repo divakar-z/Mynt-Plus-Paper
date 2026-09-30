@@ -34,8 +34,18 @@ class ChartWithDepthWeb extends ConsumerStatefulWidget {
   final DepthInputArgs wlValue;
   final String isBasket;
 
+  /// When true, picking a scrip from the chart's own search box reloads this
+  /// page (Market Info, depth, Options, Stock Report) for that scrip, same as
+  /// a watchlist click (Kite behaviour, TC_180). Only the main scrip-details
+  /// panel sets this — Scanner hosts its own copy and must not be pulled into
+  /// the main panel.
+  final bool followChartSymbolSearch;
+
   const ChartWithDepthWeb(
-      {super.key, required this.wlValue, this.isBasket = ""});
+      {super.key,
+      required this.wlValue,
+      this.isBasket = "",
+      this.followChartSymbolSearch = false});
 
   @override
   ConsumerState<ChartWithDepthWeb> createState() => _ChartWithDepthWebState();
@@ -60,9 +70,68 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
   // LayerLink for persistent chart portal positioning
   final LayerLink _chartLayerLink = LayerLink();
 
+  // Latest scrip requested from the chart's search box — a slower earlier
+  // request must not override a newer one.
+  String? _pendingChartSearchToken;
+
+  /// Chart search box picked [s] — reload the page for it through the same
+  /// path a watchlist click uses (calldepthApis → scrip panel → didUpdateWidget).
+  /// The chart itself is already on [s]; calldepthApis' setChartScript is a
+  /// no-op for the same symbol.
+  Future<void> _onChartSymbolSearched(ExternalChartSymbol s) async {
+    if (!mounted || s.token.isEmpty || s.exch.isEmpty) return;
+    if (s.token == widget.wlValue.token && s.exch == widget.wlValue.exch) {
+      return;
+    }
+    _pendingChartSearchToken = s.token;
+    final mw = ref.read(marketWatchProvider);
+
+    // instname drives index/commodity handling (no depth, no trading info).
+    // The search box supplies it; a saved-layout switch doesn't, so read it
+    // from the quote.
+    var instname = s.instname;
+    if (instname.isEmpty) {
+      try {
+        await mw.fetchScripQuote(s.token, s.exch, context);
+      } catch (_) {}
+      if (!mounted || _pendingChartSearchToken != s.token) return;
+      if (mw.getQuotes?.token?.toString() == s.token) {
+        instname = mw.getQuotes?.instname?.toString() ?? '';
+      }
+    }
+
+    final split = spilitTsym(value: s.tsym);
+    final depthArgs = DepthInputArgs(
+      exch: s.exch,
+      token: s.token,
+      tsym: s.tsym,
+      instname: instname,
+      symbol: split['symbol']?.toString() ?? s.tsym,
+      expDate: split['expDate']?.toString() ?? '',
+      option: split['option']?.toString() ?? '',
+    );
+    mw.scripdepthsize(false);
+    await mw.calldepthApis(context, depthArgs, "");
+  }
+
+  /// TradingView is one shared chart that moves between screens via the
+  /// inline portal. Only follow a search made while it's docked on THIS page
+  /// — e.g. not while Scanner's copy is hosting it in another panel.
+  void _onTvChartSymbolSearched(ExternalChartSymbol s) {
+    final profile = ref.read(userProfileProvider);
+    if (!profile.showInlineChart ||
+        profile.inlineChartLayerLink != _chartLayerLink) {
+      return;
+    }
+    _onChartSymbolSearched(s);
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.followChartSymbolSearch) {
+      webChartManager.setExternalSymbolListener(_onTvChartSymbolSearched);
+    }
     // Store context and container for later use in dispose
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -171,6 +240,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
 
   @override
   void dispose() {
+    // Only clears if still ours — a newer page may have registered already.
+    webChartManager.clearExternalSymbolListener(_onTvChartSymbolSearched);
+
     // Remove listener before disposing to prevent memory leaks
     if (_tabController != null && _tabControllerListener != null) {
       _tabController!.removeListener(_tabControllerListener!);
@@ -1291,7 +1363,18 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         if (!mounted) return;
         ref.read(userProfileProvider).hideInlineChart();
       });
-      return EmbeddedChartView(wlValue: widget.wlValue);
+      return EmbeddedChartView(
+        wlValue: widget.wlValue,
+        // ZChart's own search box → page follows, same as TradingView's.
+        onSymbolPicked: widget.followChartSymbolSearch
+            ? (scrip) => _onChartSymbolSearched(ExternalChartSymbol(
+                  exch: scrip.exch,
+                  token: scrip.token,
+                  tsym: scrip.tsym,
+                  instname: scrip.instname,
+                ))
+            : null,
+      );
     }
     return LayoutBuilder(
       builder: (context, constraints) {
