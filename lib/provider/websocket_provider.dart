@@ -657,6 +657,8 @@ class WebSocketProvider extends ChangeNotifier {
     // A new session starts with no owners: the previous user's charts,
     // tools and portfolio lists must not be re-subscribed on its socket.
     _touchlineOwners.clear();
+    _keptByProtection.clear();
+    _keptRecheck?.cancel();
     _depthOwners.clear();
 
     // Clear subscriptions and data.
@@ -1582,6 +1584,7 @@ class WebSocketProvider extends ChangeNotifier {
 
   /// Register [owner]'s need for depth on [scrips] (each "EXCH|TOKEN").
   void acquireDepth(String owner, Iterable<String> scrips, [BuildContext? context]) {
+    _scheduleKeptRecheck();
     final ctx = context ?? _safeContext();
     final fresh = <String>[];
     for (final k in scrips) {
@@ -1605,6 +1608,7 @@ class WebSocketProvider extends ChangeNotifier {
   /// Drop [owner]'s need for depth on [scrips]; "ud" goes out only for the
   /// scrips no other owner still needs.
   void releaseDepth(String owner, Iterable<String> scrips, [BuildContext? context]) {
+    _scheduleKeptRecheck();
     final gone = <String>[];
     for (final k in scrips) {
       final owners = _depthOwners[k];
@@ -1762,14 +1766,52 @@ class WebSocketProvider extends ChangeNotifier {
       try {
         final shown = touchlineProtection!(protectionSource);
         for (final s in symbols) {
-          if (shown.contains(s)) keep.add(s);
+          if (shown.contains(s) && !keep.contains(s)) {
+            keep.add(s);
+            _keptByProtection.add(s);
+          }
         }
+        if (_keptByProtection.isNotEmpty && !_recheckingKept) _scheduleKeptRecheck();
       } catch (_) {}
     }
+    _keptByProtection.removeAll(symbols.where((s) => !keep.contains(s)));
     if (keep.isEmpty) return symbols;
     log('WebSocket: 🛡️ kept touchline for ${keep.length} scrip(s) still in use: '
         '${keep.take(6).join(', ')}${keep.length > 6 ? ' …' : ''}');
     return symbols.where((s) => !keep.contains(s)).toList();
+  }
+
+  // Scrips a "u" left subscribed only because a screen still showed them at
+  // that moment (no owner). Without a second look they stream until the
+  // socket closes: a chart switching TCS → INFY releases TCS while the scrip
+  // page, which follows the chart, still shows TCS for a moment.
+  final Set<String> _keptByProtection = {};
+  Timer? _keptRecheck;
+  bool _recheckingKept = false;
+
+  void _scheduleKeptRecheck() {
+    if (_keptByProtection.isEmpty) return;
+    _keptRecheck?.cancel();
+    _keptRecheck = Timer(const Duration(seconds: 3), _recheckKeptTouchline);
+  }
+
+  /// Release the kept scrips nothing owns or shows any more. Ones still shown
+  /// stay remembered for the next depth change (scrip page / chart switch).
+  void _recheckKeptTouchline() {
+    _keptRecheck = null;
+    // Only scrips still live on this socket; a new socket never carried them.
+    _keptByProtection.removeWhere((s) => !_sentSubscriptions.contains('t:$s'));
+    if (_keptByProtection.isEmpty) return;
+    final ctx = _safeContext();
+    if (ctx == null) return;
+    final pending = _keptByProtection.toList();
+    _recheckingKept = true;
+    try {
+      connectTouchLine(task: 'u', input: pending.join('#'), context: ctx,
+          protectionSource: 'recheck');
+    } finally {
+      _recheckingKept = false;
+    }
   }
 
   /// Scrips whose "t" must go out again although they are marked as sent —
