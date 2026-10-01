@@ -3350,7 +3350,10 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
             await scripInfo.requestWSFut(context: context, isSubscribe: false);
           }
           if (mounted) {
-            await scripInfo.calldepthApis(context, displayData, "");
+            // Was calldepthApis(context, displayData, "") — the raw Futures
+            // item has no `idx`, so calldepthApis threw and nothing opened.
+            await scripInfo.calldepthApis(
+                context, _futureDepthArgs(displayData), "");
           }
         },
         child: Padding(
@@ -3607,6 +3610,20 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
     }
   }
 
+  /// calldepthApis needs DepthInputArgs, not the raw Futures item: it reads
+  /// `raw.idx`, which Futures doesn't have, so the raw item throws.
+  DepthInputArgs _futureDepthArgs(dynamic displayData) {
+    return DepthInputArgs(
+      exch: displayData.exch?.toString() ?? '',
+      token: displayData.token?.toString() ?? '',
+      tsym: displayData.tsym?.toString() ?? '',
+      instname: displayData.instname?.toString() ?? '',
+      symbol: displayData.symbol?.toString() ?? displayData.tsym?.toString() ?? '',
+      expDate: displayData.expDate?.toString() ?? '',
+      option: displayData.option?.toString() ?? '',
+    );
+  }
+
   /// Futures row hover chart — open the contract (same as tapping the row),
   /// then ask the host to switch to its Chart tab.
   Future<void> _futureOpenChart(dynamic displayData) async {
@@ -3616,18 +3633,7 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
       await scripInfo.requestWSFut(context: context, isSubscribe: false);
     }
     if (!mounted) return;
-    // Pass DepthInputArgs, not the raw Futures item: calldepthApis reads
-    // `raw.idx`, which Futures doesn't have, so the raw item throws.
-    final depthArgs = DepthInputArgs(
-      exch: displayData.exch?.toString() ?? '',
-      token: displayData.token?.toString() ?? '',
-      tsym: displayData.tsym?.toString() ?? '',
-      instname: displayData.instname?.toString() ?? '',
-      symbol: displayData.symbol?.toString() ?? displayData.tsym?.toString() ?? '',
-      expDate: displayData.expDate?.toString() ?? '',
-      option: displayData.option?.toString() ?? '',
-    );
-    await scripInfo.calldepthApis(context, depthArgs, "");
+    await scripInfo.calldepthApis(context, _futureDepthArgs(displayData), "");
     if (!mounted) return;
     widget.onChartRequested?.call();
   }
