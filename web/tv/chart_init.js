@@ -443,15 +443,17 @@
       searchSymbols: function (userInput, exchange, symbolType, onResultReadyCallback) {
         // Port of feedFactory.js:426-598. Maps TV's (exchange, symbolType)
         // pair to a Mynt `SearchScrip` request and a TV-shaped result list.
-        // Indices (UNDIND) bypass the API in web — same here.
-        if (symbolType === 'UNDIND') { onResultReadyCallback([]); return; }
+        // Indices (UNDIND) used to bypass the API (ported from web), leaving
+        // the Indices tab always empty. Now searched like the other types and
+        // filtered to rows the API tags instname UNDIND.
+        // if (symbolType === 'UNDIND') { onResultReadyCallback([]); return; }
         if (userInput.indexOf(':') !== -1) userInput = userInput.split(':')[1];
 
         var filterMap = {
           NSE: { STOCK: ['NSE'], 'F&O': ['NFO'], CURR: ['CDS'], COMM: ['NCOM'], UNDIND: ['NSE'], '': ['NSE','NFO','CDS','NCOM'] },
           BSE: { STOCK: ['BSE'], 'F&O': ['BFO'], CURR: ['BCD'], COMM: ['BCOM'], UNDIND: ['BSE'], '': ['BSE','BFO','BCD','BCOM'] },
           MCX: { STOCK: [], 'F&O': [], CURR: [], COMM: ['MCX'], UNDIND: ['MCX'], '': ['MCX'] },
-          ALL: { STOCK: ['NSE','BSE'], 'F&O': ['NFO','BFO'], CURR: ['CDS','BCD'], COMM: ['NCOM','BCOM','MCX'], UNDIND: [], '': ['NSE','NFO','CDS','NCOM','BSE','BFO','BCD','BCOM','MCX'] }
+          ALL: { STOCK: ['NSE','BSE'], 'F&O': ['NFO','BFO'], CURR: ['CDS','BCD'], COMM: ['NCOM','BCOM','MCX'], UNDIND: ['NSE','BSE','MCX'], '': ['NSE','NFO','CDS','NCOM','BSE','BFO','BCD','BCOM','MCX'] }
         };
         var exchMap = {
           NSE: { STOCK: 'NSE', 'F&O': 'NFO', CURR: 'CDS', COMM: 'NCOM', UNDIND: 'UNDIND' },
@@ -462,22 +464,45 @@
         var typeKey = symbolType || '';
         var filterList = (filterMap[exchange] && filterMap[exchange][typeKey]) || [];
         var exch = (exchMap[exchange] && exchMap[exchange][symbolType]) || (exchange === 'MCX' ? 'MCX' : '');
+        // exchMap's 'UNDIND' isn't a SearchScrip exchange — indices live on
+        // the cash exchange itself.
+        if (typeKey === 'UNDIND') exch = exchange === 'ALL' ? '' : exchange;
 
         var stext = userInput.replace(/&/g, '%26').replace(/ /g, '_');
-        var body = 'jData={"uid":"' + user + '","stext":"' + stext + '"' +
-                   (exch ? ',"exch":"' + exch + '"' : '') + '}&jKey=' + usession;
 
-        fetch(NOREN_BASE + '/SearchScrip', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: body
-        })
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (!data || data.stat === 'Not_Ok' || !data.values) {
+        // "All exchange" + F&O / Currency / Commodity (TC_193.1): a search
+        // without `exch` returns a capped mixed list dominated by cash/index
+        // rows, which the NFO/BFO/... filter below then empties. Ask each
+        // segment exchange separately and merge. BCD skipped — Zebu has no
+        // BCD segment.
+        var perExchange = (exchange === 'ALL' &&
+            (typeKey === 'F&O' || typeKey === 'CURR' || typeKey === 'COMM' || typeKey === 'UNDIND'))
+          ? filterList.filter(function (e) { return e !== 'BCD'; })
+          : null;
+
+        var fetchSearch = function (exchParam) {
+          var body = 'jData={"uid":"' + user + '","stext":"' + stext + '"' +
+                     (exchParam ? ',"exch":"' + exchParam + '"' : '') + '}&jKey=' + usession;
+          return fetch(NOREN_BASE + '/SearchScrip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: body
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+              return (data && data.stat !== 'Not_Ok' && data.values) ? data.values : [];
+            })
+            .catch(function () { return []; });
+        };
+
+        Promise.all(perExchange ? perExchange.map(fetchSearch) : [fetchSearch(exch)])
+          .then(function (lists) {
+            var values = [].concat.apply([], lists);
+            if (values.length === 0) {
               onResultReadyCallback([]);
               return;
             }
+            var data = { values: values };
             var typeMap = {
               OPTIDX: 'Option', OPTSTK: 'Option', OPTCUR: 'Option', OPTFUT: 'Option',
               FUTIDX: 'Future', FUTSTK: 'Future', FUTCUR: 'Future', FUTCOM: 'Future',
@@ -529,6 +554,9 @@
               };
             }).filter(function (r) {
               if (filterList.length === 0) return true;
+              if (typeKey === 'UNDIND') {
+                return filterList.indexOf(r.exchanges) !== -1 && r.symbols_types === 'Index';
+              }
               return filterList.indexOf(r.exchanges) !== -1 && r.symbols_types !== 'Commodity';
             });
             onResultReadyCallback(results);

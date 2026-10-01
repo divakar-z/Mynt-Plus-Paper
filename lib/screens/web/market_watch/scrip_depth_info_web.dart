@@ -21,6 +21,7 @@ import 'tv_chart/chart_iframe_guard.dart';
 import 'package:mynt_plus/screens/web/market_watch/stock_report_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/scrip_detail_web.dart';
 import 'package:mynt_plus/sharedWidget/list_divider.dart';
+import 'package:mynt_plus/sharedWidget/hover_actions_web.dart';
 import 'package:percent_indicator/percent_indicator.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../locator/constant.dart';
@@ -53,12 +54,15 @@ class ScripDepthInfoWeb extends ConsumerStatefulWidget {
   final DepthInputArgs wlValue;
   final String isBasket;
   final VoidCallback? onClose;
+  // Futures row hover "chart" action — asks the host to switch to its Chart tab.
+  final VoidCallback? onChartRequested;
 
   const ScripDepthInfoWeb({
     super.key,
     required this.wlValue,
     required this.isBasket,
     this.onClose,
+    this.onChartRequested,
   });
 
   @override
@@ -76,6 +80,10 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
   bool _isDisposed = false;
   final ScrollController _scrollController = ScrollController();
   bool _isBottomSheetExpanded = false;
+  // Futures list hover actions: "exch|token" of the hovered row, and a guard
+  // so a double-click on B/S doesn't open two order screens.
+  final ValueNotifier<String?> _hoveredFutureKey = ValueNotifier<String?>(null);
+  bool _futureOrderNavigating = false;
 
   @override
   bool get wantKeepAlive => true; // Keep the state alive when navigating
@@ -194,6 +202,7 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
   void dispose() {
     _isDisposed = true;
     _scrollController.dispose();
+    _hoveredFutureKey.dispose();
     super.dispose();
   }
 
@@ -3141,46 +3150,46 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Info banner
-            Container(
-              padding: EdgeInsets.symmetric(
-                vertical: context.responsive(mobile: 6.0, tablet: 7.0, desktop: 8.0),
-                horizontal: context.responsive(mobile: 12.0, tablet: 14.0, desktop: 16.0)),
-              decoration: BoxDecoration(
-                color: resolveThemeColor(
-                  context,
-                  dark: MyntColors.primaryDark,
-                  light: MyntColors.primary,
-                ).withOpacity(0.05),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SvgPicture.asset(
-                    assets.dInfo,
-                    color: resolveThemeColor(
-                      context,
-                      dark: MyntColors.textSecondaryDark,
-                      light: MyntColors.textSecondary,
-                    ),
-                    width: context.responsive(mobile: 12.0, tablet: 13.0, desktop: 14.0),
-                    height: context.responsive(mobile: 12.0, tablet: 13.0, desktop: 14.0),
-                  ),
-                  SizedBox(width: context.responsive(mobile: 4.0, tablet: 5.0, desktop: 6.0)),
-                  Text(
-                    "Long press to add to ${scripInfo.wlName} Watchlist",
-                    style: MyntWebTextStyles.caption(
-                      context,
-                      color: resolveThemeColor(
-                        context,
-                        dark: MyntColors.textSecondaryDark,
-                        light: MyntColors.textSecondary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            // Info banner removed — rows now have a hover bookmark (TC_208).
+            // Container(
+            //   padding: EdgeInsets.symmetric(
+            //     vertical: context.responsive(mobile: 6.0, tablet: 7.0, desktop: 8.0),
+            //     horizontal: context.responsive(mobile: 12.0, tablet: 14.0, desktop: 16.0)),
+            //   decoration: BoxDecoration(
+            //     color: resolveThemeColor(
+            //       context,
+            //       dark: MyntColors.primaryDark,
+            //       light: MyntColors.primary,
+            //     ).withOpacity(0.05),
+            //   ),
+            //   child: Row(
+            //     mainAxisAlignment: MainAxisAlignment.center,
+            //     children: [
+            //       SvgPicture.asset(
+            //         assets.dInfo,
+            //         color: resolveThemeColor(
+            //           context,
+            //           dark: MyntColors.textSecondaryDark,
+            //           light: MyntColors.textSecondary,
+            //         ),
+            //         width: context.responsive(mobile: 12.0, tablet: 13.0, desktop: 14.0),
+            //         height: context.responsive(mobile: 12.0, tablet: 13.0, desktop: 14.0),
+            //       ),
+            //       SizedBox(width: context.responsive(mobile: 4.0, tablet: 5.0, desktop: 6.0)),
+            //       Text(
+            //         "Long press to add to ${scripInfo.wlName} Watchlist",
+            //         style: MyntWebTextStyles.caption(
+            //           context,
+            //           color: resolveThemeColor(
+            //             context,
+            //             dark: MyntColors.textSecondaryDark,
+            //             light: MyntColors.textSecondary,
+            //           ),
+            //         ),
+            //       ),
+            //     ],
+            //   ),
+            // ),
             // Futures list - sorted by expiry date ascending
             Builder(
               builder: (context) {
@@ -3289,7 +3298,29 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
       );
     }
 
-    return Material(
+    final futureKey = "${displayData.exch}|${displayData.token}";
+
+    // Hover pill (B / S / chart / bookmark) like the option chain — long-press
+    // to add wasn't discoverable (TC_208). Long-press is kept as well.
+    return MouseRegion(
+      onEnter: (_) => _hoveredFutureKey.value = futureKey,
+      onExit: (_) {
+        if (_hoveredFutureKey.value == futureKey) _hoveredFutureKey.value = null;
+      },
+      child: Stack(
+        children: [
+    // Row highlight on hover — same tint as watchlist rows.
+    ValueListenableBuilder<String?>(
+      valueListenable: _hoveredFutureKey,
+      builder: (context, hoveredKey, child) => Container(
+        color: hoveredKey == futureKey
+            ? resolveThemeColor(context,
+                    dark: MyntColors.primaryDark, light: MyntColors.primary)
+                .withValues(alpha: 0.08)
+            : Colors.transparent,
+        child: child,
+      ),
+      child: Material(
       color: Colors.transparent,
       child: InkWell(
         onLongPress: () async {
@@ -3298,14 +3329,17 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                 "This is a pre-defined watchlist that cannot be edited!");
             return;
           }
+          // isEdit/isOptionStike false -> provider shows the standard
+          // 'Added to your watchlist' snackbar (TC_208), not the raw
+          // Fluttertoast. Was: true, true, false, true.
           await scripInfo.addDelMarketScrip(
             scripInfo.wlName,
             "${displayData.exch}|${displayData.token}",
             context,
             true,
-            true,
             false,
-            true,
+            false,
+            false,
           );
         },
         onTap: () async {
@@ -3401,7 +3435,7 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                 children: [
                   // LTP
                   Text(
-                    "₹$ltp",
+                    "$ltp", // was "₹$ltp" — no rupee symbol on futures rows
                     style: MyntWebTextStyles.body(
                       context,
                       fontWeight: MyntFonts.medium,
@@ -3428,6 +3462,194 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
           ),
         ),
       ),
+    ),
+    ),
+          // Hover pill — same look and placement as watchlist rows.
+          Positioned.fill(
+            child: Center(
+              child: ValueListenableBuilder<String?>(
+                valueListenable: _hoveredFutureKey,
+                builder: (context, hoveredKey, _) {
+                  if (hoveredKey != futureKey) return const SizedBox.shrink();
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: resolveThemeColor(context,
+                          dark: MyntColors.backgroundColorDark,
+                          light: MyntColors.backgroundColor),
+                      borderRadius: BorderRadius.circular(6),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: HoverActionsContainer(
+                    isVisible: true,
+                    actions: [
+                      HoverActionButton(
+                        label: 'B',
+                        color: Colors.white,
+                        backgroundColor: resolveThemeColor(context,
+                            dark: MyntColors.secondary, light: MyntColors.primary),
+                        borderColor: resolveThemeColor(context,
+                            dark: MyntColors.secondary, light: MyntColors.primary),
+                        onPressed: () => _futurePlaceOrder(displayData, true),
+                      ),
+                      HoverActionButton(
+                        label: 'S',
+                        color: Colors.white,
+                        backgroundColor: resolveThemeColor(context,
+                            dark: MyntColors.errorDark, light: MyntColors.tertiary),
+                        borderColor: resolveThemeColor(context,
+                            dark: MyntColors.errorDark, light: MyntColors.tertiary),
+                        onPressed: () => _futurePlaceOrder(displayData, false),
+                      ),
+                      HoverActionButton(
+                        iconAsset: assets.chartnew,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.textPrimary, light: Colors.black),
+                        backgroundColor: Colors.transparent,
+                        onPressed: () => _futureOpenChart(displayData),
+                      ),
+                      // Watches the live watchlist so the icon fills as soon
+                      // as the add succeeds.
+                      Consumer(
+                        builder: (context, ref, _) {
+                          final isInWatchlist = ref.watch(
+                              marketWatchProvider.select((p) => p.scrips.any(
+                                  (e) => "${e['exch']}|${e['token']}" == futureKey)));
+                          return HoverActionButton(
+                            iconAsset: isInWatchlist
+                                ? assets.bookmarkIcon
+                                : assets.bookmarkLineIcon,
+                            color: isInWatchlist
+                                ? resolveThemeColor(context,
+                                    dark: MyntColors.primaryDark,
+                                    light: MyntColors.primary)
+                                : resolveThemeColor(context,
+                                    dark: MyntColors.textPrimary,
+                                    light: Colors.black),
+                            backgroundColor: Colors.transparent,
+                            onPressed: () =>
+                                _futureToggleWatchlist(displayData, isInWatchlist),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Futures row hover B / S — same flow as the Futures table
+  /// (FutureScreenWeb._placeOrderInput): load the contract's scrip info, then
+  /// open the place-order screen. The page's own Buy/Sell re-fetch their scrip
+  /// info, so this doesn't leave the page pointing at the future.
+  Future<void> _futurePlaceOrder(dynamic displayData, bool isBuy) async {
+    if (_futureOrderNavigating) return;
+    _futureOrderNavigating = true;
+    try {
+      final mw = ref.read(marketWatchProvider);
+      await mw.fetchScripInfo(displayData.token?.toString() ?? "",
+          displayData.exch?.toString() ?? "", context, true);
+      if (!mounted) return;
+
+      final scripInfoModel = mw.scripInfoModel;
+      if (scripInfoModel == null) {
+        ResponsiveSnackBar.showError(context, 'Unable to load scrip details');
+        return;
+      }
+
+      final lotSize = (displayData.ls?.toString().isNotEmpty ?? false)
+          ? displayData.ls.toString()
+          : scripInfoModel.ls?.toString();
+
+      final orderArgs = OrderScreenArgs(
+        exchange: displayData.exch?.toString() ?? "",
+        tSym: displayData.tsym?.toString() ?? "",
+        isExit: false,
+        token: displayData.token?.toString() ?? "",
+        transType: isBuy,
+        lotSize: lotSize,
+        ltp: "${displayData.ltp ?? displayData.close ?? 0.00}",
+        perChange: displayData.perChange?.toString() ?? "0.00",
+        orderTpye: '',
+        holdQty: '',
+        isModify: false,
+        raw: {},
+      );
+
+      ResponsiveNavigation.toPlaceOrderScreen(
+        context: context,
+        arguments: {
+          "orderArg": orderArgs,
+          "scripInfo": scripInfoModel,
+          "isBskt": widget.isBasket,
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        ResponsiveSnackBar.showError(context, 'Error placing order: $e');
+      }
+    } finally {
+      // Short cool-down so a double-click can't open a second order screen.
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _futureOrderNavigating = false;
+      });
+    }
+  }
+
+  /// Futures row hover chart — open the contract (same as tapping the row),
+  /// then ask the host to switch to its Chart tab.
+  Future<void> _futureOpenChart(dynamic displayData) async {
+    final scripInfo = ref.read(marketWatchProvider);
+    if (scripInfo.isFuturesExpanded) {
+      scripInfo.toggleFuturesExpansion();
+      await scripInfo.requestWSFut(context: context, isSubscribe: false);
+    }
+    if (!mounted) return;
+    // Pass DepthInputArgs, not the raw Futures item: calldepthApis reads
+    // `raw.idx`, which Futures doesn't have, so the raw item throws.
+    final depthArgs = DepthInputArgs(
+      exch: displayData.exch?.toString() ?? '',
+      token: displayData.token?.toString() ?? '',
+      tsym: displayData.tsym?.toString() ?? '',
+      instname: displayData.instname?.toString() ?? '',
+      symbol: displayData.symbol?.toString() ?? displayData.tsym?.toString() ?? '',
+      expDate: displayData.expDate?.toString() ?? '',
+      option: displayData.option?.toString() ?? '',
+    );
+    await scripInfo.calldepthApis(context, depthArgs, "");
+    if (!mounted) return;
+    widget.onChartRequested?.call();
+  }
+
+  /// Futures row hover bookmark — add/remove in the current watchlist. The
+  /// provider shows the standard 'Added to / Removed from your watchlist' toast.
+  Future<void> _futureToggleWatchlist(
+      dynamic displayData, bool isInWatchlist) async {
+    final scripInfo = ref.read(marketWatchProvider);
+    if (scripInfo.isPreDefWLs == "Yes") {
+      ResponsiveSnackBar.showWarning(
+          context, "This is a pre-defined watchlist that cannot be edited!");
+      return;
+    }
+    await scripInfo.addDelMarketScrip(
+      scripInfo.wlName,
+      "${displayData.exch}|${displayData.token}",
+      context,
+      !isInWatchlist,
+      false,
+      false,
+      false,
     );
   }
 

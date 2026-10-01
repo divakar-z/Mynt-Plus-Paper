@@ -1157,6 +1157,18 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                       onClose: () {
                         mw.setIsDepthVisibleWeb(false);
                       },
+                      // Futures row hover chart — same deferred switch as the
+                      // option chain's onChartRequested (tab controller may be
+                      // recreated when the contract changes).
+                      onChartRequested: () {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          if (_tabController != null &&
+                              _tabController!.index != 1) {
+                            _tabController!.animateTo(1);
+                          }
+                        });
+                      },
                     ),
                   ),
               ],

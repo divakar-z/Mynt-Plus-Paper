@@ -3835,17 +3835,19 @@ getOptionawait(String exch, String token) {
           try {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             if (kIsWeb) {
+              // TC_208: neutral wording (was 'Stock added/removed ...') —
+              // watchlists hold F&O, indices, commodities, currency too.
               ResponsiveSnackBar.showSuccess(
                   context,
                   isAdd
-                      ? 'Stock added to your watchlist "$wlName"'
-                      : 'Stock removed from your watchlist "$wlName"');
+                      ? 'Added to your watchlist "$wlName"'
+                      : 'Removed from your watchlist "$wlName"');
             } else {
               successMessage(
                   context,
                   isAdd
-                      ? 'Stock added to your watchlist "$wlName"'
-                      : 'Stock removed from your watchlist "$wlName"');
+                      ? 'Added to your watchlist "$wlName"'
+                      : 'Removed from your watchlist "$wlName"');
             }
           } catch (e) {
             if (e.toString().contains("widget was disposed") ||
@@ -3856,7 +3858,7 @@ getOptionawait(String exch, String token) {
         if (isEdit && isOptionStike) {
           try {
             Fluttertoast.showToast(
-                msg: 'Stock added to your watchlist "$wlName"',
+                msg: 'Added to your watchlist "$wlName"',
                 timeInSecForIosWeb: 2,
                 backgroundColor: colors.colorBlack,
                 textColor: colors.colorWhite,
