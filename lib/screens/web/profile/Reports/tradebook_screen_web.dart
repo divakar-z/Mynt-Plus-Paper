@@ -69,6 +69,17 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
     _horizontalScrollController = ScrollController();
     _tableScrollController = ScrollController();
     initScrollToLoad();
+    // The search field's X empties the controller without firing onChanged,
+    // so reset the query whenever the field becomes empty (same as TC_344).
+    _searchController.addListener(() {
+      if (!mounted) return;
+      if (_searchController.text.isEmpty && _searchQuery.isNotEmpty) {
+        setState(() {
+          _searchQuery = '';
+          displayedItemCount = ScrollToLoadMixin.itemsPerPage;
+        });
+      }
+    });
 
     // Init calendar months
     final now = DateTime.now();
@@ -149,11 +160,16 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
       }).toList();
     }
 
-    // Apply search filter
-    if (_searchQuery.isNotEmpty) {
+    // Apply search filter — match the full Scrip cell text (name, strike,
+    // option type, expiry) plus the segment, same as the main screens.
+    final query = _searchQuery.toLowerCase().trim();
+    if (query.isNotEmpty) {
       filteredList = filteredList.where((trade) {
-        final scrip = (trade.sCRIPNAME ?? '').toLowerCase();
-        return scrip.contains(_searchQuery.toLowerCase());
+        final searchable = [
+          _scripDisplayText(trade),
+          trade.cOMPANYCODE ?? '',
+        ];
+        return searchable.any((f) => f.toLowerCase().contains(query));
       }).toList();
     }
 
@@ -491,7 +507,7 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
           SizedBox(
             width: isSmallScreen ? screenWidth * 0.2 : 200,
             height: isSmallScreen ? 36 : 40,
-            child: MyntSearchTextField(
+            child: MyntSearchTextField.withSmartClear(
               controller: _searchController,
               placeholder: 'Search',
               leadingIcon: 'assets/icon/search.svg',
@@ -1007,8 +1023,8 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
     }
   }
 
-  // Text style helpers
-  Widget _buildScripCell(BuildContext context, Trades trade) {
+  /// Text shown in the Scrip cell — also what search matches against.
+  String _scripDisplayText(Trades trade) {
     final scripName = trade.sCRIPNAME ?? '--';
     final strikePrice = (trade.sTRIKEPRICE ?? '').trim();
     final optionType = (trade.oPTIONTYPE ?? '').trim();
@@ -1024,7 +1040,12 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
       if (hasOption) optionType,
       if (hasExpiry) expiryDate,
     ];
-    final fullText = parts.join(' ');
+    return parts.join(' ');
+  }
+
+  // Text style helpers
+  Widget _buildScripCell(BuildContext context, Trades trade) {
+    final fullText = _scripDisplayText(trade);
 
     return Tooltip(
       message: fullText,
@@ -1262,6 +1283,98 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
     );
   }
 
+  static const List<String> _headers = [
+    'Trade Date', 'Exchange', 'Scrip', 'Trade Type', 'Quantity', 'Price',
+    'Amount', 'Trade No',
+  ];
+  // Previous fixed split - now only used to share out spare width.
+  static const List<double> _columnWeights = [
+    0.11, 0.11, 0.24, 0.09, 0.09, 0.12, 0.12, 0.12,
+  ];
+
+  /// Text of every cell in a row, in column order - same strings the row
+  /// renders in [_buildHoverableRow].
+  List<String> _cellTexts(Trades trade) => [
+        trade.tRADEDATE ?? '--',
+        trade.cOMPANYCODE ?? '--',
+        _scripDisplayText(trade),
+        trade.showtype ?? '--',
+        trade.showqnt ?? '--',
+        '\u20B9${_formatPrice(trade.showprice)}',
+        '\u20B9${_formatPrice(trade.showamt)}',
+        trade.tRADENUMBER ?? '--',
+      ];
+
+  double _textWidth(BuildContext context, String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      // Directionality, not TextDirection.ltr — intl's TextDirection
+      // shadows Flutter's in this file.
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    return painter.width;
+  }
+
+  List<double> _fitColumnWidths(
+      BuildContext context, double available, List<Trades> rows) {
+    const sortIcon = 20.0; // 16 icon + 4 gap, shown on the sorted column
+    const safety = 4.0; // sub-pixel rounding headroom
+    // Tradebook can hold thousands of rows, so only the few longest strings
+    // per column (by character count) are actually measured.
+    const candidatesPerColumn = 5;
+    final cellStyle = _getTextStyle(context);
+    final headerStyle = _getHeaderStyle(context);
+    final last = _headers.length - 1;
+
+    // Same horizontal padding as _buildHeaderCell / _buildDataCell.
+    double headerPad(int i) => i == 0 || i == last ? 24 : 12;
+    double cellPad(int i) => i == 0 || i == last ? 28 : 24;
+
+    final mins = List<double>.generate(
+        _headers.length,
+        (i) =>
+            _textWidth(context, _headers[i], headerStyle) +
+            sortIcon +
+            headerPad(i) +
+            safety);
+
+    final longest =
+        List<List<String>>.generate(_headers.length, (_) => <String>[]);
+    for (final trade in rows) {
+      final texts = _cellTexts(trade);
+      for (int i = 0; i < texts.length; i++) {
+        final list = longest[i];
+        final t = texts[i];
+        if (list.length < candidatesPerColumn) {
+          list.add(t);
+        } else {
+          int shortest = 0;
+          for (int k = 1; k < list.length; k++) {
+            if (list[k].length < list[shortest].length) shortest = k;
+          }
+          if (t.length > list[shortest].length) list[shortest] = t;
+        }
+      }
+    }
+    for (int i = 0; i < _headers.length; i++) {
+      for (final t in longest[i]) {
+        final w = _textWidth(context, t, cellStyle) + cellPad(i) + safety;
+        if (w > mins[i]) mins[i] = w;
+      }
+    }
+
+    final totalMin = mins.fold<double>(0, (a, b) => a + b);
+    if (totalMin >= available) return mins; // scrolls horizontally
+    final extra = available - totalMin;
+    final weightSum = _columnWeights.fold<double>(0, (a, b) => a + b);
+    return [
+      for (int i = 0; i < mins.length; i++)
+        mins[i] + extra * _columnWeights[i] / weightSum,
+    ];
+  }
+
   Widget _buildTable(
       BuildContext context, ThemesProvider theme, List<Trades> sortedList) {
     final bool hasData = sortedList.isNotEmpty;
@@ -1270,32 +1383,26 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
       builder: (context, constraints) {
         final double totalWidth = constraints.maxWidth - 32;
         // 8 columns: Trade Date, Exchange, Scrip, Trade Type, Quantity, Price, Amount, Trade No
-        final double tradeDateWidth = totalWidth * 0.11;
-        final double exchangeWidth = totalWidth * 0.11;
-        final double scripWidth = totalWidth * 0.24;
-        final double tradeTypeWidth = totalWidth * 0.09;
-        final double quantityWidth = totalWidth * 0.09;
-        final double priceWidth = totalWidth * 0.12;
-        final double amountWidth = totalWidth * 0.12;
-        final double tradeNoWidth = totalWidth * 0.12;
-
+        // Each column is at least as wide as its header and its widest value,
+        // so the scrip name is never cut off. Spare width is shared in the
+        // old proportions; when the minimums don't fit, the table scrolls
+        // horizontally instead of truncating.
+        final widths = _fitColumnWidths(context, totalWidth, sortedList);
+        final double tableWidth = widths.fold<double>(0, (a, b) => a + b);
         final columnWidths = {
-          0: shadcn.FixedTableSize(tradeDateWidth),
-          1: shadcn.FixedTableSize(exchangeWidth),
-          2: shadcn.FixedTableSize(scripWidth),
-          3: shadcn.FixedTableSize(tradeTypeWidth),
-          4: shadcn.FixedTableSize(quantityWidth),
-          5: shadcn.FixedTableSize(priceWidth),
-          6: shadcn.FixedTableSize(amountWidth),
-          7: shadcn.FixedTableSize(tradeNoWidth),
+          for (int i = 0; i < widths.length; i++)
+            i: shadcn.FixedTableSize(widths[i]),
         };
+        // Same as main Positions/Holdings: keep the horizontal scrollbar
+        // visible only while the columns are wider than the screen.
+        final bool needsHorizontalScroll = tableWidth > totalWidth;
 
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: shadcn.OutlinedContainer(
             child: Scrollbar(
               controller: _horizontalScrollController,
-              thumbVisibility: false,
+              thumbVisibility: needsHorizontalScroll,
               child: SingleChildScrollView(
                 controller: _horizontalScrollController,
                 scrollDirection: Axis.horizontal,
@@ -1334,7 +1441,7 @@ class _TradebookScreenWebState extends ConsumerState<TradebookScreenWeb>
                                   final hasMore = displayedItemCount <
                                       sortedList.length;
                                   return SizedBox(
-                                    width: totalWidth,
+                                    width: tableWidth,
                                     child: ListView.builder(
                                       controller: _tableScrollController,
                                       itemCount:

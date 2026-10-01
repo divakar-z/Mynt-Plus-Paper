@@ -15,6 +15,7 @@ import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../sharedWidget/common_search_fields_web.dart';
 import '../../../../sharedWidget/scroll_to_load_mixin.dart';
+import '../../../../res/responsive_extensions.dart';
 
 class PledgeApproveListScreen extends StatefulWidget {
   const PledgeApproveListScreen({super.key});
@@ -28,7 +29,9 @@ class _PledgeApproveListScreenState extends State<PledgeApproveListScreen> {
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _tableScrollController = ScrollController();
-  int activeTab = 0;
+  // Index into the group's category keys; _allCategories shows every category.
+  static const int _allCategories = -1;
+  int activeTab = _allCategories;
 
   // Sorting state
   int? _sortColumnIndex;
@@ -318,17 +321,22 @@ class _PledgeApproveListScreenState extends State<PledgeApproveListScreen> {
         return indexA.compareTo(indexB);
       });
 
-      // Reset activeTab and pagination when category changes
+      // Reset the category filter to All and pagination when group changes
       if (_lastSelectedCategory != _selectedCategory) {
-        activeTab = 0;
+        activeTab = _allCategories;
         _lastSelectedCategory = _selectedCategory;
         _resetPagination();
       }
 
-      // Clamp activeTab to valid range
-      if (tabKeys.isNotEmpty) {
-        activeTab = activeTab.clamp(0, tabKeys.length - 1);
+      // Fall back to All if the selected category no longer exists
+      if (activeTab >= tabKeys.length) {
+        activeTab = _allCategories;
       }
+
+      // All = every category of the group, in tab order
+      final List<PledgeItem> tableItems = activeTab == _allCategories
+          ? tabKeys.expand((k) => currentMap[k] ?? <PledgeItem>[]).toList()
+          : currentMap[tabKeys[activeTab]] ?? [];
 
       return Scaffold(
         backgroundColor:
@@ -360,25 +368,26 @@ class _PledgeApproveListScreenState extends State<PledgeApproveListScreen> {
                     ],
                   ),
                 ),
-                // ── Toolbar: Tabs + Cash dropdown + Search + Filter ──
-                _buildToolbar(tabKeys, theme),
+                // ── Toolbar: Cash / Non Cash tabs + Category filter + Search ──
+                _buildToolbar(tabKeys, theme, data, currentMap),
 
-                // ── Divider ──
-                Divider(
-                  height: 1,
-                  thickness: 0.4,
-                  color: resolveThemeColor(
-                    context,
-                    dark: MyntColors.dividerDark,
-                    light: MyntColors.divider,
-                  ),
-                ),
+                // ── Divider ── (removed; Positions has none, just a gap)
+                // Divider(
+                //   height: 1,
+                //   thickness: 0.4,
+                //   color: resolveThemeColor(
+                //     context,
+                //     dark: MyntColors.dividerDark,
+                //     light: MyntColors.divider,
+                //   ),
+                // ),
+                const SizedBox(height: 8),
 
                 // ── Table Content ──
                 Expanded(
                   child: tabKeys.isNotEmpty
                       ? _buildTable(
-                          currentMap[tabKeys[activeTab]] ?? [],
+                          tableItems,
                           ledgerprovider,
                           theme,
                         )
@@ -401,30 +410,64 @@ class _PledgeApproveListScreenState extends State<PledgeApproveListScreen> {
 
   // ── Combined Toolbar: Tabs + Cash dropdown + Search + Filter ──
 
-  Widget _buildToolbar(List<String> tabKeys, ThemesProvider theme) {
+  // Rows the table actually renders — it skips items with a blank name, so
+  // counts use the same rule to match what the user sees.
+  int _visibleCount(List<PledgeItem>? items) =>
+      items?.where((i) => (i.name ?? '').trim().isNotEmpty).length ?? 0;
+
+  int _groupCount(Map<String, List<PledgeItem>>? group) =>
+      group?.values.fold<int>(0, (sum, list) => sum + _visibleCount(list)) ?? 0;
+
+  Widget _buildToolbar(List<String> tabKeys, ThemesProvider theme, Data? data,
+      Map<String, List<PledgeItem>> currentMap) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
       child: Row(
         children: [
-          // Tabs on the left
+          // Cash / Non Cash — the primary split, always visible so users see
+          // both groups (Equity lives under Non Cash). Replaces the dropdown.
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
                 mainAxisSize: MainAxisSize.min,
-                children: List.generate(tabKeys.length, (index) {
-                  return _buildTabItem(tabKeys[index], index, theme);
-                }),
+                children: [
+                  _buildGroupTab('Cash', _groupCount(data?.cash), theme),
+                  _buildGroupTab('Non Cash', _groupCount(data?.noncash), theme),
+                ],
               ),
             ),
           ),
+          // Old layout: category tabs on the left + Cash/Non Cash dropdown.
+          // Expanded(
+          //   child: SingleChildScrollView(
+          //     scrollDirection: Axis.horizontal,
+          //     child: Row(
+          //       mainAxisSize: MainAxisSize.min,
+          //       children: List.generate(tabKeys.length, (index) {
+          //         return _buildTabItem(tabKeys[index], index, theme);
+          //       }),
+          //     ),
+          //   ),
+          // ),
+          // const SizedBox(width: 12),
+          // _buildCategoryDropdown(theme),
           const SizedBox(width: 12),
-          // Cash / Non Cash dropdown
-          _buildCategoryDropdown(theme),
-          const SizedBox(width: 12),
+          // Category filter — defaults to All (whole group), narrows to one
+          if (tabKeys.isNotEmpty) ...[
+            _buildCategoryFilter(tabKeys, currentMap),
+            const SizedBox(width: 12),
+          ],
           // Search bar
           SizedBox(
-            width: 260,
+            width: context.responsiveValue<double>(
+              mobile: 140,
+              smallTablet: 180,
+              tablet: 220,
+              desktop: 300,
+              largeDesktop: 350,
+              widescreen: 400,
+            ),
             child: MyntSearchTextField.withSmartClear(
               controller: _searchController,
               placeholder: 'Search ISIN / symbol / name',
@@ -487,6 +530,271 @@ class _PledgeApproveListScreenState extends State<PledgeApproveListScreen> {
                   ? shadcn.Theme.of(context).colorScheme.foreground
                   : shadcn.Theme.of(context).colorScheme.mutedForeground,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Cash / Non Cash tab — same look as the old category tab, plus a count.
+  Widget _buildGroupTab(String group, int count, ThemesProvider theme) {
+    final isActive = _selectedCategory == group;
+    final colorScheme = shadcn.Theme.of(context).colorScheme;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () {
+          if (group != _selectedCategory) {
+            // build() resets the category chip + pagination on group change.
+            setState(() => _selectedCategory = group);
+          }
+        },
+        // Same chip-tab + raised count as the Positions tab.
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: isActive
+                ? (theme.isDarkMode
+                    ? Colors.white.withValues(alpha: 0.1)
+                    : Colors.black.withValues(alpha: 0.05))
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                group,
+                style: MyntWebTextStyles.body(
+                  context,
+                  fontWeight: isActive ? MyntFonts.semiBold : MyntFonts.medium,
+                ).copyWith(
+                  color: isActive
+                      ? colorScheme.foreground
+                      : colorScheme.mutedForeground,
+                ),
+              ),
+              if (count > 0) ...[
+                const SizedBox(width: 4),
+                Transform.translate(
+                  offset: const Offset(0, -6),
+                  child: Text(
+                    '$count',
+                    style: MyntWebTextStyles.bodySmall(
+                      context,
+                      fontWeight:
+                          isActive ? MyntFonts.semiBold : MyntFonts.medium,
+                    ).copyWith(
+                      fontSize: context.responsive<double>(
+                        mobile: 10,
+                        tablet: 11,
+                        desktop: 12,
+                      ),
+                      color: isActive
+                          ? colorScheme.foreground
+                          : colorScheme.mutedForeground,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Category filter (All / ETF / MF / Equity…) for the selected group.
+  // Defaults to All so the whole group is listed; users narrow it down here.
+  Widget _buildCategoryFilter(
+      List<String> tabKeys, Map<String, List<PledgeItem>> currentMap) {
+    final label =
+        activeTab == _allCategories ? 'All' : tabKeys[activeTab];
+    return Builder(
+      builder: (buttonContext) {
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () =>
+                _showCategoryFilterPopup(buttonContext, tabKeys, currentMap),
+            // Same dropdown box as the Scalper symbol / offset selectors;
+            // 40 high to line up with the search field.
+            child: Container(
+              width: 160,
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: resolveThemeColor(
+                  context,
+                  dark: MyntColors.transparent,
+                  light: const Color(0xffF1F3F8),
+                ),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: resolveThemeColor(
+                    context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.primary,
+                  ),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      style: MyntWebTextStyles.body(
+                        context,
+                        darkColor: MyntColors.textWhite,
+                        lightColor: MyntColors.textBlack,
+                        fontWeight: MyntFonts.medium,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    Icons.keyboard_arrow_down,
+                    color: resolveThemeColor(
+                      context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary,
+                    ),
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showCategoryFilterPopup(BuildContext context, List<String> tabKeys,
+      Map<String, List<PledgeItem>> currentMap) {
+    final allCount = tabKeys.fold<int>(
+        0, (sum, k) => sum + _visibleCount(currentMap[k]));
+    shadcn.showPopover(
+      context: context,
+      alignment: Alignment.topCenter,
+      offset: const Offset(0, 8),
+      overlayBarrier: shadcn.OverlayBarrier(
+        borderRadius: shadcn.Theme.of(context).borderRadiusLg,
+      ),
+      builder: (popoverContext) {
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: shadcn.Theme.of(popoverContext).borderRadiusLg,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.15),
+                blurRadius: 12,
+                spreadRadius: 2,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: shadcn.ModalContainer(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              width: 180,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildCategoryFilterItem(
+                      'All', allCount, _allCategories, popoverContext),
+                  ...List.generate(tabKeys.length, (index) {
+                    return _buildCategoryFilterItem(
+                      tabKeys[index],
+                      _visibleCount(currentMap[tabKeys[index]]),
+                      index,
+                      popoverContext,
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCategoryFilterItem(
+      String label, int count, int index, BuildContext popoverContext) {
+    final isSelected = activeTab == index;
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          if (index != activeTab) {
+            setState(() {
+              activeTab = index;
+              _sortColumnIndex = null;
+              _sortAscending = true;
+              _resetPagination();
+            });
+          }
+          shadcn.closeOverlay(popoverContext);
+        },
+        splashColor: resolveThemeColor(
+          context,
+          dark: MyntColors.rippleDark,
+          light: MyntColors.rippleLight,
+        ),
+        highlightColor: resolveThemeColor(
+          context,
+          dark: MyntColors.highlightDark,
+          light: MyntColors.highlightLight,
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(4),
+            color: isSelected
+                ? resolveThemeColor(
+                    context,
+                    dark: MyntColors.primaryDark.withValues(alpha: 0.12),
+                    light: const Color(0xFFE8F0FE),
+                  )
+                : Colors.transparent,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: MyntWebTextStyles.body(
+                    context,
+                    fontWeight:
+                        isSelected ? MyntFonts.semiBold : MyntFonts.medium,
+                    color: isSelected
+                        ? primary
+                        : resolveThemeColor(
+                            context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textPrimary,
+                          ),
+                  ),
+                ),
+              ),
+              Text(
+                '$count',
+                style: MyntWebTextStyles.para(
+                  context,
+                  fontWeight: MyntFonts.medium,
+                ).copyWith(
+                  color: isSelected
+                      ? primary
+                      : shadcn.Theme.of(context).colorScheme.mutedForeground,
+                ),
+              ),
+            ],
           ),
         ),
       ),
