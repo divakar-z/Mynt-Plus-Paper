@@ -201,6 +201,18 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       } catch (e) {
         // Depth will be cleaned up when scrip changes anyway
       }
+      // The page's option chain, futures list and option underlying/spot are
+      // owned touchline (so a reconnect restores them while the page is
+      // open). Release them with the page — they used to stay subscribed
+      // after navigating away, since only some back-button paths released
+      // them. Anything still shown elsewhere stays live.
+      try {
+        final ws = _storedContainer!.read(websocketProvider);
+        ws.releaseAllTouchline('option-chain', null, 'optionChain');
+        ws.releaseAllTouchline('futures', null, 'futures');
+        ws.releaseAllTouchline('option-underlying');
+        ws.releaseAllTouchline('option-spot');
+      } catch (_) {}
     }
 
     super.dispose();

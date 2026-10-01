@@ -2764,11 +2764,8 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     final websocketProv = ref.read(websocketProvider);
     final subscriptionKey = '$_selectedExch|$_selectedToken';
 
-    websocketProv.connectTouchLine(
-      input: subscriptionKey,
-      task: 't',
-      context: WidgetsBinding.instance.rootElement!,
-    );
+    websocketProv.acquireTouchline(
+        'strategy-builder', [subscriptionKey], WidgetsBinding.instance.rootElement!);
   }
 
   void _subscribeToOptions() {
@@ -2776,11 +2773,8 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
 
     // Unsubscribe from previous
     if (_subscribedTokens.isNotEmpty) {
-      websocketProv.connectTouchLine(
-        input: _subscribedTokens.join('#'),
-        task: 'u',
-        context: WidgetsBinding.instance.rootElement!,
-      );
+      websocketProv.releaseTouchline(
+          'strategy-builder', _subscribedTokens, WidgetsBinding.instance.rootElement!);
       _subscribedTokens.clear();
     }
 
@@ -2794,11 +2788,8 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     }
 
     if (keys.isNotEmpty) {
-      websocketProv.connectTouchLine(
-        input: keys.join('#'),
-        task: 't',
-        context: WidgetsBinding.instance.rootElement!,
-      );
+      websocketProv.acquireTouchline(
+          'strategy-builder', keys, WidgetsBinding.instance.rootElement!);
     }
   }
 
@@ -2828,11 +2819,14 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
         if (pc != null) {
           _spotPriceChangePercent = pc;
         } else {
-          // Fallback: calculate from change value
-          final chng = double.tryParse(indexData['c']?.toString() ?? indexData['chng']?.toString() ?? '0') ?? 0;
-          final prevClose = newPrice - chng;
-          if (prevClose > 0) {
-            _spotPriceChangePercent = (chng / prevClose) * 100;
+          // Fallback: `c` on the touchline is the PREVIOUS CLOSE (it was
+          // read as the change here); use it directly, else `chng`.
+          final close = double.tryParse(indexData['c']?.toString() ?? '');
+          final chng = double.tryParse(indexData['chng']?.toString() ?? '');
+          if (close != null && close > 0) {
+            _spotPriceChangePercent = ((newPrice - close) / close) * 100;
+          } else if (chng != null && newPrice - chng > 0) {
+            _spotPriceChangePercent = (chng / (newPrice - chng)) * 100;
           }
         }
         // Keep target slider in sync with live spot when not actively set by user
@@ -3057,11 +3051,9 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     if (_subscribedTokens.isNotEmpty) {
       try {
         final websocketProv = ref.read(websocketProvider);
-        websocketProv.connectTouchLine(
-          input: _subscribedTokens.join('#'),
-          task: 'u',
-          context: WidgetsBinding.instance.rootElement!,
-        );
+        // Underlying and options alike.
+        websocketProv.releaseAllTouchline(
+            'strategy-builder', WidgetsBinding.instance.rootElement!);
       } catch (e) {
         // Ignore if already disposed
       }

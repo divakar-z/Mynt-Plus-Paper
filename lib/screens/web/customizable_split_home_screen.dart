@@ -4427,6 +4427,21 @@ class _CustomizableSplitHomeScreenState
         protectedTokens.add(_currentDepthArgs!.token);
       }
 
+      // Protect every scrip a feature still owns on the socket (holdings and
+      // positions feed the top strip's P&L from any screen; charts, tools, the
+      // order ticket, …). Their ticks keep arriving, and touchline only sends
+      // changed fields — clearing the cache rebuilt entries without previous
+      // close / change / %, which then read as 0.00 (and looked like missing
+      // data, prompting needless re-subscribes).
+      for (final key in websocket.touchlineScripsInUse) {
+        final bar = key.indexOf('|');
+        if (bar > 0) protectedTokens.add(key.substring(bar + 1));
+      }
+      for (final key in websocket.depthScripsInUse) {
+        final bar = key.indexOf('|');
+        if (bar > 0) protectedTokens.add(key.substring(bar + 1));
+      }
+
       // Protect holdings tokens if holdings panel is active elsewhere
       for (var panel in _panels) {
         if (panel.screenType == ScreenType.holdings) {

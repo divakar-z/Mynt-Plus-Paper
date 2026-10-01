@@ -92,8 +92,8 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
             final chng = data['chng']?.toString();
 
             if (_isValidValue(lp)) _ltp = lp;
-            if (_isValidValue(pc)) _perChange = pc;
-            if (_isValidValue(chng)) _change = chng;
+            if (_isPresent(pc)) _perChange = pc;
+            if (_isPresent(chng)) _change = chng;
           });
         }
       });
@@ -102,6 +102,11 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
   }
 
   // Helper method to check if a value is valid
+  // Change / % change may legitimately be 0.00 (back to flat); only a zero
+  // LTP is a placeholder. Rejecting "0.00" left the last non-zero change.
+  bool _isPresent(String? value) =>
+      value != null && value != "null" && value.isNotEmpty;
+
   bool _isValidValue(String? value) {
     return value != null &&
         value != "null" &&

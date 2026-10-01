@@ -107,8 +107,8 @@ class _PositionDetailScreenWebState
       final chng = socketData['chng']?.toString();
 
       if (_isValidValue(lp)) _positionData.lp = lp;
-      if (_isValidValue(pc)) _positionData.perChange = pc;
-      if (_isValidValue(chng)) _positionData.chng = chng;
+      if (_isPresent(pc)) _positionData.perChange = pc;
+      if (_isPresent(chng)) _positionData.chng = chng;
 
       _updateProfitLossValues();
     }
@@ -141,8 +141,8 @@ class _PositionDetailScreenWebState
             final chng = data['chng']?.toString();
 
             if (_isValidValue(lp)) _positionData.lp = lp;
-            if (_isValidValue(pc)) _positionData.perChange = pc;
-            if (_isValidValue(chng)) _positionData.chng = chng;
+            if (_isPresent(pc)) _positionData.perChange = pc;
+            if (_isPresent(chng)) _positionData.chng = chng;
 
             _updateProfitLossValues();
           });
@@ -153,6 +153,11 @@ class _PositionDetailScreenWebState
   }
 
   // Helper method to check if a value is valid
+  // Change / % change may legitimately be 0.00 (back to flat); only a zero
+  // LTP is a placeholder. Rejecting "0.00" left the last non-zero change.
+  bool _isPresent(String? value) =>
+      value != null && value != "null" && value.isNotEmpty;
+
   bool _isValidValue(String? value) {
     return value != null &&
         value != "null" &&
@@ -161,8 +166,25 @@ class _PositionDetailScreenWebState
         value != "0.00";
   }
 
-  // Calculate profit and loss values
+  // P&L / MTM: the provider's figures for the same position (same scrip,
+  // product and exchange) — the numbers the positions table, the depth card
+  // and the top strip show. They apply the lot multiplier and price factor
+  // (currency, MCX), booked P&L and the Day / Net basis. This screen used to
+  // compute (ltp − avg) × qty on its copy and put it in both P&L and MTM.
   void _updateProfitLossValues() {
+    try {
+      final portfolio = ref.read(portfolioProvider);
+      for (final live in [...portfolio.allPostionList, ...?portfolio.postionBookModel]) {
+        if (live.token == _positionData.token &&
+            live.exch == _positionData.exch &&
+            live.prd == _positionData.prd) {
+          if (live.profitNloss != null) _positionData.profitNloss = live.profitNloss;
+          if (live.mTm != null) _positionData.mTm = live.mTm;
+          return;
+        }
+      }
+    } catch (_) {}
+    // Fallback (position no longer in the book): simple price × qty.
     final ltp = double.tryParse(_positionData.lp ?? "0.0") ?? 0.0;
     final qty = int.tryParse(_positionData.netqty ?? "0") ?? 0;
     final avgPrice = double.tryParse(_positionData.avgPrc ?? "0.0") ?? 0.0;

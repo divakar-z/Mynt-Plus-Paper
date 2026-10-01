@@ -159,8 +159,12 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     }
   }
 
+  // Cached while mounted — ref.read throws in dispose (Riverpod 3).
+  WebSocketProvider? _ws;
+
   @override
   void dispose() {
+    try { _ws?.releaseAllTouchline('alerts'); } catch (_) {}
     _cancelPopoverCloseTimer();
     _hoveredRowToken.removeListener(_onHoverChanged);
     _teardownSocketSubscription();
@@ -246,22 +250,15 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       final manage = ref.read(marketWatchProvider);
       final pendingAlerts = manage.alertPendingModel ?? [];
 
-      if (pendingAlerts.isEmpty) return;
-
-      // Create input string for WebSocket subscription
-      final tokens = pendingAlerts
-          .where((alert) => alert.token != null && alert.token!.isNotEmpty)
-          .map((alert) => "${alert.exch}|${alert.token}")
-          .toSet()
-          .join("#");
-
-      if (tokens.isNotEmpty) {
-        ref.read(websocketProvider).establishConnection(
-              channelInput: tokens,
-              task: "t", // Subscribe with touchline for web (alerts need only LTP)
-              context: context,
-            );
-      }
+      // Owned touchline for the pending alerts' scrips: tracked, restored after
+      // a reconnect, protected from other screens' "u", and replaced as alerts
+      // are added or removed (it was a raw "t" nothing restored).
+      _ws = ref.read(websocketProvider);
+      _ws!.setOwnedTouchline('alerts', [
+        for (final alert in pendingAlerts)
+          if (alert.token != null && alert.token!.isNotEmpty)
+            "${alert.exch}|${alert.token}"
+      ], context);
     } catch (e) {
     }
   }
@@ -349,8 +346,10 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       }
 
       // Update percentage change if available
+      // % change may legitimately be 0.00 (back to flat) — only a zero LTP
+      // is a placeholder.
       final pc = socketData['pc']?.toString();
-      if (isValidNumeric(pc)) {
+      if (pc != null && pc != "null" && double.tryParse(pc) != null) {
         if (alert.perChange != pc) {
           alert.perChange = pc;
           hasUpdates = true;

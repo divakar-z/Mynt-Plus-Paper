@@ -137,8 +137,8 @@ class _OrderBookDetailScreenWebState
             final chng = data['chng']?.toString();
 
             if (_isValidValue(lp)) _orderData.ltp = lp;
-            if (_isValidValue(pc)) _orderData.perChange = pc;
-            if (_isValidValue(chng)) _orderData.change = chng;
+            if (_isPresent(pc)) _orderData.perChange = pc;
+            if (_isPresent(chng)) _orderData.change = chng;
           });
         }
       });
@@ -147,6 +147,11 @@ class _OrderBookDetailScreenWebState
   }
 
   // Helper method to check if a value is valid
+  // Change / % change may legitimately be 0.00 (back to flat); only a zero
+  // LTP is a placeholder. Rejecting "0.00" left the last non-zero change.
+  bool _isPresent(String? value) =>
+      value != null && value != "null" && value.isNotEmpty;
+
   bool _isValidValue(String? value) {
     return value != null &&
         value != "null" &&

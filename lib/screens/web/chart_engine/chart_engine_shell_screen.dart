@@ -176,6 +176,14 @@ class _ChartEngineShellScreenState
   WebSocketProvider? _wsCache;
   // This chart's id in WebSocketProvider's depth-owner registry.
   String get _depthOwner => 'chart:$_iframeId';
+  String _oiOwner(int pane) => 'chart-oi:$_iframeId:$pane';
+
+  /// Forget a pane's OI strikes and release their touchline (only what no
+  /// other screen shows is unsubscribed).
+  void _dropOiSubs(int pane) {
+    if (_oiSubs.remove(pane) == null) return;
+    try { _wsCache?.releaseAllTouchline(_oiOwner(pane), mounted ? context : null); } catch (_) {}
+  }
   // Stream subscription on `socketDataStream` covers index ticks
   // that the ChangeNotifier `addListener` path doesn't reliably wake on
   // (NIFTY 50 / SENSEX spot updates were stale because their `hasUpdates`
@@ -307,6 +315,11 @@ class _ChartEngineShellScreenState
     // streaming until the socket dropped.
     if (_wsCache != null && _subscribedKeys.isNotEmpty) {
       try { _wsCache!.releaseDepth(_depthOwner, _subscribedKeys.toList()); } catch (_) {}
+      // Touchline too — only scrips nothing else shows are unsubscribed.
+      try { _wsCache!.releaseTouchline(_depthOwner, _subscribedKeys.toList()); } catch (_) {}
+    }
+    for (final pane in _oiSubs.keys.toList()) {
+      try { _wsCache?.releaseAllTouchline(_oiOwner(pane)); } catch (_) {}
     }
     if (_wsListener != null) {
       try { _wsCache?.removeListener(_wsListener!); } catch (_) {}
@@ -1526,12 +1539,10 @@ class _ChartEngineShellScreenState
     // re-sends its own tracked SubSet on every reconnect ack.
     if (widget.popout) return;
     final ws = ref.read(websocketProvider);
-    for (final key in _subscribedKeys) {
-      ws.establishConnection(channelInput: key, task: 't', context: context);
-    }
-    // Depth comes back via WebSocketProvider's owner registry on connect.
-    // Re-claim anyway in case a legacy path released it meanwhile — a no-op
-    // when this chart already owns it and the feed is live.
+    // Touchline and depth both come back via WebSocketProvider's owner
+    // registry on connect. Re-claim anyway in case a legacy path released
+    // them meanwhile — a no-op when the feed is already live.
+    ws.acquireTouchline(_depthOwner, _subscribedKeys.toList(), context);
     ws.acquireDepth(_depthOwner, _subscribedKeys.toList(), context);
   }
 
@@ -1551,12 +1562,10 @@ class _ChartEngineShellScreenState
     if (_subscribedKeys.contains(key)) return;
     _subscribedKeys.add(key);
     final ws = ref.read(websocketProvider);
-    // Touchline ('t') gives lp/v/ft which the candle aggregator needs.
-    ws.establishConnection(
-      channelInput: key,
-      task: 't',
-      context: context,
-    );
+    // Touchline ('t') gives lp/v/ft which the candle aggregator needs. Owned,
+    // so another screen's "u" cannot cut this chart's feed (and the chart can
+    // release it when the symbol changes).
+    ws.acquireTouchline(_depthOwner, [key], context);
     // Depth ('d') reliably populates bp1/sp1/bq1/sq1 in socketDatas[token].
     // Touchline alone doesn't always carry bid/ask on every broker/exchange,
     // and the bid/ask header strip needs them. Both subs share the same
@@ -1607,12 +1616,9 @@ class _ChartEngineShellScreenState
     final key = '$exch|$token';
     if (!_subscribedKeys.contains(key)) return;
     // Remove from our forwarding set — the WS listener will stop posting ticks
-    // for this token to the iframe. We deliberately do NOT issue 'u' on the
-    // underlying WS: the same token may still be needed by other parts of
-    // the app (watchlists, holdings, ticker bar) which share the single
-    // app-wide subscription. The downside is a tiny per-symbol bandwidth
-    // overhead for symbols the chart no longer needs; the WS-level cleanup
-    // belongs in WebSubscriptionManager, not us.
+    // for this token to the iframe. The chart used to keep the touchline
+    // forever (a raw 'u' could cut the watchlist/holdings/ticker using the same
+    // scrip); the owner registry below only unsubscribes what nothing else shows.
     _subscribedKeys.remove(key);
     // Depth is different: the registry counts owners, so releasing here drops
     // the feed only if the depth panel / another chart is not also using it.
@@ -1622,6 +1628,7 @@ class _ChartEngineShellScreenState
     // removed above, was never released by dispose either.
     try {
       _wsCache?.releaseDepth(_depthOwner, [key], mounted ? context : null);
+      _wsCache?.releaseTouchline(_depthOwner, [key], mounted ? context : null);
     } catch (_) {}
   }
 
@@ -2985,7 +2992,7 @@ class _ChartEngineShellScreenState
         if (expiryCache.nearestByPane.containsKey(i)) {
           expiryNotifier.clearForPane(i);
         }
-        _oiSubs.remove(i);
+        _dropOiSubs(i);
         continue;
       }
       final scrip = pane.scrip;
@@ -2994,7 +3001,7 @@ class _ChartEngineShellScreenState
         if (expiryCache.nearestByPane.containsKey(i)) {
           expiryNotifier.clearForPane(i);
         }
-        _oiSubs.remove(i);
+        _dropOiSubs(i);
         continue;
       }
       // No index-only gate anymore — `getLinkedScrip` decides. If the
@@ -3018,7 +3025,7 @@ class _ChartEngineShellScreenState
         expiryNotifier.clearForPane(i);    // force Step 1 to re-resolve expiry
         _linkedScripCheckedAt.remove(scripKey); // allow an immediate re-link
         _noOptionChainAt.remove(scripKey); // re-check; don't inherit stale "no chain"
-        _oiSubs.remove(i);                 // drop old option-token WS subs
+        _dropOiSubs(i);                    // drop old option-token WS subs
         if (_kOiDebug) debugPrint('[OI] pane=$i $scripKey symbol-change reset');
         continue; // next cycle (ms away) proceeds with clean state
       }
@@ -3131,6 +3138,7 @@ class _ChartEngineShellScreenState
         // Build initial snapshot and subscribe each option token via WS.
         final ws = ref.read(websocketProvider);
         final tokenMap = <String, _OiTokenInfo>{};
+        final oiKeys = <String>[];
         final byStrike = <double, ChartOiStrike>{};
         for (final v in res.optValue!) {
           final strike = double.tryParse(v.strprc ?? '');
@@ -3155,14 +3163,14 @@ class _ChartEngineShellScreenState
           // Subscribe token for WS-based live OI updates.
           if (t != null && ex != null) {
             tokenMap[t] = _OiTokenInfo(strike: strike, isCe: isCe, poi: poi);
-            ws.establishConnection(
-              channelInput: '$ex|$t',
-              task: 't',
-              context: context,
-            );
+            oiKeys.add('$ex|$t');
           }
         }
         _oiSubs[i] = tokenMap;
+        // Owned per pane: restored after a reconnect (they used to come back
+        // only on the next chain refetch, up to 10 minutes later) and
+        // released when the pane's chain is dropped or the chart closes.
+        ws.setOwnedTouchline(_oiOwner(i), oiKeys, context);
         // Push the initial snapshot immediately; WS ticks will refine it.
         final parsed = byStrike.values.toList()
           ..sort((a, b) => a.strike.compareTo(b.strike));

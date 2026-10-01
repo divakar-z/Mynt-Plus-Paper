@@ -15,6 +15,7 @@ import '../locator/constant.dart';
 import '../locator/locator.dart';
 import '../locator/preference.dart';
 import '../screens/web/customizable_split_home_screen.dart';
+import 'package:mynt_plus/main.dart' show getNavigatorContext;
 
 /// Web-specific subscription manager that tracks active screens across multiple panels
 /// and manages websocket subscriptions accordingly
@@ -66,7 +67,6 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
   
   // Context management
   BuildContext? _lastValidContext;
-  DateTime? _lastContextUpdate;
   
   // Getters
   Map<int, ScreenType?> get activeScreens => Map.from(_activeScreens);
@@ -108,6 +108,15 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     // Listen to websocket connection state changes
     // This ensures subscriptions are restored after websocket reconnects (e.g., after page refresh)
     _setupWebSocketListener();
+
+    // Every raw touchline "u" anywhere in the app is checked against what is
+    // on screen before it goes out (WebSocketProvider._touchlineReleasable).
+    try {
+      ref.read(websocketProvider).touchlineProtection =
+          (source) => _protectedSymbols(source: source);
+    } catch (e) {
+      log('WebSubscriptionManager: could not register touchline protection: $e');
+    }
   }
 
   /// Handle browser tab visibility changes (visibilitychange event).
@@ -177,7 +186,19 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     // Clear ALL subscription tracking so nothing blocks re-sends:
     //  1. WebSubscriptionManager dedup + per-screen tracking
     _currentWebSocketSubscriptions.clear();
+    //     Per-screen tracking is what protects a screen's scrips from other
+    //     screens' "u" and what a later screen change releases — so it is
+    //     recomputed from what each active screen shows now, not just wiped
+    //     (wiping left every screen unprotected until its next change).
     _screenSubscriptions.clear();
+    for (final screenType in _activeScreens.values) {
+      if (screenType == null) continue;
+      final subType = _screenSubscriptionTypes[screenType] ?? SubscriptionType.none;
+      if (subType == SubscriptionType.none) continue;
+      try {
+        _screenSubscriptions[screenType] = _getSymbolsForScreen(screenType, subType);
+      } catch (_) {}
+    }
     //  2. WebSocketProvider's _sentSubscriptions
     wsProvider.clearSentSubscriptions();
 
@@ -229,25 +250,12 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     try {
       final mwProvider = ref.read(marketWatchProvider);
 
-      // 3a. Option chain tokens (calls + puts) - bypasses manager via requestWSOptChain
-      final optChain = mwProvider.optionChainModel;
-      if (optChain?.optValue != null) {
-        for (var option in optChain!.optValue!) {
-          if (option.exch != null && option.token != null) {
-            symbols.add('${option.exch}|${option.token}');
-          }
-        }
-      }
-
-      // 3b. Futures tokens - bypasses manager via requestWSFut
-      final futures = mwProvider.fut;
-      if (futures != null) {
-        for (var f in futures) {
-          if (f.exch != null && f.token != null) {
-            symbols.add('${f.exch}|${f.token}');
-          }
-        }
-      }
+      // 3a/3b. The option chain and futures list are NOT taken from the
+      //        market-watch models here: those models stay loaded after their
+      //        page closes, so a tab return re-subscribed a closed page's 40
+      //        strikes and futures. Both lists are owned touchline now
+      //        ('option-chain' / 'futures') and come back through
+      //        WebSocketProvider's owner registry while the page is open.
 
       // 3c. Depth symbol - bypasses manager via subscribeToDepthData
       final depthSymbol = mwProvider.currentDepthSymbol;
@@ -279,6 +287,12 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
 
     // 3e. Always include index symbols (shown in header bar across all screens)
     symbols.addAll(_getIndexSymbols());
+
+    // 3f. The watchlist sidebar is on screen whatever the main panels show.
+    //     Without this, a tab return with no panel set to "watchlist" left the
+    //     sidebar's rows frozen. (Positions, holdings, the order book and other
+    //     feature lists come back through WebSocketProvider's owner registry.)
+    symbols.addAll(_getWatchlistSymbols());
 
     return symbols;
   }
@@ -1153,72 +1167,8 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       return;
     }
 
-    // Check if any other active screen needs the same symbols
-    final symbolsStillNeeded = <String>{};
-    for (var entry in _activeScreens.entries) {
-      final otherScreenType = entry.value;
-      if (otherScreenType != null && otherScreenType != screenType) {
-        final otherScreenSymbols = _screenSubscriptions[otherScreenType];
-        if (otherScreenSymbols != null) {
-          symbolsStillNeeded.addAll(otherScreenSymbols);
-        }
-      }
-    }
-
-    // CRITICAL: Also check symbols that are actively used by providers
-    // This prevents unsubscribing symbols that are shown in watchlist, depth, etc.
-    try {
-      final marketWatch = ref.read(marketWatchProvider);
-
-      // Add current depth symbol (the symbol user clicked on)
-      final depthSymbol = marketWatch.currentDepthSymbol;
-      if (depthSymbol != null && depthSymbol.isNotEmpty) {
-        symbolsStillNeeded.add(depthSymbol);
-      }
-
-      // Add all watchlist symbols (visible in watchlist panel)
-      final watchlistSymbols = _getWatchlistSymbols();
-      if (watchlistSymbols.isNotEmpty) {
-        symbolsStillNeeded.addAll(watchlistSymbols);
-      }
-
-      // Add index symbols (visible in dashboard/indices)
-      final indexSymbols = _getIndexSymbols();
-      if (indexSymbols.isNotEmpty) {
-        symbolsStillNeeded.addAll(indexSymbols);
-      }
-
-      // CRITICAL FIX: Protect holdings symbols - they need real-time updates
-      final portfolio = ref.read(portfolioProvider);
-      final holdings = portfolio.holdingsModel ?? [];
-      for (var holding in holdings) {
-        final exchTsymList = holding.exchTsym ?? [];
-        for (var exchTsym in exchTsymList) {
-          if (exchTsym.exch != null && exchTsym.token != null) {
-            symbolsStillNeeded.add('${exchTsym.exch}|${exchTsym.token}');
-          }
-        }
-      }
-      if (holdings.isNotEmpty) {
-      }
-
-      // CRITICAL FIX: Protect positions symbols - they need real-time updates
-      final positions = portfolio.postionBookModel ?? [];
-      for (var position in positions) {
-        if (position.exch != null && position.token != null) {
-          symbolsStillNeeded.add('${position.exch}|${position.token}');
-        }
-      }
-      if (positions.isNotEmpty) {
-      }
-
-      // CRITICAL: Protect ticker symbols (positions) - these NEVER get unsubscribed
-      // Ticker header needs live position data regardless of which screen is active
-      if (_tickerSubscriptions.isNotEmpty) {
-        symbolsStillNeeded.addAll(_tickerSubscriptions);
-      }
-    } catch (e) {
-    }
+    // Everything still on screen elsewhere (one shared definition).
+    final symbolsStillNeeded = _protectedSymbols(exceptScreen: screenType);
 
     // Find symbols that can be unsubscribed (not needed by any other screen)
     final symbolsToUnsubscribe = screenSymbols.where((symbol) =>
@@ -1244,6 +1194,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         task: "u", // Unsubscribe touchline task
         input: symbolString,
         context: context,
+        protectionChecked: true,
       );
 
       // Remove these symbols from our tracking (deduplication)
@@ -1271,56 +1222,10 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     required BuildContext context,
   }) async {
 
-    // Collect all protected symbols (symbols used by other screens)
-    final protectedSymbols = <String>{};
-
-    try {
-      // 1. Protect symbols from all active screen subscriptions EXCEPT watchlist
-      for (var entry in _screenSubscriptions.entries) {
-        if (entry.key != ScreenType.watchlist) {
-          protectedSymbols.addAll(entry.value);
-        }
-      }
-
-      // 2. Protect depth symbol
-      final marketWatch = ref.read(marketWatchProvider);
-      final depthSymbol = marketWatch.currentDepthSymbol;
-      if (depthSymbol != null && depthSymbol.isNotEmpty) {
-        protectedSymbols.add(depthSymbol);
-      }
-
-      // 3. Protect index symbols
-      final indexSymbols = _getIndexSymbols();
-      if (indexSymbols.isNotEmpty) {
-        protectedSymbols.addAll(indexSymbols);
-      }
-
-      // 4. Protect holdings symbols
-      final portfolio = ref.read(portfolioProvider);
-      final holdings = portfolio.holdingsModel ?? [];
-      for (var holding in holdings) {
-        final exchTsymList = holding.exchTsym ?? [];
-        for (var exchTsym in exchTsymList) {
-          if (exchTsym.exch != null && exchTsym.token != null) {
-            protectedSymbols.add('${exchTsym.exch}|${exchTsym.token}');
-          }
-        }
-      }
-
-      // 5. Protect positions symbols
-      final positions = portfolio.postionBookModel ?? [];
-      for (var position in positions) {
-        if (position.exch != null && position.token != null) {
-          protectedSymbols.add('${position.exch}|${position.token}');
-        }
-      }
-
-      // 6. Protect ticker symbols (always active for ticker header)
-      if (_tickerSubscriptions.isNotEmpty) {
-        protectedSymbols.addAll(_tickerSubscriptions);
-      }
-    } catch (e) {
-    }
+    // Symbols other screens still show — the watchlist's own (old tab) symbols
+    // are what we are replacing, so they are not protected here.
+    final protectedSymbols = _protectedSymbols(
+        exceptScreen: ScreenType.watchlist, includeWatchlist: false);
 
     // Find symbols to unsubscribe (in old but not in new, and not protected)
     final symbolsToUnsubscribe = oldSymbols.where((symbol) =>
@@ -1346,6 +1251,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
           task: "u",
           input: symbolString,
           context: context,
+          protectionChecked: true,
         );
 
         // Remove from tracking
@@ -1385,6 +1291,62 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     return _screenSubscriptions[ScreenType.watchlist] ?? {};
   }
 
+  /// Every touchline scrip something on screen still shows. The ONE definition
+  /// used by screen teardown, watchlist tab switches, unsubscribeTokens, and —
+  /// through WebSocketProvider.touchlineProtection — every raw "u" anywhere in
+  /// the app (Option Flash, Scalper, strategy builder, …). There used to be
+  /// three hand-copied lists that had drifted apart.
+  ///
+  /// [exceptScreen]: the screen being torn down (its own symbols are what is
+  /// being released). [source] 'futures' / 'optionChain' releases its own list.
+  /// [includeWatchlist]: false for a watchlist tab switch (old tab's symbols).
+  Set<String> _protectedSymbols({
+    ScreenType? exceptScreen,
+    String source = 'unknown',
+    bool includeWatchlist = true,
+  }) {
+    final protectedSymbols = <String>{};
+    try {
+      // Every screen's tracked subscriptions.
+      for (final entry in _screenSubscriptions.entries) {
+        if (entry.key != exceptScreen) protectedSymbols.addAll(entry.value);
+      }
+      // Watchlist rows on screen.
+      if (includeWatchlist) protectedSymbols.addAll(_getWatchlistSymbols());
+      // Depth panel scrip.
+      final marketWatch = ref.read(marketWatchProvider);
+      final depthSymbol = marketWatch.currentDepthSymbol;
+      if (depthSymbol != null && depthSymbol.isNotEmpty) {
+        protectedSymbols.add(depthSymbol);
+      }
+      // Indices (dashboard + header).
+      protectedSymbols.addAll(_getIndexSymbols());
+      // Holdings + positions.
+      final portfolio = ref.read(portfolioProvider);
+      for (final holding in portfolio.holdingsModel ?? []) {
+        for (final exchTsym in holding.exchTsym ?? []) {
+          if (exchTsym.exch != null && exchTsym.token != null) {
+            protectedSymbols.add('${exchTsym.exch}|${exchTsym.token}');
+          }
+        }
+      }
+      for (final position in portfolio.postionBookModel ?? []) {
+        if (position.exch != null && position.token != null) {
+          protectedSymbols.add('${position.exch}|${position.token}');
+        }
+      }
+      // Futures list / option chain: protected by their touchline owners
+      // ('futures' / 'option-chain') while their page is open. Their models
+      // stay loaded after it closes, so protecting from the models kept a
+      // closed page's strikes subscribed. [source] is still accepted.
+      // Ticker header (positions) — always live.
+      protectedSymbols.addAll(_tickerSubscriptions);
+    } catch (e) {
+      log('WebSubscriptionManager: Error collecting protected symbols: $e');
+    }
+    return protectedSymbols;
+  }
+
   /// Unsubscribe specific tokens (for option chain, futures symbol changes)
   /// This method checks for protected symbols before unsubscribing
   /// Protected symbols: watchlist, depth, holdings, positions, indices, other active screens
@@ -1404,83 +1366,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     }
 
 
-    // Collect all protected symbols
-    final protectedSymbols = <String>{};
-
-    try {
-      // 1. Protect symbols from all active screen subscriptions
-      for (var screenSubscriptions in _screenSubscriptions.values) {
-        protectedSymbols.addAll(screenSubscriptions);
-      }
-
-      // 2. Protect watchlist symbols
-      final watchlistSymbols = _getWatchlistSymbols();
-      if (watchlistSymbols.isNotEmpty) {
-        protectedSymbols.addAll(watchlistSymbols);
-      }
-
-      // 3. Protect depth symbol
-      final marketWatch = ref.read(marketWatchProvider);
-      final depthSymbol = marketWatch.currentDepthSymbol;
-      if (depthSymbol != null && depthSymbol.isNotEmpty) {
-        protectedSymbols.add(depthSymbol);
-      }
-
-      // 4. Protect index symbols
-      final indexSymbols = _getIndexSymbols();
-      if (indexSymbols.isNotEmpty) {
-        protectedSymbols.addAll(indexSymbols);
-      }
-
-      // 5. Protect holdings symbols
-      final portfolio = ref.read(portfolioProvider);
-      final holdings = portfolio.holdingsModel ?? [];
-      for (var holding in holdings) {
-        final exchTsymList = holding.exchTsym ?? [];
-        for (var exchTsym in exchTsymList) {
-          if (exchTsym.exch != null && exchTsym.token != null) {
-            protectedSymbols.add('${exchTsym.exch}|${exchTsym.token}');
-          }
-        }
-      }
-
-      // 6. Protect positions symbols
-      final positions = portfolio.postionBookModel ?? [];
-      for (var position in positions) {
-        if (position.exch != null && position.token != null) {
-          protectedSymbols.add('${position.exch}|${position.token}');
-        }
-      }
-
-      // 7. Protect futures symbols (if futures list is open) - BUT NOT if we're unsubscribing futures
-      if (source != 'futures') {
-        final futList = marketWatch.fut ?? [];
-        for (var fut in futList) {
-          if (fut.exch != null && fut.token != null) {
-            protectedSymbols.add('${fut.exch}|${fut.token}');
-          }
-        }
-      }
-
-      // 8. Protect current option chain tokens (if option chain is open) - BUT NOT if we're unsubscribing optionChain
-      if (source != 'optionChain') {
-        final optionChainModel = marketWatch.optionChainModel;
-        if (optionChainModel?.optValue != null) {
-          for (var option in optionChainModel!.optValue!) {
-            if (option.exch != null && option.token != null) {
-              protectedSymbols.add('${option.exch}|${option.token}');
-            }
-          }
-        }
-      }
-
-      // 9. Protect ticker symbols (always active for ticker header)
-      if (_tickerSubscriptions.isNotEmpty) {
-        protectedSymbols.addAll(_tickerSubscriptions);
-      }
-
-    } catch (e) {
-    }
+    final protectedSymbols = _protectedSymbols(source: source);
 
     // Find tokens that can be unsubscribed (not protected). When the page is
     // being torn down, bypassProtection releases the depth feed unconditionally
@@ -1510,6 +1396,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         task: source == 'depth' ? "ud" : "u",
         input: symbolString,
         context: context,
+        protectionChecked: true,
       );
 
       // Remove from tracking — touchline only. A depth "ud" releases just the
@@ -1531,31 +1418,32 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
   /// Update context for future use
   void updateContext(BuildContext context) {
     _lastValidContext = context;
-    _lastContextUpdate = DateTime.now();
     log('WebSubscriptionManager: Context updated');
   }
   
   /// Get a valid context
   BuildContext? _getValidContext() {
-    // If we have a recent context (less than 30 minutes old), use it
-    if (_lastValidContext != null && _lastContextUpdate != null) {
-      final contextAge = DateTime.now().difference(_lastContextUpdate!);
-      if (contextAge < const Duration(minutes: 30)) {
-        try {
-          if (_lastValidContext!.mounted) {
-            return _lastValidContext;
-          }
-        } catch (e) {
-          log('WebSubscriptionManager: Recent context is no longer valid: $e');
-        }
+    // The last context a screen handed us, as long as it is still mounted.
+    // This used to expire after 30 minutes regardless — and with no fallback,
+    // every restore after that (master list, screen subscribe, the tab-return
+    // reconnect) silently aborted: after half an hour without a focus or
+    // resize event, a socket drop brought back only the owner-registered
+    // feeds, and the watchlist, indices and ticker stayed frozen.
+    try {
+      if (_lastValidContext != null && _lastValidContext!.mounted) {
+        return _lastValidContext;
       }
+    } catch (e) {
+      log('WebSubscriptionManager: Recent context is no longer valid: $e');
     }
-    
-    // Note: NetworkStateProvider doesn't expose context publicly
-    // We'll rely on the lastValidContext we already have
-    return null;
+    // Fall back to the app navigator — always mounted on web.
+    try {
+      return getNavigatorContext();
+    } catch (_) {
+      return null;
+    }
   }
-  
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
@@ -1731,6 +1619,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
             task: "u", // Unsubscribe touchline for web
             input: symbolString,
             context: context,
+            protectionChecked: true,
           );
         } catch (e) {
           log('WebSubscriptionManager: Error during clearAll unsubscribe: $e');

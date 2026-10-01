@@ -318,8 +318,11 @@ class WebSocketProvider extends ChangeNotifier {
     // so toast suppression matches reality.
     if (_isTabSwitchReconnect) _isTabSwitchReconnect = false;
     // Every depth owner (depth panel, charts, Insta Options) gets its feed
-    // back on the new socket — touchline is restored by WebSubscriptionManager.
+    // back on the new socket, and so does every touchline owner (Option Flash,
+    // Scalper, charts, …). Screen touchline is restored by
+    // WebSubscriptionManager; connectTouchLine dedups the overlap.
     _restoreOwnedDepth();
+    _restoreOwnedTouchline();
   }
 
   void _onEnterBackoffWait() {
@@ -395,6 +398,8 @@ class WebSocketProvider extends ChangeNotifier {
     log('WebSocket: socket gone — forgetting ${_sentSubscriptions.length} sent '
         'subscriptions so the next socket re-sends them');
     _sentSubscriptions.clear();
+    _forceResend.clear();
+    _sentAt.clear();
   }
 
   /// Drives the connect attempt from the state machine. Mirrors the path
@@ -476,9 +481,13 @@ class WebSocketProvider extends ChangeNotifier {
   }
 
   String? _pickProbeSymbol() {
-    // Prefer a symbol the user is already subscribed to — re-subscribing is
-    // free (server replies `dk` either way) and doesn't create unwanted
-    // server-side state.
+    // A scrip whose touchline is live on THIS socket: re-sending its "t" is
+    // idempotent server-side and the reply (tk) proves the socket is alive,
+    // without leaving anything new subscribed.
+    for (final key in _sentSubscriptions) {
+      if (key.startsWith('t:')) return key.substring(2);
+    }
+    // Otherwise a symbol the user is already subscribed to.
     try {
       final manager = ref.read(webSubscriptionManagerProvider);
       if (manager.activeSubscriptions.isNotEmpty) {
@@ -496,7 +505,10 @@ class WebSocketProvider extends ChangeNotifier {
     if (symbol == null) return;
     log('🟡 Socket probe: re-subscribing $symbol to verify liveness');
     try {
-      _channel!.sink.add(jsonEncode({"t": "d", "k": symbol}));
+      // Touchline, not depth: the probe used to send "d", which opened a depth
+      // feed nothing owned or released — the stray "d NSE|26000" /
+      // "d NSE|26017" (first active scrip) seen in quiet periods.
+      _channel!.sink.add(jsonEncode({"t": "t", "k": symbol}));
       _probeSentAt = DateTime.now();
       _probeTimeoutTimer = Timer(const Duration(seconds: 5), _onProbeTimeout);
     } catch (e) {
@@ -642,8 +654,15 @@ class WebSocketProvider extends ChangeNotifier {
     _isTabSwitchReconnect = false;
     _lastInboundFrameTime = null;
 
+    // A new session starts with no owners: the previous user's charts,
+    // tools and portfolio lists must not be re-subscribed on its socket.
+    _touchlineOwners.clear();
+    _depthOwners.clear();
+
     // Clear subscriptions and data.
     _sentSubscriptions.clear();
+    _forceResend.clear();
+    _sentAt.clear();
     _pendingSubscriptions['t'] = [];
     _pendingSubscriptions['d'] = [];
     _socketDatas.clear();
@@ -661,6 +680,8 @@ class WebSocketProvider extends ChangeNotifier {
   /// Call this before re-subscribing after a forced reconnect.
   void clearSentSubscriptions() {
     _sentSubscriptions.clear();
+    _forceResend.clear();
+    _sentAt.clear();
   }
 
   void closeSocket(bool mounted, {bool force = false, bool preserveData = false}) {
@@ -704,6 +725,8 @@ class WebSocketProvider extends ChangeNotifier {
 
     // Clear subscription tracking so the next connect re-sends everything.
     _sentSubscriptions.clear();
+    _forceResend.clear();
+    _sentAt.clear();
     _pendingSubscriptions['t'] = [];
     _pendingSubscriptions['d'] = [];
 
@@ -1101,9 +1124,10 @@ class WebSocketProvider extends ChangeNotifier {
     log('📋 WebSocket: Pending - touchline: ${pendingTouchline.length}, depth: ${pendingDepth.length}');
 
     // Check for pending touchline subscriptions
-    if (pendingTouchline.isNotEmpty) {
+    final pendingTl = _notYetSent('t', pendingTouchline.toSet().toList());
+    if (pendingTl.isNotEmpty) {
       log('📤 WebSocket: Sending pending touchline subscriptions');
-      final symbols = pendingTouchline.toSet().toList();
+      final symbols = pendingTl;
       final batchInput = symbols.join('#');
 
       if (symbols.length <= 10) {
@@ -1118,12 +1142,16 @@ class WebSocketProvider extends ChangeNotifier {
 
       // Send to websocket
       _channel?.sink.add(jsonEncode({"t": "t", "k": batchInput}));
+    } else {
+      _pendingSubscriptions['t'] = [];
     }
 
     // Check for pending depth subscriptions
-    if (pendingDepth.isNotEmpty) {
+    final pendingDp = _notYetSent('d', pendingDepth.toSet().toList());
+    if (pendingDp.isEmpty) _pendingSubscriptions['d'] = [];
+    if (pendingDp.isNotEmpty) {
       log('📤 WebSocket: Sending pending depth subscriptions');
-      final symbols = pendingDepth.toSet().toList();
+      final symbols = pendingDp;
       final batchInput = symbols.join('#');
 
       // Track as sent
@@ -1612,6 +1640,162 @@ class WebSocketProvider extends ChangeNotifier {
     log('WebSocket: restoring depth for ${_depthOwners.length} owned scrip(s)');
     connectTouchLine(task: 'd', input: _depthOwners.keys.join('#'), context: ctx);
   }
+
+  // ── Touchline ("t") ownership ────────────────────────────────────────────
+  // The socket also carries exactly ONE touchline subscription per scrip, and
+  // every screen shares it — so any screen's "u" blanked that scrip
+  // everywhere. Closing Option Flash sent "u NSE|26000" and froze NIFTY 50 in
+  // the watchlist and header until the next reconnect; Scalper did the same
+  // to every option it listed. Two layers now decide whether a "u" may go
+  // out (see _touchlineReleasable):
+  //  1. owners registered here (charts, Option Flash, Scalper, …) — always;
+  //  2. on web, WebSubscriptionManager's view of what is on screen (watchlist,
+  //     indices, holdings, positions, ticker, depth scrip, open screens) —
+  //     for every "u" that did not already come through that manager.
+  final Map<String, Set<String>> _touchlineOwners = {};
+
+  /// Scrips that currently have at least one touchline owner.
+  Set<String> get touchlineScripsInUse => _touchlineOwners.keys.toSet();
+
+  /// Whether [owner] currently holds touchline for [scrip].
+  bool ownsTouchline(String owner, String scrip) =>
+      _touchlineOwners[scrip]?.contains(owner) ?? false;
+
+  /// Web only: scrips the screens WebSubscriptionManager tracks are showing.
+  /// Registered by that manager; a callback so this provider needs no import.
+  /// [source] lets a feature release its own list: 'optionChain' / 'futures'
+  /// are otherwise protected while their model is loaded.
+  Set<String> Function(String source)? touchlineProtection;
+
+  /// Register [owner]'s need for touchline on [scrips] (each "EXCH|TOKEN").
+  void acquireTouchline(String owner, Iterable<String> scrips, [BuildContext? context]) {
+    final ctx = context ?? _safeContext();
+    final fresh = <String>[];
+    for (final k in scrips) {
+      if (k.isEmpty) continue;
+      final owners = _touchlineOwners.putIfAbsent(k, () => <String>{});
+      final wasUnowned = owners.isEmpty;
+      owners.add(owner);
+      if (wasUnowned || !_sentSubscriptions.contains('t:$k')) fresh.add(k);
+    }
+    if (fresh.isEmpty || ctx == null) return;
+    if (_state == SocketState.disconnected && !_connecting) {
+      establishConnection(channelInput: fresh.join('#'), task: 't', context: ctx);
+    } else {
+      connectTouchLine(task: 't', input: fresh.join('#'), context: ctx);
+    }
+  }
+
+  /// Drop [owner]'s need for touchline on [scrips]. "u" goes out only for the
+  /// scrips nobody else needs (other owners, or anything still on screen).
+  void releaseTouchline(String owner, Iterable<String> scrips,
+      [BuildContext? context, String protectionSource = 'unknown']) {
+    final gone = <String>[];
+    for (final k in scrips) {
+      final owners = _touchlineOwners[k];
+      if (owners == null || !owners.remove(owner)) continue;
+      if (owners.isEmpty) {
+        _touchlineOwners.remove(k);
+        gone.add(k);
+      }
+    }
+    if (gone.isEmpty) return;
+    final ctx = context ?? _safeContext();
+    if (ctx != null) {
+      connectTouchLine(task: 'u', input: gone.join('#'), context: ctx,
+          protectionSource: protectionSource);
+      return;
+    }
+    // No context (disposing widget): release directly, through the same guard.
+    final release = _touchlineReleasable(gone,
+        protectionChecked: false, protectionSource: protectionSource);
+    if (release.isEmpty) return;
+    for (final k in release) {
+      _sentSubscriptions.remove('t:$k');
+    }
+    _sendToWebSocket('u', release.join('#'));
+  }
+
+  /// Make [owner]'s touchline set exactly [scrips]: acquire the new ones and
+  /// release the ones it no longer lists. For a feature whose list is
+  /// re-fetched (positions, holdings, order book, basket, alerts, …).
+  void setOwnedTouchline(String owner, Iterable<String> scrips, [BuildContext? context]) {
+    final next = scrips.where((s) => s.isNotEmpty && s.contains('|')).toSet();
+    final gone = [
+      for (final e in _touchlineOwners.entries)
+        if (e.value.contains(owner) && !next.contains(e.key)) e.key
+    ];
+    if (gone.isNotEmpty) releaseTouchline(owner, gone, context);
+    if (next.isNotEmpty) acquireTouchline(owner, next, context);
+  }
+
+  /// Drop every touchline [owner] holds — a feature closing (its index and
+  /// its options alike).
+  void releaseAllTouchline(String owner,
+      [BuildContext? context, String protectionSource = 'unknown']) {
+    final mine = [
+      for (final e in _touchlineOwners.entries)
+        if (e.value.contains(owner)) e.key
+    ];
+    if (mine.isNotEmpty) releaseTouchline(owner, mine, context, protectionSource);
+  }
+
+  /// A fresh socket carries nothing: re-send touchline for every owned scrip.
+  void _restoreOwnedTouchline() {
+    if (_touchlineOwners.isEmpty) return;
+    final ctx = _safeContext();
+    if (ctx == null) return;
+    log('WebSocket: restoring touchline for ${_touchlineOwners.length} owned scrip(s)');
+    connectTouchLine(task: 't', input: _touchlineOwners.keys.join('#'), context: ctx);
+  }
+
+  /// The subset of [symbols] that may really be unsubscribed: not held by an
+  /// owner and — unless the caller already applied WebSubscriptionManager's
+  /// protection — not shown on any screen it tracks.
+  List<String> _touchlineReleasable(List<String> symbols,
+      {required bool protectionChecked, String protectionSource = 'unknown'}) {
+    final keep = <String>{};
+    for (final s in symbols) {
+      if (_touchlineOwners[s]?.isNotEmpty ?? false) keep.add(s);
+    }
+    if (!protectionChecked && touchlineProtection != null) {
+      try {
+        final shown = touchlineProtection!(protectionSource);
+        for (final s in symbols) {
+          if (shown.contains(s)) keep.add(s);
+        }
+      } catch (_) {}
+    }
+    if (keep.isEmpty) return symbols;
+    log('WebSocket: 🛡️ kept touchline for ${keep.length} scrip(s) still in use: '
+        '${keep.take(6).join(', ')}${keep.length > 6 ? ' …' : ''}');
+    return symbols.where((s) => !keep.contains(s)).toList();
+  }
+
+  /// Scrips whose "t" must go out again although they are marked as sent —
+  /// connectTouchLine's resubscribe for a scrip whose socket data went
+  /// missing. Everything else already live on this socket is never re-sent.
+  final Set<String> _forceResend = {};
+
+  /// When each "task:EXCH|TOKEN" last went out on the current socket.
+  final Map<String, DateTime> _sentAt = {};
+
+  /// Drop scrips already live on the socket from an outgoing [task] batch.
+  /// Several restore paths (screens, charts, owner registry, pending queue)
+  /// can each queue the same scrip before the first batch goes out; sending
+  /// it twice was the "duplicate touchline after network restore".
+  List<String> _notYetSent(String task, List<String> symbols) {
+    final out = <String>[];
+    final now = DateTime.now();
+    for (final s in symbols) {
+      final key = '$task:$s';
+      if (!_sentSubscriptions.contains(key) || _forceResend.remove(key)) {
+        out.add(s);
+        _sentAt[key] = now; // callers send exactly this list
+      }
+    }
+    return out;
+  }
   // Per-task debounce timers. Keyed by task ("t" / "d") so a depth ("d")
   // subscribe queued right after a touchline ("t") batch cannot cancel the
   // touchline flush — a single shared timer would only ever fire the last
@@ -1626,6 +1810,11 @@ class WebSocketProvider extends ChangeNotifier {
     required String task,
     required String input,
     required BuildContext context,
+    // True when WebSubscriptionManager already filtered [input] through its
+    // on-screen protection; the owner registry is still applied.
+    bool protectionChecked = false,
+    // Which list is being released (see touchlineProtection).
+    String protectionSource = 'unknown',
   }) {
     if (input.isEmpty) {
       return;
@@ -1680,10 +1869,19 @@ class WebSocketProvider extends ChangeNotifier {
               ? (socket != null && socket.containsKey('bp2'))
               : (socket != null);
 
-          if (!hasSocketData) {
+          // Only a subscription that has had time to answer counts as
+          // "data missing". Right after a (re)connect the first ticks take a
+          // few hundred ms; every screen asking for the same scrip in that
+          // window used to re-send it — the duplicate "t" frames after a page
+          // load or a network restore.
+          final sentAt = _sentAt[subscriptionKey];
+          final justSent = sentAt != null &&
+              DateTime.now().difference(sentAt) < const Duration(seconds: 5);
+          if (!hasSocketData && !justSent) {
             // Data for THIS task type is missing - resubscribe to get it
             newSymbols.add(symbol);
             resubscribedSymbols.add(symbol);
+            _forceResend.add(subscriptionKey);
           } else {
             // Has both subscription tracking and the right socket data - skip
             skippedSymbols.add(symbol);
@@ -1724,9 +1922,16 @@ class WebSocketProvider extends ChangeNotifier {
       });
 
     } else if (task.toLowerCase() == "u" || task.toLowerCase() == "ud") {
+      var symbols = input.split('#').where((s) => s.isNotEmpty).toList();
+      // Touchline: never drop a scrip something else still shows.
+      if (task.toLowerCase() == "u") {
+        symbols = _touchlineReleasable(symbols,
+            protectionChecked: protectionChecked, protectionSource: protectionSource);
+        if (symbols.isEmpty) return;
+        input = symbols.join('#');
+      }
       // Unsubscribe tasks - remove from subscription manager and tracking
       subscriptionManager.removeSubscription(input);
-      final symbols = input.split('#').where((s) => s.isNotEmpty).toList();
 
       // Determine which task type to unsubscribe (touchline by default)
       final taskKey = task.toLowerCase() == "ud" ? "d" : "t";
@@ -1764,8 +1969,15 @@ class WebSocketProvider extends ChangeNotifier {
     // Store context for reconnection attempts
     _context = context;
 
-    // Remove duplicates and create batch string
-    final uniqueSymbols = pending.toSet().toList();
+    // Remove duplicates — within the batch, and scrips another path already
+    // sent on this socket since they were queued.
+    final uniqueSymbols = (_wsConnected && _channel != null)
+        ? _notYetSent(task, pending.toSet().toList())
+        : pending.toSet().toList();
+    if (uniqueSymbols.isEmpty) {
+      _pendingSubscriptions[task] = [];
+      return;
+    }
     final batchInput = uniqueSymbols.join('#');
 
     log("WebSocket: 📦 Batched $task request for ${uniqueSymbols.length} symbols");
@@ -1985,6 +2197,8 @@ class WebSocketProvider extends ChangeNotifier {
 
     // Clear subscription tracking
     _sentSubscriptions.clear();
+    _forceResend.clear();
+    _sentAt.clear();
     _pendingSubscriptions.clear();
 
     // Clear buffered socket updates
