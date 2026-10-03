@@ -15,7 +15,8 @@ class ProfileAllDetails {
         bankData!.add(BankData.fromJson(v));
       });
     }
-    if (json['nominee_data'] != 'error') {
+    // nominee_data can be "error", missing or null — only parse a list.
+    if (json['nominee_data'] is List) {
       nomineeData = <NomineeDetails>[];
       json['nominee_data'].forEach((v) {
         nomineeData!.add(NomineeDetails.fromJson(v));
@@ -31,7 +32,7 @@ class ProfileAllDetails {
     if (bankData != null) {
       data['bank_data'] = bankData!.map((v) => v.toJson()).toList();
     }
-    data['nominee_data'] = nomineeData!.map((v) => v.toJson()).toList();
+    data['nominee_data'] = nomineeData?.map((v) => v.toJson()).toList();
     return data;
   }
 }
@@ -484,7 +485,7 @@ class NomineeDetails {
     nomPhone = json['Nom_Phone'].toString();
     nomDOB = json['Nom_DOB'].toString();
     nOMEMAIL = json['NOM_EMAIL'].toString();
-    nOMINEEPINCODE = json['NOMINEE_PIN_CODE'];
+    nOMINEEPINCODE = json['NOMINEE_PIN_CODE']?.toString();
     nomCity = json['Nom_City'].toString();
     nomState = json['Nom_State'].toString();
     nomAddress2 = json['Nom_address2'].toString();
