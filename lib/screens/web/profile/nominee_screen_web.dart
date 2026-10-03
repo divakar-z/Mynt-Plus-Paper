@@ -1003,7 +1003,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                         ],
 
                         // Esign Pending
-                        if (_esignRequestInProcess) ...[
+                        if (_esignRequestInProcess || _esignCompleted) ...[
                           _buildEsignPendingBanner(primaryColor, errorColor,
                               inProcess: true),
                           const SizedBox(height: 24),
@@ -1409,10 +1409,11 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.info_outline, color: warningIcon, size: 20),
               const SizedBox(width: 12),
-              Expanded(
+              Flexible(
                 child: Text(
                   inProcess
                       ? 'Your Nominee Change request is in process.'
