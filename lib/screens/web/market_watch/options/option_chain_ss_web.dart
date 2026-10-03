@@ -165,6 +165,13 @@ class _OptionChainSSState extends ConsumerState<OptionChainSSWeb> {
     // Timer removed - no longer needed
     if (kDebugMode) {
     }
+    // Basket mode lives here; reset the parent's header icon when this chain goes away
+    // (tab switch / scrip without options). Deferred: parent can't setState mid-unmount.
+    if (isBasketMode) {
+      final notifyParent = widget.onBasketModeChanged;
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => notifyParent?.call(false));
+    }
     super.dispose();
   }
 
@@ -1208,6 +1215,8 @@ class _OptionChainContentState extends ConsumerState<_OptionChainContent> {
     final bool isLoading = isLoad || (!hasCallData && !hasPutData);
 
     if (isLoading) {
+      // Re-arm the ATM scroll so the reloaded chain (e.g. new scrip) re-centres once
+      _hasScrolledInitially = false;
       // Create a timeout to handle cases where loading gets stuck
       return FutureBuilder(
           future: Future.delayed(const Duration(seconds: 5)),
