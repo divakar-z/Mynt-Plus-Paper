@@ -41,6 +41,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
 
   // Nominee status from /nom_stat
   bool _hasExistingNominee = false;
+  bool _nomStatLoaded = false;
   bool _esignPending = false;
   bool _esignCompleted = false;
   // True once user has completed Digio e-sign for the current change request;
@@ -335,7 +336,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         if (_hasExistingNominee) {
           _name1.text = name1;
           _relation1 = statusData['nominee1_relation']?.toString();
-          _percent1.text = statusData['nominee1_percentage']?.toString() ?? '';
+          _percent1.text =
+              _fmtPercent(statusData['nominee1_percentage']?.toString());
           final dob1Str = statusData['nominee1_DOB']?.toString() ?? '';
           if (dob1Str.isNotEmpty) {
             try { _dob1 = DateFormat('yyyy-MM-dd').parse(dob1Str); } catch (_) {}
@@ -347,7 +349,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
             _nomineeCount = _nomineeCount < 2 ? 2 : _nomineeCount;
             _name2.text = name2;
             _relation2 = statusData['nominee2_relation']?.toString();
-            _percent2.text = statusData['nominee2_percentage']?.toString() ?? '';
+            _percent2.text =
+                _fmtPercent(statusData['nominee2_percentage']?.toString());
             final dob2Str = statusData['nominee2_DOB']?.toString() ?? '';
             if (dob2Str.isNotEmpty) {
               try { _dob2 = DateFormat('yyyy-MM-dd').parse(dob2Str); } catch (_) {}
@@ -360,7 +363,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
             _nomineeCount = 3;
             _name3.text = name3;
             _relation3 = statusData['nominee3_relation']?.toString();
-            _percent3.text = statusData['nominee3_percentage']?.toString() ?? '';
+            _percent3.text =
+                _fmtPercent(statusData['nominee3_percentage']?.toString());
             final dob3Str = statusData['nominee3_DOB']?.toString() ?? '';
             if (dob3Str.isNotEmpty) {
               try { _dob3 = DateFormat('yyyy-MM-dd').parse(dob3Str); } catch (_) {}
@@ -370,31 +374,111 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       });
     }
 
-    // Fallback: if nom_stat didn't have nominee data, use profile API data
-    if (!_hasExistingNominee) {
-      final clientData = provider.clientAllDetailsSafe?.clientData;
-      if (clientData != null) {
-        final nomName = clientData.nomineeName ?? '';
-        if (nomName.isNotEmpty) {
-          setState(() {
-            _hasExistingNominee = true;
-            _name1.text = nomName;
-            _relation1 = clientData.nomineeRelation?.toUpperCase();
-            _percent1.text = '100';
-            final nomDob = clientData.nomineeDOB ?? '';
-            if (nomDob.isNotEmpty) {
-              try { _dob1 = DateFormat('dd/MM/yyyy').parse(nomDob); } catch (_) {
-                try { _dob1 = DateFormat('yyyy-MM-dd').parse(nomDob); } catch (_) {}
-              }
-            }
-            _mobile1.text = clientData.nomineePhone ?? '';
-            _address1.text = clientData.nomineeAddress ?? '';
-          });
-        }
-      }
-    }
+    // Back-office nominees from /profile. Re-run from build() via ref.listen
+    // when /profile arrives after /nom_stat.
+    _nomStatLoaded = true;
+    setState(_applyBackOfficeNominees);
 
     setState(() => _loading = false);
+  }
+
+  /// Trims and treats null / "null" / blank as empty.
+  String _clean(String? v) {
+    final s = v?.trim() ?? '';
+    return s == 'null' ? '' : s;
+  }
+
+  /// "50.00" → 50, "33.330" → 33.33, "12.50" → 12.5. Blank/invalid → ''.
+  String _fmtPercent(String? v) {
+    final n = num.tryParse(_clean(v));
+    if (n == null) return '';
+    return n == n.truncate() ? n.toInt().toString() : n.toDouble().toString();
+  }
+
+  /// Accepts "1995-03-23 00:00:00", "1995-03-23" and "23/03/1995".
+  DateTime? _parseNomDob(String? v) {
+    final s = _clean(v);
+    if (s.isEmpty) return null;
+    final iso = DateTime.tryParse(s);
+    if (iso != null) return iso;
+    try { return DateFormat('dd/MM/yyyy').parse(s); } catch (_) { return null; }
+  }
+
+  /// Shows back-office nominees from /profile: nominee 1 from client_data
+  /// (falling back to nominee_data[0]), nominees 2 and 3 from nominee_data[0].
+  /// Skipped while /nom_stat holds an app request pending e-sign, so that
+  /// request stays on screen. Call inside setState.
+  void _applyBackOfficeNominees() {
+    final provider = ref.read(profileAllDetailsProvider);
+    final statusData = provider.nomineeStatusData;
+    final pendingName =
+        _clean(statusData?['nominee1_name']?.toString());
+    if (statusData?['app_status']?.toString() == 'e-signed pending' &&
+        pendingName.isNotEmpty) {
+      return;
+    }
+
+    final details = provider.clientAllDetailsSafe;
+    final clientData = details?.clientData;
+    final nomList = details?.nomineeData;
+    final bo = (nomList != null && nomList.isNotEmpty) ? nomList.first : null;
+
+    var name1 = _clean(clientData?.nomineeName);
+    var relation1 = _clean(clientData?.nomineeRelation);
+    var dob1 = _clean(clientData?.nomineeDOB);
+    if (name1.isEmpty) {
+      name1 = _clean(bo?.nominationName);
+      relation1 = _clean(bo?.nomRelation);
+      dob1 = _clean(bo?.nomDOB);
+    }
+    // No back-office nominee — keep whatever /nom_stat showed.
+    if (name1.isEmpty) return;
+    // client_data may carry the name but not the relation/DOB.
+    if (relation1.isEmpty) relation1 = _clean(bo?.nomRelation);
+    if (_parseNomDob(dob1) == null) dob1 = _clean(bo?.nomDOB);
+
+    final name2 = _clean(bo?.nominationName2);
+    final name3 = _clean(bo?.nominationName3);
+    final percent2 = name2.isNotEmpty ? _fmtPercent(bo?.sharePercentage2) : '';
+    final percent3 = name3.isNotEmpty ? _fmtPercent(bo?.sharePercentage3) : '';
+
+    var percent1 = _fmtPercent(bo?.sharePercentage);
+    if (percent1.isEmpty) {
+      final others =
+          (num.tryParse(percent2) ?? 0) + (num.tryParse(percent3) ?? 0);
+      if (others < 100) percent1 = _fmtPercent('${100 - others}');
+    }
+
+    _hasExistingNominee = true;
+    _nomineeCount = name3.isNotEmpty ? 3 : (name2.isNotEmpty ? 2 : 1);
+
+    _name1.text = name1;
+    _relation1 = relation1.isEmpty ? null : relation1.toUpperCase();
+    _dob1 = _parseNomDob(dob1);
+    _percent1.text = percent1;
+    _mobile1.text = _clean(clientData?.nomineePhone).isNotEmpty
+        ? _clean(clientData?.nomineePhone)
+        : _clean(bo?.nomPhone);
+    _email1.text = _clean(bo?.nOMEMAIL);
+    _address1.text = _clean(clientData?.nomineeAddress);
+
+    _name2.text = name2;
+    _relation2 = name2.isEmpty || _clean(bo?.nomRelation2).isEmpty
+        ? null
+        : _clean(bo?.nomRelation2).toUpperCase();
+    _dob2 = name2.isEmpty ? null : _parseNomDob(bo?.nomDOB2);
+    _percent2.text = percent2;
+    _mobile2.text = name2.isEmpty ? '' : _clean(bo?.nomPhone2);
+    _email2.text = name2.isEmpty ? '' : _clean(bo?.nomEmail2);
+
+    _name3.text = name3;
+    _relation3 = name3.isEmpty || _clean(bo?.nomRelation3).isEmpty
+        ? null
+        : _clean(bo?.nomRelation3).toUpperCase();
+    _dob3 = name3.isEmpty ? null : _parseNomDob(bo?.nomDOB3);
+    _percent3.text = percent3;
+    _mobile3.text = name3.isEmpty ? '' : _clean(bo?.nomPhone3);
+    _email3.text = name3.isEmpty ? '' : _clean(bo?.nomEmail3);
   }
 
   Future<void> _submitNominee() async {
@@ -794,6 +878,12 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   @override
   Widget build(BuildContext context) {
     ref.watch(themeProvider);
+    // /profile can respond after /nom_stat — re-merge back-office nominees.
+    ref.listen(
+        profileAllDetailsProvider.select((p) => p.clientAllDetailsSafe),
+        (_, next) {
+      if (_nomStatLoaded && next != null) setState(_applyBackOfficeNominees);
+    });
 
     final textColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
@@ -1184,7 +1274,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
               const SizedBox(width: 24),
               Expanded(child: _buildReadOnlyField('NOMINEE RELATION', _relation1 ?? '', textColor, subtitleColor, borderColor)),
               const SizedBox(width: 24),
-              Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob1 != null ? DateFormat('dd/MM/yyyy').format(_dob1!) : '-', textColor, subtitleColor, borderColor)),
+              Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob1 != null ? DateFormat('dd MMM yyyy').format(_dob1!) : '-', textColor, subtitleColor, borderColor)),
             ],
           ),
           const SizedBox(height: 16),
@@ -1217,7 +1307,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                 const SizedBox(width: 24),
                 Expanded(child: _buildReadOnlyField('NOMINEE RELATION', _relation2 ?? '', textColor, subtitleColor, borderColor)),
                 const SizedBox(width: 24),
-                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob2 != null ? DateFormat('dd/MM/yyyy').format(_dob2!) : '-', textColor, subtitleColor, borderColor)),
+                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob2 != null ? DateFormat('dd MMM yyyy').format(_dob2!) : '-', textColor, subtitleColor, borderColor)),
               ],
             ),
             const SizedBox(height: 16),
@@ -1251,7 +1341,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                 const SizedBox(width: 24),
                 Expanded(child: _buildReadOnlyField('NOMINEE RELATION', _relation3 ?? '', textColor, subtitleColor, borderColor)),
                 const SizedBox(width: 24),
-                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob3 != null ? DateFormat('dd/MM/yyyy').format(_dob3!) : '-', textColor, subtitleColor, borderColor)),
+                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob3 != null ? DateFormat('dd MMM yyyy').format(_dob3!) : '-', textColor, subtitleColor, borderColor)),
               ],
             ),
             const SizedBox(height: 16),
@@ -1273,6 +1363,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   Widget _buildReadOnlyField(
       String label, String value, Color textColor, Color subtitleColor, Color borderColor) {
     return TextFormField(
+      // initialValue is read once; key on value so a later re-merge repaints.
+      key: ValueKey('$label|$value'),
       initialValue: value,
       readOnly: true,
       style: MyntWebTextStyles.body(context, color: textColor)
