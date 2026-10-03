@@ -1089,7 +1089,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             ),
                             const Spacer(),
                             // Basket mode toggle button
-                            Material(
+                            Tooltip(
+                              message: "Basket Mode",
+                              child: Material(
                               color: Colors.transparent,
                               child: InkWell(
                                 customBorder: const CircleBorder(),
@@ -1123,6 +1125,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                                   ),
                                 ),
                               ),
+                            ),
                             ),
                           ],
                         ),
@@ -1329,6 +1332,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       return OptionChainSSWeb(
         wlValue: widget.wlValue,
         onBasketModeChanged: (bool isBasketMode) {
+          if (!mounted) return;
           setState(() {
             _isBasketMode = isBasketMode;
           });

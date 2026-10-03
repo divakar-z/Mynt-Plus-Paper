@@ -381,7 +381,7 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
       return Expanded(
         child: NoDataFoundWeb(
           title: "Basket is Empty",
-          subtitle: "Click on options to add them to basket",
+          subtitle: "Hover over a strike, click Buy or Sell, then Add to Basket",
           assetIcon: assets.documentIcon,
           iconSize: 80,
           primaryEnabled: false,
