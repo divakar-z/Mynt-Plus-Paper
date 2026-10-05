@@ -1101,7 +1101,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             ),
                             const Spacer(),
                             // Basket mode toggle button
-                            Material(
+                            Tooltip(
+                              message: "Basket Mode",
+                              child: Material(
                               color: Colors.transparent,
                               child: InkWell(
                                 customBorder: const CircleBorder(),
@@ -1136,6 +1138,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                                 ),
                               ),
                             ),
+                            ),
                           ],
                         ),
                       ),
@@ -1168,6 +1171,18 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                       isBasket: widget.isBasket,
                       onClose: () {
                         mw.setIsDepthVisibleWeb(false);
+                      },
+                      // Futures row hover chart — same deferred switch as the
+                      // option chain's onChartRequested (tab controller may be
+                      // recreated when the contract changes).
+                      onChartRequested: () {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          if (_tabController != null &&
+                              _tabController!.index != 1) {
+                            _tabController!.animateTo(1);
+                          }
+                        });
                       },
                     ),
                   ),
@@ -1329,6 +1344,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       return OptionChainSSWeb(
         wlValue: widget.wlValue,
         onBasketModeChanged: (bool isBasketMode) {
+          if (!mounted) return;
           setState(() {
             _isBasketMode = isBasketMode;
           });
