@@ -2,11 +2,13 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/screens/web/chart_engine/chart_engine_shell_screen.dart';
 import 'package:mynt_plus/screens/web/chart_engine/state/chart_engine_store.dart';
 import 'package:mynt_plus/screens/web/chart_engine/utils/popout_feed_client.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart' show DerivativeMaster;
 
 /// Detached, view-only chart window served at `/chart-popout`. It is a SECOND
 /// Flutter instance opened via `window.open` from the logged-in app, so instead
@@ -70,6 +72,22 @@ class _ChartPopoutScreenState extends ConsumerState<ChartPopoutScreen> {
     // built a fresh popout session — see [kChartPopoutMode]) exists to receive
     // it. The shell's own postMessage pipeline then loads history + subscribes.
     WidgetsBinding.instance.addPostFrameCallback((_) => _seedSymbol());
+    _loadDerivativeNames();
+  }
+
+  /// The main window loads the derivative contract master at login; this
+  /// window never logs in, so without it the symbol search showed raw trading
+  /// symbols ("TCS27OCT26F") instead of "TCS 27 OCT 26 FUT". Background and
+  /// best-effort — the search falls back to tsym until it lands. The user's
+  /// entitlements (userDetail.exarr) are not loaded here, so ask for every
+  /// derivative segment the chart search covers.
+  Future<void> _loadDerivativeNames() async {
+    if (DerivativeMaster.isLoaded) return;
+    try {
+      final data = await locator<ApiExporter>()
+          .getDerivativeMaster(exchanges: const ['NFO', 'BFO', 'MCX', 'CDS']);
+      if (data.isNotEmpty) DerivativeMaster.setAll(data);
+    } catch (_) {}
   }
 
   void _seedSymbol() {
