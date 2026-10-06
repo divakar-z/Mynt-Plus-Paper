@@ -892,11 +892,17 @@ class _HeaderExitButton extends ConsumerWidget {
             );
 
             final orderProv = ref.read(orderProvider);
-            final placeOrderModel = await positionBook.api.getPlaceOrder(
-                placeOrderInput, orderProv.ip);
+            // Slice to the freeze qty, same rule as Exit All
+            // (fetchExitPosition): floor(frzqty / ls) * ls per leg. Sending
+            // the full qty in one order was rejected by the exchange (MCX).
+            for (final legQty in _exitLegs(element)) {
+              placeOrderInput.qty = legQty.toString();
+              final placeOrderModel = await positionBook.api.getPlaceOrder(
+                  placeOrderInput, orderProv.ip);
 
-            if (placeOrderModel.stat?.toLowerCase() != "ok") {
-              // Continue with remaining positions instead of stopping
+              if (placeOrderModel.stat?.toLowerCase() != "ok") {
+                // Continue with remaining positions instead of stopping
+              }
             }
           }
         }
@@ -2205,7 +2211,7 @@ class GroupExitAllButton extends ConsumerWidget {
           // Validate product type (same as exitPosition function)
           if (((element.sPrdtAli == "MIS" || element.sPrdtAli == "CNC") ||
               element.sPrdtAli == "NRML")) {
-            // Create PlaceOrderInput for exit (same as Exit All - NO frzqty)
+            // Create PlaceOrderInput for exit (sliced below by _exitLegs)
             PlaceOrderInput placeOrderInput = PlaceOrderInput(
               amo: "",
               blprc: '',
@@ -2225,16 +2231,21 @@ class GroupExitAllButton extends ConsumerWidget {
               channel: defaultTargetPlatform == TargetPlatform.android
                   ? '${ref.read(authProvider).deviceInfo["brand"]}'
                   : "${ref.read(authProvider).deviceInfo["model"]}",
-              // NO frzqty field - same as Exit All
             );
 
             // Execute exit directly (same as Exit All - direct API call)
             final orderProv = ref.read(orderProvider);
-            final placeOrderModel = await positionBook.api.getPlaceOrder(
-                placeOrderInput, orderProv.ip);
+            // Slice to the freeze qty, same rule as Exit All
+            // (fetchExitPosition): floor(frzqty / ls) * ls per leg. Sending
+            // the full qty in one order was rejected by the exchange (MCX).
+            for (final legQty in _exitLegs(element)) {
+              placeOrderInput.qty = legQty.toString();
+              final placeOrderModel = await positionBook.api.getPlaceOrder(
+                  placeOrderInput, orderProv.ip);
 
-            if (placeOrderModel.stat?.toLowerCase() != "ok") {
-              // Continue with remaining positions instead of stopping
+              if (placeOrderModel.stat?.toLowerCase() != "ok") {
+                // Continue with remaining positions instead of stopping
+              }
             }
           }
         }
@@ -2243,6 +2254,23 @@ class GroupExitAllButton extends ConsumerWidget {
       // Stop on error (same as Exit All behavior)
     }
   }
+}
+
+/// Splits a group-exit position's qty into freeze-qty legs, matching
+/// Exit All (fetchExitPosition). Freeze per leg = floor(frzqty / ls) * ls so
+/// every leg stays a lot multiple. No freeze qty (0 / missing) -> one leg.
+List<int> _exitLegs(dynamic element) {
+  final int totalQty =
+      int.tryParse(element.qty.toString().replaceAll("-", "")) ?? 0;
+  final int ls = int.tryParse(element.ls?.toString() ?? "1") ?? 1;
+  final int frz = int.tryParse(element.frzqty?.toString() ?? "0") ?? 0;
+  final int legSize = ls > 0 ? (frz ~/ ls) * ls : frz;
+
+  if (legSize <= 0 || totalQty <= legSize) return [totalQty];
+
+  final legs = List<int>.filled(totalQty ~/ legSize, legSize, growable: true);
+  if (totalQty % legSize > 0) legs.add(totalQty % legSize);
+  return legs;
 }
 
 /// Confirmation dialog for exiting all positions in a group - Web style (matches ExitAllPositionsDialogWeb)
