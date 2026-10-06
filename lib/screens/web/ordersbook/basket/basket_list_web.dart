@@ -1961,6 +1961,10 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     final sentMode = _isSentMode(basket);
     _selected.removeWhere((i) => i >= basket.bsktScripList.length);
     final toPlace = _selectedUnsent(basket);
+    final unsent = [
+      for (int i = 0; i < basket.bsktScripList.length; i++)
+        if (basket.bsktScripList[i]['orderStatus'] == null) i
+    ];
     final isPlacing =
         basket.basketOverallStatus[basket.selectedBsktName] == 'placing';
 
@@ -2121,7 +2125,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     const Spacer(),
 
                     // TC_324.2: delete ticked rows (Kite "Delete (N)").
-                    if (sentMode && _selected.isNotEmpty) ...[
+                    if (_selected.isNotEmpty) ...[
                       TextButton.icon(
                         onPressed: isPlacing ? null : _deleteSelected,
                         icon: Icon(
@@ -2322,8 +2326,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                                 _isNumericColumnBasketItems(
                                                     label);
                                             // TC_324.2: select-all beside Instrument once rows are sent.
-                                            final selectAll = index == 0 &&
-                                                    sentMode
+                                            final selectAll = index == 0
                                                 ? _buildRowCheckbox(
                                                     value: sortedItems.isNotEmpty &&
                                                         _selected.length ==
@@ -2624,18 +2627,30 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     ),
                     const SizedBox(width: 16),
 
-                    // TC_324.2: "Place Selected (N)" — only ticked rows not yet sent.
-                    if (sentMode && toPlace.isNotEmpty) ...[
+                    // One flow (user): ticked -> "Place Selected (N)"; nothing
+                    // ticked -> "Place Order" for every row not sent yet.
+                    // Sent rows are never re-sent.
+                    if (!sentMode || toPlace.isNotEmpty || unsent.isNotEmpty) ...[
                       SizedBox(
                         height: 36,
                         child: ElevatedButton(
                           onPressed: isPlacing ||
+                                  basket.bsktScripList.isEmpty ||
                                   _hasMultipleExchanges(basket.bsktScripList)
                               ? null
                               : () async {
-                                  setState(() => _selected.removeAll(toPlace));
-                                  await basket.placeBasketItems(
-                                      context, toPlace);
+                                  if (toPlace.isNotEmpty) {
+                                    setState(() => _selected.removeAll(toPlace));
+                                    await basket.placeBasketItems(
+                                        context, toPlace);
+                                  } else if (!sentMode) {
+                                    // Fresh basket: original whole-basket path.
+                                    await basket.placeBasketOrder(context,
+                                        navigateToOrderBook: false);
+                                  } else {
+                                    await basket.placeBasketItems(
+                                        context, unsent);
+                                  }
                                 },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: theme.isDarkMode
@@ -2649,7 +2664,9 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                           child: Text(
                             isPlacing
                                 ? "Placing..."
-                                : "Place Selected (${toPlace.length})",
+                                : toPlace.isNotEmpty
+                                    ? "Place Selected (${toPlace.length})"
+                                    : "Place Order",
                             style: WebTextStyles.custom(
                                 fontSize: 13,
                                 isDarkTheme: theme.isDarkMode,
@@ -2661,11 +2678,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       const SizedBox(width: 12),
                     ],
 
-                    // Place Order / Reset Orders Button
+                    // Reset Orders once anything has been sent. (The Place
+                    // Order branch below is now handled by the button above.)
+                    if (sentMode)
                     SizedBox(
                       height: 36,
-                      // TC_324.2: any sent row keeps Reset, so a whole-basket
-                      // Place Order can never re-send old rows.
                       child: sentMode
                           // Reset Orders - Outlined style matching the image
                           ? OutlinedButton(
@@ -2826,9 +2843,10 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
             _handleCopyBasketScript(item, index, theme),
         onEdit: (item, index, theme) =>
             _handleEditBasketScript(item, index, theme),
+        showDelete: false,
       );
-      if (!sentMode) return cell;
-      // TC_324.2: tick box (sent rows: delete only).
+      // One flow (user): tick box on every row from the start (sent rows:
+      // delete only).
       return Row(
         children: [
           _buildRowCheckbox(
@@ -3040,7 +3058,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
       case 'Status':
         // TC_324.2: unsent row in a sent basket — no badge (was a misleading
         // 'PENDING'); users tick it and use Place Selected. Per-row Place dropped.
-        if (item["orderStatus"] == null && sentMode) {
+        if (item["orderStatus"] == null) {
           return const SizedBox.shrink();
         }
         // if (item["orderStatus"] == null && sentMode) {
@@ -3692,6 +3710,8 @@ class _BasketInstrumentCell extends ConsumerStatefulWidget {
   final Function(Map<String, dynamic>, int, ThemesProvider) onDelete;
   final Function(Map<String, dynamic>, int, ThemesProvider)? onCopy;
   final Function(Map<String, dynamic>, int, ThemesProvider)? onEdit;
+  /// One flow (user): delete via tick + Delete (N), so the hover 🗑 is off.
+  final bool showDelete;
 
   const _BasketInstrumentCell({
     required this.item,
@@ -3702,6 +3722,7 @@ class _BasketInstrumentCell extends ConsumerStatefulWidget {
     required this.onDelete,
     this.onCopy,
     this.onEdit,
+    this.showDelete = true,
   });
 
   @override
@@ -3822,7 +3843,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                 child: Tooltip(
                   message: '$displayText${exch.isNotEmpty ? ' $exch' : ''}',
                   child: Padding(
-                    padding: EdgeInsets.only(right: isRowHovered ? 100.0 : 0.0),
+                    padding: EdgeInsets.only(right: isRowHovered ? (widget.showDelete ? 100.0 : 70.0) : 0.0),
                     child: RichText(
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
@@ -3888,6 +3909,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                               ? () => widget.onEdit!(widget.item, widget.originalIndex, widget.theme)
                               : null,
                         ),
+                        if (widget.showDelete) ...[
                         const SizedBox(width: 6),
                         // Delete button
                         _buildActionButton(
@@ -3895,6 +3917,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                           iconColor: styles.MyntColors.loss,
                           onPressed: () => widget.onDelete(widget.item, widget.originalIndex, widget.theme),
                         ),
+                        ],
                       ],
                     ),
                   ),

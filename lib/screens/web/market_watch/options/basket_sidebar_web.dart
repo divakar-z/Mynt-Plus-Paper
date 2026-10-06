@@ -420,7 +420,7 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
       child: Column(
         children: [
           // TC_324.2: Select all + Delete (N) line, shown only while rows are ticked.
-          if (sentMode && _selected.isNotEmpty) ...[
+          if (_selected.isNotEmpty) ...[
             _buildSelectionBar(orderProvider),
             const ListDivider(),
           ],
@@ -574,12 +574,13 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
       onTap: () => _handleBasketItemTap(index, script, orderProv),
       child: Container(
         padding: EdgeInsets.only(
-            left: sentMode ? 8 : 16, right: 16, top: 12, bottom: 12),
+            left: 8, right: 16, top: 12, bottom: 12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // TC_324.2: tick box once rows are sent (sent rows: delete only).
-            if (sentMode) ...[
+            // One flow (user): tick box on every row from the start; sent rows
+            // can be ticked to delete only.
+            ...[
               _buildRowCheckbox(
                 value: _selected.contains(index),
                 onChanged: (v) => setState(() {
@@ -679,8 +680,9 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
 //                               : () => orderProv.placeBasketItems(context, [index]),
 //                         ),
 //                       ),
-                    // Delete button — sent basket deletes via tick + Delete (N) (TC_324.2)
-                    if (!sentMode &&
+                    // Delete button — retired (user: one flow; delete via tick +
+                    // Delete (N)). Kept for rollback.
+                    if (false &&
                         (script['orderStatus'] == null ||
                             !_isOrderPlaced(script['orderStatus'])))
                       Material(
@@ -840,79 +842,70 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
     // so a whole-basket Place Order can never re-send old rows.
     final isBasketPlaced = _isSentMode(orderProv);
 
-    // Show reset button if basket has been placed
-    if (isBasketPlaced) {
-      final reset = SizedBox(
-        height: 45,
-        child: MyntOutlinedButton(
-          label: "Reset Orders",
-          size: MyntButtonSize.large,
-          isFullWidth: true,
-          onPressed: () {
-            setState(() => _selected.clear());
-            orderProv.resetBasketOrderTracking(orderProv.selectedBsktName);
-            showResponsiveSuccess(context, "Basket reset. You can place orders again.");
-          },
-        ),
-      );
-      // Kite: "Place Selected (N)" counts only ticked rows not yet sent.
-      final toPlace = _selectedUnsent(orderProv);
-      return Padding(
-        padding: const EdgeInsets.all(10),
-        child: toPlace.isEmpty
-            ? SizedBox(width: double.infinity, child: reset)
-            : Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 45,
-                      child: MyntPrimaryButton(
-                        label: basketStatus == 'placing'
-                            ? "Placing..."
-                            : "Place Selected (${toPlace.length})",
-                        size: MyntButtonSize.large,
-                        isFullWidth: true,
-                        isLoading: basketStatus == 'placing',
-                        onPressed: hasMultipleExchanges ||
-                                basketStatus == 'placing'
-                            ? null
-                            : () async {
-                                setState(() => _selected.removeAll(toPlace));
-                                await orderProv.placeBasketItems(
-                                    context, toPlace);
-                              },
-                        backgroundColor:
-                            hasMultipleExchanges ? Colors.grey : null,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(child: reset),
-                ],
-              ),
-      );
-    }
-    // Place order button
+    // One flow (user): ticked rows -> "Place Selected (N)"; nothing ticked ->
+    // "Place Order" for every row not sent yet. Sent rows are never re-sent.
+    // "Reset Orders" sits beside it once anything has been sent.
+    final isPlacing = basketStatus == 'placing';
+    final toPlace = _selectedUnsent(orderProv);
+    final unsent = [
+      for (int i = 0; i < orderProv.bsktScripList.length; i++)
+        if (orderProv.bsktScripList[i]['orderStatus'] == null) i
+    ];
+    final primary = SizedBox(
+      height: 45,
+      child: MyntPrimaryButton(
+        label: isPlacing
+            ? "Placing..."
+            : toPlace.isNotEmpty
+                ? "Place Selected (${toPlace.length})"
+                : "Place Order",
+        size: MyntButtonSize.large,
+        isFullWidth: true,
+        isLoading: isPlacing,
+        onPressed: hasMultipleExchanges || isPlacing
+            ? null
+            : () async {
+                if (toPlace.isNotEmpty) {
+                  setState(() => _selected.removeAll(toPlace));
+                  await orderProv.placeBasketItems(context, toPlace);
+                } else if (!isBasketPlaced) {
+                  // Fresh basket: original whole-basket path.
+                  await orderProv.placeBasketOrder(context,
+                      navigateToOrderBook: false);
+                } else {
+                  await orderProv.placeBasketItems(context, unsent);
+                }
+              },
+        backgroundColor: hasMultipleExchanges ? Colors.grey : null,
+      ),
+    );
+    final reset = SizedBox(
+      height: 45,
+      child: MyntOutlinedButton(
+        label: "Reset Orders",
+        size: MyntButtonSize.large,
+        isFullWidth: true,
+        onPressed: () {
+          setState(() => _selected.clear());
+          orderProv.resetBasketOrderTracking(orderProv.selectedBsktName);
+          showResponsiveSuccess(context, "Basket reset. You can place orders again.");
+        },
+      ),
+    );
+    final showPrimary = toPlace.isNotEmpty || unsent.isNotEmpty;
     return Padding(
       padding: const EdgeInsets.all(10),
-      child: SizedBox(
-        height : 45, 
-        child: MyntPrimaryButton(
-          label: basketStatus == 'placing' ? "Placing..." : "Place Order",
-          size: MyntButtonSize.large,
-          isFullWidth: true,
-          isLoading: basketStatus == 'placing',
-          onPressed: hasMultipleExchanges
-              ? null
-              : basketStatus == 'placing'
-                  ? null
-                  : () async {
-                      await orderProv.placeBasketOrder(context,
-                          navigateToOrderBook: false);
-                    },
-          backgroundColor: hasMultipleExchanges ? Colors.grey : null,
-        ),
-      ),
+      child: !isBasketPlaced
+          ? SizedBox(width: double.infinity, child: primary)
+          : !showPrimary
+              ? SizedBox(width: double.infinity, child: reset)
+              : Row(
+                  children: [
+                    Expanded(child: primary),
+                    const SizedBox(width: 8),
+                    Expanded(child: reset),
+                  ],
+                ),
     );
   }
 
