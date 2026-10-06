@@ -30,6 +30,10 @@ import '../../../../sharedWidget/mynt_loader.dart';
 import 'create_basket_web.dart';
 // import '../../../web/market_watch/search_dialog_web.dart'; // Commented out - search bar integrated
 import '../../../web/order/place_order_screen_web.dart';
+import '../../market_watch/tv_chart/chart_iframe_guard.dart';
+import '../../../../utils/overlay_manager.dart';
+import 'dart:html' as html;
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 
 class BasketList extends ConsumerStatefulWidget {
   const BasketList({super.key});
@@ -1041,47 +1045,70 @@ class _BasketListState extends ConsumerState<BasketList> {
     await basketProvider.fetchBasketMargin();
     await basketProvider.chngBsktName(bsktName, context, true);
 
+    // Client ask: basket window floats like the place-order window — no dim,
+    // page behind stays usable, draggable, stays until closed.
     if (context.mounted) {
-      final colorScheme = shadcn.Theme.of(context).colorScheme;
-      showDialog(
-        context: context,
-        barrierDismissible: true,
-        builder: (BuildContext context) {
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.6,
-                maxHeight: MediaQuery.of(context).size.height * 0.8,
-              ),
-              decoration: BoxDecoration(
-                color: colorScheme.popover,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: colorScheme.border,
-                  width: 1,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: BasketScripList(
-                  bsktName: bsktName,
-                ),
-              ),
-            ),
-          );
-        },
-      );
+      _BasketWindow.show(context, bsktName);
     }
   }
+
+  // Previous modal dialog (dimmed backdrop), kept for rollback:
+    // if (context.mounted) {
+    //   final colorScheme = shadcn.Theme.of(context).colorScheme;
+    //   // Offset from the centred position; kept for this open only.
+    //   Offset dragOffset = Offset.zero;
+    //   showDialog(
+    //     context: context,
+    //     barrierDismissible: true,
+    //     builder: (BuildContext context) {
+    //       return StatefulBuilder(builder: (context, setDialogState) {
+    //       final screen = MediaQuery.of(context).size;
+    //       return Transform.translate(
+    //         offset: dragOffset,
+    //         child: Dialog(
+    //         backgroundColor: Colors.transparent,
+    //         elevation: 0,
+    //         child: Container(
+    //           constraints: BoxConstraints(
+    //             maxWidth: MediaQuery.of(context).size.width * 0.6,
+    //             maxHeight: MediaQuery.of(context).size.height * 0.8,
+    //           ),
+    //           decoration: BoxDecoration(
+    //             color: colorScheme.popover,
+    //             borderRadius: BorderRadius.circular(6),
+    //             border: Border.all(
+    //               color: colorScheme.border,
+    //               width: 1,
+    //             ),
+    //             boxShadow: [
+    //               BoxShadow(
+    //                 color: Colors.black.withOpacity(0.1),
+    //                 blurRadius: 8,
+    //                 offset: const Offset(0, 4),
+    //               ),
+    //             ],
+    //           ),
+    //           child: ClipRRect(
+    //             borderRadius: BorderRadius.circular(6),
+    //             child: BasketScripList(
+    //               bsktName: bsktName,
+    //               onDrag: (delta) => setDialogState(() {
+    //                 // Keep the header reachable on screen.
+    //                 final next = dragOffset + delta;
+    //                 dragOffset = Offset(
+    //                   next.dx.clamp(-screen.width * 0.45, screen.width * 0.45),
+    //                   next.dy.clamp(-screen.height * 0.1, screen.height * 0.8),
+    //                 );
+    //               }),
+    //             ),
+    //           ),
+    //         ),
+    //         ),
+    //       );
+    //       });
+    //     },
+    //   );
+    // }
 
   @override
   Widget build(BuildContext context) {
@@ -1178,7 +1205,12 @@ class _BasketListState extends ConsumerState<BasketList> {
 
 class BasketScripList extends ConsumerStatefulWidget {
   final String bsktName;
-  const BasketScripList({super.key, required this.bsktName});
+  /// Drag the dialog by its header (client ask: movable basket window).
+  final ValueChanged<Offset>? onDrag;
+  /// Closes the floating basket window; null = page route (pop).
+  final VoidCallback? onClose;
+  const BasketScripList(
+      {super.key, required this.bsktName, this.onDrag, this.onClose});
 
   @override
   ConsumerState<BasketScripList> createState() => _BasketScripListState();
@@ -1202,6 +1234,68 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   final ValueNotifier<int?> _hoveredColumnIndex = ValueNotifier<int?>(null);
   int? _sortColumnIndex;
   bool _sortAscending = true;
+  // TC_324.2: ticked rows by ORIGINAL basket index (table can be sorted).
+  // Sent rows can be ticked to delete only (Kite style).
+  final Set<int> _selected = {};
+
+  /// True once any row has been sent; rows are then placed one by one or by
+  /// selection. A fresh basket keeps the single Place Order.
+  bool _isSentMode(OrderProvider p) =>
+      _hasOrdersPlacedInBasket(widget.bsktName, p) ||
+      p.isBasketPlaced(p.selectedBsktName) ||
+      p.bsktScripList.any((e) => e['orderStatus'] != null);
+
+  List<int> _selectedUnsent(OrderProvider p) => [
+        for (final i in _selected)
+          if (i < p.bsktScripList.length &&
+              p.bsktScripList[i]['orderStatus'] == null)
+            i
+      ];
+
+  Widget _buildRowCheckbox(
+      {required bool value, required ValueChanged<bool> onChanged}) {
+    return SizedBox(
+      width: 28,
+      height: 28,
+      child: Checkbox(
+        value: value,
+        onChanged: (v) => onChanged(v ?? false),
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+        activeColor: resolveThemeColor(context,
+            dark: MyntColors.primaryDark, light: MyntColors.primary),
+      ),
+    );
+  }
+
+  void _closeWindow() {
+    if (widget.onClose != null) {
+      widget.onClose!();
+    } else {
+      Navigator.pop(context);
+    }
+  }
+
+  String get _currentBasketName {
+    final p = ref.read(orderProvider);
+    return p.selectedBsktName.isEmpty ? widget.bsktName : p.selectedBsktName;
+  }
+
+  Future<void> _deleteSelected() async {
+    final indices = _selected.toList();
+    if (indices.isEmpty) return;
+    final ok = await _confirmDelete(
+      'Delete Scripts',
+      indices.length == 1
+          ? 'Are you sure you want to delete 1 script?'
+          : 'Are you sure you want to delete ${indices.length} scripts?',
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _selected.clear());
+    final basket = ref.read(orderProvider);
+    await basket.removeBsktScrips(indices, _currentBasketName);
+    await basket.fetchBasketMargin();
+  }
 
   @override
   void initState() {
@@ -1282,7 +1376,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   // Builds a sortable header cell with sort indicator
   shadcn.TableCell buildHeaderCell(
       String label, int columnIndex, ThemesProvider theme, int totalColumns,
-      [bool alignRight = false]) {
+      [bool alignRight = false, Widget? leading]) {
     final isFirstColumn = columnIndex == 0;
     final isLastColumn = columnIndex == totalColumns - 1;
 
@@ -1327,6 +1421,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
             mainAxisAlignment:
                 alignRight ? MainAxisAlignment.end : MainAxisAlignment.start,
             children: [
+              if (leading != null) ...[leading, const SizedBox(width: 6)],
               if (alignRight && _sortColumnIndex == columnIndex)
                 Icon(
                   _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
@@ -1862,6 +1957,16 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     final ref = this.ref;
     final theme = ref.read(themeProvider);
     final basket = ref.watch(orderProvider);
+    // TC_324.2: Kite-style row placing once any row has been sent.
+    final sentMode = _isSentMode(basket);
+    _selected.removeWhere((i) => i >= basket.bsktScripList.length);
+    final toPlace = _selectedUnsent(basket);
+    final unsent = [
+      for (int i = 0; i < basket.bsktScripList.length; i++)
+        if (basket.bsktScripList[i]['orderStatus'] == null) i
+    ];
+    final isPlacing =
+        basket.basketOverallStatus[basket.selectedBsktName] == 'placing';
 
     // Calculate margins
     final preTradeMargin = basket.bsktScripList.isEmpty ||
@@ -1882,8 +1987,17 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         children: [
           Column(
             children: [
-              // 1. Header: "Basket order" + Close
-              Container(
+              // 1. Header: "Basket order" + Close — drag handle for the dialog
+              MouseRegion(
+                cursor: widget.onDrag != null
+                    ? SystemMouseCursors.move
+                    : MouseCursor.defer,
+                child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanUpdate: widget.onDrag == null
+                    ? null
+                    : (d) => widget.onDrag!(d.delta),
+                child: Container(
                 height: 50,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
@@ -1911,7 +2025,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       ),
                     ),
                     IconButton(
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: _closeWindow,
                       icon: Icon(
                         Icons.close,
                         size: 20,
@@ -1922,6 +2036,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       splashRadius: 20,
                     ),
                   ],
+                ),
+              ),
                 ),
               ),
 
@@ -2007,6 +2123,31 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     ),
 
                     const Spacer(),
+
+                    // TC_324.2: delete ticked rows (Kite "Delete (N)").
+                    if (_selected.isNotEmpty) ...[
+                      TextButton.icon(
+                        onPressed: isPlacing ? null : _deleteSelected,
+                        icon: Icon(
+                          Icons.delete_outline,
+                          size: 18,
+                          color: resolveThemeColor(context,
+                              dark: styles.MyntColors.lossDark,
+                              light: styles.MyntColors.loss),
+                        ),
+                        label: Text(
+                          "Delete (${_selected.length})",
+                          style: MyntWebTextStyles.body(
+                            context,
+                            fontWeight: MyntFonts.medium,
+                            color: resolveThemeColor(context,
+                                dark: styles.MyntColors.lossDark,
+                                light: styles.MyntColors.loss),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
 
                     // Search Bar
                     Container(
@@ -2184,8 +2325,24 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                             final isNumeric =
                                                 _isNumericColumnBasketItems(
                                                     label);
+                                            // TC_324.2: select-all beside Instrument once rows are sent.
+                                            final selectAll = index == 0
+                                                ? _buildRowCheckbox(
+                                                    value: sortedItems.isNotEmpty &&
+                                                        _selected.length ==
+                                                            sortedItems.length,
+                                                    onChanged: (v) => setState(() {
+                                                      _selected.clear();
+                                                      if (v) {
+                                                        _selected.addAll(List.generate(
+                                                            sortedItems.length,
+                                                            (i) => i));
+                                                      }
+                                                    }),
+                                                  )
+                                                : null;
                                             return buildHeaderCell(label,
-                                                index, theme, headers.length, isNumeric);
+                                                index, theme, headers.length, isNumeric, selectAll);
                                           }).toList(),
                                         ),
                                       ],
@@ -2314,6 +2471,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                                         originalIndex,
                                                         theme,
                                                         uniqueId,
+                                                        sentMode: sentMode,
                                                       ),
                                                     ),
                                                   );
@@ -2469,15 +2627,69 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     ),
                     const SizedBox(width: 16),
 
-                    // Place Order / Reset Orders Button
+                    // One flow (user): ticked -> "Place Selected (N)"; nothing
+                    // ticked -> "Place Order" for every row not sent yet.
+                    // Sent rows are never re-sent.
+                    if (!sentMode || toPlace.isNotEmpty || unsent.isNotEmpty) ...[
+                      SizedBox(
+                        height: 36,
+                        child: ElevatedButton(
+                          onPressed: isPlacing ||
+                                  basket.bsktScripList.isEmpty ||
+                                  _hasMultipleExchanges(basket.bsktScripList)
+                              ? null
+                              : () async {
+                                  if (toPlace.isNotEmpty) {
+                                    setState(() => _selected.removeAll(toPlace));
+                                    await basket.placeBasketItems(
+                                        context, toPlace);
+                                  } else if (!sentMode) {
+                                    // Fresh basket: original whole-basket path.
+                                    await basket.placeBasketOrder(context,
+                                        navigateToOrderBook: false);
+                                  } else {
+                                    await basket.placeBasketItems(
+                                        context, unsent);
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.isDarkMode
+                                ? MyntColors.secondary
+                                : MyntColors.primary,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(5)),
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            isPlacing
+                                ? "Placing..."
+                                : toPlace.isNotEmpty
+                                    ? "Place Selected (${toPlace.length})"
+                                    : "Place Order",
+                            style: WebTextStyles.custom(
+                                fontSize: 13,
+                                isDarkTheme: theme.isDarkMode,
+                                color: MyntColors.backgroundColor,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+
+                    // Reset Orders once anything has been sent. (The Place
+                    // Order branch below is now handled by the button above.)
+                    if (sentMode)
                     SizedBox(
                       height: 36,
-                      child: _hasOrdersPlacedInBasket(widget.bsktName, basket)
+                      child: sentMode
                           // Reset Orders - Outlined style matching the image
                           ? OutlinedButton(
                               onPressed: basket.bsktScripList.isEmpty
                                   ? null
                                   : () {
+                                      setState(() => _selected.clear());
                                       basket.resetBasketOrderTracking(
                                           widget.bsktName);
                                       ResponsiveSnackBar.showSuccess(context,
@@ -2615,10 +2827,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     Map<String, dynamic> item,
     int originalIndex,
     ThemesProvider theme,
-    String uniqueId,
-  ) {
+    String uniqueId, {
+    bool sentMode = false,
+  }) {
     if (column.startsWith('Instrument')) {
-      return _BasketInstrumentCell(
+      final cell = _BasketInstrumentCell(
         item: item,
         originalIndex: originalIndex,
         theme: theme,
@@ -2630,6 +2843,21 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
             _handleCopyBasketScript(item, index, theme),
         onEdit: (item, index, theme) =>
             _handleEditBasketScript(item, index, theme),
+        showDelete: false,
+      );
+      // One flow (user): tick box on every row from the start (sent rows:
+      // delete only).
+      return Row(
+        children: [
+          _buildRowCheckbox(
+            value: _selected.contains(originalIndex),
+            onChanged: (v) => setState(() {
+              v ? _selected.add(originalIndex) : _selected.remove(originalIndex);
+            }),
+          ),
+          const SizedBox(width: 6),
+          Expanded(child: cell),
+        ],
       );
     }
 
@@ -2828,7 +3056,41 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
           ),
         );
       case 'Status':
+        // TC_324.2: unsent row in a sent basket — no badge (was a misleading
+        // 'PENDING'); users tick it and use Place Selected. Per-row Place dropped.
+        if (item["orderStatus"] == null) {
+          return const SizedBox.shrink();
+        }
+        // if (item["orderStatus"] == null && sentMode) {
+        //   final basket = ref.read(orderProvider);
+        //   final isPlacing =
+        //       basket.basketOverallStatus[basket.selectedBsktName] == 'placing';
+        //   return SizedBox.expand(
+        //     child: Align(
+        //       alignment: Alignment.centerRight,
+        //       child: SizedBox(
+        //         height: 28,
+        //         child: MyntPrimaryButton(
+        //           label: "Place",
+        //           size: MyntButtonSize.small,
+        //           padding: const EdgeInsets.symmetric(horizontal: 14),
+        //           onPressed: isPlacing ||
+        //                   _hasMultipleExchanges(basket.bsktScripList)
+        //               ? null
+        //               : () => basket.placeBasketItems(context, [originalIndex]),
+        //         ),
+        //       ),
+        //     ),
+        //   );
+        // }
         final orderStatus = item["orderStatus"]?.toString().toUpperCase() ?? 'PENDING';
+        // TC_324.1 sibling: FAILED/REJECTED badge shows the reason on hover.
+        final reason = item["rejectionReason"]?.toString().trim() ?? '';
+        final statusTooltip =
+            (orderStatus == 'FAILED' || orderStatus == 'REJECTED') &&
+                    reason.isNotEmpty
+                ? reason
+                : orderStatus;
         Color statusColor;
         if (orderStatus == 'PLACED') {
           statusColor = resolveThemeColor(
@@ -2849,7 +3111,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
           child: Align(
             alignment: Alignment.centerRight,
             child: Tooltip(
-              message: orderStatus,
+              message: statusTooltip,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -3159,7 +3421,21 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     final symbol = DerivativeMaster.nameFor(
             item['exch']?.toString(), item['token']?.toString()) ??
         (item['symbol']?.replaceAll("-EQ", "") ?? 'N/A');
-    final shouldDelete = await showDialog<bool>(
+    final shouldDelete = await _confirmDelete(
+        'Delete Script', 'Are you sure you want to delete "$symbol"?');
+
+    if (shouldDelete == true && mounted) {
+      final basket = ref.read(orderProvider);
+      setState(() => _selected.clear());
+      // TC_324.2: removeBsktScrips re-saves row statuses after the index shift.
+      await basket.removeBsktScrips([index], _currentBasketName);
+      await basket.fetchBasketMargin();
+    }
+  }
+
+  /// Delete confirmation used by single-row and ticked-rows delete.
+  Future<bool?> _confirmDelete(String title, String message) {
+    return showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) {
         return Dialog(
@@ -3193,7 +3469,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'Delete Script',
+                        title,
                         style: MyntWebTextStyles.title(
                           context,
                           color: resolveThemeColor(context,
@@ -3230,7 +3506,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     children: [
                       // Confirmation text with symbol in quotes
                       Text(
-                        'Are you sure you want to delete "$symbol"?',
+                        message,
                         textAlign: TextAlign.center,
                         style: MyntWebTextStyles.body(
                           context,
@@ -3273,16 +3549,6 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         );
       },
     );
-
-    if (shouldDelete == true && mounted) {
-      final basket = ref.read(orderProvider);
-      await basket.removeBsktScrip(
-          index,
-          basket.selectedBsktName.isEmpty
-              ? widget.bsktName
-              : basket.selectedBsktName);
-      await basket.fetchBasketMargin();
-    }
   }
 
   Future<void> _handleDeleteBasket(ThemesProvider theme) async {
@@ -3427,7 +3693,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
       if (index != -1) {
         await basketProvider.removeBasket(index);
         if (mounted) {
-          Navigator.pop(context);
+          _closeWindow();
         }
       }
     }
@@ -3444,6 +3710,8 @@ class _BasketInstrumentCell extends ConsumerStatefulWidget {
   final Function(Map<String, dynamic>, int, ThemesProvider) onDelete;
   final Function(Map<String, dynamic>, int, ThemesProvider)? onCopy;
   final Function(Map<String, dynamic>, int, ThemesProvider)? onEdit;
+  /// One flow (user): delete via tick + Delete (N), so the hover 🗑 is off.
+  final bool showDelete;
 
   const _BasketInstrumentCell({
     required this.item,
@@ -3454,6 +3722,7 @@ class _BasketInstrumentCell extends ConsumerStatefulWidget {
     required this.onDelete,
     this.onCopy,
     this.onEdit,
+    this.showDelete = true,
   });
 
   @override
@@ -3574,7 +3843,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                 child: Tooltip(
                   message: '$displayText${exch.isNotEmpty ? ' $exch' : ''}',
                   child: Padding(
-                    padding: EdgeInsets.only(right: isRowHovered ? 100.0 : 0.0),
+                    padding: EdgeInsets.only(right: isRowHovered ? (widget.showDelete ? 100.0 : 70.0) : 0.0),
                     child: RichText(
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
@@ -3640,6 +3909,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                               ? () => widget.onEdit!(widget.item, widget.originalIndex, widget.theme)
                               : null,
                         ),
+                        if (widget.showDelete) ...[
                         const SizedBox(width: 6),
                         // Delete button
                         _buildActionButton(
@@ -3647,6 +3917,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                           iconColor: styles.MyntColors.loss,
                           onPressed: () => widget.onDelete(widget.item, widget.originalIndex, widget.theme),
                         ),
+                        ],
                       ],
                     ),
                   ),
@@ -3749,6 +4020,160 @@ class _BasketLtpCellState extends ConsumerState<_BasketLtpCell> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
+    );
+  }
+}
+
+
+/// Floating basket window (client ask): behaves like the place-order window —
+/// no dimmed backdrop, page behind stays usable, draggable by the header,
+/// stays open until closed. One basket window at a time.
+class _BasketWindow {
+  _BasketWindow._();
+
+  static OverlayEntry? _entry;
+
+  static void show(BuildContext context, String bsktName) {
+    close();
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final entry = OverlayEntry(
+      builder: (_) => _DraggableBasketWindow(bsktName: bsktName, onClose: close),
+    );
+    _entry = entry;
+    // Closed on logout / session expiry / account switch. Not via
+    // OverlayManager.register — that would close the basket whenever an
+    // order window opens from it.
+    OverlayManager.registerSheetCloser(close);
+    overlay.insert(entry);
+  }
+
+  static void close() {
+    OverlayManager.unregisterSheetCloser(close);
+    final entry = _entry;
+    _entry = null;
+    try {
+      if (entry != null && entry.mounted) entry.remove();
+    } catch (_) {}
+  }
+}
+
+class _DraggableBasketWindow extends StatefulWidget {
+  final String bsktName;
+  final VoidCallback onClose;
+  const _DraggableBasketWindow({required this.bsktName, required this.onClose});
+
+  @override
+  State<_DraggableBasketWindow> createState() => _DraggableBasketWindowState();
+}
+
+class _DraggableBasketWindowState extends State<_DraggableBasketWindow> {
+  Offset? _position; // null = centred on first build
+  double _maxX = 0;
+  double _maxY = 0;
+  bool _guardHeld = false;
+
+  // Several pointer moves can land in one frame — accumulate every delta onto
+  // the live position (using the last drawn position dropped most of them,
+  // so the window lagged the mouse). Clamped so the window stays on screen.
+  void _onDrag(Offset delta) {
+    final next = (_position ?? Offset.zero) + delta;
+    setState(() => _position = Offset(
+          next.dx.clamp(0.0, _maxX),
+          next.dy.clamp(0.0, _maxY),
+        ));
+  }
+
+  // Chart iframes sit above Flutter and steal mouse events — same guard as
+  // the place-order window. Does NOT touch the body cursor: resetting it on
+  // every hover wiped out Flutter's move cursor on the header.
+  void _setChartIframes(bool enabled) {
+    try {
+      for (final iframe in html.document.querySelectorAll('iframe')) {
+        if (iframe is html.IFrameElement && iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = enabled ? 'auto' : 'none';
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _onEnter() {
+    if (!_guardHeld) {
+      ChartIframeGuard.acquire();
+      _guardHeld = true;
+    }
+    _setChartIframes(false);
+  }
+
+  void _onExit() {
+    if (_guardHeld) {
+      ChartIframeGuard.release();
+      _guardHeld = false;
+    }
+    _setChartIframes(true);
+  }
+
+  @override
+  void dispose() {
+    if (_guardHeld) _onExit();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.of(context).size;
+    final colorScheme = shadcn.Theme.of(context).colorScheme;
+    // Same size as the old dialog's max constraints.
+    final width = screen.width * 0.6;
+    final height = screen.height * 0.8;
+    _maxX = (screen.width - width).clamp(0.0, double.infinity);
+    _maxY = (screen.height - height).clamp(0.0, double.infinity);
+    _position ??= Offset(_maxX / 2, _maxY / 2);
+    // Re-clamp on browser resize.
+    final pos = Offset(
+        _position!.dx.clamp(0.0, _maxX), _position!.dy.clamp(0.0, _maxY));
+
+    return Stack(
+      children: [
+        Positioned(
+          left: pos.dx,
+          top: pos.dy,
+          width: width,
+          height: height,
+          child: PointerInterceptor(
+            child: MouseRegion(
+              onEnter: (_) => _onEnter(),
+              onExit: (_) => _onExit(),
+              child: Material(
+                color: Colors.transparent,
+                elevation: 8,
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: colorScheme.popover,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: colorScheme.border, width: 1),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    // Own navigator so the window's popups (delete confirm,
+                    // edit name) open inside it instead of under it.
+                    child: Navigator(
+                      onGenerateRoute: (_) => PageRouteBuilder(
+                        transitionDuration: Duration.zero,
+                        pageBuilder: (_, __, ___) => BasketScripList(
+                          bsktName: widget.bsktName,
+                          onClose: widget.onClose,
+                          onDrag: _onDrag,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

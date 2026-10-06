@@ -28,7 +28,7 @@ class BasketSidebarWeb extends ConsumerStatefulWidget {
   final VoidCallback onClose;
 
   /// Static width of the sidebar
-  static const double sidebarWidth = 360;
+  static const double sidebarWidth = 400; // was 360 — user: slightly wider
 
   const BasketSidebarWeb({
     super.key,
@@ -40,6 +40,23 @@ class BasketSidebarWeb extends ConsumerStatefulWidget {
 }
 
 class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
+  // TC_324.2: ticked rows (Kite style). Sent rows can be ticked to delete only.
+  final Set<int> _selected = {};
+  String _selectedForBasket = '';
+
+  /// True once any row of this basket has been sent. Rows are then placed
+  /// one by one / by selection; a fresh basket keeps the single Place Order.
+  bool _isSentMode(OrderProvider p) =>
+      p.isBasketPlaced(p.selectedBsktName) ||
+      p.bsktScripList.any((e) => e['orderStatus'] != null);
+
+  List<int> _selectedUnsent(OrderProvider p) => [
+        for (final i in _selected)
+          if (i < p.bsktScripList.length &&
+              p.bsktScripList[i]['orderStatus'] == null)
+            i
+      ];
+
   @override
   void initState() {
     super.initState();
@@ -77,6 +94,13 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
     final orderProv = ref.watch(orderProvider);
     // Watch WebSocket data to get fresh LTP for basket items
     final socketDatas = ref.watch(websocketProvider).socketDatas;
+
+    // Selection belongs to one basket; drop stale indices after deletes.
+    if (_selectedForBasket != orderProv.selectedBsktName) {
+      _selected.clear();
+      _selectedForBasket = orderProv.selectedBsktName;
+    }
+    _selected.removeWhere((i) => i >= orderProv.bsktScripList.length);
 
     // Sidebar content with static width
     return Container(
@@ -391,8 +415,112 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
     }
 
     // Basket items list
+    final sentMode = _isSentMode(orderProvider);
     return Expanded(
-      child: ScrollConfiguration(
+      child: Column(
+        children: [
+          // TC_324.2: Select all + Delete (N) line, shown only while rows are ticked.
+          if (_selected.isNotEmpty) ...[
+            _buildSelectionBar(orderProvider),
+            const ListDivider(),
+          ],
+          Expanded(child: _buildItemsList(theme, orderProvider, socketDatas, sentMode)),
+        ],
+      ),
+    );
+  }
+
+  /// TC_324.2: "Select all" + "Delete (N)" line above the list (Kite style),
+  /// shown only while rows are ticked.
+  Widget _buildSelectionBar(OrderProvider orderProv) {
+    final total = orderProv.bsktScripList.length;
+    final allTicked = total > 0 && _selected.length == total;
+    final isPlacing =
+        orderProv.basketOverallStatus[orderProv.selectedBsktName] == 'placing';
+    return Padding(
+      padding: const EdgeInsets.only(left: 8, right: 16, top: 2, bottom: 2),
+      child: Row(
+        children: [
+          _buildRowCheckbox(
+            value: allTicked,
+            onChanged: (v) => setState(() {
+              _selected.clear();
+              if (v) _selected.addAll(List.generate(total, (i) => i));
+            }),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            "Select all",
+            style: MyntWebTextStyles.para(
+              context,
+              color: shadcn.Theme.of(context).colorScheme.mutedForeground,
+            ),
+          ),
+          const Spacer(),
+          if (_selected.isNotEmpty)
+            InkWell(
+              onTap: isPlacing ? null : () => _deleteSelected(orderProv),
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.delete_outline,
+                      size: 16,
+                      color: resolveThemeColor(context,
+                          dark: MyntColors.lossDark, light: MyntColors.loss),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      "Delete (${_selected.length})",
+                      style: MyntWebTextStyles.para(
+                        context,
+                        fontWeight: MyntFonts.medium,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.lossDark, light: MyntColors.loss),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRowCheckbox(
+      {required bool value, required ValueChanged<bool> onChanged}) {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: Checkbox(
+        value: value,
+        onChanged: (v) => onChanged(v ?? false),
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+        activeColor: resolveThemeColor(context,
+            dark: MyntColors.primaryDark, light: MyntColors.primary),
+      ),
+    );
+  }
+
+  Future<void> _deleteSelected(OrderProvider orderProv) async {
+    final indices = _selected.toList();
+    setState(() => _selected.clear());
+    await orderProv.removeBsktScrips(indices, orderProv.selectedBsktName);
+    await orderProv.fetchBasketMargin();
+    if (mounted) {
+      showResponsiveSuccess(context,
+          indices.length == 1 ? "Removed from basket" : "${indices.length} items removed from basket");
+    }
+  }
+
+  Widget _buildItemsList(ThemesProvider theme, OrderProvider orderProvider,
+      Map socketDatas, bool sentMode) {
+    return ScrollConfiguration(
         behavior: const MaterialScrollBehavior().copyWith(scrollbars: false),
         child: RawScrollbar(
           thumbVisibility: false,
@@ -426,25 +554,54 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
             script['option'] = "${spilitSymbol["option"]}";
           }
 
-          return _buildScriptCard(theme, script, index, orderProvider, socketDatas);
+          return _buildScriptCard(
+              theme, script, index, orderProvider, socketDatas, sentMode);
         },
           ),
+        ),
+    );
+  }
+
+  Widget _buildScriptCard(ThemesProvider theme, Map script, int index,
+      OrderProvider orderProv, Map socketDatas, bool sentMode) {
+    // **FIX: Get fresh LTP from WebSocket data instead of stale script['lp']**
+    final token = script['token']?.toString();
+    final socketData = token != null ? socketDatas[token] : null;
+    final freshLtp = socketData?['lp']?.toString() ?? script['lp']?.toString() ?? '0.00';
+    final isPlacing =
+        orderProv.basketOverallStatus[orderProv.selectedBsktName] == 'placing';
+    return InkWell(
+      onTap: () => _handleBasketItemTap(index, script, orderProv),
+      child: Container(
+        padding: EdgeInsets.only(
+            left: 8, right: 16, top: 12, bottom: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // One flow (user): tick box on every row from the start; sent rows
+            // can be ticked to delete only.
+            ...[
+              _buildRowCheckbox(
+                value: _selected.contains(index),
+                onChanged: (v) => setState(() {
+                  v ? _selected.add(index) : _selected.remove(index);
+                }),
+              ),
+              const SizedBox(width: 4),
+            ],
+            Expanded(
+              child: _buildScriptCardBody(
+                  script, index, orderProv, freshLtp, sentMode, isPlacing),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildScriptCard(
-      ThemesProvider theme, Map script, int index, OrderProvider orderProv, Map socketDatas) {
-    // **FIX: Get fresh LTP from WebSocket data instead of stale script['lp']**
-    final token = script['token']?.toString();
-    final socketData = token != null ? socketDatas[token] : null;
-    final freshLtp = socketData?['lp']?.toString() ?? script['lp']?.toString() ?? '0.00';
-    return InkWell(
-      onTap: () => _handleBasketItemTap(index, script, orderProv),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
+  Widget _buildScriptCardBody(Map script, int index, OrderProvider orderProv,
+      String freshLtp, bool sentMode, bool isPlacing) {
+    return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Row 1: Symbol and status/delete
@@ -484,32 +641,62 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
                   children: [
                     // Status badge
                     if (script['orderStatus'] != null)
-                      Container(
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color:
-                              _getItemStatusColor(script['orderStatus']).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          _getItemStatusText(script['orderStatus']),
-                          style: MyntWebTextStyles.para(
-                            context,
-                            fontWeight: MyntFonts.medium,
-                            color: _getItemStatusColor(script['orderStatus']),
+                      // TC_324.1: hover a FAILED/REJECTED badge for the reason,
+                      // same as the Executed orders status cell. Empty message
+                      // = no tooltip.
+                      Tooltip(
+                        message: _isRejectedStatus(script['orderStatus'])
+                            ? (script['rejectionReason']?.toString().trim() ?? '')
+                            : '',
+                        child: Container(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color:
+                                _getItemStatusColor(script['orderStatus']).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            _getItemStatusText(script['orderStatus']),
+                            style: MyntWebTextStyles.para(
+                              context,
+                              fontWeight: MyntFonts.medium,
+                              color: _getItemStatusColor(script['orderStatus']),
+                            ),
                           ),
                         ),
                       ),
-                    // Delete button
-                    if (script['orderStatus'] == null ||
-                        !_isOrderPlaced(script['orderStatus']))
+                    // TC_324.2: per-row Place dropped — tick rows, use Place Selected (user, Kite-like).
+//                     if (script['orderStatus'] == null && sentMode)
+//                       SizedBox(
+//                         height: 26,
+//                         child: MyntPrimaryButton(
+//                           label: "Place",
+//                           size: MyntButtonSize.small,
+//                           padding: const EdgeInsets.symmetric(horizontal: 12),
+//                           onPressed: isPlacing ||
+//                                   _hasMultipleExchanges(orderProv.bsktScripList)
+//                               ? null
+//                               : () => orderProv.placeBasketItems(context, [index]),
+//                         ),
+//                       ),
+                    // Delete button — retired (user: one flow; delete via tick +
+                    // Delete (N)). Kept for rollback.
+                    if (false &&
+                        (script['orderStatus'] == null ||
+                            !_isOrderPlaced(script['orderStatus'])))
                       Material(
                         color: Colors.transparent,
                         shape:CircleBorder(),
                         child: InkWell(
                           onTap: () async {
-                              await orderProv.removeBsktScrip(index, orderProv.selectedBsktName);
+                              if (sentMode) {
+                                // Re-saves row statuses after the index shift.
+                                setState(() => _selected.clear());
+                                await orderProv.removeBsktScrips([index], orderProv.selectedBsktName);
+                              } else {
+                                await orderProv.removeBsktScrip(index, orderProv.selectedBsktName);
+                              }
                               await orderProv.fetchBasketMargin();
                               showResponsiveSuccess(context, "Removed from basket");
                             },
@@ -603,49 +790,47 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
               ],
             ),
 
-            // Rejection reason
-            if (script['rejectionReason'] != null &&
-                script['orderStatus'] == 'failed')
-              Container(
-                margin: const EdgeInsets.only(top: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: resolveThemeColor(
-                    context,
-                    dark: MyntColors.lossDark,
-                    light: MyntColors.loss,
-                  ).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.error_outline,
-                      color: resolveThemeColor(
-                        context,
-                        dark: MyntColors.lossDark,
-                        light: MyntColors.loss,
-                      ),
-                      size: 12,
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        script['rejectionReason'],
-                        style: MyntWebTextStyles.caption(
-                          context,
-                          darkColor: MyntColors.lossDark,
-                          lightColor: MyntColors.loss,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            // Rejection reason — TC_324.1: moved to the status badge tooltip (Kite style).
+//             if (script['rejectionReason'] != null &&
+//                 script['orderStatus'] == 'failed')
+//               Container(
+//                 margin: const EdgeInsets.only(top: 6),
+//                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+//                 decoration: BoxDecoration(
+//                   color: resolveThemeColor(
+//                     context,
+//                     dark: MyntColors.lossDark,
+//                     light: MyntColors.loss,
+//                   ).withOpacity(0.1),
+//                   borderRadius: BorderRadius.circular(4),
+//                 ),
+//                 child: Row(
+//                   children: [
+//                     Icon(
+//                       Icons.error_outline,
+//                       color: resolveThemeColor(
+//                         context,
+//                         dark: MyntColors.lossDark,
+//                         light: MyntColors.loss,
+//                       ),
+//                       size: 12,
+//                     ),
+//                     const SizedBox(width: 4),
+//                     Expanded(
+//                       child: Text(
+//                         script['rejectionReason'],
+//                         style: MyntWebTextStyles.caption(
+//                           context,
+//                           darkColor: MyntColors.lossDark,
+//                           lightColor: MyntColors.loss,
+//                         ),
+//                         overflow: TextOverflow.ellipsis,
+//                       ),
+//                     ),
+//                   ],
+//                 ),
+//               ),
           ],
-        ),
-      ),
     );
   }
 
@@ -653,48 +838,74 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
     final hasMultipleExchanges = _hasMultipleExchanges(orderProv.bsktScripList);
     final basketStatus =
         orderProv.basketOverallStatus[orderProv.selectedBsktName] ?? '';
-    final isBasketPlaced = orderProv.isBasketPlaced(orderProv.selectedBsktName);
+    // TC_324.2: any sent row (not only the overall flag) keeps the sent footer,
+    // so a whole-basket Place Order can never re-send old rows.
+    final isBasketPlaced = _isSentMode(orderProv);
 
-    // Show reset button if basket has been placed
-    if (isBasketPlaced) {
-      return Padding(
-        padding: const EdgeInsets.all(10),
-        child: SizedBox(
-          width: double.infinity,
-          height : 45, 
-          child: MyntOutlinedButton(
-            label: "Reset Orders",
-            size: MyntButtonSize.large,
-            isFullWidth: true,
-            onPressed: () {
-              orderProv.resetBasketOrderTracking(orderProv.selectedBsktName);
-              showResponsiveSuccess(context, "Basket reset. You can place orders again.");
-            },
-          ),
-        ),
-      );
-    }
-    // Place order button
+    // One flow (user): ticked rows -> "Place Selected (N)"; nothing ticked ->
+    // "Place Order" for every row not sent yet. Sent rows are never re-sent.
+    // "Reset Orders" sits beside it once anything has been sent.
+    final isPlacing = basketStatus == 'placing';
+    final toPlace = _selectedUnsent(orderProv);
+    final unsent = [
+      for (int i = 0; i < orderProv.bsktScripList.length; i++)
+        if (orderProv.bsktScripList[i]['orderStatus'] == null) i
+    ];
+    final primary = SizedBox(
+      height: 45,
+      child: MyntPrimaryButton(
+        label: isPlacing
+            ? "Placing..."
+            : toPlace.isNotEmpty
+                ? "Place Selected (${toPlace.length})"
+                : "Place Order",
+        size: MyntButtonSize.large,
+        isFullWidth: true,
+        isLoading: isPlacing,
+        onPressed: hasMultipleExchanges || isPlacing
+            ? null
+            : () async {
+                if (toPlace.isNotEmpty) {
+                  setState(() => _selected.removeAll(toPlace));
+                  await orderProv.placeBasketItems(context, toPlace);
+                } else if (!isBasketPlaced) {
+                  // Fresh basket: original whole-basket path.
+                  await orderProv.placeBasketOrder(context,
+                      navigateToOrderBook: false);
+                } else {
+                  await orderProv.placeBasketItems(context, unsent);
+                }
+              },
+        backgroundColor: hasMultipleExchanges ? Colors.grey : null,
+      ),
+    );
+    final reset = SizedBox(
+      height: 45,
+      child: MyntOutlinedButton(
+        label: "Reset Orders",
+        size: MyntButtonSize.large,
+        isFullWidth: true,
+        onPressed: () {
+          setState(() => _selected.clear());
+          orderProv.resetBasketOrderTracking(orderProv.selectedBsktName);
+          showResponsiveSuccess(context, "Basket reset. You can place orders again.");
+        },
+      ),
+    );
+    final showPrimary = toPlace.isNotEmpty || unsent.isNotEmpty;
     return Padding(
       padding: const EdgeInsets.all(10),
-      child: SizedBox(
-        height : 45, 
-        child: MyntPrimaryButton(
-          label: basketStatus == 'placing' ? "Placing..." : "Place Order",
-          size: MyntButtonSize.large,
-          isFullWidth: true,
-          isLoading: basketStatus == 'placing',
-          onPressed: hasMultipleExchanges
-              ? null
-              : basketStatus == 'placing'
-                  ? null
-                  : () async {
-                      await orderProv.placeBasketOrder(context,
-                          navigateToOrderBook: false);
-                    },
-          backgroundColor: hasMultipleExchanges ? Colors.grey : null,
-        ),
-      ),
+      child: !isBasketPlaced
+          ? SizedBox(width: double.infinity, child: primary)
+          : !showPrimary
+              ? SizedBox(width: double.infinity, child: reset)
+              : Row(
+                  children: [
+                    Expanded(child: primary),
+                    const SizedBox(width: 8),
+                    Expanded(child: reset),
+                  ],
+                ),
     );
   }
 
@@ -745,6 +956,11 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
       default:
         return status.toUpperCase();
     }
+  }
+
+  bool _isRejectedStatus(String status) {
+    final s = status.toLowerCase();
+    return s == 'failed' || s == 'rejected';
   }
 
   bool _isOrderPlaced(String status) {
