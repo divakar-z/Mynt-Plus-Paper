@@ -395,20 +395,17 @@ class _TradingPreferencesScreenWebState
                         final warningIcon = resolveThemeColor(context,
                             dark: MyntColors.warningDark, light: MyntColors.warning);
                         return Container(
-                          width: double.infinity,
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
                             color: warningBg,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Row(
-                                children: [
                                   Icon(Icons.info_outline, color: warningIcon, size: 20),
                                   const SizedBox(width: 12),
-                                  Expanded(
+                                  Flexible(
                                     child: Text(
                                       'Esign Pending - Click here to complete',
                                       style: MyntWebTextStyles.bodySmall(context,
@@ -416,12 +413,7 @@ class _TradingPreferencesScreenWebState
                                           .copyWith(decoration: TextDecoration.none),
                                     ),
                                   ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
+                                  const SizedBox(width: 16),
                                   _segmentEsignLoading
                                       ? SizedBox(
                                           width: 20,
@@ -471,8 +463,6 @@ class _TradingPreferencesScreenWebState
                                             ),
                                           ),
                                         ),
-                                ],
-                              ),
                             ],
                           ),
                         );
@@ -486,13 +476,13 @@ class _TradingPreferencesScreenWebState
                         final successText = resolveThemeColor(context,
                             dark: MyntColors.successDark, light: MyntColors.success);
                         return Container(
-                          width: double.infinity,
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
                             color: successBg,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(Icons.hourglass_top_rounded, size: 20, color: successText),
                               const SizedBox(width: 12),

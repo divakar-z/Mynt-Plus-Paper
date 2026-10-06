@@ -1,7 +1,10 @@
+import 'dart:html' as html;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../../locator/locator.dart';
@@ -14,6 +17,7 @@ import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_text_fields_web.dart';
 import '../../../../sharedWidget/snack_bar.dart';
+import '../../market_watch/tv_chart/chart_iframe_guard.dart';
 import 'support_download.dart';
 
 /// Opens the raise-a-ticket form.
@@ -58,8 +62,9 @@ Future<void> showRaiseTicketDialog(
     // the dialog would silently bin a half-written description — closing has
     // to be something the client meant to do.
     barrierDismissible: false,
-    builder: (dialogContext) =>
-        _RaiseTicketDialog(screen: screen, onViewTickets: onViewTickets),
+    builder: (dialogContext) => _ChartIframeShield(
+      child: _RaiseTicketDialog(screen: screen, onViewTickets: onViewTickets),
+    ),
   ).then((_) {
     // Covers every exit: the close button, Done on the success state, and a
     // system back. Clears the text, the attachments, the validation errors and
@@ -67,6 +72,77 @@ Future<void> showRaiseTicketDialog(
     // and red text from the attempt that was abandoned.
     provider.reset();
   });
+}
+
+/// Same wrapper as the profile dropdown: the TradingView chart is an iframe
+/// that swallows pointer events above Flutter, so the dialog sits in a
+/// [PointerInterceptor] and the chart iframes are disabled while it is open.
+class _ChartIframeShield extends StatefulWidget {
+  const _ChartIframeShield({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_ChartIframeShield> createState() => _ChartIframeShieldState();
+}
+
+class _ChartIframeShieldState extends State<_ChartIframeShield> {
+  @override
+  void initState() {
+    super.initState();
+    ChartIframeGuard.acquire();
+    _disableAllChartIframes();
+  }
+
+  void _disableAllChartIframes() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement && iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'none';
+          iframe.style.cursor = 'default';
+        }
+      }
+      html.document.body?.style.cursor = 'default';
+    } catch (e) {
+    }
+  }
+
+  void _enableAllChartIframes() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement && iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'auto';
+          iframe.style.cursor = '';
+        }
+      }
+      html.document.body?.style.cursor = '';
+    } catch (e) {
+    }
+  }
+
+  @override
+  void dispose() {
+    ChartIframeGuard.release();
+    _enableAllChartIframes();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // No onExit re-enable here (unlike the dropdown): the dialog is modal, so
+    // the chart behind it must stay inert until it closes.
+    return PointerInterceptor(
+      child: MouseRegion(
+        onHover: (_) => _disableAllChartIframes(),
+        child: Listener(
+          onPointerMove: (_) => _disableAllChartIframes(),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
 }
 
 class _RaiseTicketDialog extends ConsumerWidget {

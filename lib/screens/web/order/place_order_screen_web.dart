@@ -4555,8 +4555,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                           clientData?.pOA ==
                                                               'Y';
 
-                                                      if (!DDPIActive ||
-                                                          !POAActive) {
+                                                      if (DDPIActive ||
+                                                          POAActive) {
                                                         final pendingStatuses =
                                                             profileDetails
                                                                 .pendingStatusList;
