@@ -722,14 +722,12 @@ class _ProfileSectionScreenWebState
                   color: warningBg,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
                         Icon(Icons.info_outline, color: warningIcon, size: 20),
                         const SizedBox(width: 12),
-                        Expanded(
+                        Flexible(
                           child: Text(
                             'Esign Pending - Click here to complete',
                             style: MyntWebTextStyles.bodySmall(context,
@@ -737,12 +735,7 @@ class _ProfileSectionScreenWebState
                                 .copyWith(decoration: TextDecoration.none),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
+                        const SizedBox(width: 16),
                         _bankEsignLoading
                             ? SizedBox(
                                 width: 20, height: 20,
@@ -786,8 +779,6 @@ class _ProfileSectionScreenWebState
                                   ),
                                 ),
                               ),
-                      ],
-                    ),
                   ],
                 ),
               );
@@ -808,6 +799,7 @@ class _ProfileSectionScreenWebState
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.hourglass_top_rounded, size: 20,
                         color: successText),
@@ -1630,14 +1622,12 @@ class _ProfileSectionScreenWebState
                   color: warningBg,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
                         Icon(Icons.info_outline, color: warningIcon, size: 20),
                         const SizedBox(width: 12),
-                        Expanded(
+                        Flexible(
                           child: Text(
                             'Esign Pending - Click here to complete',
                             style: MyntWebTextStyles.bodySmall(context,
@@ -1645,12 +1635,7 @@ class _ProfileSectionScreenWebState
                                 .copyWith(decoration: TextDecoration.none),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
+                        const SizedBox(width: 16),
                         _ddpiEsignLoading
                             ? SizedBox(
                                 width: 20, height: 20,
@@ -1698,8 +1683,6 @@ class _ProfileSectionScreenWebState
                                   ),
                                 ),
                               ),
-                      ],
-                    ),
                   ],
                 ),
               );
@@ -1721,6 +1704,7 @@ class _ProfileSectionScreenWebState
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.hourglass_top_rounded, size: 20, color: successText),
                     const SizedBox(width: 12),
@@ -2527,14 +2511,12 @@ color: resolveThemeColor(context,
                   color: warningBg,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
                         Icon(Icons.info_outline, color: warningIcon, size: 20),
                         const SizedBox(width: 12),
-                        Expanded(
+                        Flexible(
                           child: Text(
                             'Esign Pending - Click here to complete',
                             style: MyntWebTextStyles.bodySmall(context,
@@ -2542,12 +2524,7 @@ color: resolveThemeColor(context,
                                 .copyWith(decoration: TextDecoration.none),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
+                        const SizedBox(width: 16),
                         _mtfEsignLoading
                             ? SizedBox(
                                 width: 20, height: 20,
@@ -2607,8 +2584,6 @@ color: resolveThemeColor(context,
                                   ),
                                 ),
                               ),
-                      ],
-                    ),
                   ],
                 ),
               );
@@ -2630,6 +2605,7 @@ color: resolveThemeColor(context,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.hourglass_top_rounded, size: 20, color: successText),
                     const SizedBox(width: 12),
@@ -3380,14 +3356,12 @@ color: resolveThemeColor(context,
                     color: warningBg,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
                           Icon(Icons.info_outline, color: warningIcon, size: 20),
                           const SizedBox(width: 12),
-                          Expanded(
+                          Flexible(
                             child: Text(
                               'Esign Pending - Click here to complete',
                               style: MyntWebTextStyles.bodySmall(context,
@@ -3395,12 +3369,7 @@ color: resolveThemeColor(context,
                                   .copyWith(decoration: TextDecoration.none),
                             ),
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
+                          const SizedBox(width: 16),
                           _closureEsignLoading
                               ? SizedBox(
                                   width: 20, height: 20,
@@ -3448,8 +3417,6 @@ color: resolveThemeColor(context,
                                     ),
                                   ),
                                 ),
-                        ],
-                      ),
                     ],
                   ),
                 );
@@ -3471,6 +3438,7 @@ color: resolveThemeColor(context,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(Icons.hourglass_top_rounded, size: 20, color: successText),
                       const SizedBox(width: 12),
@@ -4779,10 +4747,11 @@ color: resolveThemeColor(context,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.info_outline, color: warningIcon, size: 20),
               const SizedBox(width: 12),
-              Expanded(
+              Flexible(
                 child: Text(
                   'Esign Pending - Click here to complete',
                   style: MyntWebTextStyles.bodySmall(context,
@@ -4790,12 +4759,7 @@ color: resolveThemeColor(context,
                       .copyWith(decoration: TextDecoration.none),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
+              const SizedBox(width: 16),
               Material(
                 color: Colors.transparent,
                 child: InkWell(

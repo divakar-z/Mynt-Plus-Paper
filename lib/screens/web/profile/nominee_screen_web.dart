@@ -1405,12 +1405,9 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         color: warningBg,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
               Icon(Icons.info_outline, color: warningIcon, size: 20),
               const SizedBox(width: 12),
               Flexible(
@@ -1423,14 +1420,9 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                       .copyWith(decoration: TextDecoration.none),
                 ),
               ),
-            ],
-          ),
           // Action buttons only when e-sign is still pending (not after sign).
           if (!inProcess) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
+                const SizedBox(width: 16),
                 _esignLoading
                     ? SizedBox(
                         width: 20,
@@ -1470,8 +1462,6 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                     ),
                   ),
                 ),
-              ],
-            ),
           ],
         ],
       ),
