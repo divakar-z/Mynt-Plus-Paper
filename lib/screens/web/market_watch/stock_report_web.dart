@@ -298,6 +298,14 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
     int dataPointsToShow;
 
     switch (selectedTimeframe) {
+      // TC_419: 3Y / 5Y from the 5Y EOD data already fetched on open.
+      case "5Y":
+        dataPointsToShow = allPriceData.length;
+        break;
+      case "3Y":
+        // Approximate 750 trading days in 3 years
+        dataPointsToShow = 750;
+        break;
       case "1Y":
         // Approximate 250 trading days in a year
         dataPointsToShow = 250;
@@ -2397,12 +2405,17 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemBuilder: (context, index) {
-                    final timeframes = ["1W", "1M", "3M", "1Y"];
+                    final timeframes = _chartTimeframes(marketWatch);
                     final timeframe = timeframes[index];
                     final isSelected =
                         marketWatch.selectedTimeframe == timeframe;
 
-                    final returnPercentage = _getTechnicalReturnPercentage(marketWatch.returnsGridview, timeframe);
+                    // TC_419: no 3Y/5Y return from the backend — leave blank
+                    // (the helper would fall back to the 1W figure).
+                    final hasReturn = timeframe != "3Y" && timeframe != "5Y";
+                    final returnPercentage = hasReturn
+                        ? _getTechnicalReturnPercentage(marketWatch.returnsGridview, timeframe)
+                        : " "; // keeps chip height equal
 
                     final percentValue = double.tryParse(returnPercentage.replaceAll(RegExp(r'[+%]'), '')) ?? 0.0;
                     final isPositive = percentValue >= 0;
@@ -2472,7 +2485,7 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                   separatorBuilder: (context, index) {
                     return const SizedBox(width: 8);
                   },
-                  itemCount: 4, // 1W, 1M, 3M, 1Y
+                  itemCount: _chartTimeframes(marketWatch).length, // 1W, 1M, 3M, 1Y (+3Y, 5Y)
                 ),
               ),
             ],
@@ -2540,6 +2553,8 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                           ];
 
                           switch (marketWatch.selectedTimeframe) {
+                            case "5Y":
+                            case "3Y":
                             case "1Y":
                               
                               final monthName = months[date.month - 1];
@@ -2872,6 +2887,20 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
         size: MyntLoaderSize.xl,
       ),
     );
+  }
+
+  /// TC_419: 3Y / 5Y only when the stock has more than ~1 year of EOD history
+  /// (a recent listing would just repeat the 1Y chart). Shorter-than-range
+  /// history plots from the listing date, like Kite.
+  List<String> _chartTimeframes(MarketWatchProvider marketWatch) {
+    final hasLongHistory = marketWatch.eodChartData.length > 250;
+    return [
+      "1W",
+      "1M",
+      "3M",
+      "1Y",
+      if (hasLongHistory) ...["3Y", "5Y"],
+    ];
   }
 
   String _getTechnicalReturnPercentage(List returnsGridview, String timeframe) {
