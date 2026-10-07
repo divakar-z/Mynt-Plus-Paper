@@ -461,10 +461,15 @@ mixin MarketWatchApi on ApiCore {
       String alertTypeVal, String remark) async {
     try {
       final uri = Uri.parse(apiLinks.setAlert);
+      // Free-text remark: JSON-escape (quotes, backslashes) then URL-encode
+      // (&, %, +) so characters like "!@#$%^&*()_+" don't break jData.
+      final jsonRemark = jsonEncode(remark);
+      final encodedRemark = UrlUtils.encodeParameter(
+          jsonRemark.substring(1, jsonRemark.length - 1));
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","d":"$value","remarks":"$remark"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","d":"$value","remarks":"$encodedRemark"}&jKey=${prefs.clientSession}''');
 
       // log("SetAlert => ${res.body}");
       final json = jsonDecode(res.body);

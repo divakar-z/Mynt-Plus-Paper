@@ -14,11 +14,15 @@ import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../sharedWidget/common_text_fields_web.dart';
 import '../../../res/res.dart';
 import '../../../routes/web_router.dart' show webNavigatorKey;
+import '../market_watch/set_alert_web.dart' show showModifyAlertDialog;
 
 class PendingAlertDetailScreenWeb extends ConsumerStatefulWidget {
   final AlertPendingModel alert;
+  // Opened from the row's Modify option — jump straight to the value field.
+  final bool focusValueOnOpen;
 
-  const PendingAlertDetailScreenWeb({super.key, required this.alert});
+  const PendingAlertDetailScreenWeb(
+      {super.key, required this.alert, this.focusValueOnOpen = false});
 
   @override
   ConsumerState<PendingAlertDetailScreenWeb> createState() =>
@@ -48,23 +52,72 @@ class _PendingAlertDetailScreenWebState
     valueCtrl.addListener(() {
       modifiedValue = valueCtrl.text;
     });
+
+    if (widget.focusValueOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _focusValueField());
+    }
+  }
+
+  final GlobalKey _valueFieldKey = GlobalKey();
+
+  bool get _isPriceAlert =>
+      widget.alert.aiT == "LTP_A" || widget.alert.aiT == "LTP_B";
+
+  // Scroll the value field into view, focus it and select its text so the
+  // user can type the new value straight away.
+  void _focusValueField() {
+    if (!mounted) return;
+    final fieldContext = _valueFieldKey.currentContext;
+    if (fieldContext != null) {
+      Scrollable.ensureVisible(fieldContext,
+          duration: const Duration(milliseconds: 200), alignment: 0.5);
+    }
+    _valueFocusNode.requestFocus();
+    valueCtrl.selection =
+        TextSelection(baseOffset: 0, extentOffset: valueCtrl.text.length);
   }
 
   // Validation logic — mirrors validatesetalret() in set_alert_web.dart so
   // the Modify Alert dialog has the same checks (empty / zero / LTP
   // already crossed) and same BRD wording as Set Alert.
   validateAlertValue(String value) {
+    // Percentage-change alerts hold a % value, not a price — word the
+    // generic errors to match.
+    final unit =
+        (widget.alert.aiT == "CH_PER_A" || widget.alert.aiT == "CH_PER_B")
+            ? "percentage"
+            : "price";
     try {
       if (value.isEmpty) {
         // Suppress the empty error until the user has actually interacted
         // — see _valueTouched note above. The button's onPressed flips
         // the flag if the user clicks with an empty field.
-        errorText = _valueTouched ? "Alert Price cannot be empty" : "";
+        errorText = _valueTouched ? "Enter an alert $unit" : "";
         return;
       }
 
-      if (value == "0") {
-        errorText = "Alert Price cannot be 0";
+      // Shape and range checks — same rules as Set Alert. Oversized
+      // values overflow on the backend and create an instantly-triggered
+      // alert with a garbage target.
+      // "400." and ".5" are accepted (as Kite does) and normalised before
+      // sending; only a lone "." is rejected.
+      if (!RegExp(r'^(\d+\.?\d*|\.\d+)$').hasMatch(value)) {
+        errorText = "Enter a valid $unit";
+        return;
+      }
+      final double parsedValue = double.parse(value);
+      if (parsedValue <= 0) {
+        errorText = "Alert $unit must be greater than 0";
+        return;
+      }
+      if (parsedValue >= 1000000000) {
+        errorText = unit == "price"
+            ? "Alert price must be less than ₹1,00,00,00,000"
+            : "Alert percentage must be less than 1,00,00,00,000";
+        return;
+      }
+      if (value.contains('.') && value.split('.')[1].length > 4) {
+        errorText = "Alert $unit can have at most 4 decimal places";
         return;
       }
 
@@ -84,13 +137,13 @@ class _PendingAlertDetailScreenWebState
 
         // Validation based on condition
         if (enteredValue == currentLtp) {
-          errorText = "Alert Price cannot be same as LTP";
+          errorText = "Alert price cannot be the same as LTP";
         } else if (widget.alert.aiT == "LTP_A" && enteredValue <= currentLtp) {
           errorText =
-              "The Current LTP (₹$formattedLtp) is already above ₹$formattedEnteredValue";
+              "LTP ₹$formattedLtp is already above ₹$formattedEnteredValue. Enter a price above ₹$formattedLtp";
         } else if (widget.alert.aiT == "LTP_B" && enteredValue >= currentLtp) {
           errorText =
-              "The Current LTP (₹$formattedLtp) is already below ₹$formattedEnteredValue";
+              "LTP ₹$formattedLtp is already below ₹$formattedEnteredValue. Enter a price below ₹$formattedLtp";
         } else {
           errorText = "";
         }
@@ -99,7 +152,7 @@ class _PendingAlertDetailScreenWebState
         errorText = "";
       }
     } catch (e) {
-      errorText = "Please enter a valid number";
+      errorText = "Enter a valid $unit";
     }
   }
 
@@ -194,7 +247,10 @@ class _PendingAlertDetailScreenWebState
                         _buildAlertDetailsSection(theme),
                         const SizedBox(height: 16),
                         // Modify Value Field
-                        _buildModifyValueField(theme),
+                        // Price alerts are edited in the Set Alert dialog
+                        // (Modify Alert button); only legacy % alerts keep
+                        // the inline field.
+                        if (!_isPriceAlert) _buildModifyValueField(theme),
                       ],
                     ),
                   ),
@@ -296,25 +352,46 @@ class _PendingAlertDetailScreenWebState
               (isModifying || isCancelling)
                   ? null
                   : () async {
+                      // Price alerts: close this sheet and open the Set
+                      // Alert dialog pre-filled with the alert.
+                      if (_isPriceAlert) {
+                        final navigatorContext =
+                            webNavigatorKey.currentContext;
+                        shadcn.closeSheet(context);
+                        if (navigatorContext != null &&
+                            navigatorContext.mounted) {
+                          showModifyAlertDialog(
+                              navigatorContext, ref, widget.alert);
+                        }
+                        return;
+                      }
+
                       // Click counts as interaction — make sure the
                       // empty-state error can surface if the field is blank.
+                      // "400." -> "400", ".5" -> "0.5" so the backend gets
+                      // a clean number.
+                      var sendValue = modifiedValue.trim();
+                      if (sendValue.startsWith('.')) sendValue = '0$sendValue';
+                      if (sendValue.endsWith('.')) {
+                        sendValue =
+                            sendValue.substring(0, sendValue.length - 1);
+                      }
+
+                      // Value not changed yet: the user is asking to edit,
+                      // so take them to the value field instead of closing
+                      // the sheet. Nothing is sent to the broker.
+                      final originalValue = (widget.alert.d ?? "").trim();
+                      if (sendValue == originalValue) {
+                        // if (mounted) shadcn.closeSheet(context);
+                        _focusValueField();
+                        return;
+                      }
+
                       setState(() {
                         _valueTouched = true;
                         validateAlertValue(valueCtrl.text);
                       });
                       if (errorText.isNotEmpty) return;
-
-                      // No-op guard: if the user clicked Modify Alert without
-                      // actually changing the value, don't call the broker
-                      // (the API would no-op too) and don't fire the success
-                      // toast — nothing was modified, so claiming a
-                      // successful modify would be misleading. Just close
-                      // the sheet silently.
-                      final originalValue = (widget.alert.d ?? "").trim();
-                      if (modifiedValue.trim() == originalValue) {
-                        if (mounted) shadcn.closeSheet(context);
-                        return;
-                      }
 
                       setState(() {
                         isModifying = true;
@@ -324,7 +401,7 @@ class _PendingAlertDetailScreenWebState
                         await ref.read(marketWatchProvider).fetchmodifyalert(
                               "${widget.alert.exch}",
                               "${widget.alert.tsym}",
-                              modifiedValue,
+                              sendValue,
                               "${widget.alert.aiT}",
                               "${widget.alert.alId}",
                               context,
@@ -615,6 +692,7 @@ class _PendingAlertDetailScreenWebState
         widget.alert.aiT == "CH_PER_A" || widget.alert.aiT == "CH_PER_B";
 
     return Column(
+      key: _valueFieldKey,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
