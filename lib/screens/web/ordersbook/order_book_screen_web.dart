@@ -635,6 +635,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                 onPressed: _isRefreshing ? null : _refreshOrders,
                 theme: theme,
                 isLoading: _isRefreshing,
+                tooltip: 'Refresh',
               ),
             ],
           );
@@ -709,6 +710,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
     required VoidCallback? onPressed,
     required ThemesProvider theme,
     bool isLoading = false,
+    String? tooltip,
   }) {
     final buttonSize = context.responsive<double>(
       mobile: 32,
@@ -721,7 +723,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
       desktop: 28,
     );
 
-    return Container(
+    final button = Container(
       width: buttonSize,
       height: buttonSize,
       decoration: BoxDecoration(
@@ -759,6 +761,9 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
         ),
       ),
     );
+    // Same pattern as the Positions page refresh button.
+    if (tooltip == null) return button;
+    return Tooltip(message: tooltip, child: button);
   }
 
   // Download button for orders (PDF & Excel)
