@@ -102,10 +102,13 @@ class _SetAlertWebState extends State<SetAlertWeb> {
     final alert = widget.modifyAlert!;
     final newType = alertValue == "Below" ? "LTP_B" : "LTP_A";
     final newValue = _normalizedValue(valueCtrl.text);
+    final newRemarks = remark.text.trim();
 
     // Nothing changed — close without calling the broker or showing a
     // false "modified" toast.
-    if (newValue == (alert.d ?? "").trim() && newType == alert.aiT) {
+    if (newValue == (alert.d ?? "").trim() &&
+        newType == alert.aiT &&
+        newRemarks == (alert.remarks ?? "").trim()) {
       setState(() => _handlesetalert = false);
       Navigator.of(context).pop();
       return;
@@ -119,6 +122,7 @@ class _SetAlertWebState extends State<SetAlertWeb> {
             newType,
             "${alert.alId}",
             context,
+            remarks: newRemarks,
           );
       if (!mounted) return;
       if (result?.stat == "OI replaced") {
@@ -740,9 +744,9 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                 child: MyntTextField(
                                   controller: remark,
                                   placeholder: 'Remarks',
-                                  // Modify API doesn't take remarks, so an
-                                  // edit here wouldn't be saved.
-                                  readOnly: _isModify,
+                                  // TC_469.1: editable in Modify too; sent
+                                  // as remarks to ModifyAlert.
+                                  // readOnly: _isModify,
                                   height: 80,
                                   maxLines: 3,
                                   textCapitalization: TextCapitalization.none,

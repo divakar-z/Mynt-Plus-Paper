@@ -2083,6 +2083,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       onPressed: () {
                         showDialog(
                           context: context,
+                          // Open inside the basket window's own navigator, not under it.
+                          useRootNavigator: false,
                           barrierDismissible: true,
                           builder: (BuildContext context) {
                             final theme = ref.read(themeProvider);
@@ -2110,17 +2112,18 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       },
                       theme: theme,
                     ),
-                    const SizedBox(width: 4),
-                    _buildBasketHoverButton(
-                      icon: Icons.delete_outline,
-                      color: resolveThemeColor(
-                        context,
-                        dark: styles.MyntColors.textSecondaryDark,
-                        light: styles.MyntColors.textSecondary,
-                      ),
-                      onPressed: () => _handleDeleteBasket(theme),
-                      theme: theme,
-                    ),
+                    // TC_123: basket delete lives on the basket row hover only.
+                    // const SizedBox(width: 4),
+                    // _buildBasketHoverButton(
+                    //   icon: Icons.delete_outline,
+                    //   color: resolveThemeColor(
+                    //     context,
+                    //     dark: styles.MyntColors.textSecondaryDark,
+                    //     light: styles.MyntColors.textSecondary,
+                    //   ),
+                    //   onPressed: () => _handleDeleteBasket(theme),
+                    //   theme: theme,
+                    // ),
 
                     const Spacer(),
 
@@ -2605,26 +2608,46 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w700),
                               ),
+                              // TC_105: refresh sits with the margins it
+                              // re-fetches, away from Reset Orders.
+                              const SizedBox(width: 4),
+                              IconButton(
+                                tooltip: 'Refresh margin',
+                                onPressed: () async {
+                                  await basket.fetchBasketMargin();
+                                },
+                                icon: Icon(
+                                  Icons.refresh,
+                                  size: 18,
+                                  color: resolveThemeColor(
+                                    context,
+                                    dark: MyntColors.textSecondaryDark,
+                                    light: MyntColors.textSecondary,
+                                  ),
+                                ),
+                                splashRadius: 16,
+                              ),
                             ],
                           ),
                         ),
 
-                    // Refresh Button
-                    IconButton(
-                      onPressed: () async {
-                        await basket.fetchBasketMargin();
-                      },
-                      icon: Icon(
-                        Icons.refresh,
-                        size: 22,
-                        color: resolveThemeColor(
-                          context,
-                          dark: MyntColors.textSecondaryDark,
-                          light: MyntColors.textSecondary,
-                        ),
-                      ),
-                      splashRadius: 20,
-                    ),
+                    // TC_105: moved into the margin group above.
+                    // // Refresh Button
+                    // IconButton(
+                    //   onPressed: () async {
+                    //     await basket.fetchBasketMargin();
+                    //   },
+                    //   icon: Icon(
+                    //     Icons.refresh,
+                    //     size: 22,
+                    //     color: resolveThemeColor(
+                    //       context,
+                    //       dark: MyntColors.textSecondaryDark,
+                    //       light: MyntColors.textSecondary,
+                    //     ),
+                    //   ),
+                    //   splashRadius: 20,
+                    // ),
                     const SizedBox(width: 16),
 
                     // One flow (user): ticked -> "Place Selected (N)"; nothing
@@ -3437,6 +3460,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   Future<bool?> _confirmDelete(String title, String message) {
     return showDialog<bool>(
       context: context,
+      // Open inside the basket window's own navigator, not under it.
+      useRootNavigator: false,
       builder: (BuildContext dialogContext) {
         return Dialog(
           backgroundColor: Colors.transparent,
@@ -3551,6 +3576,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     );
   }
 
+  // Kept for rollback: header delete icon commented out (TC_123).
+  // ignore: unused_element
   Future<void> _handleDeleteBasket(ThemesProvider theme) async {
     final basketProvider = ref.read(orderProvider);
     final bsktName = basketProvider.selectedBsktName.isEmpty
@@ -3559,6 +3586,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
 
     final shouldDelete = await showDialog<bool>(
       context: context,
+      // Open inside the basket window's own navigator, not under it.
+      useRootNavigator: false,
       builder: (BuildContext dialogContext) {
         return Dialog(
           backgroundColor: Colors.transparent,
