@@ -5005,10 +5005,12 @@ getOptionawait(String exch, String token) {
   }
 
   Future fetchmodifyalert(String exch, String tysm, String value,
-      String alertTypeVal, String alid, BuildContext context) async {
+      String alertTypeVal, String alid, BuildContext context,
+      {String? remarks}) async {
     try {
-      _modifyalertmodel =
-          await api.getmodifyalert(exch, tysm, value, alertTypeVal, alid);
+      _modifyalertmodel = await api.getmodifyalert(
+          exch, tysm, value, alertTypeVal, alid,
+          remarks: remarks);
 
       if (_modifyalertmodel!.stat! == "OI replaced") {
         ConstantName.sessCheck = true;
