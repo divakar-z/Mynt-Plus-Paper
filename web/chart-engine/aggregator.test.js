@@ -1,8 +1,8 @@
 'use strict';
 
 const assert = require('assert');
-const { bucketCandles, ingestTickIntoBucket, SOURCE_INTERVAL_FOR_MINUTES } =
-    require('./aggregator');
+const { bucketCandles, ingestTickIntoBucket, SOURCE_INTERVAL_FOR_MINUTES,
+        _calendarBucketEnd } = require('./aggregator');
 
 let pass = 0, fail = 0;
 function t(name, fn) {
@@ -130,6 +130,88 @@ t('resets baseline on huge jump (dv > 50k) without applying', () => {
   assert.strictEqual(r, 'skipped');
   assert.strictEqual(state.prevCumVol, 99999); // baseline reset
   assert.strictEqual(candles[0].v, 10);        // candle unchanged
+});
+
+console.log('weekly / monthly live ticks');
+// Epoch seconds for an IST wall-clock time (IST = UTC+05:30).
+const istSec = (y, mo, d, hh = 0, mm = 0) =>
+    Date.UTC(y, mo - 1, d, hh, mm) / 1000 - 19800;
+// Daily EOD history Mon 5 – Wed 7 Oct 2026, as the chart receives it.
+const octDays = [
+  { ts: istSec(2026, 10, 5, 9, 15), o: 22532.40, h: 22776.10, l: 22397.10, c: 22650, v: 0 },
+  { ts: istSec(2026, 10, 6, 9, 15), o: 22650,    h: 22700,    l: 22500,    c: 22560, v: 0 },
+  { ts: istSec(2026, 10, 7, 9, 15), o: 22560,    h: 22640,    l: 22540,    c: 22603.05, v: 0 },
+];
+// NIFTY 50 tick on Thu 8 Oct, 10:00 IST (index: no volume, price-only).
+const thuTick = { lp: 22238.20, v: 0, ft: istSec(2026, 10, 8, 10, 0), _lpOnly: true,
+                  dayOpen: 22599.05, dayHigh: 22599.05, dayLow: 22190 };
+
+t('weekly: a tick later in the week updates that week\'s bar (no new Thursday bar)', () => {
+  const candles = bucketCandles(octDays, 10080);
+  assert.strictEqual(candles.length, 1);
+  assert.strictEqual(candles[0].ts, istSec(2026, 10, 5));   // Monday 00:00 IST
+  const r = ingestTickIntoBucket(candles, thuTick,
+      { prevCumVol: null, prevPrice: null, prevMs: null }, 10080 * 60_000);
+  assert.strictEqual(r, 'applied');
+  assert.strictEqual(candles.length, 1);
+  assert.strictEqual(candles[0].ts, istSec(2026, 10, 5));
+  assert.strictEqual(candles[0].o, 22532.40);  // the week's open stays
+  assert.strictEqual(candles[0].c, 22238.20);  // close = live price
+  assert.strictEqual(candles[0].l, 22190);     // widened by today's low
+  assert.strictEqual(candles[0].h, 22776.10);
+});
+
+t('monthly: a tick later in the month updates that month\'s bar (no new bar on the 4th)', () => {
+  const sep30 = { ts: istSec(2026, 9, 30, 9, 15), o: 22400, h: 22500, l: 22300, c: 22420, v: 0 };
+  const candles = bucketCandles([sep30, ...octDays], 43200);
+  assert.strictEqual(candles.length, 2);
+  assert.strictEqual(candles[1].ts, istSec(2026, 10, 1));   // 1 Oct 00:00 IST
+  const r = ingestTickIntoBucket(candles, thuTick,
+      { prevCumVol: null, prevPrice: null, prevMs: null }, 43200 * 60_000);
+  assert.strictEqual(r, 'applied');
+  assert.strictEqual(candles.length, 2);
+  assert.strictEqual(candles[1].ts, istSec(2026, 10, 1));
+  assert.strictEqual(candles[1].o, 22532.40);
+  assert.strictEqual(candles[1].c, 22238.20);
+});
+
+t('weekly: the first tick of a new week opens a bar on that Monday', () => {
+  const candles = bucketCandles(octDays, 10080);
+  const mon12 = { ...thuTick, ft: istSec(2026, 10, 12, 9, 20) };
+  ingestTickIntoBucket(candles, mon12,
+      { prevCumVol: null, prevPrice: null, prevMs: null }, 10080 * 60_000);
+  assert.strictEqual(candles.length, 2);
+  assert.strictEqual(candles[1].ts, istSec(2026, 10, 12));  // Monday 00:00 IST
+});
+
+t('monthly: the first tick of a new month opens a bar on the 1st', () => {
+  const candles = bucketCandles(octDays, 43200);
+  const nov2 = { ...thuTick, ft: istSec(2026, 11, 2, 9, 20) };
+  ingestTickIntoBucket(candles, nov2,
+      { prevCumVol: null, prevPrice: null, prevMs: null }, 43200 * 60_000);
+  assert.strictEqual(candles.length, 2);
+  assert.strictEqual(candles[1].ts, istSec(2026, 11, 1));   // 1 Nov 00:00 IST
+});
+
+t('weekly: a tick just after midnight IST Monday belongs to the new week', () => {
+  // 00:30 IST Monday is still Sunday in UTC — the bucket must follow IST.
+  const candles = bucketCandles(octDays, 10080);
+  const mon0030 = { ...thuTick, ft: istSec(2026, 10, 12, 0, 30) };
+  ingestTickIntoBucket(candles, mon0030,
+      { prevCumVol: null, prevPrice: null, prevMs: null }, 10080 * 60_000);
+  assert.strictEqual(candles.length, 2);
+  assert.strictEqual(candles[1].ts, istSec(2026, 10, 12));
+});
+
+t('bar end: a monthly bar closes on the next 1st, whatever the month length', () => {
+  assert.strictEqual(_calendarBucketEnd(istSec(2026, 10, 1), 43200), istSec(2026, 11, 1));
+  assert.strictEqual(_calendarBucketEnd(istSec(2027, 2, 1), 43200), istSec(2027, 3, 1));
+  assert.strictEqual(_calendarBucketEnd(istSec(2026, 12, 1), 43200), istSec(2027, 1, 1));
+});
+
+t('bar end: weekly closes the next Monday, daily one day later', () => {
+  assert.strictEqual(_calendarBucketEnd(istSec(2026, 10, 5), 10080), istSec(2026, 10, 12));
+  assert.strictEqual(_calendarBucketEnd(istSec(2026, 10, 8, 5, 30), 1440), istSec(2026, 10, 9, 5, 30));
 });
 
 console.log();
