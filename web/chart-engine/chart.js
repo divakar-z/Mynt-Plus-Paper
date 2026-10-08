@@ -5176,9 +5176,13 @@ class Chart {
     // Skip the countdown once the last bar's own close time has passed — a
     // frozen "0:00" must never linger (e.g. just after close, before the chart
     // flips to the "Market closed" state).
+    // Daily+ bars close on the calendar (next Monday / next month's 1st), not
+    // after a fixed 7 or 30 days.
+    const _cdLastTs = cdEnabled ? (this.candles[this.candles.length - 1].ts || 0) : 0;
     const _cdLeft = cdEnabled
-        ? ((this.candles[this.candles.length - 1].ts || 0) +
-            this.timeframeMinutes * 60) - Math.floor(Date.now() / 1000)
+        ? (this.timeframeMinutes >= 1440
+            ? _calendarBucketEnd(_cdLastTs, this.timeframeMinutes)
+            : _cdLastTs + this.timeframeMinutes * 60) - Math.floor(Date.now() / 1000)
         : 0;
     if (cdEnabled && _cdLeft > 0) {
       const left = _cdLeft;
