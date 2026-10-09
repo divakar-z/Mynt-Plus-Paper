@@ -1101,8 +1101,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
             _isCoverOrderEnabled = true;
             _isBracketOrderEnabled = false;
           } else if (orderRawValue['prd'] == 'B') {
-            // Bracket Order - both Cover and Bracket checkboxes should be ticked
-            _isCoverOrderEnabled = true;
+            // Bracket Order - only Bracket ticked. The two boxes are
+            // either/or (see their onChanged); both ticked resolved to Cover
+            // (H) in chngOrderType, so an edited BO saved as CO.
+            // _isCoverOrderEnabled = true;
+            // _isBracketOrderEnabled = true;
+            _isCoverOrderEnabled = false;
             _isBracketOrderEnabled = true;
           } else {
             // Default fallback (for any other product codes)
@@ -1140,7 +1144,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
     // Check if market is closed and auto-enable AMO (except for CO-BO which doesn't support AMO)
     _isMarketClosed = _checkMarketClosed();
-    if (_isMarketClosed && !checkRawValue && orderType != "CO - BO") {
+    // TC_236: a fresh add from basket search carries raw args but no 'amo'
+    // key (edit/duplicate rows do), so it auto-ticks AMO like a new order.
+    final isFreshBasketAdd =
+        widget.isBasket == "Basket" && orderRawValue['amo'] == null;
+    if (_isMarketClosed &&
+        (!checkRawValue || isFreshBasketAdd) &&
+        orderType != "CO - BO") {
       _afterMarketOrder = true;
       // isAdvancedOptionClicked = true; // Auto-expand advanced section
     }
