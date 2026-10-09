@@ -474,26 +474,24 @@ class _DepthSideState extends State<_DepthSide> {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: 'Use this price',
-      waitDuration: const Duration(milliseconds: 500),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onTap,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            decoration: BoxDecoration(
-              color: _hover
-                  ? widget.hoverColor.withValues(alpha: 0.08)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: widget.child,
+    // No "Use this price" tooltip (user: it got in the way); the hand cursor,
+    // hover tint and the hint line under the bar say the row is clickable.
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: BoxDecoration(
+            color: _hover
+                ? widget.hoverColor.withValues(alpha: 0.08)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
           ),
+          child: widget.child,
         ),
       ),
     );
@@ -624,17 +622,38 @@ class OrderDepthToggle extends StatelessWidget {
           child: Tooltip(
             message: active ? 'Hide market depth' : 'Market depth',
             child: Material(
-              color:
-                  active ? color.withValues(alpha: 0.10) : Colors.transparent,
+              // color:
+              //     active ? color.withValues(alpha: 0.10) : Colors.transparent,
+              // Closed: light grey chip (same as the hover look) so the icon
+              // stands out at rest; open: light blue.
+              color: color.withValues(alpha: active ? 0.10 : 0.08),
               borderRadius: BorderRadius.circular(6),
               child: InkWell(
                 borderRadius: BorderRadius.circular(6),
                 onTap: depth.toggle,
+                // child: SizedBox(
+                //   width: 28,
+                //   height: 26,
+                //   child: Icon(Icons.stacked_bar_chart_rounded,
+                //       size: 18, color: color),
+                // ),
+                // Order-book ladder: bid bars in blue, ask bars in red.
                 child: SizedBox(
                   width: 28,
                   height: 26,
-                  child: Icon(Icons.stacked_bar_chart_rounded,
-                      size: 18, color: color),
+                  child: Center(
+                    child: CustomPaint(
+                      size: const Size(18, 18),
+                      painter: _DepthIconPainter(
+                        bid: resolveThemeColor(context,
+                            dark: MyntColors.primaryDark,
+                            light: MyntColors.primary),
+                        ask: resolveThemeColor(context,
+                            dark: MyntColors.lossDark,
+                            light: MyntColors.tertiary),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -643,6 +662,43 @@ class OrderDepthToggle extends StatelessWidget {
       },
     );
   }
+}
+
+/// Depth icon: bid bars to the left in blue, ask bars to the right in red
+/// (drawn on a 24-unit grid, scaled to the given size).
+class _DepthIconPainter extends CustomPainter {
+  final Color bid;
+  final Color ask;
+
+  const _DepthIconPainter({required this.bid, required this.ask});
+
+  // [y, bid bar start x, ask bar end x]; bars meet near the centre (11 / 13).
+  static const _rows = [
+    [6.0, 6.0, 19.0],
+    [10.0, 3.0, 16.0],
+    [14.0, 7.0, 21.0],
+    [18.0, 5.0, 18.0],
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.width / 24;
+    Paint pen(Color c) => Paint()
+      ..color = c
+      ..strokeWidth = 2.2 * s
+      ..strokeCap = StrokeCap.round;
+    final bidPen = pen(bid);
+    final askPen = pen(ask);
+    for (final r in _rows) {
+      final y = r[0] * s;
+      canvas.drawLine(Offset(11 * s, y), Offset(r[1] * s, y), bidPen);
+      canvas.drawLine(Offset(13 * s, y), Offset(r[2] * s, y), askPen);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DepthIconPainter old) =>
+      old.bid != bid || old.ask != ask;
 }
 
 /// Where a window and its depth panel go. The panel sits on the right when it
