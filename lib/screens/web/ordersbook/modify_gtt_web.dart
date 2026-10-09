@@ -550,6 +550,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     final closeNotifier = _ModifyGttDialogCloseNotifier.of(context);
 
     Widget headerContent = Container(
+      // Depth panel lines its header up with this row.
+      key: OrderDepthScope.of(context)?.anchorRowKey,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: theme.isDarkMode ? MyntColors.overlayBgDark : const Color(0xfffafbff),
@@ -1742,7 +1744,9 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
         if (depthPlacement.panelLeft != null)
           Positioned(
             left: depthPlacement.panelLeft,
-            top: top,
+            // top: top,
+            // Level with the depth icon, not the window's top edge.
+            top: top + _depth.anchorOffset,
             child: _guardChartIframes(OrderDepthDock(controller: _depth)),
           ),
         // Actual dialog
@@ -1774,6 +1778,7 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
                     borderRadius: BorderRadius.circular(5),
                     color: theme.isDarkMode ? MyntColors.backgroundColorDark : MyntColors.backgroundColor,
                     child: Container(
+                      key: _depth.windowKey,
                       width: dialogWidth,
                       height: dialogHeight,
                       decoration: BoxDecoration(

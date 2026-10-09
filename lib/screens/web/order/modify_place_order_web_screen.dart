@@ -533,6 +533,8 @@ class _ModifyPlaceOrderScreenState
                       _ModifyPlaceOrderDialogCloseNotifier.of(context);
 
                   Widget headerContent = Container(
+                    // Depth panel lines its header up with this row.
+                    key: OrderDepthScope.of(context)?.anchorRowKey,
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
@@ -3719,7 +3721,9 @@ class _DraggableModifyPlaceOrderScreenDialogState
         if (depthPlacement.panelLeft != null)
           Positioned(
             left: depthPlacement.panelLeft,
-            top: top,
+            // top: top,
+            // Level with the depth icon, not the window's top edge.
+            top: top + _depth.anchorOffset,
             child: _guardChartIframes(OrderDepthDock(controller: _depth)),
           ),
         // Actual dialog
@@ -3751,6 +3755,7 @@ class _DraggableModifyPlaceOrderScreenDialogState
                     borderRadius: BorderRadius.circular(5),
                     color: resolveThemeColor(context, dark: MyntColors.backgroundColorDark, light: MyntColors.backgroundColor),
                     child: Container(
+                      key: _depth.windowKey,
                       width: dialogWidth,
                       height: dialogHeight,
                       decoration: BoxDecoration(

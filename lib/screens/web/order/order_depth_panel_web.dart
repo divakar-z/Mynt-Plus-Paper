@@ -26,6 +26,9 @@ class OrderDepthPanelWeb extends ConsumerStatefulWidget {
   final ValueChanged<String>? onPriceTap;
   final VoidCallback onClose;
 
+  /// Top border (1) + header (44): where the header's bottom line sits.
+  static const double headerExtent = 45;
+
   const OrderDepthPanelWeb({
     super.key,
     required this.token,
@@ -157,19 +160,33 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
     final buyPer = total == 0 ? 0.0 : tbq / total * 100;
     final sellPer = total == 0 ? 0.0 : tsq / total * 100;
 
-    return Container(
+    // Same card as the order window beside it: 5px corners, divider border,
+    // elevation 8, window background.
+    // return Container(
+    //   width: 330,
+    //   decoration: BoxDecoration(
+    //     color: resolveThemeColor(context,
+    //         dark: MyntColors.dialogDark, light: MyntColors.dialog),
+    //     borderRadius: BorderRadius.circular(8),
+    //     boxShadow: [
+    //       BoxShadow(
+    //         color: Colors.black.withValues(alpha: 0.16),
+    //         blurRadius: 28,
+    //         offset: const Offset(0, 8),
+    //       ),
+    //     ],
+    //   ),
+    return Material(
+      elevation: 8,
+      borderRadius: BorderRadius.circular(5),
+      color: resolveThemeColor(context,
+          dark: MyntColors.backgroundColorDark,
+          light: MyntColors.backgroundColor),
+      child: Container(
       width: 330,
       decoration: BoxDecoration(
-        color: resolveThemeColor(context,
-            dark: MyntColors.dialogDark, light: MyntColors.dialog),
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.16),
-            blurRadius: 28,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: divider),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -374,6 +391,7 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
           ),
         ],
       ),
+      ),
     );
   }
 
@@ -525,6 +543,25 @@ class OrderDepthController extends ChangeNotifier {
   /// Null where a tapped price has nowhere to go (GTT).
   ValueChanged<String>? onPriceTap;
 
+  /// Key on the order window's card, so the depth icon can measure where it
+  /// sits inside the window.
+  final GlobalKey windowKey = GlobalKey();
+
+  /// Key on the row that holds the depth icon (Place order: the tab row;
+  /// Modify / Modify GTT: the header), so the panel's header line can sit on
+  /// the same y as that row's bottom line.
+  final GlobalKey anchorRowKey = GlobalKey();
+
+  /// Distance from the window's top to where the panel starts (its header
+  /// line meets the icon row's bottom line).
+  double anchorOffset = 0;
+
+  void setAnchor(double dy) {
+    if ((dy - anchorOffset).abs() < 0.5) return;
+    anchorOffset = dy;
+    notifyListeners();
+  }
+
   bool get showing => _open && available && token.isNotEmpty;
 
   void toggle() {
@@ -610,6 +647,26 @@ class OrderDepthToggle extends StatelessWidget {
       listenable: depth,
       builder: (context, _) {
         if (!depth.available) return const SizedBox.shrink();
+        // Tell the shell where the panel should start inside the window:
+        // header line on the icon row's bottom line, else level with the icon.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          final window = depth.windowKey.currentContext?.findRenderObject();
+          if (window is! RenderBox || !window.attached) return;
+          final row = depth.anchorRowKey.currentContext?.findRenderObject();
+          if (row is RenderBox && row.attached) {
+            final rowBottom = row
+                .localToGlobal(Offset(0, row.size.height), ancestor: window)
+                .dy;
+            depth.setAnchor((rowBottom - OrderDepthPanelWeb.headerExtent)
+                .clamp(0.0, double.infinity));
+            return;
+          }
+          final icon = context.findRenderObject();
+          if (icon is! RenderBox || !icon.attached) return;
+          depth.setAnchor(
+              icon.localToGlobal(Offset.zero, ancestor: window).dy);
+        });
         final active = depth.open;
         final color = active
             ? resolveThemeColor(context,
@@ -706,7 +763,8 @@ class _DepthIconPainter extends CustomPainter {
 /// panel stays on screen at the right.
 class OrderDepthPlacement {
   static const double panelWidth = 330;
-  static const double gap = 8;
+  // static const double gap = 8;
+  static const double gap = 4;
 
   final double windowLeft;
 

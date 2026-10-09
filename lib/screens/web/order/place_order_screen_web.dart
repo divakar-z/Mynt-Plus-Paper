@@ -1882,6 +1882,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
                           // if (widget.orderArg.exchange != "NCOM") ...[
                           Container(
+                              // Depth panel lines its header up with this row.
+                              key: OrderDepthScope.of(context)?.anchorRowKey,
                               height: 35,
                               padding: const EdgeInsets.only(top: 4),
                               decoration: BoxDecoration(
@@ -9765,7 +9767,9 @@ class _DraggablePlaceOrderScreenDialogState
         if (depthPlacement.panelLeft != null)
           Positioned(
             left: depthPlacement.panelLeft,
-            top: top,
+            // top: top,
+            // Level with the depth icon, not the window's top edge.
+            top: top + _depth.anchorOffset,
             child: _guardChartIframes(OrderDepthDock(controller: _depth)),
           ),
         Positioned(
@@ -9796,6 +9800,7 @@ class _DraggablePlaceOrderScreenDialogState
                     borderRadius: BorderRadius.circular(5),
                     color: resolveThemeColor(context, dark: MyntColors.backgroundColorDark, light: MyntColors.backgroundColor),
                     child: Container(
+                      key: _depth.windowKey,
                       width: dialogWidth,
                       height: dialogHeight,
                       decoration: BoxDecoration(
