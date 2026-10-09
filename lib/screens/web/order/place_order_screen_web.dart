@@ -61,6 +61,7 @@ import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:mynt_plus/utils/overlay_manager.dart';
 import 'package:mynt_plus/utils/custom_navigator.dart';
 import 'package:mynt_plus/routes/route_names.dart';
+import 'order_depth_panel_web.dart';
 
 
 /// Rejects a keystroke that would make a numeric field invalid, keeping the
@@ -1230,6 +1231,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   @override
   Widget build(BuildContext context) {
+    _syncDepthPanel();
     return PopScope(
       canPop: false, // Allows back navigation
       onPopInvokedWithResult: (didPop, result) async {
@@ -1892,6 +1894,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                   ),
                                 ),
                               ),
+                              child: Row(children: [
+                              Expanded(
                               child: ListView.builder(
                                   scrollDirection: Axis.horizontal,
                                   itemBuilder: (context, index) {
@@ -2026,6 +2030,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                     );
                                   },
                                   itemCount: orderTypes.length)),
+                              // Market depth toggle (Task #9168)
+                              _buildDepthToggle(),
+                              ])),
                           // ]
                           const SizedBox(height: 10),
                           // AMO Alert Banner - shown when market is closed
@@ -9378,6 +9385,45 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     }
   }
 
+  // ---------------- Market depth panel (Task #9168) ----------------
+
+  /// Tells the window shell which scrip the depth panel shows (it follows the
+  /// NSE/BSE switch) and whether a tapped price can be used on this tab.
+  /// Runs after the frame so the shell is not rebuilt mid-build.
+  void _syncDepthPanel() {
+    OrderDepthController.syncFrom(
+      context,
+      token: widget.scripInfo.token ?? "",
+      exch: widget.scripInfo.exch ?? "",
+      instname: widget.scripInfo.instname,
+      onPriceTap:
+          (orderType == "GTT" || orderType == "SIP") ? null : _useDepthPrice,
+    );
+  }
+
+  /// A bid/ask price tapped in the depth panel becomes the order price. A
+  /// Market order switches to Limit (SL MKT to SL Limit) first, as on Kite,
+  /// so the tapped price is actually used.
+  void _useDepthPrice(String price) {
+    if (!mounted) return;
+    final orderInput = ref.read(ordInputProvider);
+    setState(() {
+      if (_isMarketOrder) {
+        _isMarketOrder = false;
+        updatePriceType();
+        orderInput.chngPriceType(priceType, widget.orderArg.exchange);
+      }
+      priceCtrl.text = price;
+      priceCtrl.selection = TextSelection.collapsed(offset: price.length);
+      ordPrice = price;
+    });
+    _cancelPendingWarning();
+    _debouncedMarginUpdate();
+  }
+
+  Widget _buildDepthToggle() =>
+      const OrderDepthToggle(padding: EdgeInsets.only(right: 8, bottom: 2));
+
   void updatePriceType() {
     if ((orderType == "Delivery" ||
             orderType == "Intraday" ||
@@ -9549,14 +9595,25 @@ class _DraggablePlaceOrderScreenDialogState
   late Offset _position;
   bool _isDragging = false;
 
+  // Where the window is drawn (clamped) plus any drag since the last frame.
+  Offset _dragBase = Offset.zero;
+
+  late final OrderDepthController _depth;
+
   @override
   void initState() {
     super.initState();
     _position = widget.initialPosition;
 
+    _depth = OrderDepthController()..addListener(_onDepthChanged);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _listenForNavigationChanges();
     });
+  }
+
+  void _onDepthChanged() {
+    if (mounted) setState(() {});
   }
 
   // Directly disable all chart iframes and reset cursor (like chart's onExit)
@@ -9592,9 +9649,51 @@ class _DraggablePlaceOrderScreenDialogState
 
   @override
   void dispose() {
+    _depth.removeListener(_onDepthChanged);
+    _depth.dispose();
     ChartIframeGuard.release();
     _enableAllChartIframes();
     super.dispose();
+  }
+
+  // Same chart-iframe guard as the order window, so the chart crosshair does
+  // not bleed through the depth panel either.
+  Widget _guardChartIframes(Widget child) {
+    return PointerInterceptor(
+      child: MouseRegion(
+        cursor: SystemMouseCursors.basic,
+        // _disableAllChartIframes also resets the page cursor to the arrow
+        // on every move, which wiped the hand cursor on the depth rows. The
+        // panel only needs the chart iframes kept from taking the mouse.
+        onEnter: (_) {
+          ChartIframeGuard.acquire();
+          _blockChartIframesOnly();
+        },
+        onHover: (_) => _blockChartIframesOnly(),
+        onExit: (_) {
+          ChartIframeGuard.release();
+          _enableAllChartIframes();
+        },
+        child: Listener(
+          onPointerMove: (_) => _blockChartIframesOnly(),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  void _blockChartIframesOnly() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement &&
+            iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'none';
+        }
+      }
+    } catch (e) {
+      // DOM access can fail during teardown — ignore
+    }
   }
 
   void _listenForNavigationChanges() {
@@ -9645,13 +9744,30 @@ class _DraggablePlaceOrderScreenDialogState
     // Constrain position to screen bounds
     const dialogWidth = 450.0;
     final dialogHeight = screenSize.height * 0.7;
-    final constrainedPosition = Offset(
-      _position.dx.clamp(0, screenSize.width - dialogWidth),
-      _position.dy.clamp(0, screenSize.height - dialogHeight),
+    // final constrainedPosition = Offset(
+    //   _position.dx.clamp(0, screenSize.width - dialogWidth),
+    //   _position.dy.clamp(0, screenSize.height - dialogHeight),
+    // );
+    final double top =
+        _position.dy.clamp(0, screenSize.height - dialogHeight);
+    // Market depth panel beside the window (Task #9168).
+    final depthPlacement = OrderDepthPlacement.of(
+      screenWidth: screenSize.width,
+      windowLeft: _position.dx.clamp(0, screenSize.width - dialogWidth),
+      windowWidth: dialogWidth,
+      showPanel: _depth.showing,
     );
+    final constrainedPosition = Offset(depthPlacement.windowLeft, top);
+    _dragBase = constrainedPosition;
 
     return Stack(
       children: [
+        if (depthPlacement.panelLeft != null)
+          Positioned(
+            left: depthPlacement.panelLeft,
+            top: top,
+            child: _guardChartIframes(OrderDepthDock(controller: _depth)),
+          ),
         Positioned(
           left: constrainedPosition.dx,
           top: constrainedPosition.dy,
@@ -9700,10 +9816,18 @@ class _DraggablePlaceOrderScreenDialogState
                           },
                           onPanUpdate: (details) {
                             setState(() {
-                              _position = Offset(
-                                _position.dx + details.delta.dx,
-                                _position.dy + details.delta.dy,
-                              );
+                              // _position = Offset(
+                              //   _position.dx + details.delta.dx,
+                              //   _position.dy + details.delta.dy,
+                              // );
+                              // Move from where the window is drawn (clamped),
+                              // so dragging back from an edge responds at once
+                              // instead of first "unwinding" the overshoot.
+                              // _dragBase is updated on every event: several
+                              // pointer events land between frames, and a value
+                              // captured at build time would drop all but one.
+                              _dragBase = _dragBase + details.delta;
+                              _position = _dragBase;
                             });
                             widget.onPositionChanged(_position);
                           },
@@ -9713,11 +9837,14 @@ class _DraggablePlaceOrderScreenDialogState
                             });
                           },
                           isDragging: _isDragging,
-                          child: PlaceOrderScreenWeb(
-                            orderArg: widget.orderArg,
-                            scripInfo: widget.scripInfo,
-                            isBasket: widget.isBasket,
-                            fromChart: widget.fromChart,
+                          child: OrderDepthScope(
+                            controller: _depth,
+                            child: PlaceOrderScreenWeb(
+                              orderArg: widget.orderArg,
+                              scripInfo: widget.scripInfo,
+                              isBasket: widget.isBasket,
+                              fromChart: widget.fromChart,
+                            ),
                           ),
                         ),
                       ),
