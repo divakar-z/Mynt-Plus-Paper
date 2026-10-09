@@ -605,7 +605,14 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
   void _restoreDepthSubscription() {
     try {
       final depthSymbol = ref.read(marketWatchProvider).currentDepthSymbol;
-      if (depthSymbol == null || depthSymbol.isEmpty) return;
+      // if (depthSymbol == null || depthSymbol.isEmpty) return;
+      // The order-window depth panel's feed needs restoring too, even when no
+      // Overview depth is open.
+      final symbols = <String>{
+        if (depthSymbol != null && depthSymbol.isNotEmpty) depthSymbol,
+        ..._orderDepthRefs.keys,
+      };
+      if (symbols.isEmpty) return;
 
       final context = _getValidContext();
       if (context == null) {
@@ -615,12 +622,77 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
 
       ref.read(websocketProvider).connectTouchLine(
             task: "d",
-            input: depthSymbol,
+            input: symbols.join('#'),
             context: context,
           );
-      log('WebSubscriptionManager: Restored depth subscription for $depthSymbol');
+      log('WebSubscriptionManager: Restored depth subscription for ${symbols.join(', ')}');
     } catch (e) {
       log('WebSubscriptionManager: Error restoring depth subscription: $e');
+    }
+  }
+
+  // ---------------- Order-window market depth (Task #9168) ----------------
+  //
+  // The order window's depth panel needs its own depth ("d") feed: the
+  // Overview's is a single slot (MarketWatchProvider.currentDepthSymbol) and
+  // taking it would stop the Overview. Rules:
+  // - Only a feed the panel started itself is ever released with "ud". If the
+  //   symbol already had depth (Overview, chart engine, ...) when the panel
+  //   opened, the panel just reads it and leaves it alone on close.
+  // - While the panel holds a symbol, nobody else's "ud" may release it (see
+  //   unsubscribeTokens); the panel takes over releasing it instead.
+  // - The panel's symbols are re-sent after a reconnect
+  //   (_restoreDepthSubscription).
+  // Calls go to connectTouchLine, not establishConnection, so the global
+  // ConstantName.lastSubscribeDepth used by other reconnect paths is not
+  // overwritten.
+
+  /// "EXCH|TOKEN" -> number of open depth panels showing it.
+  final Map<String, int> _orderDepthRefs = {};
+
+  /// Symbols whose depth feed the order-window panel is responsible for
+  /// releasing.
+  final Set<String> _orderDepthOwned = {};
+
+  Set<String> get orderDepthSymbols => _orderDepthRefs.keys.toSet();
+
+  void acquireOrderDepth(String symbol, BuildContext context) {
+    if (symbol.isEmpty) return;
+    final count = (_orderDepthRefs[symbol] ?? 0) + 1;
+    _orderDepthRefs[symbol] = count;
+    if (count > 1) return;
+
+    final ws = ref.read(websocketProvider);
+    if (ws.hasDepthSubscription(symbol)) {
+      // Someone else's feed: read it, never release it.
+      return;
+    }
+    _orderDepthOwned.add(symbol);
+    ws.connectTouchLine(task: "d", input: symbol, context: context);
+  }
+
+  void releaseOrderDepth(String symbol) {
+    if (symbol.isEmpty || !_orderDepthRefs.containsKey(symbol)) return;
+    final count = _orderDepthRefs[symbol]! - 1;
+    if (count > 0) {
+      _orderDepthRefs[symbol] = count;
+      return;
+    }
+    _orderDepthRefs.remove(symbol);
+    if (!_orderDepthOwned.remove(symbol)) return;
+
+    // The Overview may have opened the same scrip meanwhile; it shares this
+    // feed and releases it itself when it closes.
+    if (ref.read(marketWatchProvider).currentDepthSymbol == symbol) return;
+
+    final context = _getValidContext();
+    if (context == null) return;
+    try {
+      ref
+          .read(websocketProvider)
+          .connectTouchLine(task: "ud", input: symbol, context: context);
+    } catch (e) {
+      log('WebSubscriptionManager: Error releasing order depth $symbol: $e');
     }
   }
 
@@ -1512,17 +1584,38 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         protectedSymbols.addAll(_tickerSubscriptions);
       }
 
+      // 10. Protect symbols shown in the order window's depth panel
+      protectedSymbols.addAll(_orderDepthRefs.keys);
+
     } catch (e) {
     }
 
     // Find tokens that can be unsubscribed (not protected). When the page is
     // being torn down, bypassProtection releases the depth feed unconditionally
     // (touchline protections don't apply to a depth "ud").
-    final tokensToUnsubscribe = bypassProtection
-        ? tokensToCheck.toSet()
-        : tokensToCheck.where((token) =>
-            !protectedSymbols.contains(token)
-          ).toSet();
+    // final tokensToUnsubscribe = bypassProtection
+    //     ? tokensToCheck.toSet()
+    //     : tokensToCheck.where((token) =>
+    //         !protectedSymbols.contains(token)
+    //       ).toSet();
+    // Except a depth feed the order window's panel is still showing: that one
+    // is kept, and the panel releases it when it closes.
+    final Set<String> tokensToUnsubscribe;
+    if (bypassProtection) {
+      final heldByOrderDepth = source == 'depth'
+          ? tokensToCheck.where(_orderDepthRefs.containsKey).toSet()
+          : <String>{};
+      _orderDepthOwned.addAll(heldByOrderDepth);
+      tokensToUnsubscribe = tokensToCheck.difference(heldByOrderDepth);
+    } else {
+      tokensToUnsubscribe = tokensToCheck
+          .where((token) => !protectedSymbols.contains(token))
+          .toSet();
+      if (source == 'depth') {
+        _orderDepthOwned
+            .addAll(tokensToCheck.where(_orderDepthRefs.containsKey));
+      }
+    }
 
     if (tokensToUnsubscribe.isEmpty) {
       return;
