@@ -707,6 +707,8 @@ class _BasketListState extends ConsumerState<BasketList> {
     final sortedBaskets = baskets.isNotEmpty
         ? _getSortedBaskets(baskets)
         : <dynamic>[];
+    // TC_219: search-aware empty state, same as the other Order Book tabs.
+    final searchQuery = ref.read(orderProvider).orderSearchCtrl.text.trim();
 
     return SizedBox.expand(
       child: shadcn.OutlinedContainer(
@@ -798,8 +800,12 @@ class _BasketListState extends ConsumerState<BasketList> {
                             child: Padding(
                               padding: const EdgeInsets.all(16.0),
                               child: NoDataFoundWeb(
-                                title: "No Baskets",
-                                subtitle: "You don't have any baskets yet.",
+                                title: searchQuery.isNotEmpty
+                                    ? "No Baskets Found"
+                                    : "No Baskets",
+                                subtitle: searchQuery.isNotEmpty
+                                    ? "No baskets match your search \"$searchQuery\"."
+                                    : "You don't have any baskets yet.",
                                 primaryEnabled: false,
                                 secondaryEnabled: false,
                               ),
@@ -1244,6 +1250,19 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
       _hasOrdersPlacedInBasket(widget.bsktName, p) ||
       p.isBasketPlaced(p.selectedBsktName) ||
       p.bsktScripList.any((e) => e['orderStatus'] != null);
+
+  /// Rows the Place button would send now: ticked unsent rows, else every
+  /// unsent row once something was sent, else the whole fresh basket. The
+  /// one-segment rule is checked on these only, so a PLACED row from another
+  /// segment no longer blocks the rest.
+  List _rowsToSend(OrderProvider p) {
+    final ticked = _selectedUnsent(p);
+    if (ticked.isNotEmpty) return [for (final i in ticked) p.bsktScripList[i]];
+    if (_isSentMode(p)) {
+      return p.bsktScripList.where((e) => e['orderStatus'] == null).toList();
+    }
+    return p.bsktScripList;
+  }
 
   List<int> _selectedUnsent(OrderProvider p) => [
         for (final i in _selected)
@@ -1924,6 +1943,9 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
           'option': scrip.option?.toString() ?? '',
           'trantype': isBuy ? 'B' : 'S',
           'qty': marketWatch.scripInfoModel?.ls?.toString() ?? '1',
+          // TC_235: without a prd the order window shows the Delivery chip
+          // but saves NRML; equity Delivery must save as CNC.
+          'prd': marketWatch.scripInfoModel?.seg == "EQT" ? 'C' : 'M',
         },
       );
 
@@ -2073,7 +2095,10 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     ),
                     const SizedBox(width: 8),
                     // Action Icons (Edit/Delete Basket Placeholder)
-                    _buildBasketHoverButton(
+                    // TC_173/TC_234: Rename tooltip on the header Edit icon.
+                    Tooltip(
+                      message: 'Rename Basket',
+                      child: _buildBasketHoverButton(
                       icon: Icons.edit_outlined,
                       color: resolveThemeColor(
                         context,
@@ -2111,6 +2136,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                         );
                       },
                       theme: theme,
+                    ),
                     ),
                     // TC_123: basket delete lives on the basket row hover only.
                     // const SizedBox(width: 4),
@@ -2499,7 +2525,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // Multi-segment warning bar
-                  if (_hasMultipleExchanges(basket.bsktScripList))
+                  if (_hasMultipleExchanges(_rowsToSend(basket)))
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
@@ -2659,7 +2685,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                         child: ElevatedButton(
                           onPressed: isPlacing ||
                                   basket.bsktScripList.isEmpty ||
-                                  _hasMultipleExchanges(basket.bsktScripList)
+                                  _hasMultipleExchanges(_rowsToSend(basket))
                               ? null
                               : () async {
                                   if (toPlace.isNotEmpty) {
@@ -3371,7 +3397,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         orderTpye: '',
         holdQty: '',
         isModify: false, // Copy as new order
-        prd: item['prd']?.toString(),
+        // TC_237: CO/BO rows go through raw so the CO - BO chip is kept.
+        prd: _prdArgForBasketRow(item),
         raw: item);
 
     final scripInfo = ref.read(marketWatchProvider).scripInfoModel;
@@ -3387,6 +3414,14 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
       scripInfo: scripInfo,
       isBasket: 'Basket', // Add to basket
     );
+  }
+
+  // The order window's prd lookup has no CO (H) / BO (B), so those would
+  // open on Delivery and save as NRML. Leave prd empty for them; the raw
+  // row then selects CO - BO and its Cover/Bracket ticks.
+  String? _prdArgForBasketRow(Map<String, dynamic> item) {
+    final prd = item['prd']?.toString();
+    return (prd == 'H' || prd == 'B') ? null : prd;
   }
 
   Future<void> _handleEditBasketScript(
@@ -3420,7 +3455,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         orderTpye: '',
         holdQty: '',
         isModify: true,
-        prd: item['prd']?.toString(),
+        // TC_237: CO/BO rows go through raw so the CO - BO chip is kept.
+        prd: _prdArgForBasketRow(item),
         raw: item);
 
     final scripInfo = ref.read(marketWatchProvider).scripInfoModel;
@@ -3914,29 +3950,35 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // Copy button
-                        _buildActionButton(
-                          icon: Icons.copy_outlined,
-                          iconColor: resolveThemeColor(
-                            context,
-                            dark: styles.MyntColors.textPrimary,
-                            light: styles.MyntColors.textSecondary,
+                        Tooltip(
+                          message: 'Duplicate',
+                          child: _buildActionButton(
+                            icon: Icons.copy_outlined,
+                            iconColor: resolveThemeColor(
+                              context,
+                              dark: styles.MyntColors.textPrimary,
+                              light: styles.MyntColors.textSecondary,
+                            ),
+                            onPressed: widget.onCopy != null
+                                ? () => widget.onCopy!(widget.item, widget.originalIndex, widget.theme)
+                                : null,
                           ),
-                          onPressed: widget.onCopy != null
-                              ? () => widget.onCopy!(widget.item, widget.originalIndex, widget.theme)
-                              : null,
                         ),
                         const SizedBox(width: 6),
                         // Edit button
-                        _buildActionButton(
-                          icon: Icons.edit_outlined,
-                          iconColor: resolveThemeColor(
-                            context,
-                            dark: styles.MyntColors.textPrimary,
-                            light: styles.MyntColors.textSecondary,
+                        Tooltip(
+                          message: 'Modify',
+                          child: _buildActionButton(
+                            icon: Icons.edit_outlined,
+                            iconColor: resolveThemeColor(
+                              context,
+                              dark: styles.MyntColors.textPrimary,
+                              light: styles.MyntColors.textSecondary,
+                            ),
+                            onPressed: widget.onEdit != null
+                                ? () => widget.onEdit!(widget.item, widget.originalIndex, widget.theme)
+                                : null,
                           ),
-                          onPressed: widget.onEdit != null
-                              ? () => widget.onEdit!(widget.item, widget.originalIndex, widget.theme)
-                              : null,
                         ),
                         if (widget.showDelete) ...[
                         const SizedBox(width: 6),

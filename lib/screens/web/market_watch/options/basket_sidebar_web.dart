@@ -50,6 +50,19 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
       p.isBasketPlaced(p.selectedBsktName) ||
       p.bsktScripList.any((e) => e['orderStatus'] != null);
 
+  /// Rows the Place button would send now: ticked unsent rows, else every
+  /// unsent row once something was sent, else the whole fresh basket. The
+  /// one-segment rule is checked on these only, so a PLACED row from another
+  /// segment no longer blocks the rest.
+  List _rowsToSend(OrderProvider p) {
+    final ticked = _selectedUnsent(p);
+    if (ticked.isNotEmpty) return [for (final i in ticked) p.bsktScripList[i]];
+    if (_isSentMode(p)) {
+      return p.bsktScripList.where((e) => e['orderStatus'] == null).toList();
+    }
+    return p.bsktScripList;
+  }
+
   List<int> _selectedUnsent(OrderProvider p) => [
         for (final i in _selected)
           if (i < p.bsktScripList.length &&
@@ -133,7 +146,7 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
 
           // Multi-exchange warning
           if (orderProv.bsktScripList.isNotEmpty &&
-              _hasMultipleExchanges(orderProv.bsktScripList))
+              _hasMultipleExchanges(_rowsToSend(orderProv)))
             _buildMultiExchangeWarning(),
 
           // Place Order Button
@@ -835,7 +848,7 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
   }
 
   Widget _buildPlaceOrderButton(ThemesProvider theme, OrderProvider orderProv) {
-    final hasMultipleExchanges = _hasMultipleExchanges(orderProv.bsktScripList);
+    final hasMultipleExchanges = _hasMultipleExchanges(_rowsToSend(orderProv));
     final basketStatus =
         orderProv.basketOverallStatus[orderProv.selectedBsktName] ?? '';
     // TC_324.2: any sent row (not only the overall flag) keeps the sent footer,
