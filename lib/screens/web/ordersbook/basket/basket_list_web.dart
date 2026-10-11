@@ -1983,6 +1983,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     final sentMode = _isSentMode(basket);
     _selected.removeWhere((i) => i >= basket.bsktScripList.length);
     final toPlace = _selectedUnsent(basket);
+    final onlySentTicked = _selected.isNotEmpty && toPlace.isEmpty;
     final unsent = [
       for (int i = 0; i < basket.bsktScripList.length; i++)
         if (basket.bsktScripList[i]['orderStatus'] == null) i
@@ -2422,77 +2423,13 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                                     child: GestureDetector(
                                                       behavior:
                                                           HitTestBehavior.opaque,
-                                                      onTap: () async {
-                                                        // Handle row tap logic
-                                                        await ref
-                                                            .read(
-                                                                marketWatchProvider)
-                                                            .fetchScripInfo(
-                                                                "${item['token']}",
-                                                                '${item['exch']}',
-                                                                context,
-                                                                true);
-                                                        if (!context.mounted)
-                                                          return;
-
-                                                        // Stamp the row position and price type on the COPY that is
-                                                        // passed to the edit dialog — the dialog's save removes the
-                                                        // row at raw['index'], so it must travel with this map.
-                                                        item['index'] =
-                                                            originalIndex;
-                                                        item['prctyp'] =
-                                                            item['prctype'];
-
-                                                        final ltp = item['lp']
-                                                                ?.toString() ??
-                                                            "0.00";
-                                                        final perChange = item['pc']
-                                                                ?.toString() ??
-                                                            "0.00";
-
-                                                        OrderScreenArgs orderArgs =
-                                                            OrderScreenArgs(
-                                                                exchange:
-                                                                    '${item['exch']}',
-                                                                tSym:
-                                                                    '${item['tsym']}',
-                                                                isExit: false,
-                                                                token:
-                                                                    "${item['token']}",
-                                                                transType: item[
-                                                                        'trantype'] ==
-                                                                    'B',
-                                                                lotSize: ref
-                                                                    .read(
-                                                                        marketWatchProvider)
-                                                                    .scripInfoModel
-                                                                    ?.ls
-                                                                    .toString(),
-                                                                ltp: ltp,
-                                                                perChange:
-                                                                    perChange,
-                                                                orderTpye: '',
-                                                                holdQty: '',
-                                                                isModify: true,
-                                                                prd: item['prd']
-                                                                    ?.toString(),
-                                                                raw: item);
-
-                                                        final scripInfo = ref
-                                                            .read(
-                                                                marketWatchProvider)
-                                                            .scripInfoModel;
-                                                        if (scripInfo != null) {
-                                                          PlaceOrderScreenWeb
-                                                              .showDraggable(
-                                                            context: context,
-                                                            orderArg: orderArgs,
-                                                            scripInfo: scripInfo,
-                                                            isBasket:
-                                                                'BasketEdit',
-                                                          );
-                                                        }
-                                                      },
+                                                      // TC_312: same path as the modify icon so CO/BO rows
+                                                      // keep the CO - BO chip instead of opening as Delivery.
+                                                      onTap: () =>
+                                                          _handleEditBasketScript(
+                                                              item,
+                                                              originalIndex,
+                                                              theme),
                                                       child:
                                                           _buildBasketCellWidget(
                                                         headerLabel,
@@ -2680,10 +2617,18 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     // ticked -> "Place Order" for every row not sent yet.
                     // Sent rows are never re-sent.
                     if (!sentMode || toPlace.isNotEmpty || unsent.isNotEmpty) ...[
-                      SizedBox(
+                      Tooltip(
+                        // Ticked rows that are all sent used to fall back to
+                        // "every unsent row", placing rows the user had not
+                        // ticked. Now the button waits for a placeable tick.
+                        message: onlySentTicked
+                            ? "Selected rows are already sent. Reset Orders to place them again."
+                            : "",
+                        child: SizedBox(
                         height: 36,
                         child: ElevatedButton(
                           onPressed: isPlacing ||
+                                  onlySentTicked ||
                                   basket.bsktScripList.isEmpty ||
                                   _hasMultipleExchanges(_rowsToSend(basket))
                               ? null
@@ -2723,6 +2668,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                 fontWeight: FontWeight.w600),
                           ),
                         ),
+                      ),
                       ),
                       const SizedBox(width: 12),
                     ],

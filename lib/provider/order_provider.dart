@@ -4363,23 +4363,67 @@ class OrderProvider extends DefaultChangeNotifier {
     _basketOrderStatuses.remove(basketName);
     _basketOverallStatus.remove(basketName);
 
-    // Clear order tracking from basket items
-    for (var element in _bsktScripList) {
-      element.remove('orderIds');
-      element.remove('orderStatus');
-      element.remove('orderError');
-      element.remove('avgPrice');
-      element.remove('filledQty');
-      element.remove('rejectionReason');
+    // _bsktScripList is the open basket's rows, so only clear it when that
+    // is the basket being reset (the option-chain picker can reset another).
+    if (basketName == _selectedBsktName) {
+      for (var element in _bsktScripList) {
+        _clearRowOrderFields(element);
+      }
     }
 
     // Also clear from persistent storage immediately
     _clearBasketFromPersistentStorage(basketName);
+    // TC_293: the saved basket rows carry orderIds too (written back when the
+    // basket is reopened). Left there, the next reload from storage - adding
+    // a scrip, reopening, F5 - brought the old statuses back after a reset.
+    _clearBasketRowsOrderFieldsInStorage(basketName);
 
     // Save the reset state to preferences
     _saveOrderTrackingData();
 
     notifyListeners();
+  }
+
+  void _clearRowOrderFields(Map element) {
+    element.remove('orderIds');
+    element.remove('orderStatus');
+    element.remove('orderError');
+    element.remove('avgPrice');
+    element.remove('filledQty');
+    element.remove('rejectionReason');
+  }
+
+  // Strips the sent-order fields from one basket's saved rows, using the same
+  // storage the basket scrips are read from (per-user, else general).
+  Future<void> _clearBasketRowsOrderFieldsInStorage(String basketName) async {
+    try {
+      final userId = pref.clientId;
+      final bool perUser = userId != null && userId.isNotEmpty;
+      final String raw = (perUser
+              ? pref.getBasketScripsForUser(userId)
+              : pref.bsktScrips) ??
+          "";
+      if (raw.isEmpty) return;
+
+      final Map<String, dynamic> data = jsonDecode(raw);
+      final List? rows = data[basketName];
+      if (rows == null || rows.isEmpty) return;
+      for (final row in rows) {
+        if (row is Map) _clearRowOrderFields(row);
+      }
+
+      final String jsonData = jsonEncode(data);
+      if (perUser) {
+        await pref.setBasketScripForUser(userId, jsonData);
+      } else {
+        await pref.setBasketScrip(jsonData);
+      }
+      if (_bsktScrips.containsKey(basketName)) {
+        _bsktScrips[basketName] =
+            basketName == _selectedBsktName ? _bsktScripList : rows;
+      }
+    } catch (e) {
+    }
   }
 
   // Helper method to clear specific basket from persistent storage
