@@ -90,16 +90,21 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
   }
 
   /// Checks if the basket contains scripts from multiple exchanges
-  bool _hasMultipleExchanges(List scriptList) {
-    if (scriptList.isEmpty) return false;
-    Set<String> exchanges = {};
-    for (var script in scriptList) {
-      if (script['exch'] != null) {
-        exchanges.add(script['exch'].toString());
-      }
-    }
-    return exchanges.length > 1;
-  }
+  // TC_263: mixed segments are allowed in one basket (vendor and Kite
+  // allow it; basket margin verified against the vendor on 12 Oct 2026 for
+  // NSE+NFO, BSE+NSE+BFO and NSE+NFO+MCX). Returning false removes the
+  // "only 1 segment" warning and the Place block. Old check kept below.
+  bool _hasMultipleExchanges(List scriptList) => false;
+  // bool _hasMultipleExchanges(List scriptList) {
+  //   if (scriptList.isEmpty) return false;
+  //   Set<String> exchanges = {};
+  //   for (var script in scriptList) {
+  //     if (script['exch'] != null) {
+  //       exchanges.add(script['exch'].toString());
+  //     }
+  //   }
+  //   return exchanges.length > 1;
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -281,6 +286,13 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
   }
 
   Widget _buildMarginsSection(ThemesProvider theme, OrderProvider orderProv) {
+    // The basket margin API rejects some baskets (e.g. more than 20 rows);
+    // show "Not available" with its reason instead of a misleading 0.00.
+    final marginError = orderProv.bsktScripList.isNotEmpty &&
+            orderProv.bsktOrderMargin?.stat != null &&
+            orderProv.bsktOrderMargin!.stat != 'Ok'
+        ? (orderProv.bsktOrderMargin!.emsg ?? 'Margin not available')
+        : null;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -298,15 +310,20 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                orderProv.bsktScripList.isEmpty ||
-                        orderProv.bsktOrderMargin == null
-                    ? "0.00"
-                    : orderProv.bsktOrderMargin!.basketMargin.toIndianFormat(),
-                style: MyntWebTextStyles.body(
-                  context,
-                  fontWeight: MyntFonts.semiBold,
-                  color: shadcn.Theme.of(context).colorScheme.foreground,
+              Tooltip(
+                message: marginError ?? "",
+                child: Text(
+                  marginError != null
+                      ? "Not available"
+                      : orderProv.bsktScripList.isEmpty ||
+                              orderProv.bsktOrderMargin == null
+                          ? "0.00"
+                          : orderProv.bsktOrderMargin!.basketMargin.toIndianFormat(),
+                  style: MyntWebTextStyles.body(
+                    context,
+                    fontWeight: MyntFonts.semiBold,
+                    color: shadcn.Theme.of(context).colorScheme.foreground,
+                  ),
                 ),
               ),
             ],
@@ -323,15 +340,20 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                orderProv.bsktScripList.isEmpty ||
-                        orderProv.bsktOrderMargin == null
-                    ? "0.00"
-                    : orderProv.bsktOrderMargin!.postTradeMargin.toIndianFormat(),
-                style: MyntWebTextStyles.body(
-                  context,
-                  fontWeight: MyntFonts.semiBold,
-                  color: shadcn.Theme.of(context).colorScheme.foreground,
+              Tooltip(
+                message: marginError ?? "",
+                child: Text(
+                  marginError != null
+                      ? "Not available"
+                      : orderProv.bsktScripList.isEmpty ||
+                              orderProv.bsktOrderMargin == null
+                          ? "0.00"
+                          : orderProv.bsktOrderMargin!.postTradeMargin.toIndianFormat(),
+                  style: MyntWebTextStyles.body(
+                    context,
+                    fontWeight: MyntFonts.semiBold,
+                    color: shadcn.Theme.of(context).colorScheme.foreground,
+                  ),
                 ),
               ),
             ],
@@ -860,11 +882,19 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
     // "Reset Orders" sits beside it once anything has been sent.
     final isPlacing = basketStatus == 'placing';
     final toPlace = _selectedUnsent(orderProv);
+    final onlySentTicked = _selected.isNotEmpty && toPlace.isEmpty;
     final unsent = [
       for (int i = 0; i < orderProv.bsktScripList.length; i++)
         if (orderProv.bsktScripList[i]['orderStatus'] == null) i
     ];
-    final primary = SizedBox(
+    // Ticked rows that are all sent used to fall back to "every unsent row",
+    // placing rows the user had not ticked. Now the button waits for a
+    // placeable tick (same as the Orders page basket).
+    final primary = Tooltip(
+      message: onlySentTicked
+          ? "Selected rows are already sent. Reset Orders to place them again."
+          : "",
+      child: SizedBox(
       height: 45,
       child: MyntPrimaryButton(
         label: isPlacing
@@ -875,9 +905,18 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
         size: MyntButtonSize.large,
         isFullWidth: true,
         isLoading: isPlacing,
-        onPressed: hasMultipleExchanges || isPlacing
+        onPressed: hasMultipleExchanges || isPlacing || onlySentTicked
             ? null
             : () async {
+                // A basket may hold at most 20 orders; older baskets can
+                // still have more.
+                final extra =
+                    orderProv.bsktScripList.length - orderProv.basketMaxOrders;
+                if (extra > 0) {
+                  showResponsiveWarning(context,
+                      "A basket can have up to ${orderProv.basketMaxOrders} orders. Delete $extra ${extra == 1 ? 'order' : 'orders'} to place.");
+                  return;
+                }
                 if (toPlace.isNotEmpty) {
                   setState(() => _selected.removeAll(toPlace));
                   await orderProv.placeBasketItems(context, toPlace);
@@ -889,8 +928,11 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
                   await orderProv.placeBasketItems(context, unsent);
                 }
               },
-        backgroundColor: hasMultipleExchanges ? Colors.grey : null,
+        // MyntPrimaryButton has no disabled look, so grey it by hand.
+        backgroundColor:
+            hasMultipleExchanges || onlySentTicked ? Colors.grey : null,
       ),
+    ),
     );
     final reset = SizedBox(
       height: 45,
@@ -1347,7 +1389,7 @@ class _BasketSidebarWebState extends ConsumerState<BasketSidebarWeb> {
                                         ),
                                       ),
                                       Text(
-                                        "${basket['curLength']}/${basket['max']}",
+                                        "${basket['curLength']}/${ref.read(orderProvider).basketMaxOrders}",
                                         style: MyntWebTextStyles.para(
                                           itemContext,
                                           color: resolveThemeColor(

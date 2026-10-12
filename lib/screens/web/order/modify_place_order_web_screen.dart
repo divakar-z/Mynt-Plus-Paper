@@ -913,7 +913,7 @@ class _ModifyPlaceOrderScreenState
                                                 CrossAxisAlignment.end,
                                             children: [
                                               headerTitleText(
-                                                  widget.scripInfo.exch == "MCX" ? "Lot" : "Qty",
+                                                  (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? "Lot" : "Qty",
                                                   theme),
                                               // Text(
                                               //   "Lot: ${widget.scripInfo.ls} ${widget.scripInfo.prcunt ?? ''}  ",
@@ -1236,7 +1236,9 @@ class _ModifyPlaceOrderScreenState
                                           // live via the controller listener.
                                           // Same lots × lot size the submit
                                           // payload and margin request use.
-                                          if (widget.scripInfo.exch == "MCX")
+                                          // NCOM (lot size 1) is labelled like MCX.
+                                          if (widget.scripInfo.exch == "MCX" ||
+                                              widget.scripInfo.exch == "NCOM")
                                             ValueListenableBuilder<
                                                 TextEditingValue>(
                                               valueListenable: qtyCtrl,

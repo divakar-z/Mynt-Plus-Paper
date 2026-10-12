@@ -542,11 +542,17 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     return KeyEventResult.handled;
   }
 
+  bool get _isBasketWindow =>
+      widget.isBasket == "Basket" ||
+      widget.isBasket == "BasketEdit" ||
+      widget.isBasket == "BasketMode";
+
   /// Freeze-cap warning text for regular place order (slicing allowed).
   /// In Lot mode the cap is shown in lots to match the field's display.
   String _freezeCapMessage() {
-    final int frezQtyOrderSliceMaxLimit =
-        ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
+    final int frezQtyOrderSliceMaxLimit = _isBasketWindow
+        ? ref.read(orderProvider).basketMaxOrders
+        : ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
     if (!_isStock && !_isLotToQty && lotSize > 0) {
       final int maxLots = (frezQtyOrderSliceMaxLimit * frezQty) ~/ lotSize;
       return "Maximum Allowed Lots: $maxLots";
@@ -767,6 +773,16 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                     : "Delivery")
                 : "Delivery";
 
+    // CO - BO is not allowed in a basket (vendor basket offers only
+    // CNC/MIS/NRML and basket margin is wrong for H/B). A CO - BO default
+    // from the order preference opens a basket window on Delivery instead.
+    final bool isBasketWindow = widget.isBasket == "Basket" ||
+        widget.isBasket == "BasketEdit" ||
+        widget.isBasket == "BasketMode";
+    final bool coboPrefInBasket =
+        isBasketWindow && !checkRawValue && orderType == "CO - BO";
+    if (coboPrefInBasket) orderType = "Delivery";
+
     orderTypes = [
       {"type": "Delivery"},
       {"type": "Intraday"}
@@ -800,7 +816,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       //   });
       // }
     }
-    orderTypes.add({"type": "CO - BO"});
+    // orderTypes.add({"type": "CO - BO"});
+    if (!isBasketWindow) {
+      orderTypes.add({"type": "CO - BO"});
+    }
 
     if (widget.isBasket != "Basket" &&
         widget.isBasket != "BasketEdit" &&
@@ -893,7 +912,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                   : !widget.orderArg.isExit && isUserOrderPreferenceAvailable
                       ? userOrderPreference['prd'] == "Intraday"
                           ? InvestType.intraday
-                          : (userOrderPreference['prd'] == "Delivery" &&
+                          : ((userOrderPreference['prd'] == "Delivery" ||
+                                      coboPrefInBasket) &&
                                   widget.scripInfo.seg == "EQT")
                               ? InvestType.delivery
                               : InvestType.carryForward
@@ -1124,6 +1144,18 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
           // }
         }
       }
+
+      // TC_321: Duplicate opens as "Basket", which skipped the block above,
+      // so a duplicated Bracket row fell back to Cover (no Target, CO margin).
+      if (widget.isBasket == "Basket" && orderType == "CO - BO") {
+        if (orderRawValue['prd'] == 'B') {
+          _isCoverOrderEnabled = false;
+          _isBracketOrderEnabled = true;
+        } else if (orderRawValue['prd'] == 'H') {
+          _isCoverOrderEnabled = true;
+          _isBracketOrderEnabled = false;
+        }
+      }
     }
 
     // Initialize CO-BO specific flags when loaded from user preferences
@@ -1285,8 +1317,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
           final clientFundDetail = ref.watch(fundProvider).fundDetailModel;
 
           final sip = ref.watch(siprovider);
-          int frezQtyOrderSliceMaxLimit =
-              ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
+          // Basket windows cap qty at the basket's 20-row limit.
+          int frezQtyOrderSliceMaxLimit = _isBasketWindow
+              ? ref.read(orderProvider).basketMaxOrders
+              : ref.read(orderProvider).frezQtyOrderSliceMaxLimit;
 
           // Watch the pair so the NSE/BSE toggle appears when it arrives
           final latestEquls = ref
@@ -2721,7 +2755,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                       headerTitleText(
                                                         (_isStock)
                                                             ? (_isQtyToAmount ? "Amount" : "Qty")
-                                                            : widget.scripInfo.exch == "MCX"
+                                                            : (widget.scripInfo.exch == "MCX" ||
+                                                                  widget.scripInfo.exch == "NCOM")
                                                                 ? "Lot"
                                                                 : (_isGTTLotToQty ? "Qty" : "Lot"),
                                                         theme),
@@ -2965,7 +3000,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   // MCX field is always in lots (no Lot/Qty toggle) — show the
                                                   // actual quantity underneath, same as the submitted qty
                                                   // (lots × lot size, matching getGTTFinalQuantity).
-                                                  if (widget.scripInfo.exch == "MCX")
+                                                  // NCOM (lot size 1) is labelled like MCX: "Lot" heading, qty below.
+if (widget.scripInfo.exch == "MCX" ||
+    widget.scripInfo.exch == "NCOM")
                                                     Padding(
                                                       padding: const EdgeInsets.only(top: 4),
                                                       child: Text(
@@ -3553,7 +3590,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                         headerTitleText(
                                                           (_isStock)
                                                               ? (_isQtyToAmount ? "Amount" : "Qty")
-                                                              : widget.scripInfo.exch == "MCX"
+                                                              : (widget.scripInfo.exch == "MCX" ||
+                                                                  widget.scripInfo.exch == "NCOM")
                                                                   ? "Lot"
                                                                   : (_isGTTLotToQty ? "Qty" : "Lot"),
                                                           theme),
@@ -3801,7 +3839,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                     // MCX field is always in lots (no Lot/Qty toggle) — show the
                                                     // actual quantity underneath, same as the submitted qty
                                                     // (lots × lot size, matching getGTTFinalQuantity).
-                                                    if (widget.scripInfo.exch == "MCX")
+                                                    // NCOM (lot size 1) is labelled like MCX: "Lot" heading, qty below.
+if (widget.scripInfo.exch == "MCX" ||
+    widget.scripInfo.exch == "NCOM")
                                                       Padding(
                                                         padding: const EdgeInsets.only(top: 4),
                                                         child: Text(
@@ -4725,7 +4765,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       ? (_isQtyToAmount
                                                                           ? "Amount"
                                                                           : "Qty")
-                                                                      : widget.scripInfo.exch == "MCX"
+                                                                      : (widget.scripInfo.exch == "MCX" ||
+                                                                  widget.scripInfo.exch == "NCOM")
                                                                           ? "Lot"
                                                                           : (_isLotToQty
                                                                               ? "Qty"
@@ -5185,8 +5226,12 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                   // matching the submitted qty
                                                   // (lots × lot size, as the
                                                   // MCX payload multiplies).
+                                                  // NCOM (lot size 1) shows the same Lot
+                                                  // heading + qty line as MCX.
                                                   if (widget.scripInfo.exch ==
-                                                      "MCX")
+                                                          "MCX" ||
+                                                      widget.scripInfo.exch ==
+                                                          "NCOM")
                                                     Padding(
                                                       padding:
                                                           const EdgeInsets.only(
@@ -6545,7 +6590,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                       getGTTFinalQuantity(orderInput.qtyCtrl.text));
                                                                   if (orderInput.qtyCtrl.text.trim().isNotEmpty &&
                                                                       computedQty <= 0) {
-                                                                    String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                    String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                     ResponsiveSnackBar.showWarning(
                                                                         context,
                                                                         _isStock && _isQtyToAmount
@@ -6591,7 +6636,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         getGTTFinalQuantity(orderInput.ocoQtyCtrl.text));
                                                                     if (orderInput.ocoQtyCtrl.text.trim().isNotEmpty &&
                                                                         computedOcoQty <= 0) {
-                                                                      String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                      String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                       ResponsiveSnackBar.showWarning(
                                                                           context,
                                                                           _isStock && _isQtyToAmount
@@ -6762,13 +6807,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .qtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be empty");
                                                                       } else if (SafeParse.toDouble(orderInput.qtyCtrl.text) <=
                                                                           0) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be 0");
@@ -6807,7 +6852,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .ocoQtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be empty");
@@ -6815,7 +6860,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               .ocoQtyCtrl
                                                                               .text) <=
                                                                           0) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be 0");
@@ -6939,13 +6984,13 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .qtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be empty");
                                                                       } else if (SafeParse.toDouble(orderInput.qtyCtrl.text) <=
                                                                           0) {
-                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String qtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "$qtyFieldName cannot be 0");
@@ -6986,7 +7031,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                           .ocoQtyCtrl
                                                                           .text
                                                                           .isEmpty) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be empty");
@@ -6994,7 +7039,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                               .ocoQtyCtrl
                                                                               .text) <=
                                                                           0) {
-                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : widget.scripInfo.exch == "MCX" ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
+                                                                        String ocoQtyFieldName = (_isStock) ? (_isQtyToAmount ? 'Amount' : 'Quantity') : (widget.scripInfo.exch == "MCX" || widget.scripInfo.exch == "NCOM") ? 'Lot' : (_isGTTLotToQty ? 'Quantity' : 'Lot');
                                                                         ResponsiveSnackBar.showWarning(
                                                                             context,
                                                                             "OCO $ocoQtyFieldName cannot be 0");
@@ -7050,7 +7095,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         ? (_isQtyToAmount
                                                                             ? "Amount"
                                                                             : "Quantity")
-                                                                        : widget.scripInfo.exch == "MCX"
+                                                                        : (widget.scripInfo.exch == "MCX" ||
+                                                                  widget.scripInfo.exch == "NCOM")
                                                                             ? "Lot"
                                                                             : (_isLotToQty
                                                                                 ? "Quantity"
@@ -7069,7 +7115,8 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                         ? (_isQtyToAmount
                                                                             ? "Amount"
                                                                             : "Quantity")
-                                                                        : widget.scripInfo.exch == "MCX"
+                                                                        : (widget.scripInfo.exch == "MCX" ||
+                                                                  widget.scripInfo.exch == "NCOM")
                                                                             ? "Lot"
                                                                             : (_isLotToQty
                                                                                 ? "Quantity"
@@ -8569,6 +8616,68 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     await ref.read(orderProvider).fetchSipPlaceOrder(context, sipOrderInput);
   }
 
+  /// Field checks the normal order path runs, for the basket path (which
+  /// stores the leg instead of placing it). Shows the first failure and
+  /// returns false. Lot size, freeze-qty slicing and basket slots are already
+  /// handled in addBasketScrip; the surveillance sheet does not apply here.
+  bool _basketFieldsValid() {
+    String? warning;
+    if (orderType == "CO - BO") {
+      final String slR =
+          roundOffWithInterval(SafeParse.toDouble(stopLossCtrl.text), tik)
+              .toStringAsFixed(2);
+      if (stopLossCtrl.text.isNotEmpty &&
+          SafeParse.toDouble(stopLossCtrl.text) != SafeParse.toDouble(slR)) {
+        warning = "Stoploss should be multiple of tick size $tik => $slR";
+      } else if (_isBracketOrderEnabled) {
+        final String tgtR =
+            roundOffWithInterval(SafeParse.toDouble(targetCtrl.text), tik)
+                .toStringAsFixed(2);
+        if (targetCtrl.text.isNotEmpty &&
+            SafeParse.toDouble(targetCtrl.text) != SafeParse.toDouble(tgtR)) {
+          warning = "Target should be multiple of tick size $tik => $tgtR";
+        }
+      }
+    }
+    if (warning == null && _addValidityAndDisclosedQty && _dscqtyApplies) {
+      final int discQty = SafeParse.toInt(discQtyCtrl.text);
+      final int orderQty = widget.scripInfo.exch == 'MCX'
+          ? SafeParse.toInt(getFinalQuantity(qtyCtrl.text)) * lotSize
+          : SafeParse.toInt(getFinalQuantity(qtyCtrl.text));
+      if (discQty > orderQty) {
+        warning = "Disclosed Qty cannot be greater than Quantity $orderQty";
+      }
+    }
+    if (warning == null &&
+        (priceType == "Limit" || priceType == "SL Limit")) {
+      final String r =
+          roundOffWithInterval(SafeParse.toDouble(priceCtrl.text), tik)
+              .toStringAsFixed(2);
+      if (SafeParse.toDouble(priceCtrl.text) != SafeParse.toDouble(r)) {
+        warning = "Price should be multiple of tick size $tik => $r";
+      }
+    }
+    if (warning == null &&
+        (priceType == "SL Limit" || priceType == "SL MKT")) {
+      final String r =
+          roundOffWithInterval(SafeParse.toDouble(triggerPriceCtrl.text), tik)
+              .toStringAsFixed(2);
+      if (SafeParse.toDouble(triggerPriceCtrl.text) != SafeParse.toDouble(r)) {
+        warning = "Trigger should be multiple of tick size $tik => $r";
+      }
+    }
+    if (warning == null &&
+        (priceType == "Market" || priceType == "SL MKT") &&
+        (mktProtCtrl.text.isEmpty ||
+            SafeParse.toDouble(mktProtCtrl.text) > 20 ||
+            SafeParse.toDouble(mktProtCtrl.text) < 1)) {
+      warning = "Market Protection must be between 1% and 20%";
+    }
+    if (warning == null) return true;
+    ResponsiveSnackBar.showWarning(context, warning);
+    return false;
+  }
+
   placeOrder(OrderInputProvider orderInput, bool isSliceOrd,
       ThemesProvider theme) async {
     // Guard: for stocks in Amount mode, an amount below LTP floors to qty 0.
@@ -8590,18 +8699,23 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     if (widget.isBasket == "Basket" ||
         widget.isBasket == "BasketEdit" ||
         widget.isBasket == "BasketMode") {
+      // TC_308: the basket path never reached the field checks in the normal
+      // order branch below, so bad values were saved silently. Runs before
+      // removeBsktScrip so a failed check on an edit keeps the existing row.
+      if (!_basketFieldsValid()) return;
+      // An edit replaces its row in place inside addBasketScrip, after all of
+      // its checks pass. Deleting the row up front lost it whenever one of
+      // those checks then failed, and moved the edited row to the bottom.
+      int? editIndex;
       if (widget.isBasket == "BasketEdit") {
         final rawIndex = widget.orderArg.raw['index'];
-        final bsktIndex = rawIndex is int
+        editIndex = rawIndex is int
             ? rawIndex
-            : int.tryParse(rawIndex?.toString() ?? '') ?? 0;
-        await ref
-            .read(orderProvider)
-            .removeBsktScrip(bsktIndex, bsktName);
+            : int.tryParse(rawIndex?.toString() ?? '');
       }
       // Pass false for stay so basket dialog stays open when adding new symbols
       // Only close basket dialog when editing existing basket script
-      addBasketScrip(orderInput, bsktName, false);
+      addBasketScrip(orderInput, bsktName, false, editIndex: editIndex);
     } else {
       // TC_300.4: CO/BO Stoploss (in Rs) and BO Target (in Rs) must be a
       // multiple of the tick size — same rule Price/Trigger already follow.
@@ -9237,8 +9351,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     }
   }
 
-  addBasketScrip(
-      OrderInputProvider orderInput, String bsktName, bool stay) async {
+  /// [editIndex] is the row being edited (BasketEdit); that row is replaced in
+  /// place only after every check here passes, so a failed check leaves it.
+  addBasketScrip(OrderInputProvider orderInput, String bsktName, bool stay,
+      {int? editIndex}) async {
     // Get close callback before async operations
     final closeNotifier = _PlaceOrderDialogCloseNotifier.of(context);
     
@@ -9268,13 +9384,20 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     }
 
     List scripList = data[bsktName] ?? [];
+    // An index that no longer points at a row is treated as a plain add, so
+    // nothing else in the basket is touched.
+    final bool isInPlaceEdit = editIndex != null &&
+        editIndex >= 0 &&
+        editIndex < scripList.length;
 
     // Calculate splits needed for current order
     List<int> splitQuantities = [];
     // For MCX, convert frezQty from lots to actual qty to match quantity
     final freezeQty = widget.scripInfo.exch == 'MCX' ? frezQty * lotSize : frezQty;
     final orderProv = ref.read(orderProvider);
-    final frezQtyOrderSliceMaxLimit = orderProv.frezQtyOrderSliceMaxLimit;
+    // A basket holds at most basketMaxOrders rows (20), not the 40-slice
+    // limit of normal Place Order.
+    final frezQtyOrderSliceMaxLimit = orderProv.basketMaxOrders;
 
     if (widget.scripInfo.frzqty != null && quantity > freezeQty) {
       // Calculate number of full splits and remainder
@@ -9295,8 +9418,9 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       splitQuantities.add(quantity);
     }
 
-    // Check if total basket items would exceed the limit
-    int currentBasketOrders = scripList.length;
+    // Check if total basket items would exceed the limit. The row being
+    // edited is replaced, so its slot counts as free.
+    int currentBasketOrders = scripList.length - (isInPlaceEdit ? 1 : 0);
     int newOrders = splitQuantities.length;
     int remainingSlots = frezQtyOrderSliceMaxLimit - currentBasketOrders;
 
@@ -9314,9 +9438,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       return;
     }
 
-    // Add each split as separate entry to basket
+    // Build each split as separate entry for the basket
+    final List<Map<String, dynamic>> newRows = [];
+    final int discQty = SafeParse.toInt(discQtyCtrl.text);
     for (int splitQty in splitQuantities) {
-      scripList.add({
+      newRows.add({
         "dname": "${widget.scripInfo.dname}",
         "token": widget.scripInfo.token,
         "frzqty": widget.scripInfo.frzqty?.toString() ?? "0",
@@ -9326,7 +9452,10 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
         "bpprc": orderType == "CO - BO" && _isBracketOrderEnabled
             ? targetCtrl.text
             : '',
-        "dscqty": discQtyCtrl.text,
+        // Each split row is its own order, so its disclosed qty can't exceed
+        // that row's qty or the exchange rejects it.
+        "dscqty":
+            discQty > splitQty ? splitQty.toString() : discQtyCtrl.text,
         "exch": stockExchangeSelected.exch == null ? "${widget.scripInfo.exch}" : stockExchangeSelected.exch??"",
         "prc": ordPrice,
         "prctype": orderInput.prcType,
@@ -9360,6 +9489,14 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       });
     }
 
+    Map? replacedRow;
+    if (isInPlaceEdit) {
+      replacedRow = scripList[editIndex] as Map?;
+      scripList.replaceRange(editIndex, editIndex + 1, newRows);
+    } else {
+      scripList.addAll(newRows);
+    }
+
     data.addAll({bsktName: scripList});
 
     String jsonData = jsonEncode(data);
@@ -9375,6 +9512,38 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
       }
     } else {
       await pref.setBasketScrip(jsonData);
+    }
+
+    // Same cleanup removeBsktScrip did for the replaced row: drop its sent
+    // order tracking so the edited row starts fresh.
+    // Right after placing, the order ids sit only on the open basket's
+    // in-memory row (the saved copy gets them on reopen), so read them there
+    // first. Clear that row too: the tracking save below rebuilds statuses
+    // from the in-memory rows and would otherwise keep the old status.
+    final List memRows = orderProv.bsktScripList;
+    final Map? memRow = isInPlaceEdit &&
+            orderProv.selectedBsktName == bsktName &&
+            editIndex < memRows.length &&
+            memRows[editIndex] is Map
+        ? memRows[editIndex] as Map
+        : null;
+    final List<String> replacedOrderIds = List<String>.from(
+        memRow?['orderIds'] ?? replacedRow?['orderIds'] ?? <String>[]);
+    if (memRow != null) {
+      for (final key in const [
+        'orderIds',
+        'orderStatus',
+        'orderError',
+        'avgPrice',
+        'filledQty',
+        'rejectionReason'
+      ]) {
+        memRow.remove(key);
+      }
+    }
+    if (replacedOrderIds.isNotEmpty) {
+      orderProv.removeScriptOrderTracking(
+          bsktName, "${replacedRow!['token']}_$editIndex", replacedOrderIds);
     }
 
     // **FIX: Add small delay to ensure storage write completes before reading**
