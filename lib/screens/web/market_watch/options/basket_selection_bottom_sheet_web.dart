@@ -531,7 +531,7 @@ class _BasketSelectionBottomSheetState
                       ],
                     ),
                     subtitle: Text(
-                      'Items: ${basketData['curLength']}/${basketData['max']}',
+                      'Items: ${basketData['curLength']}/${ref.read(orderProvider).basketMaxOrders}',
                       style: TextStyle(
                         fontSize: 12,
                         color: theme.isDarkMode ? colors.textSecondaryDark : colors.textSecondaryLight,

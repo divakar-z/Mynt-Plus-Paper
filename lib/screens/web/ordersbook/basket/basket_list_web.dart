@@ -394,6 +394,17 @@ class _BasketListState extends ConsumerState<BasketList> {
     }
   }
 
+  /// A basket's createdDate, saved by convDateWithTime() as
+  /// "dd MMM yyyy, hh:mm a" (e.g. "09 Oct 2026, 01:30 PM").
+  DateTime _basketCreatedAt(Map basket) {
+    final raw = (basket['createdDate'] ?? '').toString().trim();
+    try {
+      return DateFormat("dd MMM yyyy, hh:mm a").parse(raw);
+    } catch (_) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+  }
+
   List<dynamic> _getSortedBaskets(List<dynamic> baskets) {
     if (_sortColumnIndex == null) return baskets;
     final sorted = [...baskets];
@@ -416,9 +427,10 @@ class _BasketListState extends ConsumerState<BasketList> {
           comparison = aItems.compareTo(bItems);
           break;
         case 2: // Created Date
-          comparison = ((a as Map)['createdDate'] ?? '')
-              .toString()
-              .compareTo(((b as Map)['createdDate'] ?? '').toString());
+          // Compare as dates, not text ("09 Oct" sorted before "10 Sep").
+          // Unreadable dates sort as the oldest.
+          comparison = _basketCreatedAt(a as Map)
+              .compareTo(_basketCreatedAt(b as Map));
           break;
       }
       return asc ? comparison : -comparison;
@@ -1031,8 +1043,14 @@ class _BasketListState extends ConsumerState<BasketList> {
     );
 
     if (shouldDelete == true) {
+      // `index` is the row's place in the sorted / searched table, not in the
+      // provider's list, so deleting by it could remove another basket.
+      // Find the basket by name, as the basket window's own delete does.
+      final realIndex = basketProvider.bsktList
+          .indexWhere((b) => b['bsketName'].toString() == bsktName.toString());
+      if (realIndex == -1) return;
       setState(() => _isDeleting = true);
-      await basketProvider.removeBasket(index);
+      await basketProvider.removeBasket(realIndex);
       if (mounted) {
         setState(() => _isDeleting = false);
         ResponsiveSnackBar.showSuccess(
@@ -1579,20 +1597,25 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   }
 
   /// Checks if the basket contains scripts from multiple exchanges
-  bool _hasMultipleExchanges(List scriptList) {
-    if (scriptList.isEmpty) return false;
-
-    // Extract all exchanges from the basket scripts
-    Set<String> exchanges = {};
-    for (var script in scriptList) {
-      if (script['exch'] != null) {
-        exchanges.add(script['exch'].toString());
-      }
-    }
-
-    // If there's more than one unique exchange, return true
-    return exchanges.length > 1;
-  }
+  // TC_263: mixed segments are allowed in one basket (vendor and Kite
+  // allow it; basket margin verified against the vendor on 12 Oct 2026 for
+  // NSE+NFO, BSE+NSE+BFO and NSE+NFO+MCX). Returning false removes the
+  // "only 1 segment" warning and the Place block. Old check kept below.
+  bool _hasMultipleExchanges(List scriptList) => false;
+  // bool _hasMultipleExchanges(List scriptList) {
+  //   if (scriptList.isEmpty) return false;
+// 
+  //   // Extract all exchanges from the basket scripts
+  //   Set<String> exchanges = {};
+  //   for (var script in scriptList) {
+  //     if (script['exch'] != null) {
+  //       exchanges.add(script['exch'].toString());
+  //     }
+  //   }
+// 
+  //   // If there's more than one unique exchange, return true
+  //   return exchanges.length > 1;
+  // }
 
   /// Checks if the current basket has any orders placed
   bool _hasOrdersPlacedInBasket(
@@ -2002,6 +2025,15 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         ? "0.00"
         : basket.bsktOrderMargin!.postTradeMargin.toIndianFormat();
 
+    // The basket margin API rejects some baskets (e.g. more than 20 rows:
+    // "Basket size should be less than or equal to 20"). Its error used to
+    // read as ₹0.00; show "Not available" with the API's reason instead.
+    final marginError = basket.bsktScripList.isNotEmpty &&
+            basket.bsktOrderMargin?.stat != null &&
+            basket.bsktOrderMargin!.stat != 'Ok'
+        ? (basket.bsktOrderMargin!.emsg ?? 'Margin not available')
+        : null;
+
     return Material(
       color: theme.isDarkMode
           ? styles.MyntColors.backgroundColorDark
@@ -2139,6 +2171,10 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       theme: theme,
                     ),
                     ),
+                    const SizedBox(width: 8),
+                    // How many of the basket's 20 orders are used.
+                    _buildBasketCountChip(basket.bsktScripList.length,
+                        basket.basketMaxOrders, theme),
                     // TC_123: basket delete lives on the basket row hover only.
                     // const SizedBox(width: 4),
                     // _buildBasketHoverButton(
@@ -2306,8 +2342,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                 // Define headers and fixed widths for shadcn.Table
                                 final basket = ref.read(orderProvider);
                                 final count = basket.bsktScripList.length;
-                                final maxCount =
-                                    basket.frezQtyOrderSliceMaxLimit;
+                                final maxCount = basket.basketMaxOrders;
 
                                 final headers = [
                                   'Instrument ($count / $maxCount)',
@@ -2540,8 +2575,12 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w400),
                               ),
-                              Text(
-                                "₹$preTradeMargin",
+                              Tooltip(
+                                message: marginError ?? "",
+                                child: Text(
+                                marginError != null
+                                    ? "Not available"
+                                    : "₹$preTradeMargin",
                                 style: WebTextStyles.custom(
                                     fontSize: 13,
                                     isDarkTheme: theme.isDarkMode,
@@ -2549,6 +2588,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         ? WebDarkColors.textPrimary
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w700),
+                              ),
                               ),
                               const SizedBox(width: 24),
                               Text(
@@ -2561,8 +2601,12 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w400),
                               ),
-                              Text(
-                                "₹$postTradeMargin",
+                              Tooltip(
+                                message: marginError ?? "",
+                                child: Text(
+                                marginError != null
+                                    ? "Not available"
+                                    : "₹$postTradeMargin",
                                 style: WebTextStyles.custom(
                                     fontSize: 13,
                                     isDarkTheme: theme.isDarkMode,
@@ -2570,6 +2614,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         ? WebDarkColors.textPrimary
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w700),
+                              ),
                               ),
                               // TC_105: refresh sits with the margins it
                               // re-fetches, away from Reset Orders.
@@ -2633,6 +2678,15 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                   _hasMultipleExchanges(_rowsToSend(basket))
                               ? null
                               : () async {
+                                  // A basket may hold at most 20 orders;
+                                  // older baskets can still have more.
+                                  final extra = basket.bsktScripList.length -
+                                      basket.basketMaxOrders;
+                                  if (extra > 0) {
+                                    ResponsiveSnackBar.showWarning(context,
+                                        "A basket can have up to ${basket.basketMaxOrders} orders. Delete $extra ${extra == 1 ? 'order' : 'orders'} to place.");
+                                    return;
+                                  }
                                   if (toPlace.isNotEmpty) {
                                     setState(() => _selected.removeAll(toPlace));
                                     await basket.placeBasketItems(
@@ -3078,7 +3132,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         //     ),
         //   );
         // }
-        final orderStatus = item["orderStatus"]?.toString().toUpperCase() ?? 'PENDING';
+        final rawStatus =
+            item["orderStatus"]?.toString().toUpperCase() ?? 'PENDING';
+        // The API says CANCELED; show CANCELLED like the option chain basket
+        // and the other order books.
+        final orderStatus = rawStatus == 'CANCELED' ? 'CANCELLED' : rawStatus;
         // TC_324.1 sibling: FAILED/REJECTED badge shows the reason on hover.
         final reason = item["rejectionReason"]?.toString().trim() ?? '';
         final statusTooltip =
@@ -3260,6 +3318,46 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     }
   }
 
+
+  /// "5 / 20 orders" pill beside the basket name: blue normally, amber when
+  /// 2 or fewer slots are left, red once the basket is full (or over the
+  /// limit, for baskets saved before the 20-order cap).
+  Widget _buildBasketCountChip(int count, int max, ThemesProvider theme) {
+    final bool full = count >= max;
+    final bool near = !full && max - count <= 2;
+    final Color fg = full
+        ? resolveThemeColor(context,
+            dark: MyntColors.lossDark, light: MyntColors.loss)
+        : near
+            ? resolveThemeColor(context,
+                dark: MyntColors.warning, light: const Color(0xFFC25E00))
+            : resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final String label = count > max
+        ? "Over limit · $count / $max"
+        : full
+            ? "Full · $count / $max"
+            : "$count / $max orders";
+    return Tooltip(
+      message: "A basket can have up to $max orders",
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: fg.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: WebTextStyles.custom(
+            fontSize: 12,
+            isDarkTheme: theme.isDarkMode,
+            color: fg,
+            fontWeight: FontWeight.w600,
+          ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+        ),
+      ),
+    );
+  }
 
   Widget _buildBasketHoverButton({
     String? label,

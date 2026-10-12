@@ -60,7 +60,7 @@ class _CreateBasketState extends ConsumerState<CreateBasket> {
 
       if (trimmedText.length > 20) {
         setState(
-            () => errorText = "Basket name must be less than 20 characters");
+            () => errorText = "Basket name can be up to 20 characters");
         return;
       }
 
@@ -247,7 +247,7 @@ class _CreateBasketState extends ConsumerState<CreateBasket> {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             if (!mounted) return;
                             setState(() => errorText =
-                                "Basket name must be less than 20 characters");
+                                "Basket name can be up to 20 characters");
                           });
                           // Typing past 20 keeps the name as it was; a longer
                           // paste is cut to the first 20 characters.

@@ -52,6 +52,11 @@ class OrderProvider extends DefaultChangeNotifier {
 
   int frezQtyOrderSliceMaxLimit = 40;
 
+  /// Most orders (rows) one web basket may hold. Separate from the slice
+  /// limit above: GetBasketMargin rejects more than 20 rows, and the vendor
+  /// basket caps at 20 too. Normal Place Order still slices up to 40.
+  int basketMaxOrders = 20;
+
   final FToast _fToast = FToast();
   FToast get fToast => _fToast;
   final Ref ref;
@@ -664,6 +669,22 @@ class OrderProvider extends DefaultChangeNotifier {
 
     // Load order tracking data for the selected basket
     await _restoreOrderTrackingData();
+
+    // CO - BO is not allowed in a web basket any more: drop rows saved
+    // earlier as Cover (H) / Bracket (B). Runs after the restore so
+    // removeBsktScrips re-saves the other rows' statuses at their new index.
+    if (kIsWeb) {
+      final coboRows = [
+        for (int i = 0; i < _bsktScripList.length; i++)
+          if (_bsktScripList[i]['prd'] == 'H' ||
+              _bsktScripList[i]['prd'] == 'B')
+            i
+      ];
+      if (coboRows.isNotEmpty) {
+        await removeBsktScrips(coboRows, val);
+        await fetchBasketMargin();
+      }
+    }
 
     // Only update basket order status if we have order book data available
     if (_orderBookModel != null && _orderBookModel!.isNotEmpty) {
@@ -2912,7 +2933,7 @@ class OrderProvider extends DefaultChangeNotifier {
     _bsktList.add({
       "bsketName": trimmedName,
       "createdDate": curDate,
-      "max": frezQtyOrderSliceMaxLimit.toString(),
+      "max": basketMaxOrders.toString(),
       "curLength": '0'
     });
     final userId = pref.clientId;
@@ -2936,14 +2957,19 @@ class OrderProvider extends DefaultChangeNotifier {
     final trimmedNewName = newName.trim();
     final lowerCaseNewName = trimmedNewName.toLowerCase();
 
-    if (oldName.toLowerCase() == lowerCaseNewName) {
+    // Nothing to do only when the name is exactly the same. A case-only
+    // change ("abc" -> "ABC") used to be dropped here.
+    if (oldName == trimmedNewName) {
       Navigator.pop(context);
       return;
     }
 
-    // Check for duplicate basket names
+    // Check for duplicate basket names (the basket being renamed is not a
+    // duplicate of itself, so a case-only rename passes)
     for (var basket in _bsktList) {
-      if (basket['bsketName'].toString().toLowerCase() == lowerCaseNewName) {
+      final existing = basket['bsketName'].toString().toLowerCase();
+      if (existing == oldName.toLowerCase()) continue;
+      if (existing == lowerCaseNewName) {
         if (kIsWeb) {
           ResponsiveSnackBar.showWarning(
               context, "Basket name '$trimmedNewName' already exists");
