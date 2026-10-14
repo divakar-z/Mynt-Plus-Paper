@@ -1,16 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
-import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 
+/// Entry price cell of the legs table. The ⇆ icon inside the box switches the
+/// leg to the market price ("Market") and, clicked again, back to the typed price.
 class EntryPriceTableInput extends StatefulWidget {
   final double value;
   final ValueChanged<double> onChanged;
+  final bool market;
+  final VoidCallback? onToggleMarket;
+  final String? marketTip;
 
   const EntryPriceTableInput({
     super.key,
     required this.value,
     required this.onChanged,
+    this.market = false,
+    this.onToggleMarket,
+    this.marketTip,
   });
 
   @override
@@ -53,28 +60,59 @@ class _EntryPriceTableInputState extends State<EntryPriceTableInput> {
 
   @override
   Widget build(BuildContext context) {
-    return MyntTextField(
-      controller: _controller,
-      placeholder: '0.00',
-      textAlign: TextAlign.center,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      borderRadius: 4,
-      borderColor:(resolveThemeColor(context, dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder)),
-      backgroundColor: Colors.transparent,
+    final textStyle = MyntWebTextStyles.bodySmall(
+      context,
+      darkColor: MyntColors.textPrimaryDark,
+      lightColor: MyntColors.textBlack,
+      fontWeight: MyntFonts.medium,
+    ).copyWith(fontSize: 12);
+    final primary = resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final muted = resolveThemeColor(context, dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    return Container(
       height: 28,
-      textStyle: MyntWebTextStyles.bodySmall(
-        context,
-        darkColor: MyntColors.textPrimaryDark,
-        lightColor: MyntColors.textBlack,
-        fontWeight: MyntFonts.medium,
-      ).copyWith(fontSize: 12),
-      onChanged: (val) {
-         final price = double.tryParse(val);
-         if (price != null) {
-           _lastEmittedValue = price;
-           widget.onChanged(price);
-         }
-      },
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: resolveThemeColor(context, dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder)),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: widget.market
+              ? Center(child: Text('Market', style: textStyle.copyWith(color: primary)))
+              : TextField(
+                  controller: _controller,
+                  textAlign: TextAlign.center,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: textStyle,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: '0.00',
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 7),
+                  ),
+                  onChanged: (val) {
+                    final price = double.tryParse(val);
+                    if (price != null) {
+                      _lastEmittedValue = price;
+                      widget.onChanged(price);
+                    }
+                  },
+                ),
+        ),
+        if (widget.onToggleMarket != null)
+          Tooltip(
+            message: widget.marketTip ?? '',
+            child: InkWell(
+              onTap: widget.onToggleMarket,
+              borderRadius: BorderRadius.circular(4),
+              child: SizedBox(
+                width: 22,
+                height: 26,
+                child: Icon(Icons.swap_horiz, size: 15, color: widget.market ? primary : muted),
+              ),
+            ),
+          ),
+      ]),
     );
   }
 }

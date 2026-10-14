@@ -1317,13 +1317,18 @@ class _CustomizableSplitHomeScreenState
 
   /// True when any panel currently shows the Scanner shell — the Scanner
   /// page renders full-width with no watchlist (same pattern as Scalper).
-  bool get _isScannerActive {
+  bool get _isScannerActive => _isPanelScreenActive(ScreenType.scanner);
+
+  /// Strategy Builder also renders full-width with no watchlist.
+  bool get _isStrategyBuilderActive => _isPanelScreenActive(ScreenType.strategyBuilder);
+
+  bool _isPanelScreenActive(ScreenType type) {
     for (final panel in _panels) {
-      if (panel.screenType == ScreenType.scanner) return true;
+      if (panel.screenType == type) return true;
       if (panel.screens.isNotEmpty &&
           panel.activeScreenIndex >= 0 &&
           panel.activeScreenIndex < panel.screens.length &&
-          panel.screens[panel.activeScreenIndex] == ScreenType.scanner) {
+          panel.screens[panel.activeScreenIndex] == type) {
         return true;
       }
     }
@@ -1358,6 +1363,16 @@ class _CustomizableSplitHomeScreenState
               initialExplainArgs: widget.initialExplainArgs,
             ),
           ),
+        ],
+      );
+    }
+
+    // Strategy Builder: full-width AppBar + builder, no watchlist (same as Scanner)
+    if (_isStrategyBuilderActive) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          const Expanded(child: StrategyBuilderPanelWeb()),
         ],
       );
     }
