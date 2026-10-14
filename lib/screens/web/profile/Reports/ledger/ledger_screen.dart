@@ -19,7 +19,6 @@ import 'package:mynt_plus/sharedWidget/no_data_found.dart';
 import '../../../../../../provider/thems.dart';
 import '../../../../../../res/global_state_text.dart';
 import '../../../../../../sharedWidget/custom_switch_btn.dart';
-import '../../../../../../sharedWidget/custom_text_form_field.dart';
 import '../../../../../../sharedWidget/list_divider.dart';
 import '../../../../../../sharedWidget/splash_loader.dart';
 import '../../../../../../utils/no_emoji_inputformatter.dart';
@@ -698,7 +697,6 @@ class _LedgerScreenState extends ConsumerState<LedgerScreen> {
                                     textCapitalization:
                                         TextCapitalization.characters,
                                     inputFormatters: [
-                                      UpperCaseTextFormatter(),
                                       NoEmojiInputFormatter(),
                                       FilteringTextInputFormatter.deny(
                                           RegExp('[π£•₹€℅™∆√¶/.,]'))

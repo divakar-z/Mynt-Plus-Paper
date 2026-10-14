@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mynt_plus/models/mf_model/mutual_fundmodel.dart';
-import 'package:mynt_plus/sharedWidget/custom_text_form_field.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
 import 'package:mynt_plus/sharedWidget/snack_bar.dart';
@@ -149,7 +148,6 @@ class _MfCommonSearchWebState extends ConsumerState<MfCommonSearchWeb> {
                           // textCapitalization:
                           //     TextCapitalization.characters,
                           inputFormatters: [
-                            UpperCaseTextFormatter(),
                             NoEmojiInputFormatter(),
                             FilteringTextInputFormatter.deny(
                                 RegExp('[π£•₹€℅™∆√¶/.,]'))

@@ -15,7 +15,6 @@ import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/snack_bar.dart' as snack_bar;
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_search_fields_web.dart';
-import '../../../../sharedWidget/custom_text_form_field.dart' show UpperCaseTextFormatter;
 import 'position_group_symbol_web.dart';
 
 final _assets = Assets();
@@ -159,9 +158,8 @@ class _PositionListBottomSheetState
                             placeholder: 'Search',
                             leadingIcon: _assets.searchIcon,
                             inputFormatters: [
-                              UpperCaseTextFormatter(),
                               FilteringTextInputFormatter.allow(
-                                  RegExp(r'[A-Z0-9& \-]')),
+                                  RegExp(r'[A-Za-z0-9& \-]')),
                               TextInputFormatter.withFunction(
                                   (oldValue, newValue) {
                                 if (newValue.text.startsWith(' ')) {
