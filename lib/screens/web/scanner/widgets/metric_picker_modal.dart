@@ -33,6 +33,7 @@ Future<MetricPickerResult?> showMetricPicker(
   IndicatorCatalog? catalog,
   required Set<String> selectedFundamentals,
   required Set<String> selectedTechnicals,
+  bool allIndicatorKinds = false,
 }) {
   return showDialog<MetricPickerResult>(
     context: context,
@@ -41,6 +42,7 @@ Future<MetricPickerResult?> showMetricPicker(
       catalog: catalog,
       selectedFundamentals: selectedFundamentals,
       selectedTechnicals: selectedTechnicals,
+      allIndicatorKinds: allIndicatorKinds,
     ),
   );
 }
@@ -50,11 +52,16 @@ class _MetricPicker extends StatefulWidget {
   final IndicatorCatalog? catalog;
   final Set<String> selectedFundamentals;
   final Set<String> selectedTechnicals;
+  /// Also list boolean (candlestick patterns) and enum indicators — used by
+  /// the predefined-scanner filter row, which edits those as Yes/No or a
+  /// label dropdown.
+  final bool allIndicatorKinds;
   const _MetricPicker({
     required this.fields,
     required this.catalog,
     required this.selectedFundamentals,
     required this.selectedTechnicals,
+    required this.allIndicatorKinds,
   });
 
   @override
@@ -99,7 +106,9 @@ class _MetricPickerState extends State<_MetricPicker> {
       // Only float indicators for the sidebar — booleans and enums make less
       // sense as "value < N" chips and stay in the Custom Scans page.
       for (final i in cat.indicators) {
-        if (i.kind != IndicatorKind.floatKind) continue;
+        if (!widget.allIndicatorKinds && i.kind != IndicatorKind.floatKind) {
+          continue;
+        }
         _byIndCat.putIfAbsent(i.category, () => []).add(i);
       }
     }
@@ -196,7 +205,9 @@ class _MetricPickerState extends State<_MetricPicker> {
                                   color: textPrimary)),
                           const SizedBox(height: 4),
                           Text(
-                              '$totalMetrics metrics · fundamentals + technicals',
+                              widget.fields.isEmpty
+                                  ? '$totalMetrics technical indicators'
+                                  : '$totalMetrics metrics · fundamentals + technicals',
                               style: MyntWebTextStyles.caption(context,
                                   color: secondary)),
                         ],

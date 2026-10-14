@@ -151,8 +151,29 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
           //   ],
           // ),
           // const SizedBox(height: 12),
-          _buildTabs(state.activeSubPage),
-          const SizedBox(height: 12),
+          // _buildTabs(state.activeSubPage),
+          // const SizedBox(height: 12),
+          // Tab bar removed — the Dashboard is the entry point and links to
+          // the other sub-pages; they return here via their own back button,
+          // rendered inline with each page's title.
+          //
+          // KEPT FOR FUTURE USE — currently unreachable by design. The three
+          // names below are every value of ScannerSubPage, so the condition is
+          // always false and nothing renders. It comes back to life the moment
+          // a fourth sub-page is added that does NOT draw its own back button:
+          // add it to the enum, leave it out of this list, and it gets this
+          // shared one for free.
+          // ignore: dead_code
+          if (state.activeSubPage != ScannerSubPage.scannersNew &&
+              state.activeSubPage != ScannerSubPage.fundamentalsNew &&
+              state.activeSubPage != ScannerSubPage.customScans) ...[
+            CustomBackBtn(
+              onBack: () => ref
+                  .read(scannerShellProvider.notifier)
+                  .setActiveSubPage(ScannerSubPage.scannersNew),
+            ),
+            const SizedBox(height: 8),
+          ],
           Expanded(
             child: IndexedStack(
               // IndexedStack maps `.index` to child order — child list MUST
@@ -176,65 +197,65 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
     );
   }
 
-  /// Top tab bar — styled like the Positions screen chip tabs. Each tab maps
-  /// to a ScannerSubPage:
-  ///   Dashboard    → scannersNew
-  ///   Fundamentals → fundamentalsNew
-  ///   Custom Scans → customScans (saved list + full predicate builder)
-  Widget _buildTabs(ScannerSubPage active) {
-    const tabs = <_ScannerTab>[
-      _ScannerTab('Dashboard', ScannerSubPage.scannersNew),
-      _ScannerTab('Fundamentals', ScannerSubPage.fundamentalsNew),
-      // _ScannerTab('Custom Scans', ScannerSubPage.customScans),
-    ];
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final t in tabs) _tabChip(t, active == t.page, isDark),
-      ],
-    );
-  }
-
-  Widget _tabChip(_ScannerTab tab, bool selected, bool isDark) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () {
-          if (!selected) {
-            ref
-                .read(scannerShellProvider.notifier)
-                .setActiveSubPage(tab.page);
-          }
-        },
-        child: Container(
-          margin: const EdgeInsets.only(right: 4),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: selected
-                ? (isDark
-                    ? Colors.white.withOpacity(0.1)
-                    : Colors.black.withOpacity(0.05))
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            tab.label,
-            style: MyntWebTextStyles.body(
-              context,
-              fontWeight:
-                  selected ? MyntFonts.semiBold : MyntFonts.medium,
-            ).copyWith(
-              color: selected
-                  ? shadcn.Theme.of(context).colorScheme.foreground
-                  : shadcn.Theme.of(context).colorScheme.mutedForeground,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  // Top tab bar — disabled; kept commented so the Custom Scans tab can be
+  // re-enabled. Each tab maps to a ScannerSubPage:
+  //   Dashboard    → scannersNew
+  //   Fundamentals → fundamentalsNew
+  //   Custom Scans → customScans (saved list + full predicate builder)
+  // Widget _buildTabs(ScannerSubPage active) {
+  //   const tabs = <_ScannerTab>[
+  //     _ScannerTab('Dashboard', ScannerSubPage.scannersNew),
+  //     _ScannerTab('Fundamentals', ScannerSubPage.fundamentalsNew),
+  //     _ScannerTab('Custom Scans', ScannerSubPage.customScans),
+  //   ];
+  //   final isDark = Theme.of(context).brightness == Brightness.dark;
+  //   return Row(
+  //     mainAxisSize: MainAxisSize.min,
+  //     children: [
+  //       for (final t in tabs) _tabChip(t, active == t.page, isDark),
+  //     ],
+  //   );
+  // }
+  //
+  // Widget _tabChip(_ScannerTab tab, bool selected, bool isDark) {
+  //   return MouseRegion(
+  //     cursor: SystemMouseCursors.click,
+  //     child: GestureDetector(
+  //       onTap: () {
+  //         if (!selected) {
+  //           ref
+  //               .read(scannerShellProvider.notifier)
+  //               .setActiveSubPage(tab.page);
+  //         }
+  //       },
+  //       child: Container(
+  //         margin: const EdgeInsets.only(right: 4),
+  //         padding:
+  //             const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+  //         decoration: BoxDecoration(
+  //           color: selected
+  //               ? (isDark
+  //                   ? Colors.white.withOpacity(0.1)
+  //                   : Colors.black.withOpacity(0.05))
+  //               : Colors.transparent,
+  //           borderRadius: BorderRadius.circular(6),
+  //         ),
+  //         child: Text(
+  //           tab.label,
+  //           style: MyntWebTextStyles.body(
+  //             context,
+  //             fontWeight:
+  //                 selected ? MyntFonts.semiBold : MyntFonts.medium,
+  //           ).copyWith(
+  //             color: selected
+  //                 ? shadcn.Theme.of(context).colorScheme.foreground
+  //                 : shadcn.Theme.of(context).colorScheme.mutedForeground,
+  //           ),
+  //         ),
+  //       ),
+  //     ),
+  //   );
+  // }
 
   /// Top bar shown while a scrip is selected (or being resolved): a simple
   /// back button + the symbol name (matches the detail header style).
@@ -297,8 +318,9 @@ class _ScannerShellScreenState extends ConsumerState<ScannerShellScreen> {
   }
 }
 
-class _ScannerTab {
-  final String label;
-  final ScannerSubPage page;
-  const _ScannerTab(this.label, this.page);
-}
+// Used by the commented-out tab bar above.
+// class _ScannerTab {
+//   final String label;
+//   final ScannerSubPage page;
+//   const _ScannerTab(this.label, this.page);
+// }

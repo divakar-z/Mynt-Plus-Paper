@@ -510,6 +510,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "scanner") {
+            _handleScannerTap();
           } else if (routeName == "instaOptions") {
             _handleInstaOptionsTap();
           } else if (routeName == "charts") {
@@ -597,6 +599,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "scanner") {
+            _handleScannerTap();
           } else if (routeName == "instaOptions") {
             _handleInstaOptionsTap();
           } else if (routeName == "charts") {

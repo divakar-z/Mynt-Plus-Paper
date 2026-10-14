@@ -8,14 +8,21 @@ import 'package:mynt_plus/models/scanner_model/fundamental_field.dart';
 import 'package:mynt_plus/models/scanner_model/fundamental_scan.dart';
 import 'package:mynt_plus/models/scanner_model/saved_screen.dart';
 import 'package:mynt_plus/provider/scanner/fundamentals_provider.dart';
+import 'package:mynt_plus/provider/scanner/scanner_shell_provider.dart';
+import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
+import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart'
+    show ScannerSubPage;
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/screens/web/scanner/sub_pages/fundamentals_builder_state.dart';
+import 'package:mynt_plus/screens/web/scanner/sub_pages/scanners_detail_pane.dart'
+    show showScanNameDialog;
 import 'package:mynt_plus/screens/web/scanner/utils/download_xlsx.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/open_scanner_scrip.dart';
+import 'package:mynt_plus/screens/web/scanner/utils/scanner_tokens.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/empty_state.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/export_modal.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/filter_inputs.dart';
@@ -96,7 +103,7 @@ class _FundamentalsNewSubPageState
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _header(fields),
-        const SizedBox(height: 10),
+        const SizedBox(height: 14),
         _filterPanel(fields),
         const SizedBox(height: 20),
         Expanded(child: _resultsArea()),
@@ -110,40 +117,73 @@ class _FundamentalsNewSubPageState
   // and the primary Run scan CTA on the right.
   // ---------------------------------------------------------------------
   Widget _header(AsyncValue<List<FundamentalField>> fields) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Text('Fundamental Screener',
-            style: MyntWebTextStyles.head(context, fontWeight: MyntFonts.bold)),
-        const Spacer(),
-        // Screen-name pill (with the Options dropdown chevron) sits on the
-        // right, followed by a standalone Save shortcut so users don't have
-        // to open the dropdown to persist the current name.
-        _OptionsMenu(
-          controller: _screenNameCtrl,
-          onSaveAs: _save,
-          onDownload: _export,
-          onLoadScreen: _loadScreenFromMenu,
-        ),
-        const SizedBox(width: 8),
-        _chipButton(
-          icon: shadcn.LucideIcons.save,
-          label: 'Save',
-          tooltip: 'Save this screen',
-          // Matches the screen-name pill height so the two sit as siblings.
-          height: 34,
-          onTap: _save,
-        ),
-        const SizedBox(width: 8),
-        // Icon-only Download shortcut — moved out of the Options dropdown so
-        // exporting the current screen takes one tap.
-        _chipButton(
-          icon: shadcn.LucideIcons.download,
-          tooltip: 'Download results',
-          height: 34,
-          onTap: _export,
-        ),
-      ],
+    return Container(
+      padding: ScannerTokens.toolbarPadding,
+      decoration: ScannerTokens.toolbar(context),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          CustomBackBtn(
+            onBack: () => ref
+                .read(scannerShellProvider.notifier)
+                .setActiveSubPage(ScannerSubPage.scannersNew),
+          ),
+          const SizedBox(width: 8),
+          // Same title + strapline the full scanner browser and the single
+          // scanner header use, so the three scanner pages read as one.
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Fundamental Screener',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: ScannerTokens.pageTitle(context),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Screen the market on fundamentals — valuation, returns, '
+                  'debt and growth',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: ScannerTokens.pageSubtitle(context),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Screen-name pill (with the Options dropdown chevron) sits on the
+          // right, followed by a standalone Save shortcut so users don't have
+          // to open the dropdown to persist the current name.
+          _OptionsMenu(
+            controller: _screenNameCtrl,
+            onSaveAs: _save,
+            onDownload: _export,
+            onLoadScreen: _loadScreenFromMenu,
+          ),
+          const SizedBox(width: 8),
+          _chipButton(
+            icon: shadcn.LucideIcons.save,
+            label: 'Save',
+            tooltip: 'Save this screen',
+            // Matches the screen-name pill height so the two sit as siblings.
+            height: 34,
+            onTap: _save,
+          ),
+          const SizedBox(width: 8),
+          // Icon-only Download shortcut — moved out of the Options dropdown so
+          // exporting the current screen takes one tap.
+          _chipButton(
+            icon: shadcn.LucideIcons.download,
+            tooltip: 'Download results',
+            height: 34,
+            onTap: _export,
+          ),
+          const SizedBox(width: 8),
+          _settingsMenu(),
+        ],
+      ),
     );
   }
 
@@ -198,13 +238,10 @@ class _FundamentalsNewSubPageState
   // they're now hidden behind the settings menu.
   // ---------------------------------------------------------------------
   Widget _filterPanel(AsyncValue<List<FundamentalField>> fields) {
-    final borderColor = resolveThemeColor(context,
-        dark: MyntColors.dividerDark, light: MyntColors.divider);
     return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: borderColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
+      // Recessed tray — the same ground the full scanner browser gives its
+      // category quick-jump chips, so the filter chips read as sitting on it.
+      decoration: ScannerTokens.tray(context),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: fields.when(
         loading: () => const SizedBox(height: 32),
@@ -336,9 +373,11 @@ class _FundamentalsNewSubPageState
           padding: EdgeInsets.symmetric(
               horizontal: label != null ? 10 : 6, vertical: 4),
           decoration: BoxDecoration(
-            color: filled ? primaryBg : null,
+            // Unfilled chips sit on the card surface: a no-op against the
+            // header toolbar, and a raise against the recessed filter tray.
+            color: filled ? primaryBg : ScannerTokens.surface(context),
             border: filled ? null : Border.all(color: border),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(ScannerTokens.rTag),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -504,6 +543,20 @@ class _FundamentalsNewSubPageState
         orElse: () => null);
     final muted = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    if (count == null) return const SizedBox.shrink();
+    return Row(
+      children: [
+        const Spacer(),
+        Text(count,
+            style: MyntWebTextStyles.body(context,
+                fontWeight: MyntFonts.regular, color: muted)),
+      ],
+    );
+  }
+
+  /// The 3-dot settings popover (Missing data / Show top / Manage columns),
+  /// shown in the header next to the Download button.
+  Widget _settingsMenu() {
     // Build the manageable-columns list from the current scan result and
     // apply the user's preferred order. Empty before the first scan → the
     // Manage Columns section renders empty.
@@ -531,21 +584,9 @@ class _FundamentalsNewSubPageState
       for (final k in orderedKeys)
         if (rawByKey[k] != null) rawByKey[k]!,
     ];
-    // Always render the row so the settings menu is available (Missing data
-    // / Show top affect the next Run) — even before the first scan. Match
-    // count sits immediately to the left of the menu so both read as one
-    // right-edge cluster.
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        const Spacer(),
-        if (count != null) ...[
-          Text(count,
-              style: MyntWebTextStyles.body(context,
-                  fontWeight: MyntFonts.regular, color: muted)),
-          const SizedBox(width: 10),
-        ],
-        _SettingsMenu(
+    // Always available (Missing data / Show top affect the next Run) — even
+    // before the first scan.
+    return _SettingsMenu(
           treatNullAs: _state.treatNullAs,
           limit: _state.limit,
           limitCtrl: _limitCtrl,
@@ -585,9 +626,7 @@ class _FundamentalsNewSubPageState
           },
           onLimit: (n) => _setBuilder(_state.copyWith(limit: n)),
           onApplyLimit: _run,
-        ),
-      ],
-    );
+        );
   }
 
   Widget _resultsBody() {
@@ -744,18 +783,25 @@ class _FundamentalsNewSubPageState
   Future<void> _save() async {
     // Ignore repeat taps while the previous save is still running.
     if (_saving) return;
-    final name = _screenNameCtrl.text.trim();
-    if (name.isEmpty) {
-      ResponsiveSnackBar.showWarning(
-          context, 'Please enter a name');
-      return;
-    }
     if (_state.filters.isEmpty) {
       ResponsiveSnackBar.showWarning(
           context, 'Add at least one filter before saving');
       return;
     }
     _saving = true;
+    // Ask for the name in a dialog, prefilled with whatever is in the header.
+    final name = await showScanNameDialog(
+      context,
+      initial: _screenNameCtrl.text.trim(),
+      title: 'Save screen',
+      prompt: 'Enter a name for this screen',
+      placeholder: 'Screen name',
+    );
+    if (name == null || !mounted) {
+      _saving = false;
+      return;
+    }
+    _screenNameCtrl.text = name;
     try {
       // Both lists are awaited instead of read through `asData`: on the first
       // save of a session (nothing has listened to the providers yet) and on
@@ -1259,8 +1305,10 @@ class _FilterChipState extends ConsumerState<_FilterChip> {
         padding: const EdgeInsets.only(left: 10, right: 4, top: 4, bottom: 4),
         decoration: BoxDecoration(
           border: Border.all(color: borderColor, width: 1),
-          borderRadius: BorderRadius.circular(6),
-          color: _hover || isOpen ? hoverBg : Colors.transparent,
+          borderRadius: BorderRadius.circular(ScannerTokens.rTag),
+          // Raised onto the card surface so each chip reads as a tile on the
+          // recessed filter tray, like the quick-jump chips on the browser.
+          color: _hover || isOpen ? hoverBg : ScannerTokens.surface(context),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

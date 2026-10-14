@@ -7,6 +7,7 @@ import 'package:mynt_plus/provider/scanner/market_indices_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/screens/web/scanner/utils/scanner_tokens.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
 
@@ -31,11 +32,17 @@ class IndexFilterDropdown extends ConsumerStatefulWidget {
   /// size when the entry is absent — backwards-compatible while backend
   /// rolls out the `include_index_counts` feature.
   final Map<String, int> matchCounts;
+
+  /// Trigger width. Defaults to the 220px used by the scanner headers;
+  /// narrow layouts pass a smaller value so the control still fits beside
+  /// the title instead of being pushed off the right edge.
+  final double width;
   const IndexFilterDropdown({
     super.key,
     required this.selected,
     required this.onChanged,
     this.matchCounts = const {},
+    this.width = 220,
   });
 
   @override
@@ -129,21 +136,32 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
               // than carrying yesterday's query forward.
               if (!_portal.isShowing) _searchCtrl.clear();
               _portal.toggle();
+              // The trigger's border and chevron are driven by
+              // `_portal.isShowing`; toggling the portal only rebuilds the
+              // overlay, so repaint the trigger explicitly.
+              if (mounted) setState(() {});
             },
             child: Container(
-              width: 220,
-              height: 40,
+              width: widget.width,
+              // Toolbar control height/radius, shared with the search field
+              // and sentiment filter on the full scanner browser.
+              height: ScannerTokens.hControl,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
                 color: inputFill,
                 // Same muted border used by `_boxDecoration` in the predicate
-                // builder / other FilterSelects.
+                // builder / other FilterSelects; it firms up on hover and
+                // while the panel is open so the control feels live.
                 border: Border.all(
-                  color: resolveThemeColor(context,
+                  color: (_triggerHover || _portal.isShowing)
+                      ? resolveThemeColor(context,
+                          dark: MyntColors.dividerDark,
+                          light: MyntColors.divider)
+                      : resolveThemeColor(context,
                       dark: MyntColors.borderMutedDark,
                       light: MyntColors.borderMuted),
                 ),
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(ScannerTokens.rControl),
               ),
               child: Row(
                 children: [
@@ -152,7 +170,7 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
                       label,
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
-                      style: MyntWebTextStyles.body(
+                      style: MyntWebTextStyles.bodySmall(
                         context,
                         color: hasSelection ? textPrimary : secondary,
                         fontWeight: hasSelection
@@ -161,13 +179,13 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
                   AnimatedRotation(
                     turns: _portal.isShowing ? 0.5 : 0.0,
                     duration: const Duration(milliseconds: 150),
                     child: Icon(
                       Icons.keyboard_arrow_down_rounded,
-                      size: 20,
+                      size: 18,
                       color: secondary,
                     ),
                   ),
@@ -191,7 +209,12 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: _portal.hide,
+            // Repaint the trigger as well so its chevron unrotates and the
+            // open-state border relaxes when dismissed by an outside tap.
+            onTap: () {
+              _portal.hide();
+              if (mounted) setState(() {});
+            },
           ),
         ),
         CompositedTransformFollower(
@@ -222,13 +245,10 @@ class _IndexFilterDropdownState extends ConsumerState<IndexFilterDropdown> {
         color: cardBg,
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.10),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        // Shared dropdown elevation token instead of a one-off shadow —
+        // lighter, and consistent with every other popover in the app.
+        boxShadow:
+            isDarkMode(ctx) ? MyntShadows.dropdownDark : MyntShadows.dropdown,
       ),
       child: indicesAsync.when(
         loading: () => Padding(

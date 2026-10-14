@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,17 +13,24 @@ import 'package:mynt_plus/provider/scanner/custom_scans_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/formatters.dart';
+import 'package:mynt_plus/screens/web/scanner/utils/export_scan_rows.dart';
+import 'package:mynt_plus/screens/web/scanner/utils/scanner_tokens.dart';
 import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/open_scanner_scrip.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/empty_state.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/index_filter_dropdown.dart';
 import 'package:mynt_plus/screens/web/scanner/widgets/predicate_builder.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/predicate_chips.dart'
+    show ScannerChipButton;
 import 'package:mynt_plus/screens/web/scanner/widgets/scanner_results_table.dart';
+import 'scanners_detail_pane.dart' show showScanNameDialog;
 
-/// Builder + inline-runner for a custom scan. All user-visible state
-/// (name, predicate, result, JSON-preview flag, edited scan) lives in
-/// [customScansSessionProvider] so that navigating away (e.g. clicking a
-/// result row to view the symbol detail) and coming back restores exactly
-/// what was on screen, including the result list.
+/// Builder + inline-runner for a custom scan, in the other scanner pages'
+/// chrome: a toolbar (back, title, Save, JSON, Run inline), the condition
+/// builder on the page tray, then the inline results. Save asks for the name
+/// in a dialog. All user-visible state (name, predicate,
+/// result, edited scan) lives in [customScansSessionProvider] so navigating
+/// away (e.g. opening a result symbol) and coming back restores the screen.
 class CustomScanBuilderPane extends ConsumerStatefulWidget {
   final VoidCallback onClose;
   const CustomScanBuilderPane({super.key, required this.onClose});
@@ -33,29 +41,11 @@ class CustomScanBuilderPane extends ConsumerStatefulWidget {
 }
 
 class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
-  late final TextEditingController _nameCtl;
+  /// Same default universe as the saved-scan results view — the smallest,
+  /// fastest one. Widened from the dropdown when the user wants more.
+  static const List<String> _kDefaultIndices = ['NIFTY 50'];
 
-  @override
-  void initState() {
-    super.initState();
-    // Seed the controller from the persisted session.
-    final initialName =
-        ref.read(customScansSessionProvider).builder?.name ?? '';
-    _nameCtl = TextEditingController(text: initialName);
-    _nameCtl.addListener(_pushName);
-  }
-
-  @override
-  void dispose() {
-    _nameCtl.removeListener(_pushName);
-    _nameCtl.dispose();
-    super.dispose();
-  }
-
-  void _pushName() {
-    final notifier = ref.read(customScansSessionProvider.notifier);
-    notifier.updateBuilder((b) => b.copyWith(name: _nameCtl.text));
-  }
+  List<String> _indices = _kDefaultIndices;
 
   void _setPredicate(Map<String, dynamic> p) {
     ref
@@ -63,27 +53,326 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
         .updateBuilder((b) => b.copyWith(predicate: p));
   }
 
-  /// Show the current predicate as formatted JSON in a dialog (app-style
-  /// shell: header + close, scrollable monospace body).
-  void _showJsonDialog(Map<String, dynamic> predicate) {
+  void _setResult(AsyncValue<CustomScanRunResult>? r) {
+    ref
+        .read(customScansSessionProvider.notifier)
+        .updateBuilder((b) => b.copyWith(result: r));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final builder = ref.watch(customScansSessionProvider).builder;
+    if (builder == null) {
+      // Defensive: session was reset elsewhere — bail to the list.
+      return const SizedBox.shrink();
+    }
+
+    final running = builder.result?.isLoading ?? false;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _header(builder, running),
+        const SizedBox(height: 14),
+        // Scrolling body — the condition builder on the page tray, then the
+        // inline results once a run has been made.
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(right: 12, bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: ScannerTokens.tray(context),
+                  child: PredicateBuilder(
+                    // Re-seed when a different scan is opened for editing.
+                    key: ValueKey(builder.editing?.id),
+                    initial: builder.predicate,
+                    onChange: _setPredicate,
+                  ),
+                ),
+                if (builder.result != null) ...[
+                  const SizedBox(height: 20),
+                  if (builder.result!.asData?.value case final r?) ...[
+                    _matchCount(r),
+                    const SizedBox(height: 12),
+                  ],
+                  // Fixed height — the results sit inside the builder's scroll view.
+                  SizedBox(height: 520, child: _results(builder.result!)),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Toolbar — same slab as the other scanner pages: back + title/subtitle on
+  // the left; Save, Preview JSON and Run inline on the right. The scan name is
+  // asked for in a dialog on Save.
+  Widget _header(CustomScanBuilderDraft builder, bool running) {
+    final editing = builder.editing != null;
+    return Container(
+      padding: ScannerTokens.toolbarPadding,
+      decoration: ScannerTokens.toolbar(context),
+      child: Row(children: [
+        CustomBackBtn(onBack: widget.onClose),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Custom Scan',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: ScannerTokens.pageTitle(context)),
+              const SizedBox(height: 2),
+              Text(
+                'Build conditions, run inline to preview matches, then save',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: ScannerTokens.pageSubtitle(context),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        ..._resultControls(builder.result),
+        const SizedBox(width: 12),
+        ScannerChipButton(
+          icon: shadcn.LucideIcons.save,
+          label: editing ? 'Save changes' : 'Save',
+          tooltip: 'Save this scan',
+          height: 34,
+          onTap: _save,
+        ),
+        const SizedBox(width: 8),
+        // Builder gives the popover the button's own context to anchor to.
+        Builder(
+          builder: (buttonContext) => ScannerChipButton(
+            icon: shadcn.LucideIcons.code,
+            tooltip: 'Preview JSON',
+            height: 34,
+            onTap: () => _showJsonPopover(buttonContext, builder.predicate),
+          ),
+        ),
+        const SizedBox(width: 8),
+        MyntButton(
+          type: MyntButtonType.primary,
+          label: 'Run inline',
+          icon: Icons.play_arrow,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          isLoading: running,
+          onPressed: running ? null : _run,
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _run() async {
+    final predicate =
+        ref.read(customScansSessionProvider).builder?.predicate ?? const {};
+    // Dropped if the user logs out while this is in flight — the draft belongs
+    // to the account that wrote it, not to whoever logs in next.
+    final epoch = scannerSessionEpoch;
+    _setResult(const AsyncLoading());
+    try {
+      final r = await locator<ApiExporter>().runCustomScan(
+        predicate: Map<String, dynamic>.from(predicate),
+        indices: _indices.isEmpty ? null : _indices,
+      );
+      if (!mounted || !isSameScannerSession(epoch)) return;
+      _setResult(AsyncData(r));
+    } catch (e, st) {
+      if (!mounted || !isSameScannerSession(epoch)) return;
+      _setResult(AsyncError(e, st));
+    }
+  }
+
+  void _setIndices(List<String> next) {
+    setState(() => _indices = List.unmodifiable(next));
+    // Re-run only once there are results to refresh.
+    if (ref.read(customScansSessionProvider).builder?.result != null) _run();
+  }
+
+  /// Asks for the scan name (pre-filled with the draft's / edited scan's
+  /// name), then saves.
+  Future<void> _save() async {
+    final draft = ref.read(customScansSessionProvider).builder;
+    final name = await showScanNameDialog(context, initial: draft?.name ?? '');
+    if (name == null || !mounted) return;
+    ref
+        .read(customScansSessionProvider.notifier)
+        .updateBuilder((b) => b.copyWith(name: name));
+    final predicate = draft?.predicate ?? const {};
+    try {
+      await locator<ApiExporter>().saveCustomScan(
+          name: name, predicate: Map<String, dynamic>.from(predicate));
+      ref.invalidate(savedCustomScansProvider(savedCustomScansKey()));
+      if (!mounted) return;
+      ResponsiveSnackBar.showSuccess(context, 'Saved "$name"');
+      widget.onClose();
+    } catch (e) {
+      if (!mounted) return;
+      ResponsiveSnackBar.showError(context, 'Save failed: $e');
+    }
+  }
+
+  /// Match-count line (the Fundamental Screener's "N of N matches") above the
+  /// results table.
+  Widget _matchCount(CustomScanRunResult r) => Align(
+        alignment: Alignment.centerRight,
+        child: Text('${r.matches.length} matches · as of ${r.asOf}',
+            style: MyntWebTextStyles.body(context,
+                color: ScannerTokens.textSecondary(context))),
+      );
+
+  /// Universe filter + download, shown in the toolbar next to Save.
+  List<Widget> _resultControls(AsyncValue<CustomScanRunResult>? result) {
+    return [
+      // The run is scoped to these indices, not the whole market. Labelled
+      // because the scope is a default the user never chose — without this
+      // a short match list reads as "my filters are too tight" when it is
+      // really "I only scanned NIFTY 50".
+      Text('Universe',
+          style: MyntWebTextStyles.bodySmall(context,
+              color: ScannerTokens.textSecondary(context))),
+      const SizedBox(width: 8),
+      IndexFilterDropdown(
+        selected: _indices,
+        onChanged: _setIndices,
+        matchCounts: result?.maybeWhen(
+              data: (r) => r.indexCounts,
+              orElse: () => const <String, int>{},
+            ) ??
+            const <String, int>{},
+      ),
+      const SizedBox(width: 8),
+      ScannerChipButton(
+        icon: shadcn.LucideIcons.download,
+        tooltip: 'Download these matches',
+        height: 34,
+        onTap: (result?.asData?.value.matches.isNotEmpty ?? false)
+            ? () => _exportPreview(result!.asData!.value)
+            : null,
+      ),
+    ];
+  }
+
+  /// Downloads the preview run. An unsaved draft has no server-side export,
+  /// so the rows in hand are the only source.
+  Future<void> _exportPreview(CustomScanRunResult r) async {
+    final draftName =
+        ref.read(customScansSessionProvider).builder?.name.trim() ?? '';
+    final name = draftName.isEmpty ? 'custom_scan' : draftName;
+    try {
+      await exportScanRowsXlsx(
+        columns: [
+          for (final c in r.columns)
+            ScanColumn(key: c.key, label: c.label, fmt: 'raw'),
+        ],
+        rows: [
+          for (final m in r.matches)
+            ScanRow(
+              ticker: m.ticker,
+              name: m.name,
+              values: Map<String, dynamic>.from(m.values),
+            ),
+        ],
+        sheetName: name,
+        fileName: '${scanFileSlug(name)}_preview.xlsx',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ResponsiveSnackBar.showError(context, 'Export failed: $e');
+    }
+  }
+
+  Widget _results(AsyncValue<CustomScanRunResult> result) {
+    return result.when(
+      loading: () => Center(child: MyntLoader.branded()),
+      error: (e, _) => EmptyState(
+        kind: EmptyStateKind.error,
+        title: 'Run failed',
+        message: e.toString(),
+        onRetry: _run,
+      ),
+      data: (r) {
+        if (r.matches.isEmpty) {
+          // Name the universe — an empty list usually means the scan only
+          // looked at NIFTY 50, not that the filters are wrong.
+          return EmptyState(
+            kind: EmptyStateKind.empty,
+            title: 'No matches',
+            message: _indices.isEmpty
+                ? 'No stocks match these filters today.'
+                : 'No stocks in ${_indices.join(", ")} match these filters '
+                    'today. Widen the universe from the dropdown above to '
+                    'scan more stocks.',
+          );
+        }
+        final filterSuffix =
+            _indices.isEmpty ? '' : ' · filtered by ${_indices.join(", ")}';
+        return ScannerResultsTable(
+          columns: [
+            for (final c in r.columns)
+              ScanColumn(
+                key: c.key,
+                label: c.label,
+                fmt: 'raw',
+                description: c.key,
+              ),
+          ],
+          rows: [
+            for (final m in r.matches)
+              ScanRow(
+                ticker: m.ticker,
+                name: m.name,
+                values: Map<String, dynamic>.from(m.values),
+              ),
+          ],
+          footer: '${r.matches.length} matches$filterSuffix',
+          customCellFormatter: (ctx, col, raw) =>
+              formatCustomScanCell(ctx, col.key, raw),
+          onTickerTap: (t) =>
+              openScannerScripFromContext(context, ref, ticker: t),
+        );
+      },
+    );
+  }
+
+  /// Show the current predicate as formatted JSON in a popover dropped below
+  /// the `<>` button, right edges aligned (header: title, copy, close;
+  /// scrollable body). Closes on an outside click.
+  void _showJsonPopover(
+      BuildContext buttonContext, Map<String, dynamic> predicate) {
     final json = const JsonEncoder.withIndent('  ').convert(predicate);
     final border = resolveThemeColor(context,
         dark: MyntColors.dividerDark, light: MyntColors.divider);
     final textPrimary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    showDialog<void>(
-      context: context,
-      builder: (dCtx) => Dialog(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+    final dark = isDarkMode(context);
+    shadcn.showPopover(
+      context: buttonContext,
+      alignment: Alignment.topRight,
+      anchorAlignment: Alignment.bottomRight,
+      offset: const Offset(0, 6),
+      overlayBarrier: shadcn.OverlayBarrier(
+        borderRadius: BorderRadius.circular(8),
+      ),
+      builder: (dCtx) => Material(
+        color: Colors.transparent,
         child: Container(
-          width: 560,
-          constraints: const BoxConstraints(maxHeight: 600),
+          width: 420,
+          constraints: const BoxConstraints(maxHeight: 420),
           decoration: BoxDecoration(
             color: resolveThemeColor(dCtx,
                 dark: MyntColors.dialogDark, light: MyntColors.dialog),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: border),
+            boxShadow: dark ? MyntShadows.dropdownDark : MyntShadows.dropdown,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -112,7 +401,7 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
                         },
                       ),
                       MyntCloseButton(
-                          onPressed: () => Navigator.of(dCtx).pop()),
+                          onPressed: () => shadcn.closeOverlay(dCtx)),
                     ]),
                   ],
                 ),
@@ -122,353 +411,12 @@ class _CustomScanBuilderPaneState extends ConsumerState<CustomScanBuilderPane> {
                   padding: const EdgeInsets.all(16),
                   child: SelectableText(
                     json,
-                    style: MyntWebTextStyles.para(dCtx)
-                        ,
+                    style: MyntWebTextStyles.para(dCtx),
                   ),
                 ),
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  void _setResult(AsyncValue<CustomScanRunResult>? r) {
-    ref
-        .read(customScansSessionProvider.notifier)
-        .updateBuilder((b) => b.copyWith(result: r));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final builder = ref.watch(customScansSessionProvider).builder;
-    if (builder == null) {
-      // Defensive: session was reset elsewhere — bail to the list.
-      return const SizedBox.shrink();
-    }
-
-    // Keep the text controller in sync with provider state when something
-    // outside this widget changes the draft (e.g. user clicks "Edit" on a
-    // different scan card without unmounting).
-    if (_nameCtl.text != builder.name) {
-      _nameCtl.removeListener(_pushName);
-      _nameCtl.text = builder.name;
-      _nameCtl.selection =
-          TextSelection.collapsed(offset: _nameCtl.text.length);
-      _nameCtl.addListener(_pushName);
-    }
-
-    final headerBorder = resolveThemeColor(context,
-        dark: MyntColors.dividerDark, light: MyntColors.divider);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Fixed header — back + live title + name field + the Run / Save /
-        // Preview JSON actions. Stays put while the builder body scrolls.
-        Container(
-          padding: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: headerBorder.withValues(alpha: 0.6)),
-            ),
-          ),
-          child: Row(children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back, size: 18),
-              onPressed: widget.onClose,
-              tooltip: 'Back to list',
-            ),
-            const SizedBox(width: 4),
-            // Static page title — mirrors "Fundamental Screener" on the sibling
-            // tab so the two pages read as siblings.
-            Text('Custom Scan',
-                style: MyntWebTextStyles.head(context,
-                    fontWeight: MyntFonts.bold)),
-            const Spacer(),
-            // Name pill on the right — editable for a new scan, read-only pill
-            // for an existing saved scan (rename happens from the list, not
-            // from within the builder). Placed just left of the action cluster,
-            // matching the Fundamentals header's screen-name pill placement.
-            if (builder.editing == null)
-              _NamePill(controller: _nameCtl)
-            else
-              _ReadOnlyNamePill(name: builder.name),
-            const SizedBox(width: 8),
-            // Save + Preview JSON — chip-buttons matching the Fundamentals
-            // header (34px tall so they sit as siblings of the name pill).
-            // Save is icon+label, Preview JSON is icon-only.
-            _chipButton(
-              icon: shadcn.LucideIcons.save,
-              label: builder.editing == null ? 'Save' : 'Save changes',
-              tooltip: 'Save this scan',
-              height: 34,
-              onTap: _save,
-            ),
-            const SizedBox(width: 8),
-            _chipButton(
-              icon: shadcn.LucideIcons.code,
-              tooltip: 'Preview JSON',
-              height: 34,
-              onTap: () => _showJsonDialog(builder.predicate),
-            ),
-            const SizedBox(width: 8),
-            // Run inline — primary MyntButton kept as the header's CTA (mirrors
-            // Fundamentals' "Run scan" pattern).
-            MyntButton(
-              type: MyntButtonType.primary,
-              label: 'Run inline',
-              icon: Icons.play_arrow,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-              onPressed: _runInline,
-            ),
-          ]),
-        ),
-        const SizedBox(height: 12),
-        // Scrolling body — the predicate builder, optional JSON preview and
-        // the inline results.
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.only(right: 12, bottom: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                PredicateBuilder(
-                  initial: builder.predicate,
-                  onChange: _setPredicate,
-                ),
-                const SizedBox(height: 24),
-                if (builder.result != null) _resultArea(builder.result!),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _runInline() async {
-    final predicate =
-        ref.read(customScansSessionProvider).builder?.predicate ?? const {};
-    _setResult(const AsyncLoading());
-    try {
-      final r = await locator<ApiExporter>()
-          .runCustomScan(predicate: Map<String, dynamic>.from(predicate));
-      _setResult(AsyncData(r));
-    } catch (e, st) {
-      _setResult(AsyncError(e, st));
-    }
-  }
-
-  Future<void> _save() async {
-    final name = _nameCtl.text.trim();
-    if (name.isEmpty) {
-      ResponsiveSnackBar.showWarning(context, 'Give the scan a name first.');
-      return;
-    }
-    final predicate =
-        ref.read(customScansSessionProvider).builder?.predicate ?? const {};
-    try {
-      await locator<ApiExporter>().saveCustomScan(
-          name: name, predicate: Map<String, dynamic>.from(predicate));
-      ref.invalidate(savedCustomScansProvider);
-      if (!mounted) return;
-      ResponsiveSnackBar.showSuccess(context, 'Saved "$name"');
-      widget.onClose();
-    } catch (e) {
-      if (!mounted) return;
-      ResponsiveSnackBar.showError(context, 'Save failed: $e');
-    }
-  }
-
-  Widget _resultArea(AsyncValue<CustomScanRunResult> result) {
-    return result.when(
-      loading: () => Padding(
-        padding: EdgeInsets.all(16),
-        child: Center(child: MyntLoader.simple()),
-      ),
-      error: (e, _) => EmptyState(
-        kind: EmptyStateKind.error,
-        title: 'Run failed',
-        message: e.toString(),
-      ),
-      data: (r) {
-        if (r.matches.isEmpty) {
-          return const EmptyState(
-              kind: EmptyStateKind.empty, title: 'No matches');
-        }
-        final cols = [
-          for (final c in r.columns)
-            ScanColumn(
-              key: c.key,
-              label: c.label,
-              fmt: 'raw',
-              description: c.key,
-            ),
-        ];
-        final rows = [
-          for (final m in r.matches)
-            ScanRow(
-              ticker: m.ticker,
-              name: m.name,
-              values: Map<String, dynamic>.from(m.values),
-            ),
-        ];
-        return Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 4),
-              Text('Results : ${r.matches.length} matches  ·  as of ${r.asOf}',
-                  style: MyntWebTextStyles.title(context,
-                      fontWeight: MyntFonts.medium,
-                      color: resolveThemeColor(context,
-                          dark: MyntColors.textPrimaryDark,
-                          light: MyntColors.textPrimary))),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 520,
-                child: ScannerResultsTable(
-                  columns: cols,
-                  rows: rows,
-                  footer: '${r.matches.length} matches  ·  as of ${r.asOf}',
-                  customCellFormatter: (ctx, col, raw) =>
-                      formatCustomScanCell(ctx, col.key, raw),
-                  onTickerTap: (t) =>
-                      openScannerScripFromContext(context, ref, ticker: t),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  /// Bordered action button that mirrors the Fundamentals header's chip
-  /// button — icon+label variant for Save, icon-only variant for Preview
-  /// JSON. Sized by [height] (34px) so it sits as a sibling of the name pill.
-  Widget _chipButton({
-    String? label,
-    IconData? icon,
-    String? tooltip,
-    double? height,
-    required VoidCallback? onTap,
-  }) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final textPrimary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final hoverBg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
-    final disabled = onTap == null;
-    final labelColor =
-        disabled ? secondary.withValues(alpha: 0.4) : textPrimary;
-    final iconColor =
-        disabled ? secondary.withValues(alpha: 0.4) : secondary;
-    final button = Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        hoverColor: hoverBg,
-        child: Container(
-          height: height,
-          alignment: height != null ? Alignment.center : null,
-          padding: EdgeInsets.symmetric(
-              horizontal: label != null ? 10 : 6, vertical: 4),
-          decoration: BoxDecoration(
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (icon != null) Icon(icon, size: 18, color: iconColor),
-              if (icon != null && label != null) const SizedBox(width: 6),
-              if (label != null)
-                Text(
-                  label,
-                  style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.medium, color: labelColor),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (tooltip != null) return Tooltip(message: tooltip, child: button);
-    return button;
-  }
-}
-
-/// Read-only sibling of [_NamePill] — same pill chrome, plain Text inside.
-/// Used when editing an existing saved scan so the name occupies the same
-/// slot on the right as the editable pill does for a new scan.
-class _ReadOnlyNamePill extends StatelessWidget {
-  final String name;
-  const _ReadOnlyNamePill({required this.name});
-
-  @override
-  Widget build(BuildContext context) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final textPrimary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    return Container(
-      width: 280,
-      height: 36,
-      decoration: BoxDecoration(
-        border: Border.all(color: border),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      alignment: Alignment.centerLeft,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      child: Text(
-        name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: MyntWebTextStyles.body(context,
-            fontWeight: MyntFonts.medium, color: textPrimary),
-      ),
-    );
-  }
-}
-
-/// Outlined pill for the scan name — mirrors the "Screen name" field in the
-/// Fundamentals header. A bare TextField sits inside a bordered container so
-/// the name reads as one control alongside the header's Run / Save buttons.
-class _NamePill extends StatelessWidget {
-  final TextEditingController controller;
-  const _NamePill({required this.controller});
-
-  @override
-  Widget build(BuildContext context) {
-    final border = shadcn.Theme.of(context).colorScheme.border;
-    final textPrimary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final secondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    return Container(
-      width: 280,
-      height: 36,
-      decoration: BoxDecoration(
-        border: Border.all(color: border),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      child: TextField(
-        controller: controller,
-        style: MyntWebTextStyles.body(context,
-            fontWeight: MyntFonts.medium, color: textPrimary),
-        decoration: InputDecoration(
-          isCollapsed: true,
-          border: InputBorder.none,
-          hintText: 'Untitled scan',
-          hintStyle: MyntWebTextStyles.body(context,
-              color: secondary.withValues(alpha: 0.7)),
         ),
       ),
     );
