@@ -3192,6 +3192,12 @@ class OrderProvider extends DefaultChangeNotifier {
     _bsktScrips = allScripts;
     // 5. **Reset all order‑tracking for that basket**
     resetBasketOrderTracking(removedBasketName);
+    // TC_487: if the deleted basket was the open one, drop the selection so
+    // the option chain sidebar stops showing it and scrips can't be added to it.
+    if (_selectedBsktName == removedBasketName) {
+      _selectedBsktName = "";
+      _bsktScripList = [];
+    }
     // 6. Refresh any dependent state (recomputing curLength etc.)
     tabSize();
     notifyListeners();

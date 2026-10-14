@@ -26,7 +26,6 @@ import '../../../../res/responsive_extensions.dart';
 import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_search_fields_web.dart';
-import '../../../../sharedWidget/custom_text_form_field.dart' show UpperCaseTextFormatter;
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../sharedWidget/snack_bar.dart';
@@ -554,8 +553,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 placeholder: context.isMobile ? 'Search' : 'Search positions',
                 leadingIcon: assets.searchIcon,
                 inputFormatters: [
-                  UpperCaseTextFormatter(),
-                  FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9& \-]')),
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9& \-]')),
                   TextInputFormatter.withFunction((oldValue, newValue) {
                     if (newValue.text.startsWith(' ')) return oldValue;
                     return newValue;

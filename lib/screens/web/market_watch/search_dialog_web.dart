@@ -93,8 +93,8 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
     _tabControllerListener = () {
       if (_tabController.indexIsChanging) {
         ref.read(marketWatchProvider).searchClear();
-        ref.read(marketWatchProvider).scripSearch(
-            _searchValue, context, _tabController.index, widget.isBasket);
+        ref.read(marketWatchProvider).scripSearch(_searchValue.toUpperCase(),
+            context, _tabController.index, widget.isBasket);
         _scrollToSelectedTab(_tabController.index);
       }
     };
@@ -120,8 +120,8 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
           // Debounce search API calls
           _searchDebounceTimer = Timer(_searchDebounceDuration, () {
             if (mounted && _searchValue == currentText) {
-              searchScrip.scripSearch(
-                  currentText, context, _tabController.index, widget.isBasket);
+              searchScrip.scripSearch(currentText.toUpperCase(), context,
+                  _tabController.index, widget.isBasket);
             }
           });
         }
@@ -315,8 +315,9 @@ class _SearchDialogWebState extends ConsumerState<SearchDialogWeb>
                                 leadingIcon: assets.searchIcon,
                                 leadingIconHoverEffect: true,
                                 autofocus: true,
+                                // Shows what the user types; the API call
+                                // below still sends uppercase.
                                 inputFormatters: [
-                                  UpperCaseTextFormatter(),
                                   FilteringTextInputFormatter.allow(
                                       RegExp(r'[a-zA-Z0-9& \-]')),
                                   TextInputFormatter.withFunction((oldValue, newValue) {

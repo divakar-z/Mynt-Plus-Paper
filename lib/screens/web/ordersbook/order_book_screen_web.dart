@@ -29,7 +29,6 @@ import 'screens/trade_book_screen.dart';
 import 'screens/gtt_orders_screen.dart';
 import 'screens/sip_orders_screen_web.dart';
 import '../../../sharedWidget/common_search_fields_web.dart';
-import '../../../sharedWidget/custom_text_form_field.dart' show UpperCaseTextFormatter;
 import '../../../models/order_book_model/order_book_model.dart';
 import 'cancel_all_orders_dialog_web.dart';
 
@@ -551,11 +550,12 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                   controller: orderBook.orderSearchCtrl,
                   placeholder: 'Search orders',
                   leadingIcon: assets.searchIcon,
-                  // Same formatters as the positions search so typed text
-                  // displays identically (uppercase) on both screens.
+                  // TC_476: keep the user's case — basket names are mixed case
+                  // and every tab's match is case-insensitive. `_` allowed
+                  // because basket names may contain it.
                   inputFormatters: [
-                    UpperCaseTextFormatter(),
-                    FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9& \-]')),
+                    FilteringTextInputFormatter.allow(
+                        RegExp(r'[A-Za-z0-9&_ \-]')),
                     TextInputFormatter.withFunction((oldValue, newValue) {
                       if (newValue.text.startsWith(' ')) return oldValue;
                       return newValue;
