@@ -1140,6 +1140,25 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
         },
       },
       {
+        'title': 'Scanner',
+        'subtitle': 'Screener • Technicals • Fundamentals',
+        'description':
+            'Screen stocks with ready-made and custom scans across technicals & fundamentals.',
+        // Deep petrol teal. Every other tool accent is a bright mid-tone, so
+        // this is the only dark tile in the row — it reads as its own thing by
+        // value rather than by hue, which is what keeps it clear of Scalper
+        // and Equity SIP without resorting to a loud colour.
+        'accentColor': const Color(0xFF0F766E),
+        'badge': null,
+        'icon': Icons.radar_rounded,
+        'isIcon': true,
+        'onTap': () {
+          if (WebNavigationHelper.isAvailable) {
+            WebNavigationHelper.navigateTo('scanner');
+          }
+        },
+      },
+      {
         'title': 'WebHook Trading',
         'subtitle': 'TradingView • Auto Alert',
         'description':

@@ -1,6 +1,15 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
+import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
+import 'package:mynt_plus/res/res.dart';
+import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart'
+    show ScannerSubPage;
+import 'package:mynt_plus/screens/web/scanner/utils/export_scan_rows.dart';
+import 'package:mynt_plus/screens/web/scanner/utils/scanner_tokens.dart';
+import 'package:mynt_plus/screens/web/scanner/widgets/predicate_chips.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
@@ -9,6 +18,7 @@ import 'package:mynt_plus/models/scanner_model/custom_scan.dart';
 import 'package:mynt_plus/models/scanner_model/scan_explain.dart';
 import 'package:mynt_plus/provider/scanner/custom_scans_provider.dart';
 import 'package:mynt_plus/provider/scanner/scanner_shell_provider.dart';
+import 'package:mynt_plus/provider/scanner/scanners_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/scanner/utils/formatters.dart';
@@ -18,20 +28,132 @@ import 'package:mynt_plus/screens/web/scanner/widgets/index_filter_dropdown.dart
 import 'package:mynt_plus/screens/web/scanner/widgets/scanner_results_table.dart';
 import 'custom_scan_builder_pane.dart';
 
-/// Default index filter — NIFTY 500 pre-selected so both the initial run
-/// and the pane's filter dropdown start on a liquid, actionable universe
-/// instead of the full NSE catalog.
-const List<String> _kDefaultCustomScanIndices = ['NIFTY 500'];
+/// Default index filter — NIFTY 50 pre-selected so both the initial run and
+/// the pane's filter dropdown start on the smallest, fastest universe. The
+/// dropdown widens it to NIFTY 500 or the full catalog on demand; a broad
+/// default made every first run slow enough to hit gateway timeouts.
+const List<String> _kDefaultCustomScanIndices = ['NIFTY 50'];
 
-/// Custom Scans tab — saved-scans list, "New custom scan" builder, and the
-/// results view for a saved scan. The predicate builder handles both
-/// fundamental and technical conditions (the old chip-based Technicals tab
-/// has been retired).
-class CustomScansSubPage extends ConsumerWidget {
+/// Runs a saved scan into the session's results slot (showing a loader
+/// first). A result is dropped if the user picked a different scan while it
+/// was in flight, or if the session it belongs to has ended.
+///
+/// [preload] is the background run made when the scanner page opens (the
+/// shell's IndexedStack builds this page off-screen). It evaluates the saved
+/// predicate via the ad-hoc run endpoint so it doesn't count as a user run
+/// (run count / last run stay untouched). User clicks use the saved-scan run
+/// and refresh the list so runs / last-run update.
+Future<void> _runSavedScan(
+  WidgetRef ref,
+  SavedCustomScan scan, {
+  List<String> indices = _kDefaultCustomScanIndices,
+  bool preload = false,
+}) async {
+  final api = locator<ApiExporter>();
+  final notifier = ref.read(customScansSessionProvider.notifier);
+  // Captured before the await. If the user logs out mid-flight this scan
+  // belongs to an account that is no longer signed in, and its reply must be
+  // dropped rather than written into the next user's screen.
+  final epoch = scannerSessionEpoch;
+  bool stillActive() =>
+      isSameScannerSession(epoch) &&
+      ref.read(customScansSessionProvider).results?.scan.id == scan.id;
+  final idx = indices.isEmpty ? null : indices;
+  // A predicate that failed to decode falls back to the saved-scan run.
+  final adHoc = preload && scan.predicateJson.isNotEmpty;
+  notifier.openResults(scan);
+  try {
+    final r = adHoc
+        ? await api.runCustomScan(predicate: scan.predicateJson, indices: idx)
+        : await api.runSavedCustomScan(scan.id, indices: idx);
+    if (stillActive()) notifier.setResults(AsyncValue.data(r));
+    // Only refresh the saved list for the account that asked for the run.
+    if (!adHoc && isSameScannerSession(epoch)) {
+      ref.invalidate(savedCustomScansProvider(savedCustomScansKey()));
+    }
+  } catch (e, st) {
+    if (stillActive()) notifier.setResults(AsyncValue.error(e, st));
+  }
+}
+
+/// The scan to open by default — the most recently run one, else the first.
+SavedCustomScan _defaultScan(List<SavedCustomScan> list) {
+  SavedCustomScan best = list.first;
+  for (final s in list) {
+    final a = s.lastRunAt;
+    final b = best.lastRunAt;
+    if (a != null && (b == null || a.compareTo(b) > 0)) best = s;
+  }
+  return best;
+}
+
+/// Custom Scans — toolbar on top, then saved scans on the left and the
+/// selected scan's results on the right. Opens on the most recently run
+/// scan. The builder (new / edit) takes over the whole page while open.
+class CustomScansSubPage extends ConsumerStatefulWidget {
   const CustomScansSubPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CustomScansSubPage> createState() => _CustomScansSubPageState();
+}
+
+class _CustomScansSubPageState extends ConsumerState<CustomScansSubPage> {
+  bool _autoRunQueued = false;
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  // No explicit refetch on mount. `savedCustomScansProvider` is keyed by
+  // client id, so this page can only ever read the signed-in account's scans,
+  // and it is autoDispose, so a fresh mount of the Scanner has no cache to
+  // serve and fetches on its own. Invalidating here as well would throw that
+  // in-flight fetch away and start a second identical request on every open.
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Nothing selected yet — open the default scan after this frame.
+  ///
+  /// This is a deliberate prefetch: the shell's IndexedStack builds this page
+  /// even while the user is on the Dashboard, so by the time they click into
+  /// Custom Scans the results are already there and the page feels instant.
+  /// The caller gates it on the Dashboard's own list having arrived first, so
+  /// the prefetch never competes with the page actually on screen.
+  void _queueDefaultRun(List<SavedCustomScan> list) {
+    if (_autoRunQueued) return;
+    _autoRunQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoRunQueued = false;
+      if (!mounted) return;
+      final session = ref.read(customScansSessionProvider);
+      if (session.results != null || session.builder != null) return;
+      _runSavedScan(ref, _defaultScan(list), preload: true);
+    });
+  }
+
+  Future<void> _delete(SavedCustomScan scan) async {
+    if (!await _confirmDelete(context, scan.name)) return;
+    try {
+      await locator<ApiExporter>().deleteSavedCustomScan(scan.id);
+    } catch (e) {
+      if (!mounted) return;
+      ResponsiveSnackBar.showError(context, 'Could not delete "${scan.name}"');
+      return;
+    }
+    if (!mounted) return;
+    final notifier = ref.read(customScansSessionProvider.notifier);
+    // Deleting the open scan clears the right side; the default re-opens.
+    if (ref.read(customScansSessionProvider).results?.scan.id == scan.id) {
+      notifier.closeResults();
+    }
+    ref.invalidate(savedCustomScansProvider(savedCustomScansKey()));
+    ResponsiveSnackBar.showSuccess(context, 'Deleted "${scan.name}"');
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final session = ref.watch(customScansSessionProvider);
     if (session.builder != null) {
       return CustomScanBuilderPane(
@@ -40,32 +162,56 @@ class CustomScansSubPage extends ConsumerWidget {
             .closeBuilder(),
       );
     }
-    if (session.results != null) {
-      return _SavedScanResultsPane(view: session.results!);
-    }
 
-    final async = ref.watch(savedCustomScansProvider);
+    final async = ref.watch(savedCustomScansProvider(savedCustomScansKey()));
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header — title on the left, primary "New custom scan" on the right
-        // (matches the MF Strategy dashboard / Fundamental Screener header).
-        Row(children: [
-          Text('Custom Scans',
-              style:
-                  MyntWebTextStyles.head(context, fontWeight: MyntFonts.bold)),
-          const Spacer(),
-          MyntButton(
-            type: MyntButtonType.primary,
-            label: 'New custom scan',
-            icon: Icons.add,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            onPressed: () => ref
-                .read(customScansSessionProvider.notifier)
-                .openNewBuilder(),
-          ),
-        ]),
-        const SizedBox(height: 16),
+        // Toolbar — the Fundamental Screener's slab: back + title/subtitle on
+        // the left, primary "New custom scan" on the right.
+        Container(
+          padding: ScannerTokens.toolbarPadding,
+          decoration: ScannerTokens.toolbar(context),
+          child: Row(children: [
+            CustomBackBtn(
+              onBack: () => ref
+                  .read(scannerShellProvider.notifier)
+                  .setActiveSubPage(ScannerSubPage.scannersNew),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Custom Scans',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ScannerTokens.pageTitle(context)),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Scan the market on technicals — RSI, moving averages, '
+                    'price action and candlestick patterns',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: ScannerTokens.pageSubtitle(context),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            MyntButton(
+              type: MyntButtonType.primary,
+              label: 'New custom scan',
+              icon: Icons.add,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              onPressed: () => ref
+                  .read(customScansSessionProvider.notifier)
+                  .openNewBuilder(),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 14),
         Expanded(
           child: async.when(
             loading: () => Center(child: MyntLoader.branded()),
@@ -73,7 +219,8 @@ class CustomScansSubPage extends ConsumerWidget {
               kind: EmptyStateKind.error,
               title: 'Could not load custom scans',
               message: e.toString(),
-              onRetry: () => ref.invalidate(savedCustomScansProvider),
+              onRetry: () => ref
+                  .invalidate(savedCustomScansProvider(savedCustomScansKey())),
             ),
             data: (list) {
               if (list.isEmpty) {
@@ -81,12 +228,98 @@ class CustomScansSubPage extends ConsumerWidget {
                   kind: EmptyStateKind.empty,
                   title: 'No custom scans yet',
                   message:
-                      'Click "+ New custom scan" above to write your first predicate.',
+                      'Click "+ New custom scan" above to build your first scan.',
                 );
               }
-              return _ScansTable(
-                list: list,
-                onChanged: () => ref.invalidate(savedCustomScansProvider),
+              final results = session.results;
+              // Hold the prefetch until the Dashboard's scanner list has
+              // landed. Without this it fires on the very first frame of the
+              // Scanner opening and races the list the user is waiting to
+              // see — on a slow connection that is the one request that must
+              // not be queued behind anything else. Watched, not polled: the
+              // page rebuilds by itself when the list resolves.
+              final dashboardReady = ref.watch(scannerListProvider).hasValue;
+              if (results == null && dashboardReady) _queueDefaultRun(list);
+              final q = _query.trim().toLowerCase();
+              final shown = q.isEmpty
+                  ? list
+                  : list
+                      .where((s) => s.name.toLowerCase().contains(q))
+                      .toList();
+              return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Sidebar — one white panel: a search field, then the
+                    // saved scans as compact tab rows.
+                    Container(
+                      width: 280,
+                      decoration: BoxDecoration(
+                        color: ScannerTokens.surface(context),
+                        borderRadius:
+                            BorderRadius.circular(ScannerTokens.rCard),
+                        border:
+                            Border.all(color: ScannerTokens.border(context)),
+                        boxShadow: ScannerTokens.lift(context),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                            child: SizedBox(
+                              height: 40,
+                              child: MyntSearchTextField.withSmartClear(
+                                controller: _search,
+                                placeholder: 'Search',
+                                leadingIcon: assets.searchIcon,
+                                textCapitalization: TextCapitalization.none,
+                                onChanged: (v) => setState(() => _query = v),
+                                onClear: () => setState(() => _query = ''),
+                              ),
+                            ),
+                          ),
+                          Divider(
+                              height: 1,
+                              color: ScannerTokens.border(context)),
+                          Expanded(
+                            child: shown.isEmpty
+                                ? Center(
+                                    child: Text('No scans match',
+                                        style: MyntWebTextStyles.body(context,
+                                            color: ScannerTokens.textSecondary(
+                                                context))),
+                                  )
+                                : ListView.separated(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              itemCount: shown.length,
+                              separatorBuilder: (_, __) => Divider(
+                                  height: 1,
+                                  indent: 12,
+                                  endIndent: 12,
+                                  color: ScannerTokens.border(context)),
+                              itemBuilder: (_, i) {
+                                final s = shown[i];
+                                return _ScanRow(
+                                  scan: s,
+                                  active: results?.scan.id == s.id,
+                                  onRun: () => _runSavedScan(ref, s),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: results == null
+                          ? Center(child: MyntLoader.branded())
+                          : _SavedScanResultsPane(
+                              view: results,
+                              onDelete: () => _delete(results.scan),
+                            ),
+                    ),
+                  ],
               );
             },
           ),
@@ -96,388 +329,74 @@ class CustomScansSubPage extends ConsumerWidget {
   }
 }
 
-/// Responsive card grid for saved custom scans — 4 / 3 / 2 / 1 columns based
-/// on available width. Cards use a fixed height so every card in the grid
-/// aligns cleanly regardless of column count or content length. Border only
-/// (no drop shadow) so the surface stays flat and matches the rest of the
-/// screener chrome.
-class _ScansTable extends ConsumerWidget {
-  final List<SavedCustomScan> list;
-  final VoidCallback onChanged;
-  const _ScansTable({required this.list, required this.onChanged});
-
-  /// Uniform card height keeps every row of the grid aligned even when the
-  /// meta line ("Never run" vs. "Last run 10 Jul 2026") differs across cards.
-  static const double _kCardHeight = 118.0;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: LayoutBuilder(builder: (ctx, c) {
-        const spacing = 14.0;
-        // 4 up on wide screens, gracefully falling back to 3 / 2 / 1.
-        final columns = c.maxWidth >= 1280
-            ? 4
-            : c.maxWidth >= 960
-                ? 3
-                : c.maxWidth >= 640
-                    ? 2
-                    : 1;
-        final cardWidth =
-            (c.maxWidth - spacing * (columns - 1)) / columns;
-        return Wrap(
-          spacing: spacing,
-          runSpacing: spacing,
-          children: [
-            for (final s in list)
-              SizedBox(
-                width: cardWidth,
-                height: _kCardHeight,
-                child: _ScanRow(
-                  scan: s,
-                  onEdit: () => ref
-                      .read(customScansSessionProvider.notifier)
-                      .openExistingBuilder(s),
-                  onChanged: onChanged,
-                ),
-              ),
-          ],
-        );
-      }),
-    );
-  }
-}
-
-/// A single saved-scan row in the table — identity icon + name on the left,
-/// Created / Runs / Last-run metadata across, and a 3-dot Edit / Delete menu
-/// at the trailing edge. Row click runs the scan.
-class _ScanRow extends ConsumerStatefulWidget {
+/// One saved scan in the sidebar — a tab row: the name, its created date,
+/// then runs · last run. Tapping runs it into the right side; the active row
+/// takes the accent tint. Edit / Delete live in the results header.
+class _ScanRow extends StatelessWidget {
   final SavedCustomScan scan;
-  final VoidCallback onEdit;
-  final VoidCallback onChanged;
+  final bool active;
+  final VoidCallback onRun;
   const _ScanRow({
     required this.scan,
-    required this.onEdit,
-    required this.onChanged,
+    required this.active,
+    required this.onRun,
   });
 
   @override
-  ConsumerState<_ScanRow> createState() => _ScanRowState();
-}
-
-class _ScanRowState extends ConsumerState<_ScanRow> {
-  bool _hover = false;
-
-  /// Run the saved scan — switch the sub-page into results view (which shows a
-  /// loading spinner) and fire the run. The notifier handles success/error;
-  /// `onChanged` refreshes the saved-scans list so the run-count + lastRunAt
-  /// update the next time the user pops back to the card grid.
-  Future<void> _run() async {
-    final scan = widget.scan;
-    final notifier = ref.read(customScansSessionProvider.notifier);
-    notifier.openResults(scan);
-    try {
-      // First run uses the same default the results pane pre-selects, so the
-      // table and the filter dropdown agree from the first frame.
-      final r = await locator<ApiExporter>().runSavedCustomScan(
-        scan.id,
-        indices: _kDefaultCustomScanIndices,
-      );
-      notifier.setResults(AsyncValue.data(r));
-      widget.onChanged();
-    } catch (e, st) {
-      notifier.setResults(AsyncValue.error(e, st));
-    }
-  }
-
-  Future<void> _delete() async {
-    if (await _confirmDelete(widget.scan.name)) {
-      await locator<ApiExporter>().deleteSavedCustomScan(widget.scan.id);
-      widget.onChanged();
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final scan = widget.scan;
-    // Portfolio card chrome — divider-tone border, dashboard-card BG in dark,
-    // shadcn card BG in light. Copied verbatim so the two card families look
-    // like siblings.
-    final cardBg = isDarkMode(context)
-        ? MyntColors.dashboardCarColor
-        : shadcn.Theme.of(context).colorScheme.card;
-    final borderColor = resolveThemeColor(context,
-        dark: MyntColors.dividerDark, light: MyntColors.divider);
-    final textPrimary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    final textSecondary = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final chipBg = resolveThemeColor(context,
-        dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
+    final textSecondary = ScannerTokens.textSecondary(context);
     final hasRun = scan.lastRunAt != null;
     final lastRunLabel =
         hasRun ? 'Last run ${formatDate(scan.lastRunAt)}' : 'Never run';
     final runsLabel =
         '${scan.runCount} ${scan.runCount == 1 ? "run" : "runs"}';
-    final createdLabel = 'Created ${formatDate(scan.createdAt)}';
-
+    final metaStyle = MyntWebTextStyles.caption(context, color: textSecondary);
+    final accent = ScannerTokens.accent(context);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: _run,
+        onTap: active ? null : onRun,
         behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: cardBg,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-                color: _hover ? primary.withValues(alpha: 0.55) : borderColor,
-                width: 1),
+            color: active ? accent.withValues(alpha: 0.10) : Colors.transparent,
+            borderRadius: BorderRadius.circular(ScannerTokens.rTag),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header — icon + (name, created-date subtitle) + menu.
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 6, 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: primary.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(shadcn.LucideIcons.code,
-                          size: 16, color: primary),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            scan.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: MyntWebTextStyles.symbol(context,
-                                fontWeight: MyntFonts.semiBold,
-                                color: textPrimary),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            createdLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: MyntWebTextStyles.exch(context,
-                                color: textSecondary),
-                          ),
-                        ],
-                      ),
-                    ),
-                    _menu(textSecondary),
-                  ],
-                ),
+              Text(
+                scan.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: MyntWebTextStyles.body(context,
+                    fontWeight: active ? MyntFonts.semiBold : MyntFonts.medium,
+                    color:
+                        active ? accent : ScannerTokens.textPrimary(context)),
               ),
-              const Spacer(),
-              // Footer strip — divider on top, runs count on the left, and a
-              // status pill on the right. Fills the card's bottom so every
-              // card lines up regardless of name length.
-              Container(
-                decoration: BoxDecoration(
-                  border: Border(top: BorderSide(color: borderColor)),
-                ),
-                padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
-                child: Row(
-                  children: [
-                    Icon(shadcn.LucideIcons.play,
-                        size: 12, color: textSecondary),
-                    const SizedBox(width: 6),
-                    Text(
-                      runsLabel,
-                      style: MyntWebTextStyles.exch(context,
-                          fontWeight: MyntFonts.medium,
-                          color: textSecondary),
-                    ),
-                    const Spacer(),
-                    Flexible(
-                      child: _statusPill(
-                        context,
-                        label: lastRunLabel,
-                        muted: textSecondary,
-                        chipBg: chipBg,
-                        accent: hasRun ? null : textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              const SizedBox(height: 4),
+              Text('Created ${formatDate(scan.createdAt)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: metaStyle),
+              const SizedBox(height: 2),
+              Text('$runsLabel · $lastRunLabel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: metaStyle),
             ],
           ),
         ),
       ),
     );
   }
+}
 
-  /// Compact status pill for the footer's last-run label. Subtle background
-  /// + secondary text; keeps the footer readable without competing with the
-  /// scan name in the header.
-  Widget _statusPill(
-    BuildContext context, {
-    required String label,
-    required Color muted,
-    required Color chipBg,
-    Color? accent,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: chipBg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: MyntWebTextStyles.exch(context,
-            fontWeight: FontWeight.w500, color: accent ?? muted),
-      ),
-    );
-  }
-
-  // 3-dot trigger → opens the app's standard dropdown popover (the same
-  // shadcn popover the MF Strategy cards use).
-  Widget _menu(Color iconColor) {
-    return Builder(
-      builder: (buttonContext) {
-        return Material(
-          color: Colors.transparent,
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            splashColor: resolveThemeColor(context,
-                dark: MyntColors.rippleDark, light: MyntColors.rippleLight),
-            highlightColor: resolveThemeColor(context,
-                dark: MyntColors.highlightDark,
-                light: MyntColors.highlightLight),
-            onTap: () => _showCardPopover(buttonContext),
-            child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: Icon(Icons.more_vert, size: 20, color: iconColor),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  void _showCardPopover(BuildContext buttonContext) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primary = resolveThemeColor(context,
-        dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final loss = resolveThemeColor(context,
-        dark: MyntColors.lossDark, light: MyntColors.loss);
-    final textPrimary = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
-    shadcn.showPopover(
-      context: buttonContext,
-      alignment: Alignment.topLeft,
-      offset: const Offset(0, 4),
-      overlayBarrier: shadcn.OverlayBarrier(
-        borderRadius: shadcn.Theme.of(buttonContext).borderRadiusLg,
-      ),
-      builder: (popCtx) {
-        return Container(
-          decoration: BoxDecoration(
-            borderRadius: shadcn.Theme.of(popCtx).borderRadiusLg,
-            boxShadow:
-                isDark ? MyntShadows.dropdownDark : MyntShadows.dropdown,
-          ),
-          child: shadcn.ModalContainer(
-            padding: const EdgeInsets.all(6),
-            child: SizedBox(
-              width: 160,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildPopoverItem(
-                    popCtx,
-                    icon: Icons.edit_outlined,
-                    label: 'Edit',
-                    iconColor: primary,
-                    textColor: textPrimary,
-                    onTap: () {
-                      shadcn.closeOverlay(popCtx);
-                      widget.onEdit();
-                    },
-                  ),
-                  _buildPopoverItem(
-                    popCtx,
-                    icon: Icons.delete_outline,
-                    label: 'Delete',
-                    iconColor: loss,
-                    textColor: loss,
-                    onTap: () {
-                      shadcn.closeOverlay(popCtx);
-                      _delete();
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildPopoverItem(
-    BuildContext context, {
-    required IconData icon,
-    required String label,
-    required Color iconColor,
-    required Color textColor,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        splashColor: resolveThemeColor(context,
-            dark: MyntColors.rippleDark, light: MyntColors.rippleLight),
-        highlightColor: resolveThemeColor(context,
-            dark: MyntColors.highlightDark, light: MyntColors.highlightLight),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            children: [
-              Icon(icon, size: 16, color: iconColor),
-              const SizedBox(width: 10),
-              Text(label,
-                  style: MyntWebTextStyles.body(context,
-                      fontWeight: MyntFonts.medium, color: textColor)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// App-style delete confirm (shadcn.Card → header + centered text + red
-  /// full-width Delete) — matches the MF Strategy / Fundamental Screener dialog.
-  Future<bool> _confirmDelete(String name) async {
+/// App-style delete confirm (shadcn.Card → header + centered text + red
+/// full-width Delete) — matches the MF Strategy / Fundamental Screener dialog.
+Future<bool> _confirmDelete(BuildContext context, String name) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (dCtx) => Dialog(
@@ -553,16 +472,14 @@ class _ScanRowState extends ConsumerState<_ScanRow> {
       ),
     );
     return ok == true;
-  }
 }
 
-/// Results view for "user clicked Run on a saved custom scan". Replaces
-/// the cards list while open; back arrow returns to the cards. Mirrors
-/// the layout of `ScannersDetailPane` so users get the same UX whether
-/// they're viewing a built-in or a custom scanner.
+/// Right side of the Custom Scans page — the selected scan's name and match
+/// count, the index filter, Edit and Delete, then its results table.
 class _SavedScanResultsPane extends ConsumerStatefulWidget {
   final SavedScanResultsView view;
-  const _SavedScanResultsPane({required this.view});
+  final VoidCallback onDelete;
+  const _SavedScanResultsPane({required this.view, required this.onDelete});
 
   @override
   ConsumerState<_SavedScanResultsPane> createState() =>
@@ -584,24 +501,41 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
 
   /// Re-runs the saved scan with the supplied index filter. Used by both
   /// the dropdown's onChanged and the error state's retry button.
-  Future<void> _rerun(List<String> indices) async {
-    final scan = widget.view.scan;
-    final notifier = ref.read(customScansSessionProvider.notifier);
-    notifier.openResults(scan);
-    try {
-      final r = await locator<ApiExporter>().runSavedCustomScan(
-        scan.id,
-        indices: indices.isEmpty ? null : indices,
-      );
-      notifier.setResults(AsyncValue.data(r));
-    } catch (e, st) {
-      notifier.setResults(AsyncValue.error(e, st));
-    }
-  }
+  Future<void> _rerun(List<String> indices) =>
+      _runSavedScan(ref, widget.view.scan, indices: indices);
 
   void _onFilterChanged(List<String> next) {
     setState(() => _selectedIndices = List.unmodifiable(next));
     _rerun(next);
+  }
+
+  /// Downloads the rows on screen. There is no server-side export for a saved
+  /// custom scan, and the run is index-filtered client-side anyway, so the
+  /// only correct source is the result in hand.
+  Future<void> _exportResults() async {
+    final r = widget.view.result.asData?.value;
+    if (r == null || r.matches.isEmpty) return;
+    try {
+      await exportScanRowsXlsx(
+        columns: [
+          for (final c in r.columns)
+            ScanColumn(key: c.key, label: c.label, fmt: 'raw'),
+        ],
+        rows: [
+          for (final m in r.matches)
+            ScanRow(
+              ticker: m.ticker,
+              name: m.name,
+              values: Map<String, dynamic>.from(m.values),
+            ),
+        ],
+        sheetName: widget.view.scan.name,
+        fileName: '${scanFileSlug(widget.view.scan.name)}.xlsx',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ResponsiveSnackBar.showError(context, 'Export failed: $e');
+    }
   }
 
   @override
@@ -609,24 +543,18 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
     final view = widget.view;
     final scan = view.scan;
     final selectedIndices = _selectedIndices;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ScannerTokens.surface(context),
+        borderRadius: BorderRadius.circular(ScannerTokens.rCard),
+        border: Border.all(color: ScannerTokens.border(context)),
+        boxShadow: ScannerTokens.lift(context),
+      ),
+      child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Title row + filter dropdown — wrapped in a Wrap so the
-        // dropdown drops onto a second line on narrow viewports
-        // instead of being pushed off the right edge by the Expanded
-        // column. Matches the built-in scanner detail pane's layout.
-        // Header — back + scan name (head bold) with a match-count subtitle,
-        // and the index filter on the right. Matches the other screen headers.
-        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-          IconButton(
-            onPressed: () => ref
-                .read(customScansSessionProvider.notifier)
-                .closeResults(),
-            icon: const Icon(Icons.arrow_back, size: 18),
-            tooltip: 'Back to custom scans',
-          ),
-          const SizedBox(width: 8),
+        Row(children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -636,29 +564,29 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
                   scan.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: MyntWebTextStyles.head(context,
-                      fontWeight: MyntFonts.bold,
-                      color: resolveThemeColor(context,
-                          dark: MyntColors.textPrimaryDark,
-                          light: MyntColors.textPrimary)),
+                  style: MyntWebTextStyles.title(context,
+                      fontWeight: MyntFonts.semiBold,
+                      color: ScannerTokens.textPrimary(context)),
                 ),
-                view.result.maybeWhen(
-                  data: (r) => Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      '${r.matches.length} matches · as of ${r.asOf}',
-                      style: MyntWebTextStyles.para(context,
-                          color: resolveThemeColor(context,
-                              dark: MyntColors.textSecondaryDark,
-                              light: MyntColors.textSecondary)),
+                // Match count only once results are in — nothing while
+                // the scan runs.
+                ...view.result.maybeWhen(
+                  data: (r) => [
+                    const SizedBox(height: 2),
+                    Text(
+                      '${r.matches.length} matches · as of ${formatDate(r.asOf)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: MyntWebTextStyles.caption(context,
+                          color: ScannerTokens.textSecondary(context)),
                     ),
-                  ),
-                  orElse: () => const SizedBox.shrink(),
+                  ],
+                  orElse: () => const <Widget>[],
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 12),
           IndexFilterDropdown(
             selected: selectedIndices,
             onChanged: _onFilterChanged,
@@ -667,11 +595,39 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
               orElse: () => const <String, int>{},
             ),
           ),
+          const SizedBox(width: 8),
+          ScannerChipButton(
+            icon: shadcn.LucideIcons.download,
+            tooltip: 'Download results',
+            height: 34,
+            // Disabled until a run has landed — there is nothing to write yet.
+            onTap: view.result.asData?.value.matches.isNotEmpty == true
+                ? _exportResults
+                : null,
+          ),
+          const SizedBox(width: 8),
+          ScannerChipButton(
+            icon: Icons.edit_outlined,
+            tooltip: 'Edit this scan',
+            height: 34,
+            onTap: () => ref
+                .read(customScansSessionProvider.notifier)
+                .openExistingBuilder(scan),
+          ),
+          const SizedBox(width: 8),
+          ScannerChipButton(
+            icon: shadcn.LucideIcons.trash2,
+            tooltip: 'Delete this scan',
+            height: 34,
+            iconColor: resolveThemeColor(context,
+                dark: MyntColors.errorDark, light: MyntColors.error),
+            onTap: widget.onDelete,
+          ),
         ]),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(
           child: view.result.when(
-            loading: () => Center(child: MyntLoader.simple()),
+            loading: () => Center(child: MyntLoader.branded()),
             error: (e, _) => EmptyState(
               kind: EmptyStateKind.error,
               title: 'Could not run scan',
@@ -726,6 +682,7 @@ class _SavedScanResultsPaneState extends ConsumerState<_SavedScanResultsPane> {
           ),
         ),
       ],
+      ),
     );
   }
 }

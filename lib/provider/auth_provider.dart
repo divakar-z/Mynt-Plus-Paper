@@ -20,6 +20,7 @@ import 'package:mynt_plus/provider/text_nugget_provider.dart';
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/provider/option_flash_provider.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
+import 'package:mynt_plus/provider/scanner/custom_scans_provider.dart';
 import 'package:mynt_plus/provider/stocks_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
@@ -1016,6 +1017,10 @@ class AuthProvider extends DefaultChangeNotifier {
 
         // Clear pending watchlists on logout
         ref.read(marketWatchProvider).clearPendingWatchlists();
+
+        // Drop the previous account's saved custom scans, open results and
+        // builder draft so they don't show up under the next login.
+        clearCustomScansOnLogout(ref);
 
         // Clear notification data on logout to prevent data leaking between users
         ref.read(notificationprovider).clearData();
@@ -2258,6 +2263,9 @@ class AuthProvider extends DefaultChangeNotifier {
     // Clear pending watchlists on logout (network failure scenario)
     ref.read(marketWatchProvider).clearPendingWatchlists();
 
+    // Saved custom scans are per-account — drop them with the session.
+    clearCustomScansOnLogout(ref);
+
     // Update UI state
     ref.read(indexListProvider).bottomMenu(0, context);
 
@@ -2393,6 +2401,9 @@ class AuthProvider extends DefaultChangeNotifier {
 
       // Clear pending watchlists on session expiry
       ref.read(marketWatchProvider).clearPendingWatchlists();
+
+      // Saved custom scans are per-account — drop them with the session.
+      clearCustomScansOnLogout(ref);
 
       // Prefill the login field for convenience
       loginMethCtrl.text = pref.clientId ?? "";
