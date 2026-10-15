@@ -72,7 +72,11 @@ class IndicatorSchema {
 /// Returns the schema for [kind] (case-insensitive), or `null` if it isn't
 /// in the registry. Callers should fall back to the legacy single-`period`
 /// row when null.
-IndicatorSchema? schemaFor(String kind) => _kSchemas[kind.toLowerCase()];
+IndicatorSchema? schemaFor(String kind) {
+  final k = kind.toLowerCase();
+  if (k == 'cpr') return _kCprSchema;
+  return _kSchemas[k];
+}
 
 const Map<String, IndicatorSchema> _kSchemas = {
   // ── Single-period overlays / oscillators ────────────────────────────────
@@ -732,3 +736,94 @@ const Map<String, IndicatorSchema> _kSchemas = {
     ],
   ),
 };
+// ── CPR with Pivot Level Daily ──────────────────────────────────────────────
+// Port of the TradingView study. Its settings are per-line styles
+// (TradingView's Style tab), so the settings dialog renders a dedicated
+// section instead of one row per param. Every setting is a numeric param
+// `<key><field>`: V visible 0/1, C colour 0xRRGGBB, W width 1-4, S line style
+// index, T plot type index, P price line 0/1 — plus `precision` (index).
+// Plot keys, defaults and option orders MUST match chart-helpers.js (CPR_*).
+class CprPlotDef {
+  final String key;
+  final String title;
+  final int color;
+  final bool visible;
+  const CprPlotDef(this.key, this.title, this.color, this.visible);
+}
+
+const List<CprPlotDef> kCprPlots = [
+  CprPlotDef('pivot', 'Daily Central Pivot', 0xF8AF85, true),
+  CprPlotDef('high', 'Prev Day High', 0x6CAC6E, false),
+  CprPlotDef('low', 'Prev Day Low', 0xEB2D2D, false),
+  CprPlotDef('bc', 'Daily Bottom Pivot', 0x9C50E4, true),
+  CprPlotDef('tc', 'Daily Top Pivot', 0x91A9F1, true),
+  CprPlotDef('s1', 'Daily S1', 0xFF0000, false),
+  CprPlotDef('r1', 'Daily R1', 0x008000, false),
+  CprPlotDef('s2', 'Daily S2', 0xFF0000, false),
+  CprPlotDef('r2', 'Daily R2', 0x008000, false),
+  CprPlotDef('s3', 'Daily S3', 0xFF0000, false),
+  CprPlotDef('r3', 'Daily R3', 0x008000, false),
+  CprPlotDef('s4', 'Daily S4', 0xFF0000, false),
+  CprPlotDef('r4', 'Daily R4', 0x008000, false),
+];
+
+const int kCprDefaultWidth = 3;
+const int kCprDefaultLineStyle = 0;   // Solid
+const int kCprDefaultPlotType = 10;   // Circles (the study's plottype 6)
+
+const IndicatorParam kCprPlotTypeParam = IndicatorParam(
+  key: 'T', label: 'Plot type', description: 'How the level is drawn',
+  defaultValue: kCprDefaultPlotType,
+  options: [
+    IndicatorOption('Line'), IndicatorOption('Line with breaks'),
+    IndicatorOption('Step line'), IndicatorOption('Step line with breaks'),
+    IndicatorOption('Step line with diamonds'), IndicatorOption('Histogram'),
+    IndicatorOption('Cross'), IndicatorOption('Area'),
+    IndicatorOption('Area with breaks'), IndicatorOption('Columns'),
+    IndicatorOption('Circles'),
+  ],
+);
+
+const IndicatorParam kCprLineStyleParam = IndicatorParam(
+  key: 'S', label: 'Line style', description: 'For line and step types',
+  defaultValue: kCprDefaultLineStyle,
+  options: [
+    IndicatorOption('Solid'), IndicatorOption('Dotted'), IndicatorOption('Dashed'),
+  ],
+);
+
+const IndicatorParam kCprPrecisionParam = IndicatorParam(
+  key: 'precision', label: 'Precision', description: 'Decimals shown for the levels',
+  defaultValue: 0,
+  options: [
+    IndicatorOption('Default'), IndicatorOption('0'), IndicatorOption('1'),
+    IndicatorOption('2'), IndicatorOption('3'), IndicatorOption('4'),
+    IndicatorOption('5'), IndicatorOption('6'), IndicatorOption('7'),
+    IndicatorOption('8'),
+  ],
+);
+
+final IndicatorSchema _kCprSchema = IndicatorSchema(
+  kind: 'cpr',
+  displayName: 'CPR with Pivot Level Daily',
+  shortDescription: 'Central pivot range and S/R levels from the previous day.',
+  params: [
+    kCprPrecisionParam,
+    for (final p in kCprPlots) ...[
+      IndicatorParam(key: '${p.key}V', label: '${p.title} visible',
+          description: '', defaultValue: p.visible ? 1 : 0, isBool: true),
+      IndicatorParam(key: '${p.key}C', label: '${p.title} colour',
+          description: '', defaultValue: p.color, min: 0, max: 0xFFFFFF),
+      IndicatorParam(key: '${p.key}W', label: '${p.title} width',
+          description: '', defaultValue: kCprDefaultWidth, min: 1, max: 4),
+      IndicatorParam(key: '${p.key}S', label: '${p.title} line style',
+          description: '', defaultValue: kCprDefaultLineStyle,
+          options: kCprLineStyleParam.options),
+      IndicatorParam(key: '${p.key}T', label: '${p.title} plot type',
+          description: '', defaultValue: kCprDefaultPlotType,
+          options: kCprPlotTypeParam.options),
+      IndicatorParam(key: '${p.key}P', label: '${p.title} price line',
+          description: '', defaultValue: 0, isBool: true),
+    ],
+  ],
+);

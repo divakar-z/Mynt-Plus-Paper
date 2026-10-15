@@ -89,5 +89,85 @@ t('MCX January 23:54 in', () => assert.strictEqual(h._isSessionWindowPure('MCX',
 t('MCX January 23:55 out', () => assert.strictEqual(h._isSessionWindowPure('MCX', ist(2026, 0, 16, 23, 55)), false));
 t('unmapped always in session', () => assert.strictEqual(h._isSessionWindowPure('XYZ', ist(2026, 5, 20, 3, 0)), true));
 
+
+// ── CPR with Pivot Level Daily ────────────────────────────────────────────
+console.log('CPR');
+const near = (a, b) => Math.abs(a - b) < 1e-9;
+// Daily EOD bars are stamped 05:30 IST (00:00 UTC).
+const dayBar = (mo, d, hi, lo, cl) => ({ ts: ist(2026, mo, d, 5, 30), o: lo, h: hi, l: lo, c: cl, v: 0 });
+const daily = [
+  dayBar(9, 9, 120, 100, 104),   // Fri 9 Oct
+  dayBar(9, 12, 110, 90, 100),   // Mon 12 Oct
+  dayBar(9, 13, 130, 110, 120),  // Tue 13 Oct
+  dayBar(9, 14, 105, 95, 101),   // Wed 14 Oct
+];
+const nowMs = ist(2026, 9, 15, 12, 0) * 1000;   // Thu 15 Oct, 12:00 IST
+const bar = (mo, d, hh, mi) => ({ ts: ist(2026, mo, d, hh, mi), o: 1, h: 1, l: 1, c: 1, v: 0 });
+
+t('levels follow the TradingView formulas (prev H/L/C)', () => {
+  const L = h.cprLevels(120, 100, 104);
+  assert.ok(near(L.pivot, 108) && near(L.bc, 110) && near(L.tc, 106));
+  assert.ok(near(L.high, 120) && near(L.low, 100));
+  assert.ok(near(L.r1, 116) && near(L.r2, 128) && near(L.r3, 136) && near(L.r4, 148));
+  assert.ok(near(L.s1, 96) && near(L.s2, 88) && near(L.s3, 76) && near(L.s4, 68));
+});
+
+t('each candle uses the PREVIOUS trading day; Monday uses Friday', () => {
+  const candles = [bar(9, 12, 9, 15), bar(9, 13, 10, 0)];
+  const s = h.computeCprSeries(candles, daily, nowMs);
+  assert.ok(near(s.pivot[0], 108));          // Mon 12 <- Fri 9 (120/100/104)
+  assert.ok(near(s.pivot[1], 100));          // Tue 13 <- Mon 12 (110/90/100)
+  assert.ok(near(s.high[1], 110) && near(s.low[1], 90));
+});
+
+t('today (no daily bar yet) uses the last completed day', () => {
+  const s = h.computeCprSeries([bar(9, 15, 9, 15), bar(9, 15, 11, 30)], daily, nowMs);
+  const wed = h.cprLevels(105, 95, 101);
+  assert.ok(near(s.pivot[0], wed.pivot) && near(s.pivot[1], wed.pivot));
+  assert.ok(near(s.r1[1], wed.r1) && near(s.s4[1], wed.s4));
+});
+
+t('a partial bar for today in the daily data does not change today\'s levels', () => {
+  const withToday = daily.concat([dayBar(9, 15, 999, 1, 500)]);
+  const s = h.computeCprSeries([bar(9, 15, 10, 0)], withToday, nowMs);
+  assert.ok(near(s.pivot[0], h.cprLevels(105, 95, 101).pivot));
+});
+
+t('bars older than 30 days, or with no previous day, have no levels', () => {
+  const s = h.computeCprSeries([bar(8, 1, 10, 0), bar(9, 9, 10, 0)], daily, nowMs);
+  assert.ok(Number.isNaN(s.pivot[0]));   // 1 Sep: older than 30 days
+  assert.ok(Number.isNaN(s.pivot[1]));   // Fri 9 Oct: no earlier daily bar loaded
+});
+
+t('daily data out of order is handled', () => {
+  const s = h.computeCprSeries([bar(9, 13, 10, 0)], daily.slice().reverse(), nowMs);
+  assert.ok(near(s.pivot[0], 100));
+});
+
+t('plot style defaults match the TradingView metainfo', () => {
+  const pv = h.cprPlotStyle({}, h.CPR_PLOTS.find((p) => p.key === 'pivot'));
+  assert.deepStrictEqual(pv, { visible: true, color: '#F8AF85', width: 3,
+    lineStyle: 'solid', plotType: 'circles', priceLine: false });
+  const r4 = h.cprPlotStyle({}, h.CPR_PLOTS.find((p) => p.key === 'r4'));
+  assert.strictEqual(r4.visible, false);
+  assert.strictEqual(r4.color, '#008000');
+  assert.deepStrictEqual(h.CPR_PLOTS.filter((p) => p.visible).map((p) => p.key), ['pivot', 'bc', 'tc']);
+  assert.strictEqual(h.CPR_PLOTS.length, 13);
+});
+
+t('plot style reads the per-line params', () => {
+  const st = h.cprPlotStyle({ bcV: 0, bcC: 0x112233, bcW: 1, bcS: 2, bcT: 0, bcP: 1 },
+      h.CPR_PLOTS.find((p) => p.key === 'bc'));
+  assert.deepStrictEqual(st, { visible: false, color: '#112233', width: 1,
+    lineStyle: 'dashed', plotType: 'line', priceLine: true });
+});
+
+t('precision: Default = 2 decimals, else the chosen digits', () => {
+  assert.strictEqual(h.cprDecimals({}), 2);
+  assert.strictEqual(h.cprDecimals({ precision: 0 }), 2);
+  assert.strictEqual(h.cprDecimals({ precision: 1 }), 0);
+  assert.strictEqual(h.cprDecimals({ precision: 5 }), 4);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

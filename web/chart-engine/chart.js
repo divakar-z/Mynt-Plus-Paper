@@ -262,6 +262,14 @@ class Chart {
 
     // Phase 8 — per-pane technical indicators (SMA / EMA / RSI).
     this._indicators = []; // [{id, kind, period, color}]
+    // CPR — official daily bars for the previous-day levels (see
+    // _ensureCprDaily in chart-overlays.js).
+    this._cprDaily = null;            // { key, day, stamp, bars }
+    this._cprCache = null;
+    this._pendingCprDailyId = null;
+    this._pendingCprDailyKey = null;
+    this._cprDailyRetryKey = null;
+    this._cprDailyRetryAt = 0;
 
     // Per-draw memoization of indicator compute functions. Each method is
     // wrapped at instantiation time so every call inside a single draw()
@@ -858,6 +866,7 @@ class Chart {
   // Phase 8 — replace the technical-indicator list for this pane.
   setIndicators(list) {
     this._indicators = Array.isArray(list) ? list : [];
+    this._ensureCprDaily();
     // Drop manual-view entries for indicators that no longer exist, so the
     // map doesn't accumulate stale ids across edits.
     if (this._subPaneView) {
@@ -1213,6 +1222,11 @@ class Chart {
   }
 
   onHistoryResult(requestId, candles) {
+    // CPR's daily bars ride the same channel under their own request id.
+    if (requestId != null && requestId === this._pendingCprDailyId) {
+      this._onCprDailyResult(candles);
+      return;
+    }
     // Recent-window refresh — merge-replace the tail (incl. synth bars) with
     // server data. Pan/zoom preserved (xCenter is position-from-right; we only
     // touch the tail).
@@ -1415,6 +1429,10 @@ class Chart {
   }
 
   onHistoryError(requestId, message) {
+    if (requestId != null && requestId === this._pendingCprDailyId) {
+      this._onCprDailyError();
+      return;
+    }
     if (requestId === this._pendingRefreshId) {
       this._pendingRefreshId = null;
       return; // a refresh failing is non-fatal — next trigger retries
@@ -2939,6 +2957,8 @@ class Chart {
       const visible = this._visibleCandles();
       if (visible.length === 0) return null;
       for (const c of visible) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
+      // CPR's visible levels count toward the fit, as on TradingView.
+      ({ lo, hi } = this._cprFitRange(visible, lo, hi));
     }
     const pad = (hi - lo) * 0.08 || 1;
     return { lo: lo - pad, hi: hi + pad };
@@ -4062,6 +4082,8 @@ class Chart {
 
   // Inline params string: any numeric values from ind.params, space-separated.
   _indicatorParamsLabel(ind) {
+    // CPR's params are its per-line style settings, not inputs.
+    if (ind.kind === 'cpr') return '';
     const parts = [];
     const p = ind.params || {};
     for (const key of Object.keys(p)) {
@@ -4079,6 +4101,8 @@ class Chart {
   // lagging (today's close), lead 1 and lead 2 at the current bar. null for
   // everything else (single-value path below).
   _indicatorLastValues(ind) {
+    // CPR: every visible level at the newest bar (TradingView's status line).
+    if (ind.kind === 'cpr') return this._cprLegendValues(ind);
     if (ind.kind !== 'ichi' || !this.candles.length) return null;
     const ic = this._computeIchimoku(ind);
     const i = this.candles.length - 1;
@@ -4221,7 +4245,8 @@ class Chart {
       const valColor = ind.hidden ? iconDim : indColor;
       // Value segments: one per line for multi-line indicators, else one.
       const valSegs = multi
-          ? multi.map((m) => ({ text: this._fmtPrice(m.v), color: ind.hidden ? iconDim : m.color }))
+          ? multi.map((m) => ({ text: m.dp != null ? m.v.toFixed(m.dp) : this._fmtPrice(m.v),
+            color: ind.hidden ? iconDim : m.color }))
           : (valLabel ? [{ text: valLabel, color: valColor }] : []);
 
       // Inline measurement — kind + " " + params + " " + value
