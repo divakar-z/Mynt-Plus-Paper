@@ -2346,6 +2346,7 @@
     { kind: 'pvt',      label: 'PVT',    fullName: 'Price Volume Trend',          category: 'momentum' },
     { kind: 'ad',       label: 'A/D',    fullName: 'Accumulation/Distribution',   category: 'momentum' },
     { kind: 'pivots',   label: 'PIV',    fullName: 'Pivot Points',                category: 'trend' },
+    { kind: 'cpr',      label: 'CPR',    fullName: 'CPR with Pivot Level Daily',  category: 'trend' },
   ];
   const INDICATOR_CATEGORIES = [
     { value: 'all',        label: 'All' },
