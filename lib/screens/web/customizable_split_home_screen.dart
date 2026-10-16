@@ -1302,15 +1302,25 @@ class _CustomizableSplitHomeScreenState
         subscriptionManager.refreshTickerSubscriptions(context);
       }
     });
-    portfolio.fetchHoldings(context, "");
+    // A reconnect through websocketProvider.reconnect() (tab return, network
+    // recovery) has already re-fetched holdings, order book and funds just
+    // before the socket came back; calling them again sent every one twice.
+    // Only skip when that happened moments ago — an internal auto-reconnect
+    // doesn't refresh, so this remains its only refresh.
+    final lastRefresh = ref.read(websocketProvider).lastDataRefreshAt;
+    final alreadyRefreshed = lastRefresh != null &&
+        DateTime.now().difference(lastRefresh) < const Duration(seconds: 10);
+    if (!alreadyRefreshed) {
+      portfolio.fetchHoldings(context, "");
 
-    // Refresh order book data
-    final orders = ref.read(orderProvider);
-    orders.fetchOrderBook(context, true); // websocCon = true since we're reconnecting
+      // Refresh order book data
+      final orders = ref.read(orderProvider);
+      orders.fetchOrderBook(context, true); // websocCon = true since we're reconnecting
 
-    // Refresh fund data
-    final fund = ref.read(fundProvider);
-    fund.fetchFunds(context);
+      // Refresh fund data
+      final fund = ref.read(fundProvider);
+      fund.fetchFunds(context);
+    }
 
     // Re-establish WebSocket subscriptions for active screens
     _updateSubscriptionManagerForPanels(forceRefresh: true);

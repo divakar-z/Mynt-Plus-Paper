@@ -34,6 +34,21 @@
   var dispNames = {};
   var changeSymbolTimers = {}; // containerId -> debounce timer
   var lastNotifiedSymbol = {}; // containerId -> last symbol sent to Dart via onChartSymbolChanged (dedup)
+  // containerId -> { "SYM|resolution": bar } — the newest bar per symbol AND
+  // resolution, written by getBars and by every live tick. subscribeBars seeds
+  // from it. Keyed by symbol so switching back to a cached symbol never picks
+  // up the other symbol's candle.
+  var lastBars = {};
+  // containerId -> { symbol: ms } — when the user switched away from a symbol.
+  // TradingView keeps each symbol's bars cached, and ticks only flow for the
+  // symbol on screen, so that cache is complete only up to this moment.
+  var leftAt = {};
+  // containerId -> { "sym|resolution": sub } — the live-tick sub TradingView
+  // handed us for each symbol. When TV replays a cached symbol it does NOT call
+  // subscribeBars again, so changeSymbol (which clears `subscriptions`) would
+  // leave the chart with no tick target; the setSymbol callback restores it
+  // from here.
+  var subRegistry = {};
   // containerId -> [{ symbol, at }] — symbols Dart asked for via changeSymbol
   // that TV hasn't confirmed yet. onSymbolChanged fires for these too; they
   // are echoes, not user searches, and must not reach Dart as an external
@@ -252,12 +267,125 @@
   // Ignore jitter: only treat it as a hole when the stream skipped clear of
   // the next bucket. 1.5 intervals is past the next candle but short of two.
   var GAP_TOLERANCE = 1.5;
-  // TV aggregates every intraday view from 1-minute bars, so subscribeBars
-  // always reports resolution "1" no matter what the user is looking at.
-  // A quiet option skips single minutes constantly and the server has no
-  // candles there either, so only a run of missing minutes is worth
-  // reporting — below this it is just a thin scrip, not a lost session.
+  // subscribeBars reports the BASE resolution TV builds the view from (see
+  // INTRADAY_BASES — 1 minute), not the one on screen. A quiet option
+  // skips single candles constantly and the server has no candles there
+  // either, so only a run of missing candles is worth reporting — below this
+  // it is just a thin scrip, not a lost session.
   var MIN_GAP_CANDLES = 3;
+
+  // Intraday resolutions fetched from TPSeries as-is; TV aggregates every
+  // other intraday view from these (resolveSymbol's intraday_multipliers).
+  //
+  // 1-minute only, as before. TPSeries' own 3m / 5m / 15m series differ from
+  // candles built from its 1m series on the LAST candle of each day (wrong
+  // high / low / close, e.g. NIFTY 50 7 Oct 5m closed 22599.05, official
+  // 22603.05), so those charts disagreed with other brokers. Building from 1m
+  // matches the official close. Cost: more rows per load than 5m / 15m bases.
+  var INTRADAY_BASES = ['1'];
+
+  // The base TV picks for a displayed intraday resolution: the largest entry
+  // of INTRADAY_BASES that divides it. Mirrors the library's
+  // findSuitableResolutionToBuildFrom so pushTick feeds the sub TV actually
+  // subscribed.
+  function baseResolutionFor(displayedRes) {
+    var mins = parseInt(displayedRes, 10);
+    if (!mins || mins < 1) return '1';
+    for (var i = INTRADAY_BASES.length - 1; i >= 0; i--) {
+      if (mins % Number(INTRADAY_BASES[i]) === 0) return INTRADAY_BASES[i];
+    }
+    return '1';
+  }
+
+  // The resolution TV asks the datafeed for on this chart right now, derived
+  // from the displayed one: intraday → baseResolutionFor(); 1D / 1W / 1M pass
+  // through. null while the widget is mid-init.
+  function datafeedResolutionFor(containerId) {
+    var displayedRes = null;
+    try {
+      var w = charts[containerId];
+      if (w && w.activeChart) displayedRes = w.activeChart().resolution();
+    } catch (e) { /* widget mid-init */ }
+    if (!displayedRes) return null;
+    if (displayedRes === '1D' || displayedRes === 'D'
+        || displayedRes === '1W' || displayedRes === 'W'
+        || displayedRes === '1M' || displayedRes === 'M') {
+      return (displayedRes.length === 1) ? '1' + displayedRes : displayedRes;
+    }
+    return baseResolutionFor(displayedRes);
+  }
+
+  // ---- Failed-load recovery --------------------------------------------
+  // fetchRetry rides out a short drop, but once its retries run out getBars
+  // calls onErrorCallback and TradingView never asks again — the chart stays
+  // blurred until the user changes symbol or timeframe. Remember which charts
+  // are stuck and reload them when the link is back: on the browser's
+  // 'online' event, on tab return, or on a backoff timer (a VPN or hotspot
+  // drop often never flips navigator.onLine, so the timer is the backstop).
+  var failedLoads = {};     // containerId -> { symbol, resolution, attempts, timer }
+  var RECOVER_BACKOFF_MS = [5000, 15000, 30000, 60000];
+
+  function markLoadFailed(containerId, symbolInfo, resolution, error) {
+    // A load for a symbol the user already left is stale — the newer load
+    // decides whether the chart is stuck.
+    var desired = desiredSymbols[containerId];
+    if (desired && symbolInfo.name !== desired && symbolInfo.ticker !== desired) return;
+
+    var f = failedLoads[containerId] || { attempts: 0, timer: null };
+    f.symbol = symbolInfo.name;
+    f.resolution = resolution;
+    if (f.timer) clearTimeout(f.timer);
+    var wait = RECOVER_BACKOFF_MS[Math.min(f.attempts, RECOVER_BACKOFF_MS.length - 1)];
+    f.timer = setTimeout(function () { recoverLoad(containerId, 'timer'); }, wait);
+    failedLoads[containerId] = f;
+    nchart('stuck', {
+      container: containerId,
+      symbol: f.symbol,
+      resolution: resolution,
+      reloads: f.attempts,
+      nextReloadMs: wait,
+      error: String(error)
+    });
+  }
+
+  function clearLoadFailed(containerId) {
+    var f = failedLoads[containerId];
+    if (!f) return;
+    if (f.timer) clearTimeout(f.timer);
+    delete failedLoads[containerId];
+    nchart('recovered', { container: containerId, symbol: f.symbol, reloads: f.attempts });
+  }
+
+  function recoverLoad(containerId, trigger) {
+    var f = failedLoads[containerId];
+    if (!f) return;
+    if (f.timer) { clearTimeout(f.timer); f.timer = null; }
+    var desired = desiredSymbols[containerId];
+    if (!charts[containerId] || (desired && f.symbol !== desired)) {
+      // Chart removed or the user moved on to another symbol.
+      delete failedLoads[containerId];
+      return;
+    }
+    if (changeSymbolTimers[containerId] || navigator.onLine === false ||
+        document.visibilityState === 'hidden') {
+      // A symbol change is already loading, or there is no point trying yet —
+      // the 'online' / visibilitychange listeners fire sooner than this.
+      f.timer = setTimeout(function () { recoverLoad(containerId, 'timer'); }, 60000);
+      return;
+    }
+    f.attempts++;
+    nchart('reload', { container: containerId, symbol: f.symbol, trigger: trigger, reload: f.attempts });
+    // Backstop in case TV does not re-hit getBars; a success clears it and a
+    // failure reschedules with the next backoff step.
+    f.timer = setTimeout(function () { recoverLoad(containerId, 'timer'); }, 60000);
+    window.ScalperCharts.resetData(containerId);
+  }
+
+  function recoverAllLoads(trigger) {
+    for (var id in failedLoads) {
+      if (Object.prototype.hasOwnProperty.call(failedLoads, id)) recoverLoad(id, trigger);
+    }
+  }
 
   function fetchJson(url) {
     return fetch(url).then(function (r) { return r.json(); }).catch(function () { return null; });
@@ -399,13 +527,11 @@
   }
 
   function createDatafeed(user, usession, containerId, sessions) {
-    // Per-resolution cache of the most recent historical bar. A single
-    // shared variable broke when TV issued back-to-back getBars for two
-    // resolutions (e.g. 1m and 1D on a Daily-view switch): whichever
-    // response landed last won, so the daily subscribeBars could end up
-    // with a 1-minute lastBar, and pushTick then snapped to that minute's
-    // timestamp. Keying by resolution isolates each series.
-    var lastBarByResolution = {};
+    // Most recent bar per symbol + resolution (see `lastBars`). Keying by
+    // resolution stops back-to-back 1m / 1D getBars from overwriting each
+    // other; keying by symbol stops a cached symbol from inheriting the
+    // previous symbol's bar.
+    var lastBarByKey = lastBars[containerId] = lastBars[containerId] || {};
 
     return {
       onReady: function (callback) {
@@ -683,7 +809,15 @@
               has_intraday: true,
               has_daily: true,
               has_weekly_and_monthly: false,
-              intraday_multipliers: ["1"],
+              // Base resolutions TPSeries serves directly. TV builds every
+              // other intraday view from the largest one that divides it
+              // (10m <- 5m, 30m/60m <- 15m), so a 5m chart downloads 5m
+              // candles instead of 5x as many 1m ones. Keep ascending — TV
+              // scans from the end. 30/60 are left out on purpose: NSE's
+              // 09:15 open is not on a 30/60-minute clock boundary, so their
+              // live bucketing needs the offsets in bucketTime; building them
+              // from 15m avoids that path. See baseResolutionFor().
+              intraday_multipliers: INTRADAY_BASES,
               daily_multipliers: ["1"],
               weekly_multipliers: ["1"],
               monthly_multipliers: ["1"],
@@ -756,6 +890,7 @@
           }, 'EODChartData ' + index)
             .then(function (r) { return r.json(); })
             .then(function (data) {
+              if (periodParams.firstDataRequest) clearLoadFailed(containerId);
               if (!data || data.stat === 'Not_Ok' || data.length === 0) {
                 onHistoryCallback([], { noData: true });
                 return;
@@ -767,7 +902,7 @@
               if (periodParams.firstDataRequest && bars.length > 0) {
                 var desired = desiredSymbols[containerId];
                 if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
-                  lastBarByResolution[resolution] = bars[bars.length - 1];
+                  lastBarByKey[symbolInfo.name + '|' + resolution] = bars[bars.length - 1];
                 } else {
                   console.log('ScalperCharts: Stale getBars (day) for', symbolInfo.name, '- desired:', desired);
                 }
@@ -777,7 +912,11 @@
             })
             .catch(function (e) {
               console.error('getBars day error:', e);
-              onErrorCallback(e);
+              // Not only first loads: reopening a symbol TV has cached asks
+              // only for the recent candles, and that failing sticks too (T7).
+              markLoadFailed(containerId, symbolInfo, resolution, e);
+              // TV expects a text reason; an Error object throws inside it.
+              onErrorCallback(String(e));
             });
         } else {
           // Intraday chart — exchange from symbolInfo.exchange (set by
@@ -793,6 +932,7 @@
           }, 'TPSeries ' + symbolInfo.name + ' ' + resolution)
             .then(function (r) { return r.json(); })
             .then(function (data) {
+              if (periodParams.firstDataRequest) clearLoadFailed(containerId);
               if (!data || data.stat === 'Not_Ok' || data.length === 0) {
                 onHistoryCallback([], { noData: true });
                 return;
@@ -804,7 +944,7 @@
               if (periodParams.firstDataRequest && bars.length > 0) {
                 var desired = desiredSymbols[containerId];
                 if (!desired || symbolInfo.name === desired || symbolInfo.ticker === desired) {
-                  lastBarByResolution[resolution] = bars[bars.length - 1];
+                  lastBarByKey[symbolInfo.name + '|' + resolution] = bars[bars.length - 1];
                 } else {
                   console.log('ScalperCharts: Stale getBars (intraday) for', symbolInfo.name, '- desired:', desired);
                 }
@@ -814,7 +954,11 @@
             })
             .catch(function (e) {
               console.error('getBars intraday error:', e);
-              onErrorCallback(e);
+              // Not only first loads: reopening a symbol TV has cached asks
+              // only for the recent candles, and that failing sticks too (T7).
+              markLoadFailed(containerId, symbolInfo, resolution, e);
+              // TV expects a text reason; an Error object throws inside it.
+              onErrorCallback(String(e));
             });
         }
       },
@@ -856,7 +1000,7 @@
 
         var sub = {
           callback: onRealtimeCallback,
-          lastBar: lastBarByResolution[resolution] || null,
+          lastBar: lastBarByKey[symbolInfo.name + '|' + resolution] || null,
           resolution: resolution,
           subscriberUID: subscriberUID,
           preVolume: 0,
@@ -868,11 +1012,11 @@
         // fallback hint for pushTick — it is NOT the live-tick routing
         // decision. Do not reintroduce a `resolution === activeChart()
         // .resolution()` test here: those two values are different things.
-        // resolveSymbol declares intraday_multipliers:["1"], so TradingView
-        // asks this datafeed for the BASE resolution it builds the view from
-        // ("1" for every intraday interval — Interval.letter() is "" for
+        // resolveSymbol declares intraday_multipliers:INTRADAY_BASES, so
+        // TradingView asks this datafeed for the BASE resolution it builds the
+        // view from ("5" for a 10m view — Interval.letter() is "" for
         // minutes), while activeChart().resolution() returns the DISPLAYED
-        // interval ("5"). On any intraday chart they never match, the main
+        // interval ("10"). On many intraday charts they never match, the main
         // series was filed as a study, entry.main stayed null and pushTick
         // dropped every tick — socket data flowing, chart frozen.
         //
@@ -885,10 +1029,16 @@
           subscriptions[containerId] = { main: sub, studies: {} };
         } else if (!entry.main) {
           entry.main = sub;
+        } else if (entry.main.restored && entry.main.symbolName === sub.symbolName &&
+                   entry.main.resolution === sub.resolution) {
+          // TV did resubscribe after we rebound the cached sub: use the fresh one.
+          entry.main = sub;
         } else {
           entry.studies = entry.studies || {};
           entry.studies[subscriberUID] = sub;
         }
+        (subRegistry[containerId] = subRegistry[containerId] || {})[
+          (symbolInfo.name || '').toLowerCase() + '|' + resolution] = sub;
         console.log('ScalperCharts: subscribeBars -', containerId, 'res:', resolution, 'uid:', subscriberUID);
       },
 
@@ -898,6 +1048,25 @@
         if (entry.main && entry.main.subscriberUID === subscriberUID) {
           entry.main = null;
           console.log('ScalperCharts: unsubscribeBars (main) -', containerId, subscriberUID);
+          // A timeframe change subscribes the new series BEFORE TV drops the
+          // old one, so the new visible series was filed as a study. Promote
+          // it now — without a main, resyncIfStale skips every repair ("chart
+          // still loading") and the gap check never runs, so candles missed
+          // on a tab return / network drop stay missing (smoke test T5/T10b).
+          var target = datafeedResolutionFor(containerId);
+          if (target && entry.studies) {
+            for (var puid in entry.studies) {
+              var ps = entry.studies[puid];
+              // Same resolution alone could be the OI overlay series.
+              if (ps && ps.resolution === target &&
+                  (ps.symbolName || '').indexOf(OI_SUFFIX) === -1) {
+                entry.main = ps;
+                delete entry.studies[puid];
+                console.log('ScalperCharts: promoted to main -', containerId, puid);
+                break;
+              }
+            }
+          }
         } else if (entry.studies && entry.studies[subscriberUID]) {
           delete entry.studies[subscriberUID];
           console.log('ScalperCharts: unsubscribeBars (study) -', containerId, subscriberUID);
@@ -1333,9 +1502,51 @@
             // is still resolving from a previous setSymbol call.
             var res = '5';
             try { res = widget.activeChart().resolution(); } catch (_) { }
+            // TradingView keeps every symbol's bars cached for the widget's
+            // lifetime, so switching back to a symbol shown earlier (NIFTY ->
+            // SENSEX -> NIFTY) replays that snapshot without calling getBars
+            // (no TPSeries). Ticks only flow for the symbol on screen, so the
+            // snapshot is complete only up to when the user left it. Reuse it
+            // while still inside that same 1-minute candle; otherwise drop the
+            // cache so getBars re-pulls the candles formed while away.
+            //
+            // Always 1-minute, whatever the displayed timeframe: every
+            // intraday view (5m, 1h, 4h) is built from cached 1-minute bars
+            // (intraday_multipliers: ["1"]), so a 4h candle reused after an
+            // hour away would keep a permanent hole underneath it.
+            var shown = null;
+            try { shown = widget.activeChart().symbol(); } catch (_) { }
+            var away = leftAt[containerId] = leftAt[containerId] || {};
+            if (shown && shown !== symbol) away[shown] = Date.now();
+            var leftTime = away[symbol];
+            // No entry = never shown since the last reset, so TradingView has
+            // nothing cached and fetches it anyway; resetting would only throw
+            // away the other symbols' valid snapshots.
+            if (leftTime && Math.floor(leftTime / 60000) !== Math.floor(Date.now() / 60000)) {
+              // resetCache drops EVERY symbol's cached bars, so no remembered
+              // snapshot is valid after it.
+              try { widget.resetCache(); } catch (_) { }
+              leftAt[containerId] = {};
+              delete subRegistry[containerId];
+            }
             (dartRequestedSymbols[containerId] = dartRequestedSymbols[containerId] || [])
               .push({ symbol: symbol, at: Date.now() });
+            // TV serves a cached symbol without calling subscribeBars again, so
+            // the `delete subscriptions` above would leave the chart with no
+            // tick target and it would freeze. A registry entry survives only
+            // until the next resetCache, i.e. exactly while TV still has the
+            // symbol cached, so rebind that sub right away.
+            var cachedSub = null;
+            var reg = subRegistry[containerId] || {};
+            for (var k in reg) {
+              if (k === (symbol || '').toLowerCase() + '|' + reg[k].resolution) { cachedSub = reg[k]; break; }
+            }
             widget.setSymbol(symbol, res, function () { });
+            if (cachedSub && !subscriptions[containerId]) {
+              cachedSub.restored = true;
+              subscriptions[containerId] = { main: cachedSub, studies: {} };
+              console.log('ScalperCharts: restored cached subscription -', containerId, symbol);
+            }
             console.log('ScalperCharts: Symbol changed -', containerId, symbol);
           } catch (e) {
             console.error('ScalperCharts: changeSymbol error -', containerId, e);
@@ -1366,27 +1577,13 @@
       // though Dart is still pushing ticks.
       //
       // Datafeed resolution is DERIVED from the displayed one, because
-      // resolveSymbol declares intraday_multipliers:["1"] / daily_multipliers:
-      // ["1"]:
-      //   - any intraday view (1, 3, 5, 15, …) → datafeed res is always "1";
-      //     TV aggregates the view from 1-minute bars.
+      // resolveSymbol declares intraday_multipliers:INTRADAY_BASES /
+      // daily_multipliers:["1"]:
+      //   - any intraday view → the largest base that divides it (1m, 3m, 5m
+      //     or 15m), same rule as TV's findSuitableResolutionToBuildFrom.
       //   - 1D / 1W / 1M → TV passes the daily res through to subscribeBars.
-      var displayedRes = null;
-      try {
-        var w = charts[containerId];
-        if (w && w.activeChart) displayedRes = w.activeChart().resolution();
-      } catch (e) { /* widget mid-init */ }
-
-      var targetRes;
-      if (!displayedRes) {
-        targetRes = null; // unknown → fall back to entry.main below
-      } else if (displayedRes === '1D' || displayedRes === 'D'
-              || displayedRes === '1W' || displayedRes === 'W'
-              || displayedRes === '1M' || displayedRes === 'M') {
-        targetRes = (displayedRes.length === 1) ? '1' + displayedRes : displayedRes;
-      } else {
-        targetRes = '1';
-      }
+      // Unknown (null) → fall back to entry.main below.
+      var targetRes = datafeedResolutionFor(containerId);
 
       var sub = null;
       if (targetRes) {
@@ -1562,6 +1759,11 @@
         }
 
         sub.lastBar = bar;
+        // Keep the live bar per symbol, so switching back while TradingView
+        // reuses its cache seeds subscribeBars from the bar TV actually shows.
+        if (lastBars[containerId] && sub.symbolName) {
+          lastBars[containerId][sub.symbolName + '|' + sub.resolution] = bar;
+        }
         sub.callback(bar);
       }
 
@@ -1586,6 +1788,8 @@
           // "Before calling [resetData] the resetCache method should be
           // called." (IChartWidgetApi.resetData).
           widget.resetCache();
+          delete leftAt[containerId]; // cache gone — no snapshot to reuse
+          delete subRegistry[containerId];
           widget.activeChart().resetData();
           nchart('refetch', {
             container: containerId,
@@ -1702,6 +1906,13 @@
       delete dartRequestedSymbols[containerId];
       delete gapFlags[containerId];
       delete lastResyncAt[containerId];
+      delete leftAt[containerId];
+      delete lastBars[containerId];
+      delete subRegistry[containerId];
+      if (failedLoads[containerId] && failedLoads[containerId].timer) {
+        clearTimeout(failedLoads[containerId].timer);
+      }
+      delete failedLoads[containerId];
       var widget = charts[containerId];
       if (widget) {
         try { widget.remove(); } catch (e) { }
@@ -1749,6 +1960,7 @@
       // Restart the wake check too, so the throttled beat from the hidden
       // period is not mistaken for a sleep.
       lastBeat = Date.now();
+      recoverAllLoads('tab-return');
       if (hiddenAt === null) return;
       var away = Date.now() - hiddenAt;
       hiddenAt = null;
@@ -1766,6 +1978,8 @@
       if (document.visibilityState !== 'visible') return;
       if (gap >= RESYNC_COOLDOWN_MS) resyncAllCharts(gap, 'wake');
     }, WAKE_CHECK_MS);
+
+    window.addEventListener('online', function () { recoverAllLoads('online'); });
   } catch (e) { /* non-browser host */ }
 
   console.log('ScalperCharts bridge loaded');
