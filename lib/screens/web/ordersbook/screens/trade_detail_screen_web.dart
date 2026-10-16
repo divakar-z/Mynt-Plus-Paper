@@ -361,6 +361,13 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
             "${widget.trade.sPrdtAli ?? '-'} / ${widget.trade.prctyp ?? '-'}",
             theme,
           ),
+          // One order can fill in several trades that share an Order Id, so
+          // show the Trade ID (same label as the Trade table column).
+          _rowOfInfoData(
+            "Trade ID",
+            widget.trade.flid?.toString() ?? '-',
+            theme,
+          ),
           _rowOfInfoData(
             "Order Id",
             widget.trade.norenordno?.toString() ?? '-',

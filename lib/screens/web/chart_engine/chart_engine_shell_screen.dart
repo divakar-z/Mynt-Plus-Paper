@@ -3560,7 +3560,10 @@ class _IndicatorSettingsDialogState
     ref.read(chartEngineSessionProvider.notifier).updateIndicator(
           widget.paneIndex,
           widget.indicatorId,
-          period: nextPeriod.clamp(1, 999),
+          // CPR has no length input — keep its period as it is.
+          period: cfg.kind.toLowerCase() == 'cpr'
+              ? cfg.period
+              : nextPeriod.clamp(1, 999),
           color: _color,
           thickness: _thickness,
           params: Map<String, num>.from(_values),
@@ -3624,6 +3627,7 @@ class _IndicatorSettingsDialogState
 
     final schema = schemaFor(cfg.kind);
     final params = schema?.params ?? const <IndicatorParam>[];
+    final isCpr = cfg.kind.toLowerCase() == 'cpr';
     final useGenericPeriod = schema == null &&
         _kKindsWithPeriod.contains(cfg.kind.toLowerCase());
     final kindLabel = cfg.kind.toUpperCase();
@@ -3641,7 +3645,7 @@ class _IndicatorSettingsDialogState
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 460),
+        constraints: BoxConstraints(maxWidth: isCpr ? 580 : 460),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: surface,
@@ -3714,7 +3718,19 @@ class _IndicatorSettingsDialogState
 
               // Schema-driven param rows (or single generic Period row for
               // legacy kinds that aren't in the schema registry yet).
-              if (schema != null)
+              if (isCpr)
+                // 13 levels: scroll inside the dialog rather than overflow.
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(context).height * 0.6),
+                  child: SingleChildScrollView(
+                    child: _CprStyleSection(
+                      values: _values,
+                      onChanged: (k, v) => setState(() => _values[k] = v),
+                    ),
+                  ),
+                )
+              else if (schema != null)
                 for (final p in params) ...[
                   _SettingsRow(
                     label: p.label,
@@ -3738,6 +3754,7 @@ class _IndicatorSettingsDialogState
                 ),
               ],
 
+              if (!isCpr) ...[
               _SettingsRow(
                 label: 'Color',
                 description: 'Line color for this indicator',
@@ -3765,6 +3782,7 @@ class _IndicatorSettingsDialogState
                   onChanged: (v) => setState(() => _thickness = v),
                 ),
               ),
+              ],
 
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
@@ -3835,6 +3853,142 @@ String _fmtNum(num v, IndicatorParam? p) {
     return v.toStringAsFixed(1).replaceAll(RegExp(r'\.0$'), '');
   }
   return v.toInt().toString();
+}
+
+// CPR with Pivot Level Daily — TradingView-style Style section: one row per
+// level (visible, colour, plot type); tapping the colour opens the level's
+// colour, width, line style and price line under the row. Every value is a
+// numeric param (see kCprPlots in indicator_schema.dart).
+const List<String> _kCprPalette = [
+  '#F8AF85', '#9C50E4', '#91A9F1', '#6CAC6E', '#EB2D2D', '#FF0000', '#008000',
+  ..._kIndicatorPalette,
+];
+
+class _CprStyleSection extends StatefulWidget {
+  final Map<String, num> values;
+  final void Function(String key, num value) onChanged;
+  const _CprStyleSection({required this.values, required this.onChanged});
+
+  @override
+  State<_CprStyleSection> createState() => _CprStyleSectionState();
+}
+
+class _CprStyleSectionState extends State<_CprStyleSection> {
+  String? _open; // level whose style editor is expanded
+
+  num _v(String key, num def) => widget.values[key] ?? def;
+
+  static String _hex(num c) =>
+      '#${(c.toInt() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+
+  static int _fromHex(String hex) =>
+      int.parse(hex.replaceFirst('#', ''), radix: 16) & 0xFFFFFF;
+
+  @override
+  Widget build(BuildContext context) {
+    final divider = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SettingsRow(
+          label: kCprPrecisionParam.label,
+          description: kCprPrecisionParam.description,
+          control: _ParamDropdown(
+            param: kCprPrecisionParam,
+            value: _v('precision', kCprPrecisionParam.defaultValue),
+            onChanged: (v) => widget.onChanged('precision', v),
+          ),
+        ),
+        Divider(height: 1, color: divider, thickness: 1),
+        for (final p in kCprPlots) ...[
+          _row(context, p, accent),
+          if (_open == p.key) _editor(p, accent),
+        ],
+      ],
+    );
+  }
+
+  Widget _row(BuildContext context, CprPlotDef p, Color accent) {
+    final visible = _v('${p.key}V', p.visible ? 1 : 0) >= 1;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 20, 6),
+      child: Row(
+        children: [
+          Checkbox(
+            value: visible,
+            activeColor: accent,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onChanged: (v) =>
+                widget.onChanged('${p.key}V', (v ?? false) ? 1 : 0),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              p.title,
+              overflow: TextOverflow.ellipsis,
+              style: MyntWebTextStyles.body(context),
+            ),
+          ),
+          _ColorButton(
+            color: _hex(_v('${p.key}C', p.color)),
+            open: _open == p.key,
+            onTap: () => setState(() => _open = _open == p.key ? null : p.key),
+          ),
+          const SizedBox(width: 8),
+          _ParamDropdown(
+            param: kCprPlotTypeParam,
+            value: _v('${p.key}T', kCprDefaultPlotType),
+            onChanged: (v) => widget.onChanged('${p.key}T', v),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editor(CprPlotDef p, Color accent) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ColorPaletteRow(
+          selected: _hex(_v('${p.key}C', p.color)),
+          palette: _kCprPalette,
+          onPick: (hex) => widget.onChanged('${p.key}C', _fromHex(hex)),
+        ),
+        _SettingsRow(
+          label: 'Width',
+          description: 'Line or marker width',
+          control: _ThicknessSegmented(
+            value: _v('${p.key}W', kCprDefaultWidth).toInt().clamp(1, 4),
+            accent: accent,
+            onChanged: (v) => widget.onChanged('${p.key}W', v),
+          ),
+        ),
+        _SettingsRow(
+          label: kCprLineStyleParam.label,
+          description: kCprLineStyleParam.description,
+          control: _ParamDropdown(
+            param: kCprLineStyleParam,
+            value: _v('${p.key}S', kCprDefaultLineStyle),
+            onChanged: (v) => widget.onChanged('${p.key}S', v),
+          ),
+        ),
+        _SettingsRow(
+          label: 'Price line',
+          description: "Line across the chart at today's level",
+          control: _ParamSwitch(
+            value: _v('${p.key}P', 0) >= 1,
+            onChanged: (v) => widget.onChanged('${p.key}P', v ? 1 : 0),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _SettingsRow extends StatelessWidget {
@@ -4201,7 +4355,12 @@ class _ColorButton extends StatelessWidget {
 class _ColorPaletteRow extends StatelessWidget {
   final String selected;
   final ValueChanged<String> onPick;
-  const _ColorPaletteRow({required this.selected, required this.onPick});
+  final List<String> palette;
+  const _ColorPaletteRow({
+    required this.selected,
+    required this.onPick,
+    this.palette = _kIndicatorPalette,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -4211,7 +4370,7 @@ class _ColorPaletteRow extends StatelessWidget {
         spacing: 10,
         runSpacing: 10,
         children: [
-          for (final hex in _kIndicatorPalette)
+          for (final hex in palette)
             _SwatchTile(
               hex: hex,
               selected: hex.toLowerCase() == selected.toLowerCase(),

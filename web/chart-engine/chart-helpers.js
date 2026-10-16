@@ -427,6 +427,118 @@ function _isSessionWindowPure(exch, tsSec) {
   return p.minuteOfDay >= b.openMin && p.minuteOfDay < b.closeMin;
 }
 
+
+// ── CPR with Pivot Level Daily ──────────────────────────────────────────────
+// Port of the TradingView custom study "CPR with Pivot Level Daily"
+// (CPRwithPivotLevelDaily@tv-basicstudies-1). Every bar shows the levels made
+// from the PREVIOUS trading day's official daily high / low / close, for bars
+// in the last 30 days only (as the TradingView version did).
+//
+// The 13 plots in the study's metainfo order (later plots draw on top), with
+// its default colours and visibility. Per-line settings live in the
+// indicator's numeric params as `<key><field>`:
+//   V visible 0/1 · C colour 0xRRGGBB · W width 1-4 · S line style index
+//   T plot type index · P price line 0/1          — plus `precision` (index).
+// Option orders MUST match indicator_schema.dart (cpr).
+const CPR_PLOTS = [
+  { key: 'pivot', title: 'Daily Central Pivot', color: '#F8AF85', visible: true },
+  { key: 'high',  title: 'Prev Day High',       color: '#6CAC6E', visible: false },
+  { key: 'low',   title: 'Prev Day Low',        color: '#EB2D2D', visible: false },
+  { key: 'bc',    title: 'Daily Bottom Pivot',  color: '#9C50E4', visible: true },
+  { key: 'tc',    title: 'Daily Top Pivot',     color: '#91A9F1', visible: true },
+  { key: 's1',    title: 'Daily S1',            color: '#FF0000', visible: false },
+  { key: 'r1',    title: 'Daily R1',            color: '#008000', visible: false },
+  { key: 's2',    title: 'Daily S2',            color: '#FF0000', visible: false },
+  { key: 'r2',    title: 'Daily R2',            color: '#008000', visible: false },
+  { key: 's3',    title: 'Daily S3',            color: '#FF0000', visible: false },
+  { key: 'r3',    title: 'Daily R3',            color: '#008000', visible: false },
+  { key: 's4',    title: 'Daily S4',            color: '#FF0000', visible: false },
+  { key: 'r4',    title: 'Daily R4',            color: '#008000', visible: false },
+];
+// TradingView's plot types for a line plot, in its Style-tab order. The study
+// defaults every plot to Circles (its plottype 6), width 3, solid.
+const CPR_PLOT_TYPES = ['line', 'linebr', 'step', 'stepbr', 'stepdiamond',
+  'histogram', 'cross', 'area', 'areabr', 'columns', 'circles'];
+const CPR_LINE_STYLES = ['solid', 'dotted', 'dashed'];
+const _CPR_DEF_WIDTH = 3;
+const _CPR_DEF_STYLE = 0;   // solid
+const _CPR_DEF_TYPE = 10;   // circles
+const _CPR_LOOKBACK_DAYS = 30;
+
+function cprLevels(h, l, c) {
+  const pivot = (h + l + c) / 3;
+  const bc = (h + l) / 2;
+  const tc = 2 * pivot - bc;
+  const r1 = 2 * pivot - l;
+  const r2 = pivot + h - l;
+  const r3 = r1 + h - l;
+  const r4 = r3 + r2 - r1;
+  const s1 = 2 * pivot - h;
+  const s2 = pivot - h + l;
+  const s3 = s1 - h + l;
+  const s4 = s3 + s2 - s1;
+  return { pivot, high: h, low: l, bc, tc, s1, r1, s2, r2, s3, r3, s4, r4 };
+}
+
+// IST calendar day number (days since 1970-01-01 in IST).
+function _cprIstDay(tsSec) {
+  return Math.floor((tsSec + 19800) / 86400);
+}
+
+// One array per plot key, aligned to `candles`; NaN where a bar has no level
+// (older than 30 days before `nowMs`, or no earlier daily bar). A bar's levels
+// come from the latest daily bar dated BEFORE the bar's own IST day, so today
+// uses the last completed day even if the daily data already holds a partial
+// bar for today, and Monday uses Friday.
+function computeCprSeries(candles, dailyBars, nowMs) {
+  const n = Array.isArray(candles) ? candles.length : 0;
+  const out = {};
+  for (const p of CPR_PLOTS) out[p.key] = new Array(n).fill(NaN);
+  if (!n || !Array.isArray(dailyBars) || dailyBars.length === 0) return out;
+  const days = dailyBars
+      .filter((b) => b && isFinite(b.ts) && isFinite(b.h) && isFinite(b.l) && isFinite(b.c))
+      .map((b) => ({ day: _cprIstDay(b.ts), lv: cprLevels(+b.h, +b.l, +b.c) }))
+      .sort((a, b) => a.day - b.day);
+  const cutoffSec = nowMs / 1000 - _CPR_LOOKBACK_DAYS * 86400;
+  let j = -1;   // latest daily bar with day < current candle's day
+  for (let i = 0; i < n; i++) {
+    const ts = candles[i].ts;
+    const d = _cprIstDay(ts);
+    while (j + 1 < days.length && days[j + 1].day < d) j++;
+    if (ts < cutoffSec || j < 0) continue;
+    const lv = days[j].lv;
+    for (const p of CPR_PLOTS) out[p.key][i] = lv[p.key];
+  }
+  return out;
+}
+
+// Resolved style for one plot from the indicator's params (defaults when a
+// key is missing — a freshly added CPR has an empty params map).
+function cprPlotStyle(params, plot) {
+  const p = params || {};
+  const k = plot.key;
+  const num = (field, def) => {
+    const v = p[k + field];
+    return (typeof v === 'number' && isFinite(v)) ? v : def;
+  };
+  const colorNum = num('C', parseInt(plot.color.slice(1), 16)) | 0;
+  return {
+    visible: num('V', plot.visible ? 1 : 0) >= 1,
+    color: '#' + (colorNum & 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0'),
+    width: Math.max(1, Math.min(4, num('W', _CPR_DEF_WIDTH) | 0)),
+    lineStyle: CPR_LINE_STYLES[num('S', _CPR_DEF_STYLE) | 0] || 'solid',
+    plotType: CPR_PLOT_TYPES[num('T', _CPR_DEF_TYPE) | 0] || 'circles',
+    priceLine: num('P', 0) >= 1,
+  };
+}
+
+// Decimals for values: index 0 = "Default" (the study's precision 2), index
+// k > 0 = k - 1 decimals (options Default, 0, 1, … 8).
+function cprDecimals(params) {
+  const i = (params && typeof params.precision === 'number') ? params.precision | 0 : 0;
+  return i <= 0 ? 2 : Math.min(8, i - 1);
+}
+
 // Dual-mode export — browser global (script tag) AND node require() for tests.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -438,5 +550,7 @@ if (typeof module !== 'undefined' && module.exports) {
     _positionExpand, _positionRender, _forkAnchors, _drawForkInChart, _forkPartial,
     _istParts, _istDayKey, _nthSundayOfMonth, _usInDst,
     _sessionBoundsFor, _isSessionWindowPure,
+    CPR_PLOTS, CPR_PLOT_TYPES, CPR_LINE_STYLES, cprLevels, computeCprSeries,
+    cprPlotStyle, cprDecimals,
   };
 }
