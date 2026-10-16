@@ -573,10 +573,15 @@ mixin MarketWatchApi on ApiCore {
       String alertTypeVal, String remark) async {
     try {
       final uri = Uri.parse(apiLinks.setAlert);
+      // Free-text remark: JSON-escape (quotes, backslashes) then URL-encode
+      // (&, %, +) so characters like "!@#$%^&*()_+" don't break jData.
+      final jsonRemark = jsonEncode(remark);
+      final encodedRemark = UrlUtils.encodeParameter(
+          jsonRemark.substring(1, jsonRemark.length - 1));
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","d":"$value","remarks":"$remark"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","d":"$value","remarks":"$encodedRemark"}&jKey=${prefs.clientSession}''');
 
       // log("SetAlert => ${res.body}");
       final json = jsonDecode(res.body);
@@ -635,13 +640,23 @@ mixin MarketWatchApi on ApiCore {
   }
 
   Future<ModifyAlertModel> getmodifyalert(String exch, String tysm,
-      String value, String alertTypeVal, String alid) async {
+      String value, String alertTypeVal, String alid,
+      {String? remarks}) async {
     try {
       final uri = Uri.parse(apiLinks.modifyalert);
+      // TC_469.1: remarks only when the caller passes them (web Modify Alert);
+      // same JSON-escape + URL-encode as SetAlert.
+      String remarksField = "";
+      if (remarks != null) {
+        final jsonRemark = jsonEncode(remarks);
+        final encodedRemark = UrlUtils.encodeParameter(
+            jsonRemark.substring(1, jsonRemark.length - 1));
+        remarksField = ',"remarks":"$encodedRemark"';
+      }
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","al_id":"$alid","d":"$value"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","al_id":"$alid","d":"$value"$remarksField}&jKey=${prefs.clientSession}''');
 
       // log("Modify Alert => ${res.body}");
       final json = jsonDecode(res.body);

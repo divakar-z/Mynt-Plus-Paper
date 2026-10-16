@@ -138,6 +138,10 @@ class Chart {
     // Set to true when the server returns an empty page for an extend — there
     // is no more history before our earliest loaded candle, so stop pestering.
     this._noMoreHistory = false;
+    // True while the initial history load has failed and not been redone.
+    // Refresh / extend then re-run the FULL load instead of merging a partial
+    // window over the few live-tick candles (that showed half the data).
+    this._historyLoadFailed = false;
 
     // Live-tick freshness tracking (drives the "Stale" pill in the OHLC area)
     this._lastTickAt = 0;
@@ -263,6 +267,17 @@ class Chart {
 
     // Phase 8 — per-pane technical indicators (SMA / EMA / RSI).
     this._indicators = []; // [{id, kind, period, color}]
+    // CPR — official daily bars for the previous-day levels (see
+    // _ensureCprDaily in chart-overlays.js).
+    this._cprDaily = null;            // { key, day, stamp, bars }
+    this._cprCache = null;
+    this._tcCache = null;             // Trend Checker level series
+    this._tcMaCache = null;           // Trend Checker moving averages
+    this._pendingCprDailyDays = 0;
+    this._pendingCprDailyId = null;
+    this._pendingCprDailyKey = null;
+    this._cprDailyRetryKey = null;
+    this._cprDailyRetryAt = 0;
 
     // Per-draw memoization of indicator compute functions. Each method is
     // wrapped at instantiation time so every call inside a single draw()
@@ -860,6 +875,7 @@ class Chart {
   // Phase 8 — replace the technical-indicator list for this pane.
   setIndicators(list) {
     this._indicators = Array.isArray(list) ? list : [];
+    this._ensureCprDaily();
     // Drop manual-view entries for indicators that no longer exist, so the
     // map doesn't accumulate stale ids across edits.
     if (this._subPaneView) {
@@ -1241,6 +1257,11 @@ class Chart {
   }
 
   onHistoryResult(requestId, candles) {
+    // CPR's daily bars ride the same channel under their own request id.
+    if (requestId != null && requestId === this._pendingCprDailyId) {
+      this._onCprDailyResult(candles);
+      return;
+    }
     // Recent-window refresh — merge-replace the tail (incl. synth bars) with
     // server data. Pan/zoom preserved (xCenter is position-from-right; we only
     // touch the tail).
@@ -1319,7 +1340,10 @@ class Chart {
         return;
       }
     }
-    this._hideOverlay();
+    // _hideOverlay() redraws, and every redraw runs _maybeExtendHistory. Hide
+    // it only once the new candles are in: hiding it here, while this.candles
+    // still held just the live tick candle, made the extend re-download the
+    // same window — every ZChart open fetched its history twice.
     if (!Array.isArray(candles) || candles.length === 0) {
       // No history from the API — for ANY timeframe (daily+ index series like
       // SENSEX, OR intraday when the feed returns an empty window). Don't block
@@ -1332,6 +1356,7 @@ class Chart {
       this.candles = [];
       this._markLiveFrom(this._requestEndSec);
       this._noMoreHistory = true; // nothing older to fetch
+      this._hideOverlay();
       this.scheduleRedraw();
       if (this.scrip) {
         this.subscribe({ exch: this.scrip.exch, token: this.scrip.token });
@@ -1351,6 +1376,7 @@ class Chart {
     } else if (this._isRebinnedStyle(this.candleStyle)) {
       this._rebuildRebinned();
     }
+    this._hideOverlay();
     this.scheduleRedraw();
     if (this.scrip) this.subscribe({ exch: this.scrip.exch, token: this.scrip.token });
   }
@@ -1366,6 +1392,7 @@ class Chart {
     if (this._isSecondsTf()) return;   // one session of second bars only
     if (this._pendingExtendId != null) return;
     if (this._pendingRequestId != null) return;
+    if (this._historyLoadFailed) return;  // full reload pending, see _refreshRecent
     if (Date.now() < this._extendBlockedUntil) return;
     if (this.candles.length === 0) return;
 
@@ -1405,6 +1432,15 @@ class Chart {
   // bridge changes are needed. Throttled + single-in-flight.
   _refreshRecent(reason) {
     if (!this.scrip) return;
+    // The initial load failed (network drop). A recent-window refresh would
+    // only bring today's bars and leave the chart half-filled, so redo the
+    // full load now that the network is back.
+    if (this._historyLoadFailed) {
+      if (this._pendingRequestId != null) return;
+      this.container.removeEventListener('click', this._retryOnce);
+      this._loadHistory();
+      return;
+    }
     if (this.timeframeMinutes >= 1440) return;     // daily+: extend covers it
     if (this.candles.length === 0) return;
     if (this._pendingRefreshId != null) return;
@@ -1457,12 +1493,23 @@ class Chart {
   }
 
   onHistoryError(requestId, message) {
+    if (requestId != null && requestId === this._pendingCprDailyId) {
+      this._onCprDailyError();
+      return;
+    }
     if (requestId === this._pendingRefreshId) {
       this._pendingRefreshId = null;
       return; // a refresh failing is non-fatal — next trigger retries
     }
+    if (requestId === this._pendingExtendId) {
+      // Clear it, or the extend stays "in flight" forever and older history
+      // never loads again after a network drop.
+      this._pendingExtendId = null;
+      return;
+    }
     if (requestId !== this._pendingRequestId) return;
     this._pendingRequestId = null;
+    this._historyLoadFailed = true;
     const name = this.scrip ? this.scrip.dispName : 'symbol';
     this._showOverlay('Could not load history for ' + name,
         String(message || 'Network error') + ' · click chart to retry');
@@ -1528,6 +1575,7 @@ class Chart {
 
   _loadHistoryNow(dayBack = 0) {
     if (!this.scrip) return;
+    this._historyLoadFailed = false;
     this._showOverlay('Loading ' + this.scrip.dispName + '…');
     const minutes = this.timeframeMinutes;
     const interval = SOURCE_INTERVAL_FOR_MINUTES(minutes);
@@ -3012,6 +3060,8 @@ class Chart {
       const visible = this._visibleCandles();
       if (visible.length === 0) return null;
       for (const c of visible) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
+      // CPR's visible levels count toward the fit, as on TradingView.
+      ({ lo, hi } = this._cprFitRange(visible, lo, hi));
     }
     const pad = (hi - lo) * 0.08 || 1;
     return { lo: lo - pad, hi: hi + pad };
@@ -4156,6 +4206,9 @@ class Chart {
 
   // Inline params string: any numeric values from ind.params, space-separated.
   _indicatorParamsLabel(ind) {
+    // CPR's params are its per-line style settings, not inputs.
+    if (ind.kind === 'cpr') return '';
+    if (ind.kind === 'tcheck') return this._tcInputsLabel(ind);
     const parts = [];
     const p = ind.params || {};
     for (const key of Object.keys(p)) {
@@ -4173,6 +4226,9 @@ class Chart {
   // lagging (today's close), lead 1 and lead 2 at the current bar. null for
   // everything else (single-value path below).
   _indicatorLastValues(ind) {
+    // CPR: every visible level at the newest bar (TradingView's status line).
+    if (ind.kind === 'cpr') return this._cprLegendValues(ind);
+    if (ind.kind === 'tcheck') return this._tcLegendValues(ind);
     if (ind.kind !== 'ichi' || !this.candles.length) return null;
     const ic = this._computeIchimoku(ind);
     const i = this.candles.length - 1;
@@ -4300,7 +4356,7 @@ class Chart {
     ctx.font = '500 11px Geist, sans-serif';
 
     for (const ind of this._indicators) {
-      const kindLabel = (ind.kind || '').toUpperCase();
+      const kindLabel = ind.kind === 'tcheck' ? 'Trend Checker by GP' : (ind.kind || '').toUpperCase();
       const multi = this._indicatorLastValues(ind);
       // Multi-line indicators list their inputs (Ichimoku: 9 26 52 26), not
       // the single `period` the store gives every indicator.
@@ -4315,7 +4371,8 @@ class Chart {
       const valColor = ind.hidden ? iconDim : indColor;
       // Value segments: one per line for multi-line indicators, else one.
       const valSegs = multi
-          ? multi.map((m) => ({ text: this._fmtPrice(m.v), color: ind.hidden ? iconDim : m.color }))
+          ? multi.map((m) => ({ text: m.dp != null ? m.v.toFixed(m.dp) : this._fmtPrice(m.v),
+            color: ind.hidden ? iconDim : m.color }))
           : (valLabel ? [{ text: valLabel, color: valColor }] : []);
 
       // Inline measurement — kind + " " + params + " " + value
@@ -4324,6 +4381,20 @@ class Chart {
       const paramsW = paramsLabel
           ? ctx.measureText(paramsLabel).width + sp
           : 0;
+      // A long list of values (Trend Checker has up to ~15) must not push the
+      // eye / settings / delete icons off the chart: trim the trailing values
+      // to fit and end with an ellipsis (the price scale still shows them all).
+      if (valSegs.length > 1) {
+        const segW = (seg) => ctx.measureText(seg.text).width + sp;
+        const room = (plot.right - plot.left) - 12 - rowPadX * 2 - dotSize - labelGap * 2 -
+            iconW * 3 - iconGap * 2 - kindW - paramsW;
+        let total = valSegs.reduce((w, seg) => w + segW(seg), 0);
+        if (total > room) {
+          const ell = { text: '…', color: textMuted };
+          while (valSegs.length > 1 && total + segW(ell) > room) total -= segW(valSegs.pop());
+          valSegs.push(ell);
+        }
+      }
       const valW = valSegs.reduce((w, seg) => w + ctx.measureText(seg.text).width + sp, 0);
       const labelW = kindW + paramsW + valW;
 
@@ -5301,9 +5372,13 @@ class Chart {
     // Skip the countdown once the last bar's own close time has passed — a
     // frozen "0:00" must never linger (e.g. just after close, before the chart
     // flips to the "Market closed" state).
+    // Daily+ bars close on the calendar (next Monday / next month's 1st), not
+    // after a fixed 7 or 30 days.
+    const _cdLastTs = cdEnabled ? (this.candles[this.candles.length - 1].ts || 0) : 0;
     const _cdLeft = cdEnabled
-        ? ((this.candles[this.candles.length - 1].ts || 0) +
-            this._tfSec()) - Math.floor(Date.now() / 1000)
+        ? (this.timeframeMinutes >= 1440
+            ? _calendarBucketEnd(_cdLastTs, this.timeframeMinutes)
+            : _cdLastTs + this._tfSec()) - Math.floor(Date.now() / 1000)
         : 0;
     if (cdEnabled && _cdLeft > 0) {
       const left = _cdLeft;
@@ -5331,7 +5406,13 @@ class Chart {
     if (!this.candles.length) return 0;
     let n = 0;
     for (const ind of this._indicators || []) {
-      if (ind.hidden || ind.kind !== 'ichi') continue;
+      if (ind.hidden) continue;
+      // Trend Checker's pane labels sit in empty room right of the newest bar.
+      if (ind.kind === 'tcheck') {
+        if (!((ind.params || {}).labelsOn < 1) && n < 8) n = 8;
+        continue;
+      }
+      if (ind.kind !== 'ichi') continue;
       const disp = Math.max(1, (+(ind.params || {}).displacement || 26) | 0);
       if (disp - 1 > n) n = disp - 1;
     }

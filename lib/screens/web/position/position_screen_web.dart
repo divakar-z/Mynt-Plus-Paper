@@ -26,7 +26,6 @@ import '../../../../res/responsive_extensions.dart';
 import '../../../../sharedWidget/no_data_found.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/common_search_fields_web.dart';
-import '../../../../sharedWidget/custom_text_form_field.dart' show UpperCaseTextFormatter;
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../sharedWidget/snack_bar.dart';
@@ -50,6 +49,7 @@ class PositionScreenWeb extends ConsumerStatefulWidget {
 class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
   int _selectedTabIndex = 0;
   bool _showGroupsView = false; // Toggle between positions and groups view
+  bool _analyzing = false; // Strategy builder shown in place of the positions (Analyze)
   // ✅ Use ValueNotifier for search query to avoid rebuilding entire widget
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   // TextEditingController to control the TextField value
@@ -202,6 +202,11 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
         _selectedFilter.value = 'All';
       }
     });
+
+    // Analyze: the strategy builder fills this page; its back arrow returns here.
+    if (_analyzing) {
+      return StrategyBuilderPanelWeb(onBack: () => setState(() => _analyzing = false));
+    }
 
     // Show full screen loader only on initial load (when no positions exist yet)
     if (positionBook.posloader ) {
@@ -554,8 +559,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 placeholder: context.isMobile ? 'Search' : 'Search positions',
                 leadingIcon: assets.searchIcon,
                 inputFormatters: [
-                  UpperCaseTextFormatter(),
-                  FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9& \-]')),
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9& \-]')),
                   TextInputFormatter.withFunction((oldValue, newValue) {
                     if (newValue.text.startsWith(' ')) return oldValue;
                     return newValue;
@@ -641,6 +645,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
               builder: (context, ref, _) {
                 final selectedFnO = ref.watch(portfolioProvider.select((p) => p.selectedFnOPositions));
                 if (selectedFnO.isEmpty) return const SizedBox.shrink();
+                // A strategy has one underlying (one spot axis); same key as loadFromPositions.
+                final mixed = selectedFnO.map((p) => p.symbol ?? p.dname ?? p.tsym).toSet().length > 1;
 
                 final buttonHeight = context.responsive<double>(
                   mobile: 30,
@@ -655,10 +661,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
 
                 return Padding(
                   padding: EdgeInsets.only(left: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
-                  child: SizedBox(
+                  child: Tooltip(
+                    message: mixed ? 'Select positions of one symbol to analyze' : '',
+                    child: SizedBox(
                     height: buttonHeight,
                     child: ElevatedButton.icon(
-                      onPressed: () => _showAnalyzeDialog(selectedFnO),
+                      onPressed: mixed ? null : () => _openAnalyze(selectedFnO),
                       icon: const Icon(Icons.analytics_outlined, size: 16),
                       label: Text(
                         'Analyze (${selectedFnO.length})',
@@ -681,6 +689,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                           light: MyntColors.primary,
                         ),
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor: resolveThemeColor(
+                          context,
+                          dark: MyntColors.secondary,
+                          light: MyntColors.primary,
+                        ).withValues(alpha: .4),
+                        disabledForegroundColor: Colors.white70,
                         padding: EdgeInsets.symmetric(horizontal: buttonPadding, vertical: 0),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
@@ -688,6 +702,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                         elevation: 0,
                       ),
                     ),
+                  ),
                   ),
                 );
               },
@@ -2808,106 +2823,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     }
   }
 
-  void _showAnalyzeDialog(List<PositionBookModel> positions) {
-    final strategyProvider = ref.read(strategyBuilderProvider);
-
-    // Load positions into strategy builder
-    strategyProvider.loadFromPositions(positions, context);
-
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierColor: resolveThemeColor(
-        context,
-        dark: MyntColors.modalBarrierDark,
-        light: MyntColors.modalBarrierLight,
-      ),
-      builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(24),
-          child: Container(
-            width: MediaQuery.of(context).size.width * 0.85,
-            height: MediaQuery.of(context).size.height * 0.85,
-            decoration: BoxDecoration(
-              color: resolveThemeColor(
-                context,
-                dark: MyntColors.dialogDark,
-                light: MyntColors.dialog,
-              ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              children: [
-                // Header bar
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(
-                        color: resolveThemeColor(
-                          context,
-                          dark: const Color(0xFF333333),
-                          light: const Color(0xFFE0E0E0),
-                        ),
-                      ),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.analytics_outlined,
-                        size: 20,
-                        color: resolveThemeColor(
-                          context,
-                          dark: Colors.white,
-                          light: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Analyze Positions',
-                        style: MyntWebTextStyles.body(
-                          context,
-                          fontWeight: MyntFonts.semiBold,
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: () {
-                          Navigator.of(dialogContext).pop();
-                          strategyProvider.exitAnalyzeMode();
-                        },
-                        icon: Icon(
-                          Icons.close,
-                          size: 20,
-                          color: resolveThemeColor(
-                            context,
-                            dark: Colors.white70,
-                            light: Colors.black54,
-                          ),
-                        ),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                    ],
-                  ),
-                ),
-                // Strategy Builder panel
-                const Expanded(
-                  child: StrategyBuilderPanelWeb(),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    ).then((_) {
-      // Ensure analyze mode is exited when dialog is dismissed
-      if (strategyProvider.isAnalyzeMode) {
-        strategyProvider.exitAnalyzeMode();
-      }
-    });
+  /// Shows the strategy builder inside this page in analyze mode. Its back
+  /// arrow returns to the positions; the builder going away ends analyze mode.
+  void _openAnalyze(List<PositionBookModel> positions) {
+    // Sets analyze mode synchronously, so the builder skips its own initialize.
+    ref.read(strategyBuilderProvider).loadFromPositions(positions, context);
+    setState(() => _analyzing = true);
   }
 
   void _onSortTable(int columnIndex) {

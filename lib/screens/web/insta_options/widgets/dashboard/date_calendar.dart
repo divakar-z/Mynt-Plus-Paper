@@ -79,7 +79,7 @@ class _DashDateButtonState extends State<DashDateButton> {
             targetAnchor: Alignment.bottomRight,
             followerAnchor: Alignment.topRight,
             offset: const Offset(0, 6),
-            child: _CalendarCard(
+            child: DashCalendarCard(
               selected: widget.selectedDate,
               available: widget.availableDates,
               markToday: widget.markToday,
@@ -154,24 +154,29 @@ class _DashDateButtonState extends State<DashDateButton> {
   }
 }
 
-class _CalendarCard extends StatefulWidget {
+class DashCalendarCard extends StatefulWidget {
   final DateTime? selected;
   final List<DateTime> available;
   final bool markToday;
   final void Function(DateTime) onPick;
 
-  const _CalendarCard({
+  /// Text colour for days that can't be picked; defaults to text-tertiary.
+  final Color? disabledDayColor;
+
+  const DashCalendarCard({
+    super.key,
     required this.selected,
     required this.available,
     required this.markToday,
     required this.onPick,
+    this.disabledDayColor,
   });
 
   @override
-  State<_CalendarCard> createState() => _CalendarCardState();
+  State<DashCalendarCard> createState() => _CalendarCardState();
 }
 
-class _CalendarCardState extends State<_CalendarCard> {
+class _CalendarCardState extends State<DashCalendarCard> {
   late Set<DateTime> _availSet;
   late DateTime _minMonth;
   late DateTime _maxMonth;
@@ -305,6 +310,7 @@ class _CalendarCardState extends State<_CalendarCard> {
         available: available,
         selected: selected,
         isToday: widget.markToday && date == today,
+        disabledColor: widget.disabledDayColor,
         onTap: available ? () => widget.onPick(date) : null,
       ));
     }
@@ -327,6 +333,7 @@ class _DayCell extends StatelessWidget {
   final bool selected;
   final bool isToday;
   final VoidCallback? onTap;
+  final Color? disabledColor;
 
   const _DayCell({
     required this.day,
@@ -334,6 +341,7 @@ class _DayCell extends StatelessWidget {
     required this.selected,
     this.isToday = false,
     required this.onTap,
+    this.disabledColor,
   });
 
   @override
@@ -362,7 +370,7 @@ class _DayCell extends StatelessWidget {
       textColor = fg;
     } else {
       bg = null;
-      textColor = muted;
+      textColor = disabledColor ?? muted;
     }
 
     return Padding(

@@ -174,17 +174,28 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
     final headerBg = resolveThemeColor(context,
         dark: MyntColors.cardHoverDark, light: MyntColors.cardHover);
 
-    // Symbol, Exch and every data column share an EQUAL width so their headers
-    // and cells line up in uniform tracks. Stock Name is bumped by [stockNameExtra]
-    // above that base — its content ("RELIANCE INDUSTRIES LTD", "HITACHI ENERGY
-    // INDIA…") is the longest in the row, and the extra room lets fewer names
-    // ellipsize without stealing space from the equal-width tracks.
-    // The min width is generous enough to fit common sector / industry names
-    // ("Consumer Durables", "Media & Entertainment") on a single line; wider
-    // content still ellipsizes rather than wrapping to a second row.
-    const rowHPad = 20.0;
-    const colMin = 170.0;
-    const stockNameExtra = 90.0;
+    // Columns are sized to the CONTENT they hold rather than to one uniform
+    // track: a stock name needs far more room than "NSE" or a 2-decimal
+    // ratio. Each column carries a minimum plus a growth weight — spare
+    // width goes to the columns that can use it (names, sector labels) and
+    // skips the ones with fixed-length content (ticker, exchange), which is
+    // what made the old equal-width split feel so sparse. Anything narrower
+    // than the sum of the minimums scrolls horizontally instead.
+    const rowHPad = 16.0;
+    const stockNameMin = 230.0; // "HITACHI ENERGY INDIA LTD"
+    const symbolMin = 120.0; // tickers are short and fixed-ish
+    const exchMin = 80.0; // "NSE"
+    const textColMin = 150.0; // Sector / Industry labels
+    const numColMin = 112.0; // prices, ratios, percentages
+
+    const stockNameGrow = 3.0;
+    const textColGrow = 2.0;
+    const numColGrow = 1.0;
+    const fixedGrow = 0.0; // Symbol / Exch never widen
+
+    double minWidthOf(ScanColumn c) =>
+        c.fmt == 'string' ? textColMin : numColMin;
+    double growOf(ScanColumn c) => c.fmt == 'string' ? textColGrow : numColGrow;
 
     return LayoutBuilder(builder: (ctx, constraints) {
       const borderW = 1.0;
@@ -193,41 +204,54 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
       final availableForContent =
           (available - rowHPad * 2).clamp(0.0, double.infinity);
 
-      final numDataCols = dataCols.length;
-      // Total equal-weight columns: Stock Name (always) + Symbol (optional)
-      // + Exch (optional) + optional secondColumn + data cols. Each hidden
-      // column drops out of the count so the remaining columns get wider.
       final hasSecondCol = widget.secondColumn != null;
-      final equalColCount = 1 +
-          numDataCols +
-          (hasSecondCol ? 1 : 0) +
-          (widget.showSymbol ? 1 : 0) +
-          (widget.showExch ? 1 : 0);
+      // Tracks in render order: Stock Name, [second], [Symbol], [Exch], then
+      // the data columns. Hidden columns drop out entirely so the remaining
+      // ones absorb their space.
+      final mins = <double>[
+        stockNameMin,
+        if (hasSecondCol) minWidthOf(widget.secondColumn!),
+        if (widget.showSymbol) symbolMin,
+        if (widget.showExch) exchMin,
+        for (final c in dataCols) minWidthOf(c),
+      ];
+      final grows = <double>[
+        stockNameGrow,
+        if (hasSecondCol) growOf(widget.secondColumn!),
+        if (widget.showSymbol) fixedGrow,
+        if (widget.showExch) fixedGrow,
+        for (final c in dataCols) growOf(c),
+      ];
+      final totalMin = mins.fold<double>(0, (a, b) => a + b);
+      final totalGrow = grows.fold<double>(0, (a, b) => a + b);
+      final slack = availableForContent - totalMin;
+      final widths = (slack <= 0 || totalGrow == 0)
+          ? mins
+          : [
+              for (var i = 0; i < mins.length; i++)
+                mins[i] + slack * (grows[i] / totalGrow),
+            ];
 
-      // Reserve stockNameExtra before splitting the rest so Symbol / Exch /
-      // data columns still divide the remainder evenly.
-      final naturalEqualW = equalColCount == 0
-          ? 0.0
-          : (availableForContent - stockNameExtra) / equalColCount;
-      final equalW = naturalEqualW < colMin ? colMin : naturalEqualW;
+      var w = 0;
 
-      final stockNameW = equalW + stockNameExtra;
-      final secondColW = hasSecondCol ? equalW : 0.0;
-      final symbolW = widget.showSymbol ? equalW : 0.0;
-      final exchW = widget.showExch ? equalW : 0.0;
-      final colWidths = List<double>.filled(numDataCols, equalW);
+      final stockNameW = widths[w++];
+      final secondColW = hasSecondCol ? widths[w++] : 0.0;
+      final symbolW = widget.showSymbol ? widths[w++] : 0.0;
+      final exchW = widget.showExch ? widths[w++] : 0.0;
+      final colWidths = widths.sublist(w);
       final totalWidth =
-          rowHPad * 2 + equalColCount * equalW + stockNameExtra;
+          rowHPad * 2 + widths.fold<double>(0, (a, b) => a + b);
       final needsScroll = totalWidth > available + 0.5;
 
       Widget table = SizedBox(
         width: needsScroll ? totalWidth : available,
         child: Column(
           children: [
-            // Sticky header row — fixed 40px height matches the data-row
-            // height (line 550) so the header and rows read as uniform tracks.
+            // Sticky header — a slim 36px band. Kept flat (one hairline rule
+            // underneath, no vertical dividers) so the column labels read as
+            // a quiet ruler above the data instead of a boxed-in strip.
             Container(
-              height: 40,
+              height: 36,
               padding: const EdgeInsets.symmetric(horizontal: rowHPad),
               decoration: BoxDecoration(
                 color: headerBg,
@@ -312,7 +336,7 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
                   controller: _vCtrl,
                   itemCount: rows.length,
                   separatorBuilder: (_, __) => Divider(
-                      height: 1, color: border.withValues(alpha: 0.4)),
+                      height: 1, color: border.withValues(alpha: 0.25)),
                   itemBuilder: (_, i) {
                     final r = rows[i];
                     return _DataRow(
@@ -370,7 +394,8 @@ class _ScannerResultsTableState extends State<ScannerResultsTable> {
   }
 }
 
-/// Single-cell header — uppercase, semibold, tertiary color.
+/// Single-cell header — small, semibold, secondary color. Shares the type
+/// treatment with [_SortHeader] so sortable and static headers look alike.
 class _HeaderText extends StatelessWidget {
   final String label;
   // ignore: unused_element_parameter
@@ -379,13 +404,21 @@ class _HeaderText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(label,
-        style: MyntWebTextStyles.tableHeader(context,
-            fontWeight: MyntFonts.semiBold,
-            color: resolveThemeColor(context,
-                dark: MyntColors.textSecondaryDark,
-                light: MyntColors.textSecondary)));
+        style: _headerLabelStyle(context));
   }
 }
+
+/// Column-label type: 13px semibold secondary with a hair of tracking. One
+/// step down from the 14px data rows so the values carry the emphasis —
+/// and not two steps, because `fontScaleFactor` already shrinks everything
+/// to 0.8x under 1000px of pane width.
+TextStyle _headerLabelStyle(BuildContext context) =>
+    MyntWebTextStyles.bodySmall(context,
+      fontWeight: MyntFonts.semiBold,
+      color: resolveThemeColor(context,
+          dark: MyntColors.textSecondaryDark,
+          light: MyntColors.textSecondary))
+        .copyWith(letterSpacing: 0.2);
 
 /// Header text with a Positions-style sort indicator (arrow shown only on
 /// the active column) plus an optional info tooltip.
@@ -417,8 +450,14 @@ class _SortHeader extends StatelessWidget {
           textAlign: alignEnd ? TextAlign.end : TextAlign.start,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: MyntWebTextStyles.tableHeader(context,
-              fontWeight: MyntFonts.semiBold, color: secondary)),
+          // The sorted column reads at full text strength; the rest stay
+          // secondary. Cheaper signal than a background highlight.
+          style: active
+              ? _headerLabelStyle(context).copyWith(
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary))
+              : _headerLabelStyle(context)),
     );
 
     // Positions pattern: the sort arrow appears ONLY on the active column
@@ -426,7 +465,7 @@ class _SortHeader extends StatelessWidget {
     // place the arrow before the label; text columns after it.
     final sortArrow = active
         ? Icon(asc ? Icons.arrow_upward : Icons.arrow_downward,
-            size: 16, color: secondary)
+            size: 14, color: secondary)
         : null;
 
     // The sort-clickable area (label + arrow) and the info tooltip are
@@ -465,7 +504,7 @@ class _SortHeader extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(2),
                 child: Icon(shadcn.LucideIcons.info,
-                    size: 15, color: secondary),
+                    size: 13, color: secondary),
               ),
             ),
           );
@@ -529,6 +568,9 @@ class _DataRowState extends State<_DataRow> {
     final primary = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
 
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
     final hasAnyAction =
         widget.onTap != null || widget.onExplainTap != null;
     final showActions = _hover && hasAnyAction;
@@ -545,10 +587,11 @@ class _DataRowState extends State<_DataRow> {
         child: Container(
           color: _hover ? hoverBg : Colors.transparent,
           // Fixed height so the row never grows (bounces) when the hover
-          // action buttons appear. 40 matches the Positions table row height
-          // (14px `body` text + shadcn.TableCell chrome + vertical:4 padding).
-          height: 40,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+          // action buttons appear. 44 gives the 14px values room to breathe
+          // without costing many rows per screen; the horizontal padding
+          // matches the header band so headers sit over their values.
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(children: [
             // Stock Name column — the name takes the full width, hover
             // buttons pin to the RIGHT edge of the column so they sit BETWEEN
@@ -611,7 +654,9 @@ class _DataRowState extends State<_DataRow> {
                   ),
                 ),
               ),
-            // SYMBOL — compact tabular ticker, monospaced-friendly weight.
+            // SYMBOL — compact tabular ticker. Rendered one step back from
+            // the stock name (secondary) so the name leads the row and the
+            // ticker reads as its identifier rather than competing with it.
             // Padding matches the other columns so Symbol doesn't sit flush
             // against the right-aligned Market Cap number to its left.
             if (widget.showSymbol)
@@ -621,8 +666,8 @@ class _DataRowState extends State<_DataRow> {
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: Text(
                     widget.row.ticker,
-                    style: MyntWebTextStyles.body(context,
-                            fontWeight: MyntFonts.medium, color: primary)
+                    style: MyntWebTextStyles.bodySmall(context,
+                            fontWeight: MyntFonts.medium, color: secondary)
                         .copyWith(fontFeatures: const [
                       FontFeature.tabularFigures(),
                     ]),
@@ -631,15 +676,15 @@ class _DataRowState extends State<_DataRow> {
                   ),
                 ),
               ),
-            // EXCH
+            // EXCH — uniform for every row, so it stays quiet.
             if (widget.showExch)
               SizedBox(
                 width: widget.exchW,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: Text('NSE',
-                      style: MyntWebTextStyles.body(context,
-                          fontWeight: MyntFonts.medium, color: primary)),
+                      style: MyntWebTextStyles.bodySmall(context,
+                          fontWeight: MyntFonts.medium, color: secondary)),
                 ),
               ),
             // Data columns — mirror the header's 6px internal padding so
@@ -680,7 +725,8 @@ class _DataRowState extends State<_DataRow> {
         softWrap: false,
         overflow: TextOverflow.ellipsis,
         style: MyntWebTextStyles.body(context,
-                fontWeight: MyntFonts.medium,
+                fontWeight:
+                    res.color != null ? MyntFonts.semiBold : MyntFonts.medium,
                 color: res.color ?? (raw == null ? secondary : primary))
             .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
       );
@@ -700,8 +746,12 @@ class _DataRowState extends State<_DataRow> {
         maxLines: 1,
         softWrap: false,
         overflow: TextOverflow.ellipsis,
+        // A non-null color means the formatter classified the value as a
+        // gain/loss (pct, signed_price) — those get semibold so the P&L
+        // columns read at a glance down the grid.
         style: MyntWebTextStyles.body(context,
-                fontWeight: MyntFonts.medium,
+                fontWeight:
+                    res.color != null ? MyntFonts.semiBold : MyntFonts.medium,
                 color: res.color ?? primary)
             .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
       );
@@ -745,20 +795,20 @@ class _RowActionButton extends StatelessWidget {
         child: GestureDetector(
           onTap: onPressed,
           child: Container(
-            padding: const EdgeInsets.all(4),
+            padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(4),
-              boxShadow: [
-                BoxShadow(
-                  color: resolveThemeColor(context,
-                      dark: Colors.transparent, light: Colors.grey),
-                  blurRadius: 2,
-                  offset: const Offset(0, 1),
-                ),
-              ],
+              color: resolveThemeColor(context,
+                  dark: MyntColors.cardDark, light: MyntColors.card),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: resolveThemeColor(context,
+                    dark: MyntColors.borderMutedDark,
+                    light: MyntColors.borderMuted),
+              ),
             ),
-            child: Icon(icon, size: 16, color: MyntColors.textPrimary),
+            child: Icon(icon, size: 15, color: resolveThemeColor(context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.textSecondary)),
           ),
         ),
       ),

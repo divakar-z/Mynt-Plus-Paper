@@ -87,11 +87,7 @@ function _bucketCalendar(src, targetMinutes) {
   const out = [];
   let cur = null;
   for (const c of src) {
-    const bucket = (targetMinutes === 10080)
-      ? _weekStartIst(c.ts)
-      : (targetMinutes === 43200)
-        ? _monthStartIst(c.ts)
-        : c.ts - (c.ts % (targetMinutes * 60));
+    const bucket = _calendarBucketStart(c.ts, targetMinutes);
     if (!cur || cur.ts !== bucket) {
       if (cur) out.push(cur);
       cur = { ts: bucket, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v };
@@ -123,6 +119,32 @@ function _monthStartIst(ts) {
   const d = new Date(istSec * 1000);
   const istMonthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000;
   return istMonthStart - IST_OFFSET;
+}
+
+// Bucket start for a daily-or-longer timeframe — the ONE rule shared by the
+// history (_bucketCalendar) and live ticks (ingestTickIntoBucket), so a tick
+// always lands in the bar the history built. Week = Monday 00:00 IST, month =
+// the 1st 00:00 IST, anything else (daily) = whole multiples from the epoch;
+// daily EOD bars are stamped 00:00 UTC (05:30 IST), which this keeps.
+// Live ticks used plain epoch multiples for weeks and months too: epoch weeks
+// start on Thursdays and 30-day blocks on arbitrary dates, so today's ticks
+// opened a second bar ("8 Oct" next to the week of 5 Oct, "4 Oct" next to
+// October) instead of updating the current one.
+function _calendarBucketStart(tsSec, targetMinutes) {
+  if (targetMinutes === 10080) return _weekStartIst(tsSec);
+  if (targetMinutes === 43200) return _monthStartIst(tsSec);
+  const p = targetMinutes * 60;
+  return Math.floor(tsSec / p) * p;
+}
+
+// When the daily-or-longer bar that starts at `startSec` closes: the next
+// month's 1st for monthly (months are 28–31 days, not 30), else start + width.
+function _calendarBucketEnd(startSec, targetMinutes) {
+  if (targetMinutes === 43200) {
+    const d = new Date((startSec + IST_OFFSET) * 1000);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 1000 - IST_OFFSET;
+  }
+  return startSec + targetMinutes * 60;
 }
 
 // Session open (IST minutes from midnight) per exchange — mirrors
@@ -215,12 +237,12 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs, exch) {
   }
 
   const targetSec = targetMs / 1000;
-  // Intraday: anchor to the session open (same as bucketCandles) so live ticks
-  // land in the SAME bucket the history was bucketed into. Daily+ keeps epoch
-  // bucketing (its own day-OHLC logic handles the bar).
+  // Live ticks must land in the SAME bucket the history was bucketed into:
+  // intraday anchors to the session open, daily+ uses the calendar rule
+  // bucketCandles uses (Monday weeks, calendar months).
   const bucketSec = (targetMs < 86400000)
       ? _intradayBucketStart(tickMs / 1000, targetSec, _sessionOpenMinFor(exch))
-      : Math.floor(tickMs / targetMs) * targetSec;
+      : _calendarBucketStart(tickMs / 1000, targetMs / 60000);
   // Daily/weekly/monthly: TODAY's bar isn't in the EOD history (which ends
   // yesterday), so it's built from live ticks. Seed/maintain it from the
   // broker's true day OHLC (tick.dayOpen/High/Low) — using the first tick's lp
@@ -346,5 +368,6 @@ function _applyLateTick(candles, bucketSec, raw, cumVol, priceOnly, aggState, ti
 
 // Expose for browser global scope (no module system in iframe).
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { bucketCandles, ingestTickIntoBucket, SOURCE_INTERVAL_FOR_MINUTES, _tfSec };
+  module.exports = { bucketCandles, ingestTickIntoBucket, SOURCE_INTERVAL_FOR_MINUTES, _tfSec,
+    _calendarBucketEnd };
 }

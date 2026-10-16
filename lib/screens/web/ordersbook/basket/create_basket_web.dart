@@ -60,7 +60,7 @@ class _CreateBasketState extends ConsumerState<CreateBasket> {
 
       if (trimmedText.length > 20) {
         setState(
-            () => errorText = "Basket name must be less than 20 characters");
+            () => errorText = "Basket name can be up to 20 characters");
         return;
       }
 
@@ -240,6 +240,25 @@ class _CreateBasketState extends ConsumerState<CreateBasket> {
                         FilteringTextInputFormatter.allow(
                           RegExp(r'[a-zA-Z0-9 ]'),
                         ),
+                        // TC_194: stop at 20 characters and say why the
+                        // extra character did not go in.
+                        TextInputFormatter.withFunction((oldValue, newValue) {
+                          if (newValue.text.length <= 20) return newValue;
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            setState(() => errorText =
+                                "Basket name can be up to 20 characters");
+                          });
+                          // Typing past 20 keeps the name as it was; a longer
+                          // paste is cut to the first 20 characters.
+                          if (oldValue.text.length >= 20) return oldValue;
+                          final cut = newValue.text.substring(0, 20);
+                          return TextEditingValue(
+                            text: cut,
+                            selection:
+                                TextSelection.collapsed(offset: cut.length),
+                          );
+                        }),
                       ],
                     ),
                   ),

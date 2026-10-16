@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'dart:html' as html;
 import 'tv_chart/chart_iframe_guard.dart';
+import '../../../models/marketwatch_model/alert_model/alert_pending_model.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/websocket_provider.dart';
@@ -13,13 +14,20 @@ import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/res.dart';
 import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../sharedWidget/common_text_fields_web.dart';
+import '../../../utils/responsive_snackbar.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 class SetAlertWeb extends StatefulWidget {
   final GetQuotes depthdata;
   final DepthInputArgs wlvalue;
+  // Set when editing an existing alert: the dialog opens pre-filled and the
+  // button modifies that alert instead of creating a new one.
+  final AlertPendingModel? modifyAlert;
   const SetAlertWeb(
-      {super.key, required this.depthdata, required this.wlvalue});
+      {super.key,
+      required this.depthdata,
+      required this.wlvalue,
+      this.modifyAlert});
 
   @override
   State<SetAlertWeb> createState() => _SetAlertWebState();
@@ -45,8 +53,16 @@ class _SetAlertWebState extends State<SetAlertWeb> {
     alertTypeVal = alertType[0];
     // Initialize with widget data
     depthdata = widget.depthdata;
+    final modify = widget.modifyAlert;
+    if (modify != null) {
+      alertValue = modify.aiT == "LTP_B" ? "Below" : "Above";
+      valueCtrl.text = modify.d ?? "";
+      remark.text = modify.remarks ?? "";
+    }
     super.initState();
   }
+
+  bool get _isModify => widget.modifyAlert != null;
 
   // Process depth data with socket updates
   void _processDepthData(Map<String, dynamic> socketData) {
@@ -102,6 +118,51 @@ class _SetAlertWebState extends State<SetAlertWeb> {
     });
   }
 
+  // "400." -> "400", ".5" -> "0.5" so the backend gets a clean number.
+  String _normalizedValue(String v) {
+    if (v.startsWith('.')) v = '0$v';
+    if (v.endsWith('.')) v = v.substring(0, v.length - 1);
+    return v;
+  }
+
+  // Modify mode: send the edited price / condition for the existing alert.
+  Future<void> _submitModify(WidgetRef ref) async {
+    final alert = widget.modifyAlert!;
+    final newType = alertValue == "Below" ? "LTP_B" : "LTP_A";
+    final newValue = _normalizedValue(valueCtrl.text);
+    final newRemarks = remark.text.trim();
+
+    // Nothing changed — close without calling the broker or showing a
+    // false "modified" toast.
+    if (newValue == (alert.d ?? "").trim() &&
+        newType == alert.aiT &&
+        newRemarks == (alert.remarks ?? "").trim()) {
+      setState(() => _handlesetalert = false);
+      Navigator.of(context).pop();
+      return;
+    }
+
+    try {
+      final result = await ref.read(marketWatchProvider).fetchmodifyalert(
+            "${alert.exch}",
+            "${alert.tsym}",
+            newValue,
+            newType,
+            "${alert.alId}",
+            context,
+            remarks: newRemarks,
+          );
+      if (!mounted) return;
+      if (result?.stat == "OI replaced") {
+        Navigator.of(context).pop();
+      } else if (result?.stat != "Not_Ok") {
+        ResponsiveSnackBar.showWarning(context, "Alert not modified");
+      }
+    } finally {
+      if (mounted) setState(() => _handlesetalert = false);
+    }
+  }
+
   validatesetalret(value) {
     try {
       if (value == null || value.isEmpty) {
@@ -110,8 +171,53 @@ class _SetAlertWebState extends State<SetAlertWeb> {
         // by clicking Set Alert (caller flips _valueTouched first). This
         // prevents a red error from appearing on the untouched Value
         // field when the user merely flips Above/Below.
-        errorText = _valueTouched ? "Alert Price cannot be empty" : "";
+        errorText = _valueTouched ? "Enter an alert price" : "";
         return;
+      }
+
+      // Shape and range checks before the LTP comparison. Oversized
+      // values overflow on the backend and create an instantly-triggered
+      // alert with a garbage target, so cap them here (Kite's limit is
+      // also below 1,000,000,000).
+      // "400." and ".5" are accepted (as Kite does) and normalised before
+      // sending; only a lone "." is rejected.
+      if (!RegExp(r'^(\d+\.?\d*|\.\d+)$').hasMatch(value)) {
+        errorText = "Enter a valid price";
+        return;
+      }
+      final double parsedValue = double.parse(value);
+      if (parsedValue <= 0) {
+        errorText = "Alert price must be greater than 0";
+        return;
+      }
+      if (parsedValue >= 1000000000) {
+        errorText = "Alert price must be less than ₹1,00,00,00,000";
+        return;
+      }
+      if (value.contains('.') && value.split('.')[1].length > 4) {
+        errorText = "Alert price can have at most 4 decimal places";
+        return;
+      }
+      // Tick size check — Kite rejects off-tick alert prices and suggests
+      // the two nearest valid ones. Integer maths (x10000) avoids float
+      // remainders like 405.25 % 0.05 != 0.
+      final double tick = double.tryParse(depthdata.ti ?? "") ?? 0;
+      if (tick > 0) {
+        final int tickUnits = (tick * 10000).round();
+        final int valueUnits = (parsedValue * 10000).round();
+        if (tickUnits > 0 && valueUnits % tickUnits != 0) {
+          final tickDecimals =
+              tick.toString().contains('.') ? tick.toString().split('.')[1].length : 0;
+          final decimals = tickDecimals < 2 ? 2 : tickDecimals;
+          final lowerUnits = (valueUnits ~/ tickUnits) * tickUnits;
+          final upper = ((lowerUnits + tickUnits) / 10000).toStringAsFixed(decimals);
+          final lower = (lowerUnits / 10000).toStringAsFixed(decimals);
+          final tickText = tick.toStringAsFixed(decimals);
+          errorText = lowerUnits > 0
+              ? "Alert price must be in multiples of ₹$tickText. Try ₹$lower or ₹$upper"
+              : "Alert price must be in multiples of ₹$tickText. Try ₹$upper";
+          return;
+        }
       }
 
       if (alertTypeVal == "LTP" && value.isNotEmpty) {
@@ -123,13 +229,13 @@ class _SetAlertWebState extends State<SetAlertWeb> {
         String formattedEnteredValue = enteredValue.toStringAsFixed(2);
 
         if (enteredValue == currentLtp) {
-          errorText = "Alert Price cannot be same as LTP";
+          errorText = "Alert price cannot be the same as LTP";
         } else if (alertValue == "Above" && enteredValue <= currentLtp) {
           errorText =
-              "The Current LTP (₹$formattedLtp) is already above ₹$formattedEnteredValue";
+              "LTP ₹$formattedLtp is already above ₹$formattedEnteredValue. Enter a price above ₹$formattedLtp";
         } else if (alertValue == "Below" && enteredValue >= currentLtp) {
           errorText =
-              "The Current LTP (₹$formattedLtp) is already below ₹$formattedEnteredValue";
+              "LTP ₹$formattedLtp is already below ₹$formattedEnteredValue. Enter a price below ₹$formattedLtp";
         } else {
           errorText = "";
         }
@@ -141,7 +247,7 @@ class _SetAlertWebState extends State<SetAlertWeb> {
         errorText = "";
       }
     } catch (e) {
-      errorText = "Please enter a valid number";
+      errorText = "Enter a valid price";
     }
   }
 
@@ -564,7 +670,7 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                               const SizedBox(height: 16),
                               // ENTER VALUE FIELD
                               Text(
-                                'Enter Value',
+                                'Alert price',
                                 style: MyntWebTextStyles.body(
                                   context,
                                   fontWeight: MyntFonts.semiBold,
@@ -666,6 +772,9 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                 child: MyntTextField(
                                   controller: remark,
                                   placeholder: 'Remarks',
+                                  // TC_469.1: editable in Modify too; sent
+                                  // as remarks to ModifyAlert.
+                                  // readOnly: _isModify,
                                   height: 80,
                                   maxLines: 3,
                                   textCapitalization: TextCapitalization.none,
@@ -707,7 +816,8 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                 final bool isDisabled = _handlesetalert;
 
                                 return MyntPrimaryButton(
-                                  label: 'Set alert',
+                                  label:
+                                      _isModify ? 'Modify alert' : 'Set alert',
                                   isFullWidth: true,
                                   isLoading:
                                       _handlesetalert || scripInfo.loading,
@@ -730,7 +840,7 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                               // it.
                                               _valueTouched = true;
                                               errorText =
-                                                  "Alert Price cannot be empty";
+                                                  "Enter an alert price";
                                               _handlesetalert = false;
                                             });
                                             return;
@@ -740,7 +850,7 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                             setState(() {
                                               _valueTouched = true;
                                               errorText =
-                                                  "Alert Price cannot be 0";
+                                                  "Alert price must be greater than 0";
                                               _handlesetalert = false;
                                             });
                                             return;
@@ -760,13 +870,19 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                             return;
                                           }
 
+                                          if (_isModify) {
+                                            await _submitModify(ref);
+                                            return;
+                                          }
+
                                           try {
                                             await ref
                                                 .read(marketWatchProvider)
                                                 .fetchSetAlertWeb(
                                                   widget.wlvalue.exch,
                                                   widget.wlvalue.tsym,
-                                                  valueCtrl.text,
+                                                  _normalizedValue(
+                                                      valueCtrl.text),
                                                   alertValue == "Above" &&
                                                           alertTypeVal == "LTP"
                                                       ? "LTP_A"
@@ -805,4 +921,40 @@ class _SetAlertWebState extends State<SetAlertWeb> {
       },
     );
   }
+}
+
+/// Opens the Set Alert dialog pre-filled with an existing price alert so the
+/// user can change its price or Above/Below condition.
+Future<void> showModifyAlertDialog(
+    BuildContext context, WidgetRef ref, AlertPendingModel alert) async {
+  final GetQuotes quote;
+  try {
+    quote = await ref
+        .read(marketWatchProvider)
+        .api
+        .getScripQuote("${alert.token}", "${alert.exch}");
+  } catch (_) {
+    if (context.mounted) {
+      ResponsiveSnackBar.showWarning(context, "Unable to open modify alert");
+    }
+    return;
+  }
+  if (!context.mounted) return;
+  await showDialog(
+    context: context,
+    barrierDismissible: true,
+    builder: (_) => SetAlertWeb(
+      depthdata: quote,
+      wlvalue: DepthInputArgs(
+        exch: "${alert.exch}",
+        token: "${alert.token}",
+        tsym: "${alert.tsym}",
+        instname: "${alert.instname ?? alert.tsym}",
+        symbol: "${alert.tsym}",
+        expDate: "",
+        option: "",
+      ),
+      modifyAlert: alert,
+    ),
+  );
 }

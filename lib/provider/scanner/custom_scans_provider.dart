@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/models/scanner_model/custom_scan.dart';
 import 'package:mynt_plus/models/scanner_model/indicator_catalog.dart';
+import 'package:mynt_plus/provider/scanner/scanner_shell_provider.dart';
 
 ApiExporter get _api => locator<ApiExporter>();
 
@@ -13,8 +15,79 @@ final indicatorCatalogProvider = FutureProvider<IndicatorCatalog>((ref) async {
   return _api.fetchIndicatorCatalog();
 });
 
-final savedCustomScansProvider = FutureProvider<List<SavedCustomScan>>(
-    (_) => _api.listSavedCustomScans());
+/// One client's saved scans, keyed by client id — callers pass
+/// [savedCustomScansKey].
+///
+/// The key is what separates accounts, not a way for a screen to ask for
+/// somebody else's scans. It exists because a single shared cache slot leaked
+/// across logins: invalidating it on logout makes it refetch *immediately*,
+/// and at that moment the Scanner is still mounted while `apiToken` and
+/// `clientId` are still in prefs ([Preferences.clearClientSession] only drops
+/// `clientSession`). The refetch therefore succeeded as the outgoing account
+/// and re-cached its scans right after the invalidation, and the next login on
+/// the same browser read them straight out of the cache without a request.
+///
+/// Keying by client id removes the shared slot altogether, so correctness no
+/// longer depends on the order of steps in any logout path. Same fix, and same
+/// reasoning, as `journalTagsProvider`.
+///
+/// `autoDispose` on top of that keeps the per-account entries from piling up
+/// for the life of the tab, and makes each fresh mount of the Scanner refetch.
+///
+/// Invalidate after save / delete / run.
+final savedCustomScansProvider =
+    FutureProvider.autoDispose.family<List<SavedCustomScan>, String>(
+        (_, __) => _api.listSavedCustomScans());
+
+/// The current account's key for [savedCustomScansProvider].
+String savedCustomScansKey() => locator<Preferences>().clientId ?? '';
+
+/// Bumped on every logout. Any scanner request that is still in flight
+/// captures this before its `await` and compares afterwards — see
+/// [scannerSessionEpoch] and [isSameScannerSession].
+int _scannerSessionEpoch = 0;
+
+/// Identity of the current logged-in scanner session.
+///
+/// Clearing providers on logout is not enough on its own: a `/scans/run` that
+/// was already in flight when the user logged out still completes, and its
+/// `setResults` lands *after* the clear — re-filling the new user's screen
+/// with the previous user's scan. Worse, the scan id it carries belongs to the
+/// old account, so the next run of it 404s with `custom_not_found`.
+///
+/// `clientId` cannot be used for this: [Preferences.clearClientSession] only
+/// removes the session key and deliberately keeps the client id around to
+/// pre-fill the login field. A counter is unambiguous.
+int get scannerSessionEpoch => _scannerSessionEpoch;
+
+/// True when [epoch] (captured before an await) is still the live session.
+/// A response that fails this check must be dropped, not rendered.
+bool isSameScannerSession(int epoch) => epoch == _scannerSessionEpoch;
+
+/// Drops the per-account scanner state that is NOT already separated by
+/// client id. Called from every logout path in `AuthProvider` (explicit
+/// logout, session expiry, network failure).
+///
+/// [savedCustomScansProvider] is deliberately NOT invalidated here. It is
+/// keyed by client id, so the next login reads a different entry and can never
+/// see these scans — and invalidating it while the Scanner is still mounted is
+/// precisely what used to fire a `/scans/saved` request *after* logout and
+/// re-cache the outgoing account's list.
+///
+/// [indicatorCatalogProvider] is also left alone: it is static reference data,
+/// identical for every account, and refetching it costs a round trip on the
+/// next login for nothing.
+void clearCustomScansOnLogout(Ref ref) {
+  // Bump FIRST, so anything already awaiting a response is invalidated before
+  // the providers are reset — otherwise a reply that lands in between would
+  // repopulate what we just cleared.
+  _scannerSessionEpoch++;
+  ref.invalidate(customScansSessionProvider);
+  ref.invalidate(lastCustomRunProvider);
+  // Send the scanner back to its dashboard, so the next login opens on the
+  // landing page instead of the previous user's sub-page or open scan.
+  ref.invalidate(scannerShellProvider);
+}
 
 class LastCustomRunNotifier extends Notifier<AsyncValue<CustomScanRunResult>?> {
   @override

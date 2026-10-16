@@ -1232,6 +1232,16 @@ class _ChartIndicatorsMixin {
           this._drawPivotsIndicator(ind, plot, lo, hi, priceToY);
           continue;
         }
+        if (ind.kind === 'cpr') {
+          this._drawCprIndicator(ind, plot, lo, hi, priceToY,
+              firstAbs, firstAbs + visible.length - 1);
+          continue;
+        }
+        if (ind.kind === 'tcheck') {
+          this._drawTcheckIndicator(ind, plot, lo, hi, priceToY,
+              firstAbs, firstAbs + visible.length - 1);
+          continue;
+        }
         if (ind.kind === 'bb') {
           const bands = this._computeBB(ind);
           const drawSeries = (values, lineW) => {
@@ -2565,16 +2575,21 @@ class _ChartIndicatorsMixin {
   // previously-placed chip (LTP, countdown, other indicators) in the
   // `_axisChipSlots` registry. Without this, multiple MAs at close prices
   // (SMA + EMA = ~₹2 apart on a 5m chart) stack on top of each other.
-  _drawIndicatorAxisChip(plot, priceToY, value, color) {
-    if (value == null || !isFinite(value)) return;
+  // `dp` (optional): decimals for the label; the scrip's price decimals
+  // when omitted. `wantY` (optional): where to try first instead of the
+  // value's own y (CPR stacks close levels in price order). Returns the
+  // centre y drawn at, or null when not drawn.
+  _drawIndicatorAxisChip(plot, priceToY, value, color, dp, wantY) {
+    if (value == null || !isFinite(value)) return null;
     const ctx = this.ctx;
     const y = priceToY(value);
-    if (y < plot.top - 6 || y > plot.bottom + 6) return;
+    if (y < plot.top - 6 || y > plot.bottom + 6) return null;
     const chipH = 16;
-    const slot = this._allocAxisChipSlot(y, chipH, plot.top + 8, plot.bottom - 8);
-    if (slot == null) return;  // ran out of free space; drop silently
+    const slot = this._allocAxisChipSlot(wantY != null ? wantY : y, chipH,
+        plot.top + 8, plot.bottom - 8);
+    if (slot == null) return null;  // ran out of free space; drop silently
     const cy = slot;
-    const text = value.toFixed(this._priceDecimals());
+    const text = value.toFixed(dp != null ? dp : this._priceDecimals());
     ctx.save();
     ctx.font = '700 10px Geist, sans-serif';
     ctx.textBaseline = 'middle';
@@ -2586,6 +2601,7 @@ class _ChartIndicatorsMixin {
     ctx.fillStyle = '#FFFFFF';
     ctx.fillText(text, plot.right + 2 + tw / 2, cy);
     ctx.restore();
+    return cy;
   }
 
   // Reserves a non-overlapping Y slot on the right axis for a chip of the

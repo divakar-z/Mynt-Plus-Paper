@@ -1758,12 +1758,24 @@ getOptionawait(String exch, String token) {
 
   scripSearch(
       String value, BuildContext context, int? seg, String options) async {
+    _latestScripSearchText = value;
     if (value.length > 2) {
       await fetchSearchScrip(
           searchText: value,
           context: context,
           segment: ["", "EQ", "FO", "CUR", "COM", "IDX"][seg ?? 0],
           option: options == "Option||Is");
+      // TC_257: the basket hides indices (not tradable). For text like
+      // "NIFTY" the all-segment result is only indices (they fill the
+      // server's result limit), so the basket showed nothing. Then search
+      // the tradable segments too: F&O first, then ETFs (EQ).
+      if (options == "Basket" &&
+          (seg ?? 0) == 0 &&
+          _latestScripSearchText == value &&
+          !(_allSearchScrip ?? [])
+              .any((s) => s.idx?.toUpperCase() != 'YES')) {
+        await _basketTradableFallback(value);
+      }
     } else {
       searchClear();
     }
@@ -2489,6 +2501,69 @@ getOptionawait(String exch, String token) {
   }
 
 // Fetching data from the api and stored in a variable
+  /// Text of the newest scripSearch, so a slower, older answer is dropped
+  /// instead of replacing the results for what the user typed since.
+  String _latestScripSearchText = "";
+
+  /// TC_257: F&O and EQ searches run together and the list updates once,
+  /// so there is no flash of partial results. Indices are left out.
+  Future<void> _basketTradableFallback(String value) async {
+    toggleLoadingOn(true);
+    try {
+      final results = await Future.wait([
+        for (final categ in const ["FO", "EQ"])
+          api.getSearchScripNew(
+              searchText: value, categ: categ, exchs: _exarr, opt: false),
+      ]);
+      if (_latestScripSearchText != value) return;
+      final List<ScripNewValue> tradable = [];
+      for (final model in results) {
+        if (model.stat != "Ok") continue;
+        for (final val in model.values ?? <ScripNewValue>[]) {
+          if (val.idx?.toUpperCase() == 'YES') continue;
+          _decorateSearchValue(val);
+          tradable.add(val);
+        }
+      }
+      _allSearchScrip = tradable;
+      _isAdded = List<bool>.filled(tradable.length, false);
+      notifyListeners();
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Search", "Error": "$e"});
+    } finally {
+      toggleLoadingOn(false);
+    }
+  }
+
+  /// Fills symbol / expDate / option on one search row for display.
+  void _decorateSearchValue(ScripNewValue val) {
+    final exch = val.exch;
+    final dname = val.dname;
+    final tsym = val.tsym;
+    if (exch == "BFO" && dname != null) {
+      final splitVal = dname.split(" ");
+      val.symbol = splitVal[0];
+      // BFO: keep dname's day+month, append the year from the tsym —
+      // same helper as every other BFO branch. (TC_440)
+      val.expDate = bfoExpiryWithYear(splitVal, tsym);
+      // Search sends BFO futures as "... FUT 0" (empty strike slot); drop
+      // the "0" so it reads just "FUT". Options keep type + strike. (FUT0)
+      val.option = (splitVal.length > 3 && splitVal[3].toUpperCase() == "FUT")
+          ? "FUT"
+          : (splitVal.length > 4
+              ? "${splitVal[3]} ${splitVal[4]}"
+              : splitVal[3]);
+    } else {
+      final spilitSymbol = spilitTsym(value: tsym ?? "");
+      val.symbol = spilitSymbol["symbol"];
+      val.expDate = spilitSymbol["expDate"];
+      val.option = spilitSymbol["option"];
+    }
+  }
+
   Future fetchSearchScrip(
       {required String searchText,
       required BuildContext context,
@@ -2540,31 +2615,10 @@ getOptionawait(String exch, String token) {
 
           for (int i = 0; i < values.length; i++) {
             final val = values[i];
-            final exch = val.exch;
-            final dname = val.dname;
             // final instname = val.instname?.toUpperCase() ?? "";
             final tsym = val.tsym;
 
-            if (exch == "BFO" && dname != null) {
-              final splitVal = dname.split(" ");
-              val.symbol = splitVal[0];
-              // BFO: keep dname's day+month, append the year from the tsym —
-              // same helper as every other BFO branch. (TC_440)
-              val.expDate = bfoExpiryWithYear(splitVal, tsym);
-              // Search sends BFO futures as "... FUT 0" (empty strike slot); drop
-              // the "0" so it reads just "FUT". Options keep type + strike. (FUT0)
-              val.option = (splitVal.length > 3 &&
-                      splitVal[3].toUpperCase() == "FUT")
-                  ? "FUT"
-                  : (splitVal.length > 4
-                      ? "${splitVal[3]} ${splitVal[4]}"
-                      : splitVal[3]);
-            } else {
-              final spilitSymbol = spilitTsym(value: tsym ?? "");
-              val.symbol = spilitSymbol["symbol"];
-              val.expDate = spilitSymbol["expDate"];
-              val.option = spilitSymbol["option"];
-            }
+            _decorateSearchValue(val);
 
             for (var scrip in _scrips) {
               if (tsym == scrip['tsym']) {
@@ -5008,10 +5062,12 @@ getOptionawait(String exch, String token) {
   }
 
   Future fetchmodifyalert(String exch, String tysm, String value,
-      String alertTypeVal, String alid, BuildContext context) async {
+      String alertTypeVal, String alid, BuildContext context,
+      {String? remarks}) async {
     try {
-      _modifyalertmodel =
-          await api.getmodifyalert(exch, tysm, value, alertTypeVal, alid);
+      _modifyalertmodel = await api.getmodifyalert(
+          exch, tysm, value, alertTypeVal, alid,
+          remarks: remarks);
 
       if (_modifyalertmodel!.stat! == "OI replaced") {
         ConstantName.sessCheck = true;

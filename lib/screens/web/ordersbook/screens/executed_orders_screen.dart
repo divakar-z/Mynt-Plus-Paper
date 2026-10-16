@@ -159,7 +159,7 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
     'Type',        // 1 - BUY/SELL (trantype)
     'Instrument',  // 2
     'Product',     // 3
-    'Qty.',        // 4
+    'Qty',         // 4
     'LTP',         // 5
     'Avg. price',  // 6
     'Status',      // 7
@@ -282,7 +282,7 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
                               buildHeaderCell('Type', 1),
                               buildHeaderCell('Instrument', 2),
                               buildHeaderCell('Product', 3, true),
-                              buildHeaderCell('Qty.', 4, true),
+                              buildHeaderCell('Qty', 4, true),
                               buildHeaderCell('LTP', 5, true),
                               buildHeaderCell('Avg. price', 6, true),
                               buildHeaderCell('Status', 7, true),
@@ -328,7 +328,12 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
                             itemBuilder: (context, index) {
                               final order = sortedOrders[index];
                               final uniqueId = order.norenordno?.toString() ?? order.token?.toString() ?? '';
-                              final actionHandler = OrderActionHandler(ref: ref, context: context);
+                              // TC_224: the row's context dies when the table rebuilds on
+                              // resize, while the Order Details sheet opened from it stays
+                              // up and keeps reading theme through it -> grey screen.
+                              // Use the screen's context, as Trade Book does.
+                              // final actionHandler = OrderActionHandler(ref: ref, context: context);
+                              final actionHandler = OrderActionHandler(ref: ref, context: this.context);
                               return shadcn.Table(
                                 columnWidths: {
                                   0: shadcn.FixedTableSize(timeWidth),

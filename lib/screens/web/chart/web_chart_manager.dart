@@ -101,6 +101,15 @@ class WebChartManager {
   bool get isVisible => _isVisible;
   String? get currentToken => _currentToken;
 
+  /// True while the client's chart preference is Trade from Chart — symbol
+  /// details then shows the chart engine and this chart's portal is hidden
+  /// (chart_with_depth_web.dart). Read live, same source as
+  /// tradeFromChartModeProvider, so a switch applies immediately.
+  bool get _tradeFromChartOn {
+    final prefs = locator<Preferences>();
+    return prefs.getChartPreference(prefs.clientId ?? '') == 'tfc';
+  }
+
   /// Callback fired when visibility changes (preserved API).
   VoidCallback? onVisibilityChanged;
 
@@ -233,6 +242,15 @@ class WebChartManager {
     // callers keep working unchanged.
     String? decorativeName,
   }) {
+    // Trade from Chart replaces this chart in symbol details and only hides
+    // its portal, so every watchlist switch used to make the invisible
+    // TradingView chart download history too (or, with its div off the DOM,
+    // retry for 5s and fail with "container not found"). Skip it and leave
+    // the state untouched: chart_with_depth_web calls changeSymbol again
+    // with the current scrip the moment TradingView is shown, and the
+    // unchanged _current* fields make that a real symbol/theme change.
+    if (_tradeFromChartOn) return;
+
     final newSymbol = '$exch:$tsym';
     final dispName =
         _resolveDispName(tsym: tsym, decorativeName: decorativeName);
@@ -324,7 +342,7 @@ class WebChartManager {
   /// listener (or directly by callers if they manage their own stream).
   void pushTick(Map<String, dynamic> tickData) {
     final containerId = _containerId;
-    if (containerId == null || !_bridgeLoaded) return;
+    if (containerId == null || !_bridgeLoaded || _tradeFromChartOn) return;
     final bridge = _scalperChartsBridge;
     if (bridge == null) return;
     try {
@@ -359,7 +377,9 @@ class WebChartManager {
   /// [trigger] only labels the Nchart console log.
   void _resync(int awayMs, String trigger) {
     final containerId = _containerId;
-    if (containerId == null || !_bridgeLoaded) return;
+    // Hidden behind Trade from Chart: nobody sees it, and markChartVisible
+    // re-fetches when TradingView is shown again.
+    if (containerId == null || !_bridgeLoaded || _tradeFromChartOn) return;
     final bridge = _scalperChartsBridge;
     if (bridge == null) return;
     try {
@@ -553,6 +573,12 @@ class WebChartManager {
           //      recreate the chart on the new div using the last symbol.
           // Same pattern as ScalperChartManager.
           Future.delayed(const Duration(milliseconds: 200), () {
+            // Hidden behind Trade from Chart — changeSymbol creates it when
+            // TradingView is shown (no chart on this div yet at that point).
+            if (_tradeFromChartOn) {
+              _pendingCreation = null;
+              return;
+            }
             if (_pendingCreation != null) {
               _processPendingCreation();
             } else if (_bridgeLoaded && _currentSymbol != null) {
@@ -615,6 +641,12 @@ class WebChartManager {
   void _processPendingCreation() {
     if (_pendingCreation == null) return;
     if (_containerId == null || !_bridgeLoaded) return;
+    if (_tradeFromChartOn) {
+      // Queued in TradingView mode, but the client switched to Trade from
+      // Chart before the bridge loaded. changeSymbol creates it on show.
+      _pendingCreation = null;
+      return;
+    }
 
     final pending = _pendingCreation!;
     _pendingCreation = null;

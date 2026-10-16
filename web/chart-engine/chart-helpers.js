@@ -427,6 +427,412 @@ function _isSessionWindowPure(exch, tsSec) {
   return p.minuteOfDay >= b.openMin && p.minuteOfDay < b.closeMin;
 }
 
+
+// ── CPR with Pivot Level Daily ──────────────────────────────────────────────
+// Port of the TradingView custom study "CPR with Pivot Level Daily"
+// (CPRwithPivotLevelDaily@tv-basicstudies-1). Every bar shows the levels made
+// from the PREVIOUS trading day's official daily high / low / close, for bars
+// in the last 30 days only (as the TradingView version did).
+//
+// The 13 plots in the study's metainfo order (later plots draw on top), with
+// its default colours and visibility. Per-line settings live in the
+// indicator's numeric params as `<key><field>`:
+//   V visible 0/1 · C colour 0xRRGGBB · W width 1-4 · S line style index
+//   T plot type index · P price line 0/1          — plus `precision` (index).
+// Option orders MUST match indicator_schema.dart (cpr).
+const CPR_PLOTS = [
+  { key: 'pivot', title: 'Daily Central Pivot', color: '#F8AF85', visible: true },
+  { key: 'high',  title: 'Prev Day High',       color: '#6CAC6E', visible: false },
+  { key: 'low',   title: 'Prev Day Low',        color: '#EB2D2D', visible: false },
+  { key: 'bc',    title: 'Daily Bottom Pivot',  color: '#9C50E4', visible: true },
+  { key: 'tc',    title: 'Daily Top Pivot',     color: '#91A9F1', visible: true },
+  { key: 's1',    title: 'Daily S1',            color: '#FF0000', visible: false },
+  { key: 'r1',    title: 'Daily R1',            color: '#008000', visible: false },
+  { key: 's2',    title: 'Daily S2',            color: '#FF0000', visible: false },
+  { key: 'r2',    title: 'Daily R2',            color: '#008000', visible: false },
+  { key: 's3',    title: 'Daily S3',            color: '#FF0000', visible: false },
+  { key: 'r3',    title: 'Daily R3',            color: '#008000', visible: false },
+  { key: 's4',    title: 'Daily S4',            color: '#FF0000', visible: false },
+  { key: 'r4',    title: 'Daily R4',            color: '#008000', visible: false },
+];
+// TradingView's plot types for a line plot, in its Style-tab order. The study
+// defaults every plot to Circles (its plottype 6), width 3, solid.
+const CPR_PLOT_TYPES = ['line', 'linebr', 'step', 'stepbr', 'stepdiamond',
+  'histogram', 'cross', 'area', 'areabr', 'columns', 'circles'];
+const CPR_LINE_STYLES = ['solid', 'dotted', 'dashed'];
+const _CPR_DEF_WIDTH = 3;
+const _CPR_DEF_STYLE = 0;   // solid
+const _CPR_DEF_TYPE = 10;   // circles
+const _CPR_LOOKBACK_DAYS = 30;
+
+function cprLevels(h, l, c) {
+  const pivot = (h + l + c) / 3;
+  const bc = (h + l) / 2;
+  const tc = 2 * pivot - bc;
+  const r1 = 2 * pivot - l;
+  const r2 = pivot + h - l;
+  const r3 = r1 + h - l;
+  const r4 = r3 + r2 - r1;
+  const s1 = 2 * pivot - h;
+  const s2 = pivot - h + l;
+  const s3 = s1 - h + l;
+  const s4 = s3 + s2 - s1;
+  return { pivot, high: h, low: l, bc, tc, s1, r1, s2, r2, s3, r3, s4, r4 };
+}
+
+// IST calendar day number (days since 1970-01-01 in IST).
+function _cprIstDay(tsSec) {
+  return Math.floor((tsSec + 19800) / 86400);
+}
+
+// One array per plot key, aligned to `candles`; NaN where a bar has no level
+// (older than 30 days before `nowMs`, or no earlier daily bar). A bar's levels
+// come from the latest daily bar dated BEFORE the bar's own IST day, so today
+// uses the last completed day even if the daily data already holds a partial
+// bar for today, and Monday uses Friday.
+function computeCprSeries(candles, dailyBars, nowMs) {
+  const n = Array.isArray(candles) ? candles.length : 0;
+  const out = {};
+  for (const p of CPR_PLOTS) out[p.key] = new Array(n).fill(NaN);
+  if (!n || !Array.isArray(dailyBars) || dailyBars.length === 0) return out;
+  const days = dailyBars
+      .filter((b) => b && isFinite(b.ts) && isFinite(b.h) && isFinite(b.l) && isFinite(b.c))
+      .map((b) => ({ day: _cprIstDay(b.ts), lv: cprLevels(+b.h, +b.l, +b.c) }))
+      .sort((a, b) => a.day - b.day);
+  const cutoffSec = nowMs / 1000 - _CPR_LOOKBACK_DAYS * 86400;
+  let j = -1;   // latest daily bar with day < current candle's day
+  for (let i = 0; i < n; i++) {
+    const ts = candles[i].ts;
+    const d = _cprIstDay(ts);
+    while (j + 1 < days.length && days[j + 1].day < d) j++;
+    if (ts < cutoffSec || j < 0) continue;
+    const lv = days[j].lv;
+    for (const p of CPR_PLOTS) out[p.key][i] = lv[p.key];
+  }
+  return out;
+}
+
+// Resolved style for one plot from the indicator's params (defaults when a
+// key is missing — a freshly added CPR has an empty params map).
+function cprPlotStyle(params, plot) {
+  const p = params || {};
+  const k = plot.key;
+  const num = (field, def) => {
+    const v = p[k + field];
+    return (typeof v === 'number' && isFinite(v)) ? v : def;
+  };
+  const colorNum = num('C', parseInt(plot.color.slice(1), 16)) | 0;
+  return {
+    visible: num('V', plot.visible ? 1 : 0) >= 1,
+    color: '#' + (colorNum & 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0'),
+    width: Math.max(1, Math.min(4, num('W', _CPR_DEF_WIDTH) | 0)),
+    lineStyle: CPR_LINE_STYLES[num('S', _CPR_DEF_STYLE) | 0] || 'solid',
+    plotType: CPR_PLOT_TYPES[num('T', _CPR_DEF_TYPE) | 0] || 'circles',
+    priceLine: num('P', 0) >= 1,
+  };
+}
+
+// Decimals for values: index 0 = "Default" (the study's precision 2), index
+// k > 0 = k - 1 decimals (options Default, 0, 1, … 8).
+function cprDecimals(params) {
+  const i = (params && typeof params.precision === 'number') ? params.precision | 0 : 0;
+  return i <= 0 ? 2 : Math.min(8, i - 1);
+}
+
+
+// ── CPR Trend Checker (CPR + MAs) ───────────────────────────────────────────
+// Previous-period Central Pivot Range levels for the day, week and month, with
+// up to five moving averages. Built from the public description and the
+// settings screens of the TradingView study of this kind; the maths are the
+// standard pivot formulas, checked against a TradingView chart (see the tests).
+//
+// All settings are numeric params (the persistence pipeline is Map<String,num>):
+//   inputs   auto dOn pdOn wOn pwOn mOn pmOn            switches 0/1
+//   a line   <key><V|C|O|W|S|T>   visible, colour 0xRRGGBB, opacity %, width,
+//                                 line style index, plot type index
+//   a band   <d|w|m>Band<V|C|O>
+//   an MA    ma<i>On / Type / Src / Len / C / W         (i = 1..5)
+//   output   labelsOn precision axisOn statusOn inputsOn
+// Missing keys mean "default", so a saved indicator only needs the values the
+// user changed. Option orders MUST match indicator_schema.dart.
+const TC_GROUPS = [
+  { id: 'd', pre: 'Daily',   hl: ['PDH', 'PDL'], short: 'D', color: '#2962FF', hlColor: '#0D3CFF' },
+  { id: 'w', pre: 'Weekly',  hl: ['PWH', 'PWL'], short: 'W', color: '#C41D9D', hlColor: '#C41D9D' },
+  { id: 'm', pre: 'Monthly', hl: ['PMH', 'PML'], short: 'M', color: '#F58FD8', hlColor: '#F58FD8' },
+];
+// Study order per group: PDH, PDL, CPR, BC, TC, R1, S1, R2, S2, R3, S3, R4, S4.
+const TC_LINES = (() => {
+  const out = [];
+  for (const g of TC_GROUPS) {
+    const hp = g.id === 'd' ? 'pd' : g.id === 'w' ? 'pw' : 'pm';
+    const mk = (key, field, title, label, color, alpha, sw) =>
+      out.push({ key, group: g.id, field, title, label, color, alpha, sw });
+    mk(hp + 'h', 'high', g.hl[0], g.hl[0], g.hlColor, 100, 'hl');
+    mk(hp + 'l', 'low', g.hl[1], g.hl[1], g.hlColor, 100, 'hl');
+    mk(g.id + 'cpr', 'pivot', g.pre + ' CPR', g.pre + ' CPR', g.color, 50, 'cpr');
+    mk(g.id + 'bc', 'bc', g.pre + ' BC', '', g.color, 0, 'cpr');
+    mk(g.id + 'tc', 'tc', g.pre + ' TC', '', g.color, 0, 'cpr');
+    for (const n of [1, 2, 3, 4]) {
+      mk(g.id + 'r' + n, 'r' + n, g.pre + ' R' + n, g.short + '-R' + n, '#4CAF50', 100, 'cpr');
+      mk(g.id + 's' + n, 's' + n, g.pre + ' S' + n, g.short + '-S' + n, '#FF5252', 100, 'cpr');
+    }
+  }
+  return out;
+})();
+const TC_BANDS = TC_GROUPS.map((g) => ({
+  key: g.id + 'Band', group: g.id, title: g.pre + ' CPR Band', color: g.color, alpha: 25,
+}));
+const TC_MA_TYPES = ['SMA', 'EMA', 'WMA', 'RMA', 'HMA', 'VWMA'];
+const TC_MA_SOURCES = ['close', 'open', 'high', 'low', 'hl2', 'hlc3', 'ohlc4'];
+const TC_MA_DEFAULTS = [
+  { on: 1, len: 10,  color: '#F5BF00' },
+  { on: 0, len: 20,  color: '#178A17' },
+  { on: 0, len: 50,  color: '#FF2222' },
+  { on: 0, len: 100, color: '#1A0000' },
+  { on: 0, len: 200, color: '#1E7FFF' },
+];
+const _TC_DEF_WIDTH = 1;
+const _TC_DEF_TYPE = 10;     // circles
+const _TC_MA_WIDTH = 2;
+
+// The CPR levels from a period's high / low / close. R4 and S4 extend the
+// R3/S3 spacing (2*R3-R2, 2*S3-S2) — what the TradingView chart shows.
+function tcLevels(h, l, c) {
+  const pivot = (h + l + c) / 3;
+  const bc = (h + l) / 2;
+  const tc = 2 * pivot - bc;
+  const r1 = 2 * pivot - l;
+  const s1 = 2 * pivot - h;
+  const r2 = pivot + (h - l);
+  const s2 = pivot - (h - l);
+  const r3 = r1 + (h - l);
+  const s3 = s1 - (h - l);
+  const r4 = 2 * r3 - r2;
+  const s4 = 2 * s3 - s2;
+  return { high: h, low: l, pivot, bc, tc, r1, s1, r2, s2, r3, s3, r4, s4 };
+}
+
+const _TC_FIELDS = ['high', 'low', 'pivot', 'bc', 'tc', 'r1', 's1', 'r2', 's2', 'r3', 's3', 'r4', 's4'];
+
+// IST day number (days since 1970-01-01 in IST), Monday-based week number,
+// calendar month number.
+function _tcDayIdx(tsSec) { return Math.floor((tsSec + 19800) / 86400); }
+function _tcWeekIdx(dayIdx) { return Math.floor((dayIdx - 4) / 7); }   // 1970-01-05 is a Monday
+function _tcMonthIdx(dayIdx) {
+  const d = new Date(dayIdx * 86400000);
+  return d.getUTCFullYear() * 12 + d.getUTCMonth();
+}
+
+// Daily bars -> periods { idx, h, l, c, lv } for each of d / w / m. The first
+// week and month are dropped: the data may start in the middle of them, and a
+// partial period would give wrong highs and lows.
+function _tcPeriods(dailyBars) {
+  const bars = (Array.isArray(dailyBars) ? dailyBars : [])
+      .filter((b) => b && isFinite(b.ts) && isFinite(b.h) && isFinite(b.l) && isFinite(b.c))
+      .slice().sort((a, b) => a.ts - b.ts);
+  const group = (idxOf, dropFirst) => {
+    const out = [];
+    let cur = null;
+    for (const b of bars) {
+      const idx = idxOf(_tcDayIdx(b.ts));
+      if (!cur || cur.idx !== idx) {
+        cur = { idx, h: +b.h, l: +b.l, c: +b.c };
+        out.push(cur);
+      } else {
+        if (b.h > cur.h) cur.h = +b.h;
+        if (b.l < cur.l) cur.l = +b.l;
+        cur.c = +b.c;
+      }
+    }
+    if (dropFirst) out.shift();
+    for (const p of out) p.lv = tcLevels(p.h, p.l, p.c);
+    return out;
+  };
+  return {
+    d: group((di) => di, false),
+    w: group(_tcWeekIdx, true),
+    m: group((di) => _tcMonthIdx(di), true),
+  };
+}
+
+// For each candle, every group's levels from the period BEFORE the candle's own
+// day / week / month, plus `seg` (the candle's own period id, to split drawing
+// into one segment per period). NaN where there is no such period.
+function computeTcSeries(candles, dailyBars) {
+  const n = Array.isArray(candles) ? candles.length : 0;
+  const per = _tcPeriods(dailyBars);
+  const out = {};
+  const keyOf = { d: (di) => di, w: _tcWeekIdx, m: _tcMonthIdx };
+  for (const g of TC_GROUPS) {
+    const o = { seg: new Array(n).fill(NaN) };
+    for (const f of _TC_FIELDS) o[f] = new Array(n).fill(NaN);
+    const periods = per[g.id];
+    let j = -1;
+    for (let i = 0; i < n; i++) {
+      const key = keyOf[g.id](_tcDayIdx(candles[i].ts));
+      o.seg[i] = key;
+      while (j + 1 < periods.length && periods[j + 1].idx < key) j++;
+      if (j < 0) continue;
+      const lv = periods[j].lv;
+      for (const f of _TC_FIELDS) o[f][i] = lv[f];
+    }
+    out[g.id] = o;
+  }
+  return out;
+}
+
+// Which level groups are on. `auto` picks the group from the chart timeframe
+// (intraday: daily, daily chart: weekly, weekly and above: monthly) together
+// with its previous high/low; otherwise the six switches decide.
+function tcActiveGroups(params, timeframeMinutes) {
+  const p = params || {};
+  const sw = (k, def) => (typeof p[k] === 'number' ? p[k] >= 1 : def);
+  if (sw('auto', false)) {
+    const which = timeframeMinutes >= 10080 ? 'm' : timeframeMinutes >= 1440 ? 'w' : 'd';
+    const o = {};
+    for (const g of TC_GROUPS) o[g.id] = { cpr: g.id === which, hl: g.id === which };
+    return o;
+  }
+  return {
+    d: { cpr: sw('dOn', true), hl: sw('pdOn', true) },
+    w: { cpr: sw('wOn', false), hl: sw('pwOn', false) },
+    m: { cpr: sw('mOn', false), hl: sw('pmOn', false) },
+  };
+}
+
+function _tcHex(n) { return '#' + (n & 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0'); }
+function _tcCss(hex, alpha) {
+  if (alpha >= 1) return hex;
+  const h2 = hex.replace('#', '');
+  const r = parseInt(h2.slice(0, 2), 16), g = parseInt(h2.slice(2, 4), 16), b = parseInt(h2.slice(4, 6), 16);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + (+alpha.toFixed(3)) + ')';
+}
+
+// Resolved style of one line from the params. `css` is the draw colour with the
+// opacity applied; `color` the plain hex (used for labels and the legend, which
+// stay readable even when the line itself is transparent).
+function tcLineStyle(params, line) {
+  const p = params || {};
+  const num = (f, def) => {
+    const v = p[line.key + f];
+    return (typeof v === 'number' && isFinite(v)) ? v : def;
+  };
+  const color = _tcHex(num('C', parseInt(line.color.slice(1), 16)) | 0);
+  const alpha = Math.max(0, Math.min(100, num('O', line.alpha))) / 100;
+  return {
+    visible: num('V', 1) >= 1,
+    color,
+    alpha,
+    css: _tcCss(color, alpha),
+    width: Math.max(1, Math.min(4, num('W', _TC_DEF_WIDTH) | 0)),
+    lineStyle: CPR_LINE_STYLES[num('S', 0) | 0] || 'solid',
+    plotType: CPR_PLOT_TYPES[num('T', _TC_DEF_TYPE) | 0] || 'circles',
+    priceLine: false,
+  };
+}
+
+function tcBandStyle(params, band) {
+  const p = params || {};
+  const num = (f, def) => {
+    const v = p[band.key + f];
+    return (typeof v === 'number' && isFinite(v)) ? v : def;
+  };
+  const color = _tcHex(num('C', parseInt(band.color.slice(1), 16)) | 0);
+  const alpha = Math.max(0, Math.min(100, num('O', band.alpha))) / 100;
+  return { visible: num('V', 1) >= 1, color, alpha, css: _tcCss(color, alpha) };
+}
+
+// Moving average i (1..5) settings.
+function tcMaConfig(params, i) {
+  const p = params || {};
+  const d = TC_MA_DEFAULTS[i - 1];
+  const num = (f, def) => {
+    const v = p['ma' + i + f];
+    return (typeof v === 'number' && isFinite(v)) ? v : def;
+  };
+  return {
+    on: num('On', d.on) >= 1,
+    type: TC_MA_TYPES[num('Type', 0) | 0] || 'SMA',
+    src: TC_MA_SOURCES[num('Src', 0) | 0] || 'close',
+    len: Math.max(1, Math.min(999, num('Len', d.len) | 0)),
+    color: _tcHex(num('C', parseInt(d.color.slice(1), 16)) | 0),
+    width: Math.max(1, Math.min(4, num('W', _TC_MA_WIDTH) | 0)),
+  };
+}
+
+function _tcSrc(c, src) {
+  switch (src) {
+    case 1: return c.o;
+    case 2: return c.h;
+    case 3: return c.l;
+    case 4: return (c.h + c.l) / 2;
+    case 5: return (c.h + c.l + c.c) / 3;
+    case 6: return (c.o + c.h + c.l + c.c) / 4;
+    default: return c.c;
+  }
+}
+function _tcSma(a, len) {
+  const out = new Array(a.length).fill(NaN);
+  let sum = 0, cnt = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (isFinite(a[i])) { sum += a[i]; cnt++; } else { sum = 0; cnt = 0; continue; }
+    if (cnt > len) sum -= a[i - len];
+    if (cnt >= len) out[i] = sum / len;
+  }
+  return out;
+}
+function _tcEma(a, len, alpha) {
+  const sma = _tcSma(a, len);
+  const out = new Array(a.length).fill(NaN);
+  let prev = NaN;
+  for (let i = 0; i < a.length; i++) {
+    if (isNaN(prev)) { if (isFinite(sma[i])) { prev = sma[i]; out[i] = prev; } continue; }
+    prev = alpha * a[i] + (1 - alpha) * prev;
+    out[i] = prev;
+  }
+  return out;
+}
+function _tcWma(a, len) {
+  const out = new Array(a.length).fill(NaN);
+  const den = len * (len + 1) / 2;
+  for (let i = len - 1; i < a.length; i++) {
+    let s = 0, ok = true;
+    for (let k = 0; k < len; k++) {
+      const v = a[i - len + 1 + k];
+      if (!isFinite(v)) { ok = false; break; }
+      s += v * (k + 1);
+    }
+    if (ok) out[i] = s / den;
+  }
+  return out;
+}
+
+// typeIdx / srcIdx index TC_MA_TYPES / TC_MA_SOURCES; NaN while warming up.
+function tcMa(candles, typeIdx, srcIdx, len) {
+  const n = Array.isArray(candles) ? candles.length : 0;
+  const L = Math.max(1, len | 0);
+  const src = new Array(n);
+  for (let i = 0; i < n; i++) src[i] = _tcSrc(candles[i], srcIdx | 0);
+  switch (TC_MA_TYPES[typeIdx | 0]) {
+    case 'EMA': return _tcEma(src, L, 2 / (L + 1));
+    case 'WMA': return _tcWma(src, L);
+    case 'RMA': return _tcEma(src, L, 1 / L);
+    case 'HMA': {
+      const half = Math.max(1, Math.floor(L / 2));
+      const a = _tcWma(src, half), b = _tcWma(src, L);
+      const diff = src.map((_, i) => 2 * a[i] - b[i]);
+      return _tcWma(diff, Math.max(1, Math.round(Math.sqrt(L))));
+    }
+    case 'VWMA': {
+      const pv = src.map((s, i) => s * (candles[i].v || 0));
+      const vol = candles.map((c) => c.v || 0);
+      const num = _tcSma(pv, L), den = _tcSma(vol, L);
+      return num.map((x, i) => (isFinite(x) && den[i] > 0 ? x / den[i] : NaN));
+    }
+    default: return _tcSma(src, L);
+  }
+}
+
 // Dual-mode export — browser global (script tag) AND node require() for tests.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -438,5 +844,9 @@ if (typeof module !== 'undefined' && module.exports) {
     _positionExpand, _positionRender, _forkAnchors, _drawForkInChart, _forkPartial,
     _istParts, _istDayKey, _nthSundayOfMonth, _usInDst,
     _sessionBoundsFor, _isSessionWindowPure,
+    CPR_PLOTS, CPR_PLOT_TYPES, CPR_LINE_STYLES, cprLevels, computeCprSeries,
+    cprPlotStyle, cprDecimals,
+    TC_GROUPS, TC_LINES, TC_BANDS, TC_MA_TYPES, TC_MA_SOURCES, TC_MA_DEFAULTS,
+    tcLevels, computeTcSeries, tcActiveGroups, tcLineStyle, tcBandStyle, tcMaConfig, tcMa,
   };
 }

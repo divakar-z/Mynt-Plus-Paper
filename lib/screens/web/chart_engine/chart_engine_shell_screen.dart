@@ -519,6 +519,14 @@ class _ChartEngineShellScreenState
         if (mounted) setState(() {});
         break;
       case 'fetchHistory':
+        // Every shell hears every iframe's messages on `window`. Answer only
+        // our own iframe, or each extra mounted shell repeats the TPSeries
+        // download for a reply its iframe then drops (unknown requestId).
+        // No frameId = an older cached chart-engine.js; keep old behaviour.
+        final frameId = msg['frameId'];
+        if (frameId is String && frameId.isNotEmpty && frameId != _iframeId) {
+          break;
+        }
         _handleFetchHistory(msg['value']);
         break;
       case 'subscribe':
@@ -3640,12 +3648,30 @@ class _IndicatorSettingsDialogState
     ref.read(chartEngineSessionProvider.notifier).updateIndicator(
           widget.paneIndex,
           widget.indicatorId,
-          period: nextPeriod.clamp(1, 999),
+          // CPR and Trend Checker have no length input — keep the period.
+          period: (cfg.kind.toLowerCase() == 'cpr' ||
+                  cfg.kind.toLowerCase() == 'tcheck')
+              ? cfg.period
+              : nextPeriod.clamp(1, 999),
           color: _color,
           thickness: _thickness,
-          params: Map<String, num>.from(_values),
+          params: cfg.kind.toLowerCase() == 'tcheck'
+              ? _changedParams(cfg.kind)
+              : Map<String, num>.from(_values),
         );
     Navigator.of(context).pop();
+  }
+
+  // Only the values that differ from the schema defaults — the Trend Checker
+  // has ~300 settings, and a saved layout should not carry them all.
+  Map<String, num> _changedParams(String kind) {
+    final schema = schemaFor(kind);
+    if (schema == null) return Map<String, num>.from(_values);
+    final defaults = {for (final p in schema.params) p.key: p.defaultValue};
+    return {
+      for (final e in _values.entries)
+        if (defaults[e.key] != e.value) e.key: e.value,
+    };
   }
 
   void _delete() {
@@ -3704,10 +3730,15 @@ class _IndicatorSettingsDialogState
 
     final schema = schemaFor(cfg.kind);
     final params = schema?.params ?? const <IndicatorParam>[];
+    final isCpr = cfg.kind.toLowerCase() == 'cpr';
+    final isTc = cfg.kind.toLowerCase() == 'tcheck';
     final useGenericPeriod = schema == null &&
         _kKindsWithPeriod.contains(cfg.kind.toLowerCase());
-    final kindLabel = cfg.kind.toUpperCase();
-    final humanLabel = schema?.displayName ?? _humanKind(cfg.kind.toLowerCase());
+    final kindLabel =
+        isTc ? 'Trend Checker by GP' : cfg.kind.toUpperCase();
+    final humanLabel = isTc
+        ? 'CPR levels and moving averages'
+        : (schema?.displayName ?? _humanKind(cfg.kind.toLowerCase()));
     // Header value chip: single-param kinds (or legacy ones with a single
     // period) show the value next to the kind label; multi-param kinds drop
     // it to avoid the header becoming a parameter dump.
@@ -3721,7 +3752,7 @@ class _IndicatorSettingsDialogState
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 460),
+        constraints: BoxConstraints(maxWidth: isTc ? 640 : isCpr ? 580 : 460),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: surface,
@@ -3794,7 +3825,28 @@ class _IndicatorSettingsDialogState
 
               // Schema-driven param rows (or single generic Period row for
               // legacy kinds that aren't in the schema registry yet).
-              if (schema != null)
+              if (isCpr)
+                // 13 levels: scroll inside the dialog rather than overflow.
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(context).height * 0.6),
+                  child: SingleChildScrollView(
+                    child: _CprStyleSection(
+                      values: _values,
+                      onChanged: (k, v) => setState(() => _values[k] = v),
+                    ),
+                  ),
+                )
+              else if (isTc)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(context).height * 0.62),
+                  child: _TcSettings(
+                    values: _values,
+                    onChanged: (k, v) => setState(() => _values[k] = v),
+                  ),
+                )
+              else if (schema != null)
                 for (final p in params) ...[
                   _SettingsRow(
                     label: p.label,
@@ -3818,6 +3870,7 @@ class _IndicatorSettingsDialogState
                 ),
               ],
 
+              if (!isCpr && !isTc) ...[
               _SettingsRow(
                 label: 'Color',
                 description: 'Line color for this indicator',
@@ -3845,6 +3898,7 @@ class _IndicatorSettingsDialogState
                   onChanged: (v) => setState(() => _thickness = v),
                 ),
               ),
+              ],
 
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
@@ -3915,6 +3969,526 @@ String _fmtNum(num v, IndicatorParam? p) {
     return v.toStringAsFixed(1).replaceAll(RegExp(r'\.0$'), '');
   }
   return v.toInt().toString();
+}
+
+// CPR with Pivot Level Daily — TradingView-style Style section: one row per
+// level (visible, colour, plot type); tapping the colour opens the level's
+// colour, width, line style and price line under the row. Every value is a
+// numeric param (see kCprPlots in indicator_schema.dart).
+const List<String> _kCprPalette = [
+  '#F8AF85', '#9C50E4', '#91A9F1', '#6CAC6E', '#EB2D2D', '#FF0000', '#008000',
+  ..._kIndicatorPalette,
+];
+
+class _CprStyleSection extends StatefulWidget {
+  final Map<String, num> values;
+  final void Function(String key, num value) onChanged;
+  const _CprStyleSection({required this.values, required this.onChanged});
+
+  @override
+  State<_CprStyleSection> createState() => _CprStyleSectionState();
+}
+
+class _CprStyleSectionState extends State<_CprStyleSection> {
+  String? _open; // level whose style editor is expanded
+
+  num _v(String key, num def) => widget.values[key] ?? def;
+
+  static String _hex(num c) =>
+      '#${(c.toInt() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+
+  static int _fromHex(String hex) =>
+      int.parse(hex.replaceFirst('#', ''), radix: 16) & 0xFFFFFF;
+
+  @override
+  Widget build(BuildContext context) {
+    final divider = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SettingsRow(
+          label: kCprPrecisionParam.label,
+          description: kCprPrecisionParam.description,
+          control: _ParamDropdown(
+            param: kCprPrecisionParam,
+            value: _v('precision', kCprPrecisionParam.defaultValue),
+            onChanged: (v) => widget.onChanged('precision', v),
+          ),
+        ),
+        Divider(height: 1, color: divider, thickness: 1),
+        for (final p in kCprPlots) ...[
+          _row(context, p, accent),
+          if (_open == p.key) _editor(p, accent),
+        ],
+      ],
+    );
+  }
+
+  Widget _row(BuildContext context, CprPlotDef p, Color accent) {
+    final visible = _v('${p.key}V', p.visible ? 1 : 0) >= 1;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 20, 6),
+      child: Row(
+        children: [
+          Checkbox(
+            value: visible,
+            activeColor: accent,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onChanged: (v) =>
+                widget.onChanged('${p.key}V', (v ?? false) ? 1 : 0),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              p.title,
+              overflow: TextOverflow.ellipsis,
+              style: MyntWebTextStyles.body(context),
+            ),
+          ),
+          _ColorButton(
+            color: _hex(_v('${p.key}C', p.color)),
+            open: _open == p.key,
+            onTap: () => setState(() => _open = _open == p.key ? null : p.key),
+          ),
+          const SizedBox(width: 8),
+          _ParamDropdown(
+            param: kCprPlotTypeParam,
+            value: _v('${p.key}T', kCprDefaultPlotType),
+            onChanged: (v) => widget.onChanged('${p.key}T', v),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editor(CprPlotDef p, Color accent) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ColorPaletteRow(
+          selected: _hex(_v('${p.key}C', p.color)),
+          palette: _kCprPalette,
+          onPick: (hex) => widget.onChanged('${p.key}C', _fromHex(hex)),
+        ),
+        _SettingsRow(
+          label: 'Width',
+          description: 'Line or marker width',
+          control: _ThicknessSegmented(
+            value: _v('${p.key}W', kCprDefaultWidth).toInt().clamp(1, 4),
+            accent: accent,
+            onChanged: (v) => widget.onChanged('${p.key}W', v),
+          ),
+        ),
+        _SettingsRow(
+          label: kCprLineStyleParam.label,
+          description: kCprLineStyleParam.description,
+          control: _ParamDropdown(
+            param: kCprLineStyleParam,
+            value: _v('${p.key}S', kCprDefaultLineStyle),
+            onChanged: (v) => widget.onChanged('${p.key}S', v),
+          ),
+        ),
+        _SettingsRow(
+          label: 'Price line',
+          description: "Line across the chart at today's level",
+          control: _ParamSwitch(
+            value: _v('${p.key}P', 0) >= 1,
+            onChanged: (v) => widget.onChanged('${p.key}P', v ? 1 : 0),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// CPR Trend Checker settings — two tabs like the TradingView study: Inputs
+// (which CPR timeframes, five moving averages) and Style (every level, the
+// moving averages, the CPR bands, labels and output options). Every value is a
+// numeric param (see kTcLines in indicator_schema.dart); only changed values
+// are saved.
+class _TcSettings extends StatefulWidget {
+  final Map<String, num> values;
+  final void Function(String key, num value) onChanged;
+  const _TcSettings({required this.values, required this.onChanged});
+
+  @override
+  State<_TcSettings> createState() => _TcSettingsState();
+}
+
+class _TcSettingsState extends State<_TcSettings> {
+  int _tab = 0; // 0 = Inputs, 1 = Style
+  String? _open; // style editor open for this line / band / MA key
+
+  num _v(String key, num def) => widget.values[key] ?? def;
+  bool _on(String key, bool def) => _v(key, def ? 1 : 0) >= 1;
+
+  static String _hex(num c) =>
+      '#${(c.toInt() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  static int _fromHex(String hex) =>
+      int.parse(hex.replaceFirst('#', ''), radix: 16) & 0xFFFFFF;
+
+  @override
+  Widget build(BuildContext context) {
+    final divider = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+          child: Row(children: [
+            _tabButton('Inputs', 0, accent),
+            const SizedBox(width: 20),
+            _tabButton('Style', 1, accent),
+          ]),
+        ),
+        Divider(height: 1, color: divider, thickness: 1),
+        Flexible(
+          child: SingleChildScrollView(
+            child: _tab == 0 ? _inputs(accent) : _style(accent),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _tabButton(String label, int i, Color accent) {
+    final selected = _tab == i;
+    return InkWell(
+      onTap: () => setState(() => _tab = i),
+      child: Container(
+        padding: const EdgeInsets.only(bottom: 8, top: 4),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+                color: selected ? accent : Colors.transparent, width: 2),
+          ),
+        ),
+        child: Text(label,
+            style: MyntWebTextStyles.body(context,
+                fontWeight: selected ? MyntFonts.semiBold : MyntFonts.medium)),
+      ),
+    );
+  }
+
+  Widget _section(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
+        child: Text(text,
+            style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textSecondaryDark,
+                lightColor: MyntColors.textSecondary)),
+      );
+
+  Widget _check(String key, String label, bool def, Color accent) {
+    return InkWell(
+      onTap: () => widget.onChanged(key, _on(key, def) ? 0 : 1),
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Checkbox(
+            value: _on(key, def),
+            activeColor: accent,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onChanged: (v) => widget.onChanged(key, (v ?? false) ? 1 : 0),
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(label,
+                overflow: TextOverflow.ellipsis,
+                style: MyntWebTextStyles.body(context)),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // ── Inputs tab ───────────────────────────────────────────────────────────
+  Widget _inputs(Color accent) {
+    Widget group(String name, String on, String hl, String hlLabel) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 20, 0),
+          child: Row(children: [
+            SizedBox(width: 190, child: _check(on, name, on == 'dOn', accent)),
+            Expanded(child: _check(hl, hlLabel, hl == 'pdOn', accent)),
+          ]),
+        );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _section('CPR SETTINGS'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 20, 0),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: _check('auto', 'Auto Select CPR Timeframes', false, accent),
+          ),
+        ),
+        group('Daily CPR', 'dOn', 'pdOn', 'PDH / PDL'),
+        group('Weekly CPR', 'wOn', 'pwOn', 'PWH / PWL'),
+        group('Monthly CPR', 'mOn', 'pmOn', 'PMH / PML'),
+        _section('MOVING AVERAGES'),
+        for (var i = 1; i <= 5; i++) _maInputRow(i, accent),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  Widget _maInputRow(int i, Color accent) {
+    final colorKey = 'ma${i}C';
+    final colorHex = _hex(_v(colorKey, kTcMas[i - 1].color));
+    final open = _open == 'ma$i';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 3, 20, 3),
+          child: Row(children: [
+            SizedBox(
+              width: 82,
+              child: _check('ma${i}On', 'MA #$i', kTcMas[i - 1].on, accent),
+            ),
+            _ParamDropdown(
+              param: kTcMaTypeParam,
+              width: 84,
+              value: _v('ma${i}Type', 0),
+              onChanged: (v) => widget.onChanged('ma${i}Type', v),
+            ),
+            const SizedBox(width: 8),
+            _ParamDropdown(
+              param: kTcMaSourceParam,
+              width: 96,
+              value: _v('ma${i}Src', 0),
+              onChanged: (v) => widget.onChanged('ma${i}Src', v),
+            ),
+            const SizedBox(width: 8),
+            _ParamStepper(
+              value: _v('ma${i}Len', kTcMas[i - 1].len),
+              param: IndicatorParam(
+                  key: 'ma${i}Len', label: 'Length', description: '',
+                  defaultValue: kTcMas[i - 1].len, min: 1, max: 999),
+              onChanged: (v) => widget.onChanged('ma${i}Len', v),
+            ),
+            const Spacer(),
+            _ColorButton(
+              color: colorHex,
+              open: open,
+              onTap: () => setState(() => _open = open ? null : 'ma$i'),
+            ),
+          ]),
+        ),
+        if (open)
+          _ColorPaletteRow(
+            selected: colorHex,
+            palette: _kCprPalette,
+            onPick: (hex) => widget.onChanged(colorKey, _fromHex(hex)),
+          ),
+      ],
+    );
+  }
+
+  // ── Style tab ────────────────────────────────────────────────────────────
+  Widget _style(Color accent) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final l in kTcLines) ...[
+          if (l.key == 'pdh' || l.key == 'pwh' || l.key == 'pmh')
+            _section(l.group == 'd'
+                ? 'DAILY'
+                : l.group == 'w'
+                    ? 'WEEKLY'
+                    : 'MONTHLY'),
+          _lineRow(l, accent),
+        ],
+        _section('MOVING AVERAGES'),
+        for (var i = 1; i <= 5; i++) _maStyleRow(i, accent),
+        _section('CPR BANDS'),
+        for (final b in kTcBands) _bandRow(b, accent),
+        _section('GRAPHIC OBJECTS'),
+        _pad(_check('labelsOn', 'Pane labels', true, accent)),
+        _section('OUTPUT VALUES'),
+        _SettingsRow(
+          label: kCprPrecisionParam.label,
+          description: '',
+          control: _ParamDropdown(
+            param: kCprPrecisionParam,
+            value: _v('precision', 0),
+            onChanged: (v) => widget.onChanged('precision', v),
+          ),
+        ),
+        _pad(_check('axisOn', 'Labels on price scale', true, accent)),
+        _pad(_check('statusOn', 'Values in status line', true, accent)),
+        _section('INPUT VALUES'),
+        _pad(_check('inputsOn', 'Inputs in status line', true, accent)),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  Widget _pad(Widget w) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 20, 0),
+        child: Align(alignment: Alignment.centerLeft, child: w),
+      );
+
+  Widget _swatchRow({
+    required String visibleKey,
+    required String title,
+    required String colorKey,
+    required int defColor,
+    required String opacityKey,
+    required int defAlpha,
+    required String openKey,
+    required Color accent,
+    required List<Widget> editor,
+  }) {
+    final open = _open == openKey;
+    final hex = _hex(_v(colorKey, defColor));
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 2, 20, 2),
+          child: Row(children: [
+            Expanded(child: _check(visibleKey, title, true, accent)),
+            Opacity(
+              opacity: (_v(opacityKey, defAlpha) / 100).clamp(0.25, 1.0).toDouble(),
+              child: _ColorButton(
+                color: hex,
+                open: open,
+                onTap: () => setState(() => _open = open ? null : openKey),
+              ),
+            ),
+          ]),
+        ),
+        if (open) ...[
+          _ColorPaletteRow(
+            selected: hex,
+            palette: _kCprPalette,
+            onPick: (h) => widget.onChanged(colorKey, _fromHex(h)),
+          ),
+          _SettingsRow(
+            label: 'Opacity',
+            description: '0 hides the line itself; its value still shows',
+            control: _ParamStepper(
+              value: _v(opacityKey, defAlpha),
+              param: IndicatorParam(
+                  key: opacityKey, label: 'Opacity', description: '',
+                  defaultValue: defAlpha, min: 0, max: 100, step: 10),
+              onChanged: (v) => widget.onChanged(opacityKey, v),
+            ),
+          ),
+          ...editor,
+        ],
+      ],
+    );
+  }
+
+  Widget _lineRow(TcLineDef l, Color accent) {
+    return _swatchRow(
+      visibleKey: '${l.key}V',
+      title: l.title,
+      colorKey: '${l.key}C',
+      defColor: l.color,
+      opacityKey: '${l.key}O',
+      defAlpha: l.alpha,
+      openKey: l.key,
+      accent: accent,
+      editor: [
+        _SettingsRow(
+          label: 'Plot type',
+          description: 'How the level is drawn',
+          control: _ParamDropdown(
+            param: kCprPlotTypeParam,
+            value: _v('${l.key}T', kCprDefaultPlotType),
+            onChanged: (v) => widget.onChanged('${l.key}T', v),
+          ),
+        ),
+        _SettingsRow(
+          label: 'Width',
+          description: 'Line or marker width',
+          control: _ThicknessSegmented(
+            value: _v('${l.key}W', kTcDefaultWidth).toInt().clamp(1, 4),
+            accent: accent,
+            onChanged: (v) => widget.onChanged('${l.key}W', v),
+          ),
+        ),
+        _SettingsRow(
+          label: 'Line style',
+          description: 'For line and step types',
+          control: _ParamDropdown(
+            param: kCprLineStyleParam,
+            value: _v('${l.key}S', kCprDefaultLineStyle),
+            onChanged: (v) => widget.onChanged('${l.key}S', v),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _bandRow(TcBandDef b, Color accent) {
+    return _swatchRow(
+      visibleKey: '${b.key}V',
+      title: b.title,
+      colorKey: '${b.key}C',
+      defColor: b.color,
+      opacityKey: '${b.key}O',
+      defAlpha: b.alpha,
+      openKey: b.key,
+      accent: accent,
+      editor: const [],
+    );
+  }
+
+  Widget _maStyleRow(int i, Color accent) {
+    final colorKey = 'ma${i}C';
+    final open = _open == 'mas$i';
+    final hex = _hex(_v(colorKey, kTcMas[i - 1].color));
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 2, 20, 2),
+          child: Row(children: [
+            Expanded(child: _check('ma${i}On', 'MA #$i', kTcMas[i - 1].on, accent)),
+            _ColorButton(
+              color: hex,
+              open: open,
+              onTap: () => setState(() => _open = open ? null : 'mas$i'),
+            ),
+          ]),
+        ),
+        if (open) ...[
+          _ColorPaletteRow(
+            selected: hex,
+            palette: _kCprPalette,
+            onPick: (h) => widget.onChanged(colorKey, _fromHex(h)),
+          ),
+          _SettingsRow(
+            label: 'Width',
+            description: 'Line width',
+            control: _ThicknessSegmented(
+              value: _v('ma${i}W', kTcMaDefaultWidth).toInt().clamp(1, 4),
+              accent: accent,
+              onChanged: (v) => widget.onChanged('ma${i}W', v),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 class _SettingsRow extends StatelessWidget {
@@ -4123,10 +4697,12 @@ class _ParamDropdown extends StatelessWidget {
   final IndicatorParam param;
   final num value; // selected option index
   final ValueChanged<num> onChanged;
+  final double width;
   const _ParamDropdown({
     required this.param,
     required this.value,
     required this.onChanged,
+    this.width = 168,
   });
 
   @override
@@ -4179,7 +4755,7 @@ class _ParamDropdown extends StatelessWidget {
           ),
       ],
       child: Container(
-        width: 168,
+        width: width,
         height: 36,
         padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
         decoration: BoxDecoration(
@@ -4281,7 +4857,12 @@ class _ColorButton extends StatelessWidget {
 class _ColorPaletteRow extends StatelessWidget {
   final String selected;
   final ValueChanged<String> onPick;
-  const _ColorPaletteRow({required this.selected, required this.onPick});
+  final List<String> palette;
+  const _ColorPaletteRow({
+    required this.selected,
+    required this.onPick,
+    this.palette = _kIndicatorPalette,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -4291,7 +4872,7 @@ class _ColorPaletteRow extends StatelessWidget {
         spacing: 10,
         runSpacing: 10,
         children: [
-          for (final hex in _kIndicatorPalette)
+          for (final hex in palette)
             _SwatchTile(
               hex: hex,
               selected: hex.toLowerCase() == selected.toLowerCase(),

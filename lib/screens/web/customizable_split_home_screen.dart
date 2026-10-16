@@ -510,6 +510,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "scanner") {
+            _handleScannerTap();
           } else if (routeName == "instaOptions") {
             _handleInstaOptionsTap();
           } else if (routeName == "charts") {
@@ -597,6 +599,8 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "scanner") {
+            _handleScannerTap();
           } else if (routeName == "instaOptions") {
             _handleInstaOptionsTap();
           } else if (routeName == "charts") {
@@ -1298,15 +1302,25 @@ class _CustomizableSplitHomeScreenState
         subscriptionManager.refreshTickerSubscriptions(context);
       }
     });
-    portfolio.fetchHoldings(context, "");
+    // A reconnect through websocketProvider.reconnect() (tab return, network
+    // recovery) has already re-fetched holdings, order book and funds just
+    // before the socket came back; calling them again sent every one twice.
+    // Only skip when that happened moments ago — an internal auto-reconnect
+    // doesn't refresh, so this remains its only refresh.
+    final lastRefresh = ref.read(websocketProvider).lastDataRefreshAt;
+    final alreadyRefreshed = lastRefresh != null &&
+        DateTime.now().difference(lastRefresh) < const Duration(seconds: 10);
+    if (!alreadyRefreshed) {
+      portfolio.fetchHoldings(context, "");
 
-    // Refresh order book data
-    final orders = ref.read(orderProvider);
-    orders.fetchOrderBook(context, true); // websocCon = true since we're reconnecting
+      // Refresh order book data
+      final orders = ref.read(orderProvider);
+      orders.fetchOrderBook(context, true); // websocCon = true since we're reconnecting
 
-    // Refresh fund data
-    final fund = ref.read(fundProvider);
-    fund.fetchFunds(context);
+      // Refresh fund data
+      final fund = ref.read(fundProvider);
+      fund.fetchFunds(context);
+    }
 
     // Re-establish WebSocket subscriptions for active screens
     _updateSubscriptionManagerForPanels(forceRefresh: true);
@@ -1317,13 +1331,18 @@ class _CustomizableSplitHomeScreenState
 
   /// True when any panel currently shows the Scanner shell — the Scanner
   /// page renders full-width with no watchlist (same pattern as Scalper).
-  bool get _isScannerActive {
+  bool get _isScannerActive => _isPanelScreenActive(ScreenType.scanner);
+
+  /// Strategy Builder also renders full-width with no watchlist.
+  bool get _isStrategyBuilderActive => _isPanelScreenActive(ScreenType.strategyBuilder);
+
+  bool _isPanelScreenActive(ScreenType type) {
     for (final panel in _panels) {
-      if (panel.screenType == ScreenType.scanner) return true;
+      if (panel.screenType == type) return true;
       if (panel.screens.isNotEmpty &&
           panel.activeScreenIndex >= 0 &&
           panel.activeScreenIndex < panel.screens.length &&
-          panel.screens[panel.activeScreenIndex] == ScreenType.scanner) {
+          panel.screens[panel.activeScreenIndex] == type) {
         return true;
       }
     }
@@ -1358,6 +1377,16 @@ class _CustomizableSplitHomeScreenState
               initialExplainArgs: widget.initialExplainArgs,
             ),
           ),
+        ],
+      );
+    }
+
+    // Strategy Builder: full-width AppBar + builder, no watchlist (same as Scanner)
+    if (_isStrategyBuilderActive) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          const Expanded(child: StrategyBuilderPanelWeb()),
         ],
       );
     }

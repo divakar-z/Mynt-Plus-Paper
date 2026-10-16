@@ -89,6 +89,7 @@ import '../../../sharedWidget/no_data_found.dart';
 import '../../../sharedWidget/mynt_loader.dart';
 import '../../../utils/responsive_snackbar.dart';
 import 'pending_alert_detail_screen_web.dart';
+import '../market_watch/set_alert_web.dart' show showModifyAlertDialog;
 
 class PendingAlertWeb extends ConsumerStatefulWidget {
   const PendingAlertWeb({super.key});
@@ -1058,7 +1059,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     return textPainter.width;
   }
 
-  void _showAlertDetail(dynamic alert) {
+  void _showAlertDetail(dynamic alert, {bool focusValueOnOpen = false}) {
     // Only show detail sheet for pending alerts, not triggered ones
     if (alert is! BrokerMessage) {
       // Prevent double-click from opening sheet twice
@@ -1086,7 +1087,8 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
                 ),
               ],
             ),
-            child: PendingAlertDetailScreenWeb(alert: alert),
+            child: PendingAlertDetailScreenWeb(
+                alert: alert, focusValueOnOpen: focusValueOnOpen),
           );
         },
         position: shadcn.OverlayPosition.end,
@@ -1180,6 +1182,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // Modify button (pencil icon) — same order as GTT
+                      _buildModifyButton(alert),
+                      const SizedBox(width: 6),
                       // Cancel button (X icon)
                       _buildCancelButton(alert, uniqueId),
                       const SizedBox(width: 6),
@@ -1194,6 +1199,46 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // Build Modify button with pencil icon - matches GTT Modify button. Price
+  // alerts open the Set Alert dialog pre-filled; legacy % alerts fall back to
+  // the detail sheet's value field.
+  Widget _buildModifyButton(dynamic alert) {
+    return GestureDetector(
+      onTap: () {
+        if (alert is AlertPendingModel &&
+            (alert.aiT == "LTP_A" || alert.aiT == "LTP_B")) {
+          showModifyAlertDialog(context, ref, alert);
+        } else {
+          _showAlertDetail(alert, focusValueOnOpen: true);
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: resolveThemeColor(context,
+              dark: MyntColors.textWhite,
+              light: MyntColors.textWhite),
+          borderRadius: BorderRadius.circular(4),
+          boxShadow: [
+            BoxShadow(
+              color: resolveThemeColor(context,
+                  dark: Colors.transparent,
+                  light: Colors.grey),
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Icon(
+          Icons.edit_outlined,
+          size: 16,
+          color: resolveThemeColor(context,
+              dark: MyntColors.primaryDark, light: MyntColors.primary),
         ),
       ),
     );

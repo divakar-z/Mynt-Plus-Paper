@@ -25,6 +25,7 @@ import 'dart:html' as html;
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import '../market_watch/tv_chart/chart_iframe_guard.dart';
 import '../../../utils/overlay_manager.dart';
+import '../order/order_depth_panel_web.dart';
 
 
 /// Rejects a keystroke that would make a numeric field invalid, keeping the
@@ -423,6 +424,15 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
 
   @override
   Widget build(BuildContext context) {
+    // Market depth panel (Task #9168): view only on GTT, a tapped price has
+    // no single field to go to (trigger vs order price).
+    OrderDepthController.syncFrom(
+      context,
+      token: widget.gttOrderBook.token ?? "",
+      exch: widget.gttOrderBook.exch ?? "",
+      instname: widget.scripInfo.instname,
+      onPriceTap: null,
+    );
     final theme = ref.read(themeProvider);
     final internet = ref.watch(networkStateProvider);
     
@@ -561,6 +571,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     final closeNotifier = _ModifyGttDialogCloseNotifier.of(context);
 
     Widget headerContent = Container(
+      // Depth panel lines its header up with this row.
+      key: OrderDepthScope.of(context)?.anchorRowKey,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: theme.isDarkMode ? MyntColors.overlayBgDark : const Color(0xfffafbff),
@@ -624,6 +636,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
               ],
             ),
           ),
+          // Market depth toggle (Task #9168)
+          const OrderDepthToggle(padding: EdgeInsets.only(right: 6)),
           // Close button
           Material(
             color: Colors.transparent,
@@ -1631,10 +1645,59 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
   late Offset _position;
   bool _isDragging = false;
 
+  // Where the window is drawn (clamped) plus any drag since the last frame.
+  Offset _dragBase = Offset.zero;
+
+  late final OrderDepthController _depth;
+
   @override
   void initState() {
     super.initState();
     _position = widget.initialPosition;
+    _depth = OrderDepthController()..addListener(_onDepthChanged);
+  }
+
+  void _onDepthChanged() {
+    if (mounted) setState(() {});
+  }
+
+  // Same chart-iframe guard as the order window, for the depth panel.
+  Widget _guardChartIframes(Widget child) {
+    return PointerInterceptor(
+      child: MouseRegion(
+        cursor: SystemMouseCursors.basic,
+        // _disableAllChartIframes also resets the page cursor to the arrow
+        // on every move, which wiped the hand cursor on the depth rows. The
+        // panel only needs the chart iframes kept from taking the mouse.
+        onEnter: (_) {
+          ChartIframeGuard.acquire();
+          _blockChartIframesOnly();
+        },
+        onHover: (_) => _blockChartIframesOnly(),
+        onExit: (_) {
+          ChartIframeGuard.release();
+          _enableAllChartIframes();
+        },
+        child: Listener(
+          onPointerMove: (_) => _blockChartIframesOnly(),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  void _blockChartIframesOnly() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement &&
+            iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'none';
+        }
+      }
+    } catch (e) {
+      // DOM access can fail during teardown — ignore
+    }
   }
 
   // Directly disable all chart iframes and reset cursor (like chart's onExit)
@@ -1666,6 +1729,8 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
 
   @override
   void dispose() {
+    _depth.removeListener(_onDepthChanged);
+    _depth.dispose();
     ChartIframeGuard.release();
     _enableAllChartIframes();
     super.dispose();
@@ -1679,13 +1744,32 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
     // Constrain position to screen bounds
     const dialogWidth = 450.0;
     final dialogHeight = screenSize.height * 0.7;
-    final constrainedPosition = Offset(
-      _position.dx.clamp(0, screenSize.width - dialogWidth),
-      _position.dy.clamp(0, screenSize.height - dialogHeight),
+    // final constrainedPosition = Offset(
+    //   _position.dx.clamp(0, screenSize.width - dialogWidth),
+    //   _position.dy.clamp(0, screenSize.height - dialogHeight),
+    // );
+    // Market depth panel beside the window (Task #9168).
+    final depthPlacement = OrderDepthPlacement.of(
+      screenWidth: screenSize.width,
+      windowLeft: _position.dx.clamp(0, screenSize.width - dialogWidth),
+      windowWidth: dialogWidth,
+      showPanel: _depth.showing,
     );
+    final double top =
+        _position.dy.clamp(0, screenSize.height - dialogHeight);
+    final constrainedPosition = Offset(depthPlacement.windowLeft, top);
+    _dragBase = constrainedPosition;
 
     return Stack(
       children: [
+        if (depthPlacement.panelLeft != null)
+          Positioned(
+            left: depthPlacement.panelLeft,
+            // top: top,
+            // Level with the depth icon, not the window's top edge.
+            top: top + _depth.anchorOffset,
+            child: _guardChartIframes(OrderDepthDock(controller: _depth)),
+          ),
         // Actual dialog
         Positioned(
           left: constrainedPosition.dx,
@@ -1715,6 +1799,7 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
                     borderRadius: BorderRadius.circular(5),
                     color: theme.isDarkMode ? MyntColors.backgroundColorDark : MyntColors.backgroundColor,
                     child: Container(
+                      key: _depth.windowKey,
                       width: dialogWidth,
                       height: dialogHeight,
                       decoration: BoxDecoration(
@@ -1733,10 +1818,14 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
                           },
                           onPanUpdate: (details) {
                             setState(() {
-                              _position = Offset(
-                                _position.dx + details.delta.dx,
-                                _position.dy + details.delta.dy,
-                              );
+                              // _position = Offset(
+                              //   _position.dx + details.delta.dx,
+                              //   _position.dy + details.delta.dy,
+                              // );
+                              // Move from where the window is drawn, updated
+                              // per event (same as the Place Order shell).
+                              _dragBase = _dragBase + details.delta;
+                              _position = _dragBase;
                             });
                             widget.onPositionChanged(_position);
                           },
@@ -1746,9 +1835,12 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
                             });
                           },
                           isDragging: _isDragging,
-                          child: ModifyGttWeb(
-                            gttOrderBook: widget.gttOrderBook,
-                            scripInfo: widget.scripInfo,
+                          child: OrderDepthScope(
+                            controller: _depth,
+                            child: ModifyGttWeb(
+                              gttOrderBook: widget.gttOrderBook,
+                              scripInfo: widget.scripInfo,
+                            ),
                           ),
                         ),
                       ),

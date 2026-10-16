@@ -1779,20 +1779,25 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
   }
 
   /// Checks if the basket contains scripts from multiple exchanges
-  bool _hasMultipleExchanges(List scriptList) {
-    if (scriptList.isEmpty) return false;
-
-    // Extract all exchanges from the basket scripts
-    Set<String> exchanges = {};
-    for (var script in scriptList) {
-      if (script['exch'] != null) {
-        exchanges.add(script['exch'].toString());
-      }
-    }
-
-    // If there's more than one unique exchange, return true
-    return exchanges.length > 1;
-  }
+  // TC_263: mixed segments are allowed in one basket (vendor and Kite
+  // allow it; basket margin verified against the vendor on 12 Oct 2026 for
+  // NSE+NFO, BSE+NSE+BFO and NSE+NFO+MCX). Returning false removes the
+  // "only 1 segment" warning and the Place block. Old check kept below.
+  bool _hasMultipleExchanges(List scriptList) => false;
+  // bool _hasMultipleExchanges(List scriptList) {
+  //   if (scriptList.isEmpty) return false;
+// 
+  //   // Extract all exchanges from the basket scripts
+  //   Set<String> exchanges = {};
+  //   for (var script in scriptList) {
+  //     if (script['exch'] != null) {
+  //       exchanges.add(script['exch'].toString());
+  //     }
+  //   }
+// 
+  //   // If there's more than one unique exchange, return true
+  //   return exchanges.length > 1;
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -2030,6 +2035,13 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
   }
 
   Widget _buildMarginsSection(ThemesProvider theme, OrderProvider orderProv) {
+    // The basket margin API rejects some baskets (e.g. more than 20 rows);
+    // show "Not available" with its reason instead of a misleading 0.00.
+    final marginError = orderProv.bsktScripList.isNotEmpty &&
+            orderProv.bsktOrderMargin?.stat != null &&
+            orderProv.bsktOrderMargin!.stat != 'Ok'
+        ? (orderProv.bsktOrderMargin!.emsg ?? 'Margin not available')
+        : null;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -2048,16 +2060,21 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                orderProv.bsktScripList.isEmpty ||
-                        orderProv.bsktOrderMargin == null
-                    ? "0.00"
-                    : orderProv.bsktOrderMargin!.basketMargin.toIndianFormat(),
-                style: TextStyle(
-                  fontFamily: dyslexiaFontOr('Geist'),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: shadcn.Theme.of(context).colorScheme.foreground,
+              Tooltip(
+                message: marginError ?? "",
+                child: Text(
+                  marginError != null
+                      ? "Not available"
+                      : orderProv.bsktScripList.isEmpty ||
+                              orderProv.bsktOrderMargin == null
+                          ? "0.00"
+                          : orderProv.bsktOrderMargin!.basketMargin.toIndianFormat(),
+                  style: TextStyle(
+                    fontFamily: dyslexiaFontOr('Geist'),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: shadcn.Theme.of(context).colorScheme.foreground,
+                  ),
                 ),
               ),
             ],
@@ -2075,16 +2092,21 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                orderProv.bsktScripList.isEmpty ||
-                        orderProv.bsktOrderMargin == null
-                    ? "0.00"
-                    : orderProv.bsktOrderMargin!.postTradeMargin.toIndianFormat(),
-                style: TextStyle(
-                  fontFamily: dyslexiaFontOr('Geist'),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: shadcn.Theme.of(context).colorScheme.foreground,
+              Tooltip(
+                message: marginError ?? "",
+                child: Text(
+                  marginError != null
+                      ? "Not available"
+                      : orderProv.bsktScripList.isEmpty ||
+                              orderProv.bsktOrderMargin == null
+                          ? "0.00"
+                          : orderProv.bsktOrderMargin!.postTradeMargin.toIndianFormat(),
+                  style: TextStyle(
+                    fontFamily: dyslexiaFontOr('Geist'),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: shadcn.Theme.of(context).colorScheme.foreground,
+                  ),
                 ),
               ),
             ],
@@ -2667,6 +2689,15 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
               : basketStatus == 'placing'
                   ? null // Disable button while placing
                   : () async {
+                      // A basket may hold at most 20 orders; older baskets
+                      // can still have more.
+                      final extra = orderProv.bsktScripList.length -
+                          orderProv.basketMaxOrders;
+                      if (extra > 0) {
+                        showResponsiveWarning(context,
+                            "A basket can have up to ${orderProv.basketMaxOrders} orders. Delete $extra ${extra == 1 ? 'order' : 'orders'} to place.");
+                        return;
+                      }
                       await orderProv.placeBasketOrder(context,
                           navigateToOrderBook: false);
                     },
@@ -3222,7 +3253,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
                         padding: const EdgeInsets.only(top: 8),
                         child: TextWidget.paraText(
                           text:
-                              "${basket['curLength']} / ${basket['max']} items",
+                              "${basket['curLength']} / ${ref.read(orderProvider).basketMaxOrders} items",
                           theme: isDark,
                           textOverflow: TextOverflow.ellipsis,
                           maxLines: 1,

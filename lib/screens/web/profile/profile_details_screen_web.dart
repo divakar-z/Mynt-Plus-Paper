@@ -951,10 +951,11 @@ class _ProfileDetailsScreenWebState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.info_outline, color: warningIcon, size: 20),
               const SizedBox(width: 12),
-              Expanded(
+              Flexible(
                 child: Text(
                   'Esign Pending - Click here to complete',
                   style: MyntWebTextStyles.bodySmall(context,
@@ -962,12 +963,7 @@ class _ProfileDetailsScreenWebState
                       .copyWith(decoration: TextDecoration.none),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
+              const SizedBox(width: 16),
               Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -1136,11 +1132,9 @@ class _ProfileDetailsScreenWebState
           color: warningBg,
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
                 Icon(Icons.info_outline, color: warningIcon, size: 20),
                 const SizedBox(width: 12),
                 Flexible(
@@ -1151,12 +1145,7 @@ class _ProfileDetailsScreenWebState
                         .copyWith(decoration: TextDecoration.none),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
+                const SizedBox(width: 16),
                 esignLoading
                     ? SizedBox(
                         width: 20,
@@ -1229,8 +1218,6 @@ class _ProfileDetailsScreenWebState
                           ),
                         ),
                       ),
-              ],
-            ),
           ],
         ),
       ),

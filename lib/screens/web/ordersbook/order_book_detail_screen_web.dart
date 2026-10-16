@@ -1426,7 +1426,13 @@ class _OrderBookDetailScreenWebState
       isExit: false,
       token: orderData.token ?? '',
       transType: orderData.trantype == 'B' ? true : false,
-      prd: orderData.prd ?? orderData.sPrdtAli ?? 'CNC',
+      // TC_64.1: the place-order screen maps a passed prd only to
+      // Delivery/Intraday/MTF, so H/B repeated as Delivery. Leave prd empty for
+      // CO-BO so the screen reads the raw order, which maps H/B to CO - BO.
+      // prd: orderData.prd ?? orderData.sPrdtAli ?? 'CNC',
+      prd: (orderData.prd == 'H' || orderData.prd == 'B')
+          ? ''
+          : orderData.prd ?? orderData.sPrdtAli ?? 'CNC',
       lotSize: orderData.ls ?? '1',
       ltp: ltpValue,
       perChange: orderData.change ?? "0.00",

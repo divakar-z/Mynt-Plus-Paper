@@ -605,6 +605,51 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
   }
 
 
+  // ---------------- Order-window market depth (Task #9168) ----------------
+  //
+  // The order window's depth panel needs its own depth ("d") feed: the
+  // Overview's is a single slot (MarketWatchProvider.currentDepthSymbol) and
+  // taking it would stop the Overview. It holds the feed through the
+  // WebSocketProvider depth-owner registry, so:
+  // - a feed another owner (Overview, chart engine, Insta Options) already
+  //   holds is only read, and is never released while they still show it;
+  // - the panel keeps a feed alive when the Overview closes first, and the
+  //   registry sends "ud" only when the last owner lets go;
+  // - the registry re-sends every owned feed after a reconnect, which is what
+  //   the old _restoreDepthSubscription did for the panel's symbols.
+  // Several panels can show the same scrip (the ref-count below), but the
+  // registry sees one owner per scrip.
+  static const String _orderDepthOwner = 'order-depth';
+
+  /// "EXCH|TOKEN" -> number of open depth panels showing it.
+  final Map<String, int> _orderDepthRefs = {};
+
+  Set<String> get orderDepthSymbols => _orderDepthRefs.keys.toSet();
+
+  void acquireOrderDepth(String symbol, BuildContext context) {
+    if (symbol.isEmpty) return;
+    final count = (_orderDepthRefs[symbol] ?? 0) + 1;
+    _orderDepthRefs[symbol] = count;
+    if (count > 1) return;
+    ref.read(websocketProvider).acquireDepth(_orderDepthOwner, [symbol], context);
+  }
+
+  void releaseOrderDepth(String symbol) {
+    if (symbol.isEmpty || !_orderDepthRefs.containsKey(symbol)) return;
+    final count = _orderDepthRefs[symbol]! - 1;
+    if (count > 0) {
+      _orderDepthRefs[symbol] = count;
+      return;
+    }
+    _orderDepthRefs.remove(symbol);
+    try {
+      ref.read(websocketProvider).releaseDepth(
+          _orderDepthOwner, [symbol], _getValidContext());
+    } catch (e) {
+      log('WebSubscriptionManager: Error releasing order depth $symbol: $e');
+    }
+  }
+
   /// Initialize which subscription type each screen needs
   void _initializeSubscriptionTypes() {
     _screenSubscriptionTypes = {
@@ -1341,6 +1386,8 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       // closed page's strikes subscribed. [source] is still accepted.
       // Ticker header (positions) — always live.
       protectedSymbols.addAll(_tickerSubscriptions);
+      // Symbols shown in the order window's depth panel.
+      protectedSymbols.addAll(_orderDepthRefs.keys);
     } catch (e) {
       log('WebSubscriptionManager: Error collecting protected symbols: $e');
     }
@@ -1371,11 +1418,24 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     // Find tokens that can be unsubscribed (not protected). When the page is
     // being torn down, bypassProtection releases the depth feed unconditionally
     // (touchline protections don't apply to a depth "ud").
-    final tokensToUnsubscribe = bypassProtection
-        ? tokensToCheck.toSet()
-        : tokensToCheck.where((token) =>
-            !protectedSymbols.contains(token)
-          ).toSet();
+    // final tokensToUnsubscribe = bypassProtection
+    //     ? tokensToCheck.toSet()
+    //     : tokensToCheck.where((token) =>
+    //         !protectedSymbols.contains(token)
+    //       ).toSet();
+    // Except a depth feed the order window's panel is still showing: that one
+    // is kept, and the panel releases it when it closes.
+    final Set<String> tokensToUnsubscribe;
+    if (bypassProtection) {
+      final heldByOrderDepth = source == 'depth'
+          ? tokensToCheck.where(_orderDepthRefs.containsKey).toSet()
+          : <String>{};
+      tokensToUnsubscribe = tokensToCheck.difference(heldByOrderDepth);
+    } else {
+      tokensToUnsubscribe = tokensToCheck
+          .where((token) => !protectedSymbols.contains(token))
+          .toSet();
+    }
 
     if (tokensToUnsubscribe.isEmpty) {
       return;
