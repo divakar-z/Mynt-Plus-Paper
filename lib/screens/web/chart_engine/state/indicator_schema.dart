@@ -75,6 +75,7 @@ class IndicatorSchema {
 IndicatorSchema? schemaFor(String kind) {
   final k = kind.toLowerCase();
   if (k == 'cpr') return _kCprSchema;
+  if (k == 'tcheck') return _kTcSchema;
   return _kSchemas[k];
 }
 
@@ -825,5 +826,156 @@ final IndicatorSchema _kCprSchema = IndicatorSchema(
       IndicatorParam(key: '${p.key}P', label: '${p.title} price line',
           description: '', defaultValue: 0, isBool: true),
     ],
+  ],
+);
+
+// ── CPR Trend Checker (CPR + MAs) ───────────────────────────────────────────
+// Previous-day / week / month CPR levels with up to five moving averages. All
+// settings are numeric params the chart engine reads back (see the TC_* block
+// in chart-helpers.js — keys, defaults and option orders MUST match):
+//   inputs   auto dOn pdOn wOn pwOn mOn pmOn            switches 0/1
+//   a line   <key><V|C|O|W|S|T>   visible, colour 0xRRGGBB, opacity %, width,
+//                                 line style index, plot type index
+//   a band   <d|w|m>Band<V|C|O>
+//   an MA    ma<i>On / Type / Src / Len / C / W         (i = 1..5)
+//   output   labelsOn precision axisOn statusOn inputsOn
+// A saved indicator keeps only the values that differ from these defaults.
+class TcLineDef {
+  final String key;
+  final String title;
+  final String group; // 'd' | 'w' | 'm'
+  final int color;
+  final int alpha; // opacity %
+  const TcLineDef(this.key, this.title, this.group, this.color, this.alpha);
+}
+
+class TcBandDef {
+  final String key;
+  final String title;
+  final int color;
+  final int alpha;
+  const TcBandDef(this.key, this.title, this.color, this.alpha);
+}
+
+class TcMaDef {
+  final int len;
+  final int color;
+  final bool on;
+  const TcMaDef(this.len, this.color, this.on);
+}
+
+List<TcLineDef> _buildTcLines() {
+  const groups = [
+    ('d', 'pd', 'Daily', 'PDH', 'PDL', 0x2962FF, 0x0D3CFF),
+    ('w', 'pw', 'Weekly', 'PWH', 'PWL', 0xC41D9D, 0xC41D9D),
+    ('m', 'pm', 'Monthly', 'PMH', 'PML', 0xF58FD8, 0xF58FD8),
+  ];
+  final out = <TcLineDef>[];
+  for (final g in groups) {
+    final id = g.$1;
+    out.add(TcLineDef('${g.$2}h', g.$4, id, g.$7, 100));
+    out.add(TcLineDef('${g.$2}l', g.$5, id, g.$7, 100));
+    out.add(TcLineDef('${id}cpr', '${g.$3} CPR', id, g.$6, 50));
+    out.add(TcLineDef('${id}bc', '${g.$3} BC', id, g.$6, 0));
+    out.add(TcLineDef('${id}tc', '${g.$3} TC', id, g.$6, 0));
+    for (final n in [1, 2, 3, 4]) {
+      out.add(TcLineDef('${id}r$n', '${g.$3} R$n', id, 0x4CAF50, 100));
+      out.add(TcLineDef('${id}s$n', '${g.$3} S$n', id, 0xFF5252, 100));
+    }
+  }
+  return out;
+}
+
+final List<TcLineDef> kTcLines = _buildTcLines();
+
+const List<TcBandDef> kTcBands = [
+  TcBandDef('dBand', 'Daily CPR Band', 0x2962FF, 25),
+  TcBandDef('wBand', 'Weekly CPR Band', 0xC41D9D, 25),
+  TcBandDef('mBand', 'Monthly CPR Band', 0xF58FD8, 25),
+];
+
+const List<TcMaDef> kTcMas = [
+  TcMaDef(10, 0xF5BF00, true),
+  TcMaDef(20, 0x178A17, false),
+  TcMaDef(50, 0xFF2222, false),
+  TcMaDef(100, 0x1A0000, false),
+  TcMaDef(200, 0x1E7FFF, false),
+];
+
+const int kTcDefaultWidth = 1;
+const int kTcMaDefaultWidth = 2;
+
+const IndicatorParam kTcMaTypeParam = IndicatorParam(
+  key: 'Type', label: 'Type', description: '', defaultValue: 0,
+  options: [
+    IndicatorOption('SMA'), IndicatorOption('EMA'), IndicatorOption('WMA'),
+    IndicatorOption('RMA'), IndicatorOption('HMA'), IndicatorOption('VWMA'),
+  ],
+);
+
+const IndicatorParam kTcMaSourceParam = IndicatorParam(
+  key: 'Src', label: 'Source', description: '', defaultValue: 0,
+  options: [
+    IndicatorOption('Close'), IndicatorOption('Open'), IndicatorOption('High'),
+    IndicatorOption('Low'), IndicatorOption('HL2'), IndicatorOption('HLC3'),
+    IndicatorOption('OHLC4'),
+  ],
+);
+
+IndicatorParam _tcBool(String key, bool on) => IndicatorParam(
+    key: key, label: key, description: '', defaultValue: on ? 1 : 0,
+    isBool: true);
+
+final IndicatorSchema _kTcSchema = IndicatorSchema(
+  kind: 'tcheck',
+  displayName: 'Trend Checker by GP',
+  shortDescription:
+      'Previous day, week and month CPR levels with moving averages.',
+  params: [
+    _tcBool('auto', false),
+    _tcBool('dOn', true), _tcBool('pdOn', true),
+    _tcBool('wOn', false), _tcBool('pwOn', false),
+    _tcBool('mOn', false), _tcBool('pmOn', false),
+    for (final l in kTcLines) ...[
+      _tcBool('${l.key}V', true),
+      IndicatorParam(key: '${l.key}C', label: l.title, description: '',
+          defaultValue: l.color, min: 0, max: 0xFFFFFF),
+      IndicatorParam(key: '${l.key}O', label: l.title, description: '',
+          defaultValue: l.alpha, min: 0, max: 100, step: 10),
+      IndicatorParam(key: '${l.key}W', label: l.title, description: '',
+          defaultValue: kTcDefaultWidth, min: 1, max: 4),
+      IndicatorParam(key: '${l.key}S', label: l.title, description: '',
+          defaultValue: kCprDefaultLineStyle,
+          options: kCprLineStyleParam.options),
+      IndicatorParam(key: '${l.key}T', label: l.title, description: '',
+          defaultValue: kCprDefaultPlotType,
+          options: kCprPlotTypeParam.options),
+    ],
+    for (final b in kTcBands) ...[
+      _tcBool('${b.key}V', true),
+      IndicatorParam(key: '${b.key}C', label: b.title, description: '',
+          defaultValue: b.color, min: 0, max: 0xFFFFFF),
+      IndicatorParam(key: '${b.key}O', label: b.title, description: '',
+          defaultValue: b.alpha, min: 0, max: 100, step: 10),
+    ],
+    for (var i = 1; i <= 5; i++) ...[
+      _tcBool('ma${i}On', kTcMas[i - 1].on),
+      IndicatorParam(key: 'ma${i}Type', label: 'Type', description: '',
+          defaultValue: 0, options: kTcMaTypeParam.options),
+      IndicatorParam(key: 'ma${i}Src', label: 'Source', description: '',
+          defaultValue: 0, options: kTcMaSourceParam.options),
+      IndicatorParam(key: 'ma${i}Len', label: 'Length', description: '',
+          defaultValue: kTcMas[i - 1].len, min: 1, max: 999),
+      IndicatorParam(key: 'ma${i}C', label: 'Colour', description: '',
+          defaultValue: kTcMas[i - 1].color, min: 0, max: 0xFFFFFF),
+      IndicatorParam(key: 'ma${i}W', label: 'Width', description: '',
+          defaultValue: kTcMaDefaultWidth, min: 1, max: 4),
+    ],
+    _tcBool('labelsOn', true),
+    IndicatorParam(key: 'precision', label: 'Precision', description: '',
+        defaultValue: 0, options: kCprPrecisionParam.options),
+    _tcBool('axisOn', true),
+    _tcBool('statusOn', true),
+    _tcBool('inputsOn', true),
   ],
 );

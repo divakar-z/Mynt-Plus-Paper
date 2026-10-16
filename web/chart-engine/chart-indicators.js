@@ -1237,6 +1237,11 @@ class _ChartIndicatorsMixin {
               firstAbs, firstAbs + visible.length - 1);
           continue;
         }
+        if (ind.kind === 'tcheck') {
+          this._drawTcheckIndicator(ind, plot, lo, hi, priceToY,
+              firstAbs, firstAbs + visible.length - 1);
+          continue;
+        }
         if (ind.kind === 'bb') {
           const bands = this._computeBB(ind);
           const drawSeries = (values, lineW) => {

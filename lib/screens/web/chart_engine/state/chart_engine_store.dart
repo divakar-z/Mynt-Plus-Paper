@@ -288,6 +288,7 @@ String defaultIndicatorColor(String kind) {
     case 'ad':       return '#10B981';
     case 'pivots':   return '#F59E0B';
     case 'cpr':      return '#F8AF85';
+    case 'tcheck':   return '#2962FF';
   }
   return '#3B82F6';
 }
@@ -341,6 +342,7 @@ int defaultIndicatorPeriod(String kind) {
     case 'ad':       return 0;
     case 'pivots':   return 0;
     case 'cpr':      return 0;
+    case 'tcheck':   return 0;
     default:         return 20;
   }
 }

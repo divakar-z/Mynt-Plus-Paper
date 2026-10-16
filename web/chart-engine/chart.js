@@ -266,6 +266,9 @@ class Chart {
     // _ensureCprDaily in chart-overlays.js).
     this._cprDaily = null;            // { key, day, stamp, bars }
     this._cprCache = null;
+    this._tcCache = null;             // Trend Checker level series
+    this._tcMaCache = null;           // Trend Checker moving averages
+    this._pendingCprDailyDays = 0;
     this._pendingCprDailyId = null;
     this._pendingCprDailyKey = null;
     this._cprDailyRetryKey = null;
@@ -4084,6 +4087,7 @@ class Chart {
   _indicatorParamsLabel(ind) {
     // CPR's params are its per-line style settings, not inputs.
     if (ind.kind === 'cpr') return '';
+    if (ind.kind === 'tcheck') return this._tcInputsLabel(ind);
     const parts = [];
     const p = ind.params || {};
     for (const key of Object.keys(p)) {
@@ -4103,6 +4107,7 @@ class Chart {
   _indicatorLastValues(ind) {
     // CPR: every visible level at the newest bar (TradingView's status line).
     if (ind.kind === 'cpr') return this._cprLegendValues(ind);
+    if (ind.kind === 'tcheck') return this._tcLegendValues(ind);
     if (ind.kind !== 'ichi' || !this.candles.length) return null;
     const ic = this._computeIchimoku(ind);
     const i = this.candles.length - 1;
@@ -4230,7 +4235,7 @@ class Chart {
     ctx.font = '500 11px Geist, sans-serif';
 
     for (const ind of this._indicators) {
-      const kindLabel = (ind.kind || '').toUpperCase();
+      const kindLabel = ind.kind === 'tcheck' ? 'Trend Checker by GP' : (ind.kind || '').toUpperCase();
       const multi = this._indicatorLastValues(ind);
       // Multi-line indicators list their inputs (Ichimoku: 9 26 52 26), not
       // the single `period` the store gives every indicator.
@@ -4255,6 +4260,20 @@ class Chart {
       const paramsW = paramsLabel
           ? ctx.measureText(paramsLabel).width + sp
           : 0;
+      // A long list of values (Trend Checker has up to ~15) must not push the
+      // eye / settings / delete icons off the chart: trim the trailing values
+      // to fit and end with an ellipsis (the price scale still shows them all).
+      if (valSegs.length > 1) {
+        const segW = (seg) => ctx.measureText(seg.text).width + sp;
+        const room = (plot.right - plot.left) - 12 - rowPadX * 2 - dotSize - labelGap * 2 -
+            iconW * 3 - iconGap * 2 - kindW - paramsW;
+        let total = valSegs.reduce((w, seg) => w + segW(seg), 0);
+        if (total > room) {
+          const ell = { text: '…', color: textMuted };
+          while (valSegs.length > 1 && total + segW(ell) > room) total -= segW(valSegs.pop());
+          valSegs.push(ell);
+        }
+      }
       const valW = valSegs.reduce((w, seg) => w + ctx.measureText(seg.text).width + sp, 0);
       const labelW = kindW + paramsW + valW;
 
@@ -5235,7 +5254,13 @@ class Chart {
     if (!this.candles.length) return 0;
     let n = 0;
     for (const ind of this._indicators || []) {
-      if (ind.hidden || ind.kind !== 'ichi') continue;
+      if (ind.hidden) continue;
+      // Trend Checker's pane labels sit in empty room right of the newest bar.
+      if (ind.kind === 'tcheck') {
+        if (!((ind.params || {}).labelsOn < 1) && n < 8) n = 8;
+        continue;
+      }
+      if (ind.kind !== 'ichi') continue;
       const disp = Math.max(1, (+(ind.params || {}).displacement || 26) | 0);
       if (disp - 1 > n) n = disp - 1;
     }
