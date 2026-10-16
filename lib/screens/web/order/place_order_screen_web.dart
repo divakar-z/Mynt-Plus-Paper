@@ -1147,7 +1147,11 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
       // TC_321: Duplicate opens as "Basket", which skipped the block above,
       // so a duplicated Bracket row fell back to Cover (no Target, CO margin).
-      if (widget.isBasket == "Basket" && orderType == "CO - BO") {
+      // TC_64.1: Repeat (isBasket "") skipped it too, so a repeated BO opened
+      // with Cover ticked.
+      // if (widget.isBasket == "Basket" && orderType == "CO - BO") {
+      if ((widget.isBasket == "Basket" || widget.isBasket == "") &&
+          orderType == "CO - BO") {
         if (orderRawValue['prd'] == 'B') {
           _isCoverOrderEnabled = false;
           _isBracketOrderEnabled = true;
