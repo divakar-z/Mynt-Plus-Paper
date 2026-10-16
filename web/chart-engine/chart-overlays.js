@@ -678,17 +678,32 @@ class _ChartOverlaysMixin {
   // NSE's official close is not the last trade. Fetched once per symbol per
   // IST day through the normal history request (interval '1D'); the reply is
   // routed by its own request id in onHistoryResult.
+  // Calendar days of daily bars the active indicators need: CPR 60 (30 days of
+  // levels plus the day before), Trend Checker 160 (the previous full month and
+  // the weeks in it, with a partial month dropped at the start). 0 = none.
+  _levelsDailyDays() {
+    let need = 0;
+    for (const i of this._indicators) {
+      if (i.kind === 'cpr') need = Math.max(need, 60);
+      else if (i.kind === 'tcheck') need = Math.max(need, 160);
+    }
+    return need;
+  }
+
   _ensureCprDaily() {
-    if (!this.scrip || !this._indicators.some((i) => i.kind === 'cpr')) return;
+    if (!this.scrip) return;
+    const need = this._levelsDailyDays();
+    if (!need) return;
     const key = this.scrip.exch + '|' + this.scrip.token;
     const nowSec = Math.floor(Date.now() / 1000);
     const today = _cprIstDay(nowSec);
     const d = this._cprDaily;
-    if (d && d.key === key && d.day === today) return;
+    if (d && d.key === key && d.day === today && (d.days || 60) >= need) return;
     if (this._pendingCprDailyId && this._pendingCprDailyKey === key) return;
     if (this._cprDailyRetryKey === key && Date.now() < this._cprDailyRetryAt) return;
     this._pendingCprDailyId = _newRequestId();
     this._pendingCprDailyKey = key;
+    this._pendingCprDailyDays = need;
     this.requestHistory({
       requestId: this._pendingCprDailyId,
       exch: this.scrip.exch,
@@ -697,7 +712,7 @@ class _ChartOverlaysMixin {
       interval: '1D',
       // 30 days of levels need the trading day before the oldest of them —
       // 60 calendar days covers weekends and long holiday runs.
-      start: nowSec - 60 * 86400,
+      start: nowSec - need * 86400,
       end: nowSec,
       targetMinutes: 1440,
     });
@@ -711,8 +726,9 @@ class _ChartOverlaysMixin {
         ? candles.filter((c) => c && isFinite(c.ts) && isFinite(c.h) && isFinite(c.l) && isFinite(c.c))
         : [];
     this._cprDaily = { key, day: _cprIstDay(Math.floor(Date.now() / 1000)),
-        stamp: Date.now(), bars };
+        stamp: Date.now(), bars, days: this._pendingCprDailyDays || 60 };
     this._cprCache = null;
+    this._tcCache = null;
     this.scheduleRedraw();
   }
 
@@ -760,15 +776,16 @@ class _ChartOverlaysMixin {
   // candles, so autoscale keeps them on screen (TradingView's autoscale
   // includes study plots).
   _cprFitRange(visible, lo, hi) {
-    if (!visible.length || !this._indicators.some((i) => i.kind === 'cpr' && !i.hidden)) {
+    const uses = (i) => (i.kind === 'cpr' || i.kind === 'tcheck') && !i.hidden;
+    if (!visible.length || !this._indicators.some(uses)) {
       return { lo, hi };
     }
     const a = this.candles.indexOf(visible[0]);
     if (a < 0) return { lo, hi };
     const b = a + visible.length - 1;
     for (const ind of this._indicators) {
-      if (ind.kind !== 'cpr' || ind.hidden) continue;
-      const r = this._cprRange(ind, a, b);
+      if (!uses(ind)) continue;
+      const r = ind.kind === 'cpr' ? this._cprRange(ind, a, b) : this._tcRange(ind, a, b);
       if (r) { if (r.lo < lo) lo = r.lo; if (r.hi > hi) hi = r.hi; }
     }
     return { lo, hi };
@@ -981,6 +998,233 @@ class _ChartOverlaysMixin {
       }
     }
     ctx.restore();
+  }
+
+  // ── CPR Trend Checker (CPR + MAs) ───────────────────────────────────────
+  // Levels come from the previous day / week / month of the OFFICIAL daily
+  // bars (shared with the CPR indicator's fetch, see _ensureCprDaily). Lines
+  // are drawn one segment per period, so a level never joins the next
+  // period's. Moving averages run on the chart's own candles.
+
+  // Level series aligned to this.candles (the renko / rebinned stand-in while
+  // indicators draw). Cached until the bars or the daily data change.
+  _tcSeries() {
+    const bars = this.candles;
+    const d = this._cprDaily;
+    const scripKey = this.scrip ? this.scrip.exch + '|' + this.scrip.token : '';
+    const daily = (d && d.key === scripKey) ? d.bars : null;
+    const key = bars.length + '|' + (bars.length ? bars[0].ts + ':' + bars[bars.length - 1].ts : '')
+        + '|' + (daily ? d.stamp : 0);
+    const c = this._tcCache;
+    if (c && c.key === key && c.bars === bars) return c.series;
+    const series = computeTcSeries(bars, daily);
+    this._tcCache = { key, bars, series };
+    return series;
+  }
+
+  // Moving averages of one indicator, cached per settings and bar set.
+  _tcMaSeries(ind) {
+    const bars = this.candles;
+    const out = [];
+    if (!bars.length) return out;
+    const last = bars[bars.length - 1];
+    this._tcMaCache = this._tcMaCache || {};
+    for (let i = 1; i <= 5; i++) {
+      const cfg = tcMaConfig(ind.params, i);
+      if (!cfg.on) continue;
+      const typeIdx = TC_MA_TYPES.indexOf(cfg.type), srcIdx = TC_MA_SOURCES.indexOf(cfg.src);
+      const key = ind.id + ':' + i + ':' + typeIdx + ':' + srcIdx + ':' + cfg.len + ':' +
+          bars.length + ':' + bars[0].ts + ':' + last.ts + ':' + last.c + ':' + last.v;
+      let hit = this._tcMaCache[ind.id + ':' + i];
+      if (!hit || hit.key !== key) {
+        hit = { key, vals: tcMa(bars, typeIdx, srcIdx, cfg.len) };
+        this._tcMaCache[ind.id + ':' + i] = hit;
+      }
+      out.push({ i, cfg, vals: hit.vals });
+    }
+    return out;
+  }
+
+  // The level lines currently shown: group switch on AND the line's own
+  // visibility on, with the values series for each.
+  _tcShownLines(ind) {
+    const groups = tcActiveGroups(ind.params, this.timeframeMinutes);
+    const series = this._tcSeries();
+    const out = [];
+    for (const line of TC_LINES) {
+      const g = groups[line.group];
+      if (!(line.sw === 'hl' ? g.hl : g.cpr)) continue;
+      const st = tcLineStyle(ind.params, line);
+      if (!st.visible) continue;
+      out.push({ line, st, vals: series[line.group][line.field], seg: series[line.group].seg });
+    }
+    return out;
+  }
+
+  // Legend values at the newest bar, in the study's order: the levels, then
+  // the moving averages. A line whose own colour is fully transparent still
+  // shows its value (BC and TC are transparent by default).
+  _tcLegendValues(ind) {
+    const p = ind.params || {};
+    if (typeof p.statusOn === 'number' && p.statusOn < 1) return [];
+    if (!this.candles.length) return [];
+    const i = this.candles.length - 1;
+    const dp = cprDecimals(p);
+    const out = [];
+    for (const s of this._tcShownLines(ind)) {
+      const v = s.vals[i];
+      if (isFinite(v)) out.push({ v, color: s.st.color, dp });
+    }
+    for (const m of this._tcMaSeries(ind)) {
+      const v = m.vals[i];
+      if (isFinite(v)) out.push({ v, color: m.cfg.color, dp });
+    }
+    return out;
+  }
+
+  // The inputs shown beside the name when "inputs in status line" is on:
+  // each moving average that is switched on, e.g. "SMA 10".
+  _tcInputsLabel(ind) {
+    const p = ind.params || {};
+    if (typeof p.inputsOn === 'number' && p.inputsOn < 1) return '';
+    const parts = [];
+    for (let i = 1; i <= 5; i++) {
+      const c = tcMaConfig(p, i);
+      if (c.on) parts.push(c.type + ' ' + c.len);
+    }
+    return parts.join(' ');
+  }
+
+  // Min / max over candles [a..b] of everything shown, so autoscale keeps the
+  // levels and averages on screen (TradingView's autoscale includes them).
+  _tcRange(ind, a, b) {
+    let lo = Infinity, hi = -Infinity;
+    const eat = (vals) => {
+      for (let i = Math.max(0, a); i <= b && i < vals.length; i++) {
+        const v = vals[i];
+        if (!isFinite(v)) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    };
+    for (const s of this._tcShownLines(ind)) eat(s.vals);
+    for (const m of this._tcMaSeries(ind)) eat(m.vals);
+    return hi === -Infinity ? null : { lo, hi };
+  }
+
+  _drawTcheckIndicator(ind, plot, lo, hi, priceToY, firstAbs, lastAbs) {
+    this._ensureCprDaily();
+    const n = this.candles.length;
+    if (!n) return;
+    const p = ind.params || {};
+    const i0 = Math.max(0, firstAbs - 1);
+    const i1 = Math.min(n - 1, lastAbs + 1);
+    const dp = cprDecimals(p);
+    const ctx = this.ctx;
+    const X = (i) => this._candleXCenter(i, plot);
+    const baseY = Math.min(plot.bottom, Math.max(plot.top, priceToY(1)));
+    const series = this._tcSeries();
+    const groups = tcActiveGroups(p, this.timeframeMinutes);
+    const shown = this._tcShownLines(ind);
+    // One [start, end] candle range per period within the visible slice.
+    const segsOf = (seg) => {
+      const out = [];
+      let s = i0;
+      for (let i = i0 + 1; i <= i1 + 1; i++) {
+        if (i > i1 || seg[i] !== seg[s]) { out.push([s, i - 1]); s = i; }
+      }
+      return out;
+    };
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.left, plot.top, plot.right - plot.left, plot.bottom - plot.top);
+    ctx.clip();
+
+    // 1. CPR bands (BC..TC), one rectangle per period, under the lines.
+    for (const band of TC_BANDS) {
+      if (!groups[band.group].cpr) continue;
+      const bs = tcBandStyle(p, band);
+      if (!bs.visible || bs.alpha <= 0) continue;
+      const o = series[band.group];
+      ctx.fillStyle = bs.css;
+      for (const [a, z] of segsOf(o.seg)) {
+        const top = o.tc[a], bot = o.bc[a];
+        if (!isFinite(top) || !isFinite(bot)) continue;
+        const x0 = X(a) - this.view.cellW / 2, x1 = X(z) + this.view.cellW / 2;
+        const y0 = priceToY(Math.max(top, bot)), y1 = priceToY(Math.min(top, bot));
+        ctx.fillRect(x0, y0, x1 - x0, Math.max(1, y1 - y0));
+      }
+    }
+
+    // 2. Level lines, one segment per period. A fully transparent line draws
+    // nothing (its value still shows in the legend and on the price scale).
+    for (const s of shown) {
+      if (s.st.alpha <= 0) continue;
+      const st = Object.assign({}, s.st, { color: s.st.css });
+      for (const [a, z] of segsOf(s.seg)) {
+        if (!isFinite(s.vals[a])) continue;
+        this._drawCprPlot(s.vals, a, z, st, plot, priceToY, baseY);
+      }
+    }
+
+    // 3. Moving averages on top.
+    const mas = this._tcMaSeries(ind);
+    for (const m of mas) {
+      ctx.save();
+      ctx.strokeStyle = m.cfg.color;
+      ctx.lineWidth = m.cfg.width;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      let on = false;
+      for (let i = i0; i <= i1; i++) {
+        const v = m.vals[i];
+        if (!isFinite(v)) { on = false; continue; }
+        if (!on) { ctx.moveTo(X(i), priceToY(v)); on = true; } else ctx.lineTo(X(i), priceToY(v));
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 4. Pane labels just right of the newest bar (room is made by _futureBars).
+    if (!(typeof p.labelsOn === 'number' && p.labelsOn < 1)) {
+      ctx.font = '600 9px Geist, sans-serif';
+      ctx.textBaseline = 'middle';
+      // Room right of the newest bar exists only where the engine reserves it
+      // (_futureBars); otherwise the labels sit against the plot's right edge.
+      const room = typeof this._futureBars === 'function';
+      ctx.textAlign = room ? 'left' : 'right';
+      const lx = room ? X(n - 1) + this.view.cellW * 1.4 : plot.right - 4;
+      for (const s of shown) {
+        if (!s.line.label) continue;
+        const v = s.vals[n - 1];
+        if (!isFinite(v) || v < lo || v > hi) continue;
+        ctx.fillStyle = s.st.color;
+        ctx.fillText(s.line.label, lx, priceToY(v));
+      }
+    }
+    ctx.restore();
+
+    // 5. Price-scale labels, highest first and each pushed below the previous
+    // one so levels a few points apart stay in price order.
+    if (!(typeof p.axisOn === 'number' && p.axisOn < 1)) {
+      const chips = [];
+      for (const s of shown) {
+        const v = s.vals[n - 1];
+        if (isFinite(v)) chips.push({ v, color: s.st.color });
+      }
+      for (const m of mas) {
+        const v = m.vals[n - 1];
+        if (isFinite(v)) chips.push({ v, color: m.cfg.color });
+      }
+      chips.sort((a, b) => b.v - a.v);
+      let prevY = null;
+      for (const c of chips) {
+        let y = priceToY(c.v);
+        if (prevY != null && y < prevY + 18) y = prevY + 18;
+        const drawn = this._drawIndicatorAxisChip(plot, priceToY, c.v, c.color, dp, y);
+        if (drawn != null) prevY = drawn;
+      }
+    }
   }
 
   _drawKeyLevels(plot, lo, hi, priceToY) {
