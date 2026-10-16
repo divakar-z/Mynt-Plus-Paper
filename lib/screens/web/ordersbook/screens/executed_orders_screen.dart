@@ -159,7 +159,7 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
     'Type',        // 1 - BUY/SELL (trantype)
     'Instrument',  // 2
     'Product',     // 3
-    'Qty.',        // 4
+    'Qty',         // 4
     'LTP',         // 5
     'Avg. price',  // 6
     'Status',      // 7
@@ -282,7 +282,7 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
                               buildHeaderCell('Type', 1),
                               buildHeaderCell('Instrument', 2),
                               buildHeaderCell('Product', 3, true),
-                              buildHeaderCell('Qty.', 4, true),
+                              buildHeaderCell('Qty', 4, true),
                               buildHeaderCell('LTP', 5, true),
                               buildHeaderCell('Avg. price', 6, true),
                               buildHeaderCell('Status', 7, true),
