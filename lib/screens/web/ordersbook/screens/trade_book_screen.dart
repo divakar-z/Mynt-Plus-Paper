@@ -1081,7 +1081,18 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
 
       switch (_sortColumnIndex!) {
         case 0: // Trade ID
-          comparison = (a.flid ?? '').compareTo(b.flid ?? '');
+          // TC_42: fill IDs are numbers of varying length, so a text compare
+          // put "100045" before "9812". When both are all digits, the shorter
+          // one is the smaller number (no int parse, so long IDs stay exact on
+          // web); otherwise fall back to text.
+          // comparison = (a.flid ?? '').compareTo(b.flid ?? '');
+          final aId = (a.flid ?? '').trim().replaceFirst(RegExp(r'^0+(?=\d)'), '');
+          final bId = (b.flid ?? '').trim().replaceFirst(RegExp(r'^0+(?=\d)'), '');
+          final bothNumeric = RegExp(r'^\d+$').hasMatch(aId) &&
+              RegExp(r'^\d+$').hasMatch(bId);
+          comparison = bothNumeric && aId.length != bId.length
+              ? aId.length.compareTo(bId.length)
+              : aId.compareTo(bId);
           break;
         case 1: // Fill time
           comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
