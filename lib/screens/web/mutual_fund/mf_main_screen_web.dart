@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import '../../../../res/res.dart';
 import '../../../provider/thems.dart';
 import '../../../res/global_state_text.dart';
@@ -315,7 +315,7 @@ class _MfmainScreenWebState extends State<MfmainScreenWeb> {
                   //               //           contentPadding:
                   //               //               const EdgeInsets.all(0),
                   //               //           title: Text("Mutual Funds",
-                  //               //               style: GoogleFonts.inter(
+                  //               //               style: dysInter(
                   //               //                   textStyle: textStyle(
                   //               //                       const Color(0xffFEFDFD),
                   //               //                       22,
@@ -325,7 +325,7 @@ class _MfmainScreenWebState extends State<MfmainScreenWeb> {
                   //               //               const SizedBox(height: 6),
                   //               //               Text(
                   //               //                   "Invest in newly listed companies to grow wealth and diversify your portfolio.",
-                  //               //                   style: GoogleFonts.inter(
+                  //               //                   style: dysInter(
                   //               //                       textStyle: textStyle(
                   //               //                           const Color.fromARGB(
                   //               //                               255,
@@ -444,7 +444,7 @@ class _MfmainScreenWebState extends State<MfmainScreenWeb> {
   }
 
   TextStyle textStyle(Color color, double fontSize, fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle:
             TextStyle(fontWeight: fWeight, color: color, fontSize: fontSize));
   }

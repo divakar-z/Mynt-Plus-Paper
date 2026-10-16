@@ -5,6 +5,7 @@ import 'package:http/http.dart'
 import '../../locator/locator.dart';
 import '../../locator/preference.dart';
 import 'api_link.dart';
+import '../paper/paper_network_guard.dart';
 // import '../../global/preferences.dart';
 // import '../../locator/locator.dart';
 // import 'api_link.dart';
@@ -26,6 +27,11 @@ class _ConditionalTimeoutClient extends BaseClient {
 
   @override
   Future<StreamedResponse> send(BaseRequest request) async {
+    // Paper trading: never let an order / money request leave the device.
+    if (isPaperTrading && PaperNetworkGuard.isBlocked(request.url)) {
+      return PaperNetworkGuard.blockedResponse(request);
+    }
+
     final urlString = request.url.toString();
 
     final bool shouldApplyTimeout =

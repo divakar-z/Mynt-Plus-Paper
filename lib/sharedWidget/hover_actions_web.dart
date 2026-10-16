@@ -395,6 +395,10 @@ class HoverActionsWrapper extends StatefulWidget {
   final EdgeInsets? actionsPadding;
   final bool enabled;
 
+  /// Optional background painted behind the child while hovered. Pass null to
+  /// paint no hover background (e.g. when the row already has a selection color).
+  final Color? hoverBackgroundColor;
+
   const HoverActionsWrapper({
     super.key,
     required this.child,
@@ -402,6 +406,7 @@ class HoverActionsWrapper extends StatefulWidget {
     this.actionsAlignment = Alignment.centerRight,
     this.actionsPadding,
     this.enabled = true,
+    this.hoverBackgroundColor,
   });
 
   @override
@@ -420,23 +425,28 @@ class _HoverActionsWrapperState extends State<HoverActionsWrapper> {
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: Stack(
-        children: [
-          widget.child,
-          Positioned.fill(
-            child: Align(
-              alignment: widget.actionsAlignment,
-              child: Padding(
-                padding:
-                    widget.actionsPadding ?? const EdgeInsets.only(right: 8),
-                child: HoverActionsContainer(
-                  isVisible: _isHovered,
-                  actions: widget.actionsBuilder(context),
+      child: Container(
+        color: (_isHovered && widget.hoverBackgroundColor != null)
+            ? widget.hoverBackgroundColor
+            : null,
+        child: Stack(
+          children: [
+            widget.child,
+            Positioned.fill(
+              child: Align(
+                alignment: widget.actionsAlignment,
+                child: Padding(
+                  padding:
+                      widget.actionsPadding ?? const EdgeInsets.only(right: 8),
+                  child: HoverActionsContainer(
+                    isVisible: _isHovered,
+                    actions: widget.actionsBuilder(context),
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

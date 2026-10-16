@@ -7,6 +7,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../../../models/marketwatch_model/get_quotes.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/res.dart';
@@ -139,6 +140,14 @@ class _PositionCardWebState extends ConsumerState<_PositionCardWeb> {
   String get _option => widget.position.option?.toString() ?? "";
   String get _expDate => widget.position.expDate?.toString() ?? "";
   String get _netQty => widget.position.netqty?.toString() ?? "0";
+  // Same as the Positions page: MCX netqty is in units, shown as lots.
+  int get _displayQty {
+    final rawQty = int.tryParse(_netQty) ?? 0;
+    final lotSize = _exch == 'MCX'
+        ? (int.tryParse(widget.position.ls?.toString() ?? '1') ?? 1)
+        : 1;
+    return rawQty ~/ (lotSize == 0 ? 1 : lotSize);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -183,9 +192,12 @@ class _PositionCardWebState extends ConsumerState<_PositionCardWeb> {
                     try {
                       setState(() => _isNavigating = true);
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
-                        ref
-                            .read(marketWatchProvider)
-                            .setIsDepthVisibleWeb(false);
+                        // Depth visibility is managed by chart_with_depth_web.dart
+                        // (same as the watchlist row). Hiding it here closed depth
+                        // on a re-click of the same scrip with nothing to reopen it.
+                        // ref
+                        //     .read(marketWatchProvider)
+                        //     .setIsDepthVisibleWeb(false);
 
                         DepthInputArgs depthArgs = DepthInputArgs(
                           exch: _exch,
@@ -318,27 +330,49 @@ class _PositionCardWebState extends ConsumerState<_PositionCardWeb> {
                                                 light: MyntColors.textPrimary),
                                           ),
                                         ),
-                                      if (_netQty != "0" &&
-                                          _netQty.isNotEmpty) ...[
-                                        const SizedBox(width: 4),
-                                        SvgPicture.asset(
-                                          assets.suitcase,
-                                          height: 16,
-                                          width: 16,
-                                          color: resolveThemeColor(context,
-                                              dark: MyntColors.primaryDark,
-                                              light: MyntColors.primary
-                                                  .withOpacity(0.8)),
-                                        ),
+                                      // Was: holdings bag + raw netqty in blue — the bag read as a
+                                      // holding and MCX showed raw qty, not lots like the Positions page.
+                                      // if (_netQty != "0" &&
+                                      //     _netQty.isNotEmpty) ...[
+                                      //   const SizedBox(width: 4),
+                                      //   SvgPicture.asset(
+                                      //     assets.suitcase,
+                                      //     height: 16,
+                                      //     width: 16,
+                                      //     color: resolveThemeColor(context,
+                                      //         dark: MyntColors.primaryDark,
+                                      //         light: MyntColors.primary
+                                      //             .withOpacity(0.8)),
+                                      //   ),
+                                      //   const SizedBox(width: 4),
+                                      //   Text(
+                                      //     ref
+                                      //         .watch(privacyProvider)
+                                      //         .mask(_netQty),
+                                      //     style: MyntWebTextStyles.exch(
+                                      //       context,
+                                      //       fontWeight: FontWeight.w500,
+                                      //       color: resolveThemeColor(context,
+                                      //           dark: MyntColors.primaryDark,
+                                      //           light: MyntColors.primary),
+                                      //     ),
+                                      //   ),
+                                      // ],
+                                      // Signed qty, coloured and lot-adjusted exactly like the Positions
+                                      // page (position_table.dart _formatPositionQty): +N green, -N red.
+                                      if (_displayQty != 0) ...[
                                         const SizedBox(width: 4),
                                         Text(
-                                          _netQty,
+                                          ref.watch(privacyProvider).mask(
+                                              _displayQty > 0 ? '+$_displayQty' : '$_displayQty'),
                                           style: MyntWebTextStyles.exch(
                                             context,
                                             fontWeight: FontWeight.w500,
-                                            color: resolveThemeColor(context,
-                                                dark: MyntColors.primaryDark,
-                                                light: MyntColors.primary),
+                                            color: _displayQty > 0
+                                                ? resolveThemeColor(context,
+                                                    dark: MyntColors.profitDark, light: MyntColors.profit)
+                                                : resolveThemeColor(context,
+                                                    dark: MyntColors.lossDark, light: MyntColors.loss),
                                           ),
                                         ),
                                       ],

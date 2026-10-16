@@ -8,6 +8,7 @@ import 'package:syncfusion_flutter_charts/charts.dart';
 import '../../../../models/portfolio_model/group_pnl_chart_model.dart';
 import '../../../../provider/group_pnl_chart_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 
@@ -45,7 +46,7 @@ void showGroupPnlChartDialog(
   );
 }
 
-class _GroupPnlChartDialog extends ConsumerWidget {
+class _GroupPnlChartDialog extends ConsumerStatefulWidget {
   final String groupName;
   final List groupList;
 
@@ -55,7 +56,22 @@ class _GroupPnlChartDialog extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_GroupPnlChartDialog> createState() =>
+      _GroupPnlChartDialogState();
+}
+
+class _GroupPnlChartDialogState extends ConsumerState<_GroupPnlChartDialog> {
+  String get groupName => widget.groupName;
+  List get groupList => widget.groupList;
+
+  @override
+  void dispose() {
+    ref.read(groupPnlChartProvider).markDialogClosed();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final chartProv = ref.watch(groupPnlChartProvider);
     final portfolio = ref.watch(portfolioProvider);
 
@@ -192,7 +208,7 @@ class _GroupPnlChartDialog extends ConsumerWidget {
       child: Column(
         children: [
           // P&L summary row
-          _buildSummaryRow(context, data, label),
+          _buildSummaryRow(context, chartProv, data, label),
           const SizedBox(height: 12),
           // P&L Chart
           Expanded(
@@ -210,14 +226,19 @@ class _GroupPnlChartDialog extends ConsumerWidget {
     );
   }
 
-  Widget _buildSummaryRow(
-      BuildContext context, List<GroupPnlDataPoint> data, String label) {
+  Widget _buildSummaryRow(BuildContext context,
+      GroupPnlChartProvider chartProv, List<GroupPnlDataPoint> data, String label) {
     if (data.isEmpty) return const SizedBox.shrink();
-    final current = data.last.pnl;
-    final peak = data.last.peak;
-    final dd = data.last.drawdown;
+    // Privacy Mode: the stat chips are masked and colour neutralized (the
+    // curve itself stays; its axis labels and tooltip are hidden in the
+    // chart widgets below).
+    final privacy = ref.watch(privacyProvider);
+    final current = chartProv.currentPnl;
+    final peak = chartProv.peak;
+    final dd = chartProv.drawdown;
 
     Color pnlColor(double v) {
+      if (privacy.isPrivate) v = 0;
       if (v > 0) {
         return resolveThemeColor(context,
             dark: MyntColors.profitDark, light: MyntColors.profit);
@@ -233,17 +254,17 @@ class _GroupPnlChartDialog extends ConsumerWidget {
       children: [
         _SummaryItem(
             title: 'Current $label',
-            value: _numFmt.format(current),
+            value: privacy.mask(_numFmt.format(current)),
             color: pnlColor(current)),
         const SizedBox(width: 24),
         _SummaryItem(
             title: 'Peak',
-            value: _numFmt.format(peak),
+            value: privacy.mask(_numFmt.format(peak)),
             color: pnlColor(peak)),
         const SizedBox(width: 24),
         _SummaryItem(
             title: 'Drawdown',
-            value: _numFmt.format(dd),
+            value: privacy.mask(_numFmt.format(dd)),
             color: pnlColor(dd)),
       ],
     );
@@ -252,14 +273,17 @@ class _GroupPnlChartDialog extends ConsumerWidget {
 
 // ─── P&L Chart ──────────────────────────────────────────────
 
-class _PnlChart extends StatelessWidget {
+class _PnlChart extends ConsumerWidget {
   final List<GroupPnlDataPoint> data;
   final String label;
 
   const _PnlChart({required this.data, required this.label});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Privacy Mode: the curve stays but the rupee axis labels and the value
+    // tooltip are hidden.
+    final isPrivate = ref.watch(privacyProvider).isPrivate;
     final profitColor = resolveThemeColor(context,
         dark: MyntColors.profitDark, light: MyntColors.profit);
     final lossColor = resolveThemeColor(context,
@@ -302,7 +326,9 @@ class _PnlChart extends StatelessWidget {
       primaryYAxis: NumericAxis(
         majorGridLines: MajorGridLines(width: 0.5, color: gridColor),
         axisLine: const AxisLine(width: 0),
-        labelStyle: axisLabelStyle,
+        labelStyle: isPrivate
+            ? axisLabelStyle.copyWith(color: Colors.transparent)
+            : axisLabelStyle,
         numberFormat: _numFmt,
         minimum: rangeMin - padding,
         maximum: rangeMax + padding,
@@ -317,7 +343,7 @@ class _PnlChart extends StatelessWidget {
         ],
       ),
       tooltipBehavior: TooltipBehavior(
-        enable: true,
+        enable: !isPrivate,
         activationMode: ActivationMode.singleTap,
         shouldAlwaysShow: true,
         canShowMarker: true,
@@ -388,13 +414,16 @@ class _PnlChart extends StatelessWidget {
 
 // ─── Drawdown Chart ──────────────────────────────────────────
 
-class _DrawdownChart extends StatelessWidget {
+class _DrawdownChart extends ConsumerWidget {
   final List<GroupPnlDataPoint> data;
 
   const _DrawdownChart({required this.data});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Privacy Mode: the curve stays but the rupee axis labels and the value
+    // tooltip are hidden.
+    final isPrivate = ref.watch(privacyProvider).isPrivate;
     final lossColor = resolveThemeColor(context,
         dark: MyntColors.lossDark, light: MyntColors.loss);
     final gridColor = resolveThemeColor(context,
@@ -446,7 +475,9 @@ class _DrawdownChart extends StatelessWidget {
             primaryYAxis: NumericAxis(
               majorGridLines: MajorGridLines(width: 0.5, color: gridColor),
               axisLine: const AxisLine(width: 0),
-              labelStyle: axisLabelStyle,
+              labelStyle: isPrivate
+                  ? axisLabelStyle.copyWith(color: Colors.transparent)
+                  : axisLabelStyle,
               numberFormat: _numFmt,
               maximum: 0,
               minimum: yMin,
@@ -460,7 +491,7 @@ class _DrawdownChart extends StatelessWidget {
               ],
             ),
             tooltipBehavior: TooltipBehavior(
-              enable: true,
+              enable: !isPrivate,
               activationMode: ActivationMode.singleTap,
               shouldAlwaysShow: true,
               canShowMarker: true,

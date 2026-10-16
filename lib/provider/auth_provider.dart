@@ -20,6 +20,7 @@ import 'package:mynt_plus/provider/text_nugget_provider.dart';
 import 'package:mynt_plus/provider/mf_provider.dart';
 import 'package:mynt_plus/provider/option_flash_provider.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
+import 'package:mynt_plus/provider/scanner/custom_scans_provider.dart';
 import 'package:mynt_plus/provider/stocks_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
@@ -51,6 +52,7 @@ import '../sharedWidget/risk_disclosure_bottom_sheet.dart';
 import '../sharedWidget/snack_bar.dart';
 import '../utils/overlay_manager.dart';
 import '../utils/responsive_snackbar.dart';
+import 'api_key_provider.dart';
 import 'change_password_provider.dart';
 import 'core/default_change_notifier.dart';
 import 'fund_provider.dart';
@@ -947,6 +949,7 @@ class AuthProvider extends DefaultChangeNotifier {
     List<String>? jsonList = pref.loggedClient;
 
     if (jsonList != null) {
+      
       return jsonList
           .map((jsonString) => LoggedMobile.fromJson(jsonString))
           .toList();
@@ -956,7 +959,7 @@ class AuthProvider extends DefaultChangeNotifier {
   }
 
 // Fetching data from the api and stored in a variable
-  fetchLogout(BuildContext context) async {
+  fetchLogout(BuildContext context, {String? target}) async {
 
     try {
       // Call both logout APIs in parallel
@@ -975,6 +978,11 @@ class AuthProvider extends DefaultChangeNotifier {
         if (kIsWeb) {
           OverlayManager.closeAll();
         }
+
+        // The support session is osTicket's own, with a refresh token good for
+        // 30 days — it does not expire with the trading session, so it has to
+        // be torn down here or it outlives the logout.
+        api.clearSupportSession();
 
         // Cancel any active timers
         if (ConstantName.timer != null) {
@@ -1010,10 +1018,20 @@ class AuthProvider extends DefaultChangeNotifier {
         // Clear pending watchlists on logout
         ref.read(marketWatchProvider).clearPendingWatchlists();
 
+        // Drop the previous account's saved custom scans, open results and
+        // builder draft so they don't show up under the next login.
+        clearCustomScansOnLogout(ref);
+
         // Clear notification data on logout to prevent data leaking between users
         ref.read(notificationprovider).clearData();
 
         ref.read(optionFlashProvider).closePanel();
+
+        ref.read(ledgerProvider).clearOnLogout();
+
+        // Clear API key + TOTP state so the next logged-in user does not see
+        // the previous user's TOTP secret on opening the settings section.
+        ref.read(apikeyprovider).clearOnLogout();
 
         // Reset web auth provider state to ensure clean login on web
         if (kIsWeb) {
@@ -1044,7 +1062,7 @@ class AuthProvider extends DefaultChangeNotifier {
         if (currentRouteName != Routes.loginScreen) {
           // Use GoRouter for web, Navigator for mobile
           if (kIsWeb) {
-            context.go(WebRoutes.login);
+            context.go(target ?? WebRoutes.login);
           } else {
             Navigator.pushNamedAndRemoveUntil(
                 context, Routes.loginScreen, (route) => false);
@@ -1919,7 +1937,16 @@ class AuthProvider extends DefaultChangeNotifier {
                                       currentPath == WebRoutes.splash ||
                                       currentPath.isEmpty;
                 if (context.mounted && isOnAuthRoute) {
-                  context.go(WebRoutes.home);
+                  // If user arrived at /login via the OAuth redirect, the client_id
+                  // travels along in the URL. Read it off Uri.base and return there.
+                  final oauthClientId = Uri.base.queryParameters['client_id'];
+                  if (oauthClientId != null && oauthClientId.isNotEmpty) {
+                    context.go(
+                      '${WebRoutes.oauthAuthorize}?client_id=${Uri.encodeQueryComponent(oauthClientId)}',
+                    );
+                  } else {
+                    context.go(WebRoutes.home);
+                  }
                 }
               } else {
                 final targetRoute = getResponsiveWidth(context) == 600
@@ -2008,7 +2035,15 @@ class AuthProvider extends DefaultChangeNotifier {
                   ref.read(stocksProvide).fetchCAevents(),
                 ];
                 Future.wait(marketFutures); // Don't await - let it run in background
-                
+
+                // User detail carries the entitled exchanges (exarr); load it
+                // first, then fetch the derivative contract master for only those
+                // exchanges. One-time, resolves contract names across all screens.
+                Future.microtask(() async {
+                  await ref.read(userProfileProvider).fetchUserDetail(context);
+                  ref.read(marketWatchProvider).fetchDerivativeMaster();
+                });
+
                 // Batch 3: Order data (load in background)
                 // Only fetch order book on login — trade book and GTT are lazy-loaded when user opens those tabs
                 Future.microtask(() {
@@ -2029,13 +2064,13 @@ class AuthProvider extends DefaultChangeNotifier {
                 // }
                   ref.read(transcationProvider).fetchc(context);
                   ref.read(fundProvider).fetchFunds(context);
-                  ref.read(fundProvider).fetchPledgeDetails();
+                  // ref.read(fundProvider).fetchPledgeDetails();
                 });
                 
                 // Batch 6: Profile and other data (load in background)
+                // (fetchUserDetail moved up so exarr is ready for the master fetch)
                 Future.microtask(() {
                   ref.read(userProfileProvider).getProfileimage();
-                  ref.read(userProfileProvider).fetchUserDetail(context);
                   ref.read(ledgerProvider).setterfornullallSwitch = null;
                 });
                 
@@ -2109,7 +2144,16 @@ class AuthProvider extends DefaultChangeNotifier {
                                       currentPath == WebRoutes.splash ||
                                       currentPath.isEmpty;
                 if (context.mounted && isOnAuthRoute) {
-                  context.go(WebRoutes.home);
+                  // If user arrived at /login via the OAuth redirect, the client_id
+                  // travels along in the URL. Read it off Uri.base and return there.
+                  final oauthClientId = Uri.base.queryParameters['client_id'];
+                  if (oauthClientId != null && oauthClientId.isNotEmpty) {
+                    context.go(
+                      '${WebRoutes.oauthAuthorize}?client_id=${Uri.encodeQueryComponent(oauthClientId)}',
+                    );
+                  } else {
+                    context.go(WebRoutes.home);
+                  }
                 }
               } else {
                 getResponsiveWidth(context) == 600
@@ -2219,6 +2263,9 @@ class AuthProvider extends DefaultChangeNotifier {
     // Clear pending watchlists on logout (network failure scenario)
     ref.read(marketWatchProvider).clearPendingWatchlists();
 
+    // Saved custom scans are per-account — drop them with the session.
+    clearCustomScansOnLogout(ref);
+
     // Update UI state
     ref.read(indexListProvider).bottomMenu(0, context);
 
@@ -2254,11 +2301,7 @@ class AuthProvider extends DefaultChangeNotifier {
 
   setIposAPicalls(BuildContext context) async {
     // await ref.read(ipoProvide).getDashboardIpos();
-    await ref.read(ipoProvide).fetchAllOpenIpos(context);
-    await ref.read(ipoProvide).getUpcomingIpoModel();
-    await ref.read(ipoProvide).getipoperfomance(currentYear);
-    await ref.read(ipoProvide).mergemainsme();
-    await ref.read(ipoProvide).fetchIpoPreClose();
+    await ref.read(ipoProvide).loadIpoScreenData(context, currentYear);
   }
 
   setmfapicalls(context) async {
@@ -2322,7 +2365,7 @@ class AuthProvider extends DefaultChangeNotifier {
   }
 
 // This method calls and returns to the login screen whenever the client session expires.
-  ifSessionExpired(BuildContext context) {
+  ifSessionExpired(BuildContext context, {String? target}) {
     // Check if we're already in the process of showing the login screen
     // to prevent multiple calls to this method
     print('🔴 [SESSION] ifSessionExpired called — isSessionExpiring: ${ConstantName.isSessionExpiring}');
@@ -2359,6 +2402,9 @@ class AuthProvider extends DefaultChangeNotifier {
       // Clear pending watchlists on session expiry
       ref.read(marketWatchProvider).clearPendingWatchlists();
 
+      // Saved custom scans are per-account — drop them with the session.
+      clearCustomScansOnLogout(ref);
+
       // Prefill the login field for convenience
       loginMethCtrl.text = pref.clientId ?? "";
 
@@ -2392,7 +2438,7 @@ class AuthProvider extends DefaultChangeNotifier {
             // Use GoRouter for web, Navigator for mobile
             if (kIsWeb) {
               print('[SESSION] ✅ Navigating to login via context.go()');
-              context.go(WebRoutes.login);
+              context.go(target ?? WebRoutes.login);
               ResponsiveSnackBar.showWarning(
                   context, "Session Expired, Please log in again");
             } else {

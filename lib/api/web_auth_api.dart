@@ -43,30 +43,44 @@ class WebAuthApi {
       
       final inputType = _getInputType(mobileOrClientId);
       
+      // OAuth flow: the login URL carries the partner app key as ?client_id=...
+      // In that case the login is marked device=OAUTH and the app key is sent as
+      // `authid`, so the backend ties this login to that app key. Normal logins
+      // keep device=WEB and omit authid.
+      final oauthClientId = (Uri.base.queryParameters['client_id'] ?? '').trim();
+      final isOAuth = oauthClientId.isNotEmpty;
+
       Map<String, dynamic> data = {
-        'device': 'WEB', // Web-specific source
+        'device': isOAuth ? 'OAUTH' : 'WEB',
         inputType: mobileOrClientId.toUpperCase(),
         'password': password,
       };
+      if (isOAuth) {
+        data['authid'] = oauthClientId;
+      }
 
-      log("Web Login Request => $data");
-      
       final res = await http.post(
-        uri, 
-        headers: _defaultHeaders, 
+        uri,
+        headers: _defaultHeaders,
         body: jsonEncode(data),
       );
 
-      log("Web Login Response => ${res.body}");
 
       if (res.statusCode == 200) {
         final json = jsonDecode(res.body);
         final model = MobileLoginModel.fromJson(json as Map<String, dynamic>);
         // Show error if stat is not Ok - check both emsg and msg fields
         if (model.stat != 'Ok') {
-          final errorMessage = model.emsg ?? model.msg;
-          if (errorMessage != null && errorMessage.isNotEmpty) {
-            ResponsiveSnackBar.showError(context, errorMessage);
+          final rawError = model.emsg ?? model.msg;
+          if (rawError != null && rawError.isNotEmpty) {
+            // Override the verbose API wording ("Invalid Input : Wrong
+            // Password") with the standardized auth-module phrasing
+            // "Wrong Password, Please Try again" — matches the OTP/TOTP
+            // toast convention. Any other API error passes through as-is.
+            final toastMsg = rawError.toLowerCase().contains('wrong password')
+                ? 'Wrong Password, Please Try again'
+                : rawError;
+            ResponsiveSnackBar.showError(context, toastMsg);
           }
         }
         return model;
@@ -85,18 +99,22 @@ class WebAuthApi {
     required String mobileOrClientId,
     required String source,
     required BuildContext context,
+    bool isTotp = false,
   }) async {
     try {
       final uri = Uri.parse('$_loginBaseUrl/otp_send');
-      
+
       final inputType = _getInputType(mobileOrClientId);
-      
+
       Map<String, dynamic> data = {
         'device': source,
         inputType: mobileOrClientId.toUpperCase(),
+        // Flags the OTP request as part of the TOTP-setup flow so the backend
+        // can handle it accordingly. Only sent during TOTP setup; regular
+        // login OTP requests keep the original payload.
+        if (isTotp) 'is_totp': true,
       };
 
-      log("Send OTP Request => $data");
       
       final res = await http.post(
         uri, 
@@ -104,7 +122,6 @@ class WebAuthApi {
         body: jsonEncode(data),
       );
 
-      log("Send OTP Response => ${res.body}");
       
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
@@ -131,18 +148,26 @@ class WebAuthApi {
       
       final inputType = _getInputType(mobileOrClientId);
       
+      // OAuth flow: the login URL carries the partner app key as ?client_id=...
+      // In that case mark source=OAUTH and forward the app key as `authid`, same
+      // as MobileLogin. Normal OTP verifies keep the passed-in source, no authid.
+      final oauthClientId = (Uri.base.queryParameters['client_id'] ?? '').trim();
+      final isOAuth = oauthClientId.isNotEmpty;
+
       Map<String, dynamic> data = {
-        'source': source,
+        'source': isOAuth ? 'OAUTH' : source,
         'otp': otp,
         inputType: mobileOrClientId.toUpperCase(),
       };
-      
+      if (isOAuth) {
+        data['authid'] = oauthClientId;
+      }
+
       // Add log data if provided
       if (logData != null) {
         data['log'] = logData;
       }
 
-      log("Web OTP Verify Request => $data");
       
       final res = await http.post(
         uri, 
@@ -150,7 +175,6 @@ class WebAuthApi {
         body: jsonEncode(data),
       );
 
-      log("Web OTP Verify Response => ${res.body}");
 
       if (res.statusCode == 200) {
         final json = jsonDecode(res.body);
@@ -178,7 +202,6 @@ class WebAuthApi {
       
       final body = 'jData={"uid":"$clientId"}&jKey=$apiSession';
 
-      log("Get TOTP Key Request => $body");
       
       final res = await http.post(
         uri, 
@@ -186,15 +209,17 @@ class WebAuthApi {
         body: body,
       );
 
-      log("Get TOTP Key Response => ${res.body}");
       
       if (res.statusCode == 200) {
         final json = jsonDecode(res.body);
-        if (json['uid'] != null && json['pwd'] != null) {
-          return TotpData.fromJson(json as Map<String, dynamic>);
+        // Return TotpData even if pwd is empty so caller can detect
+        // the "no key generated yet" state and prompt the user to create one.
+        if (json is Map<String, dynamic>) {
+          return TotpData.fromJson(json);
         }
       }
     } catch (e) {
+      debugPrint("Failed to fetch TOTP. Please try again.");
     }
     return null;
   }
@@ -210,7 +235,6 @@ class WebAuthApi {
       
       final body = 'jData={"uid":"$clientId"}&jKey=$apiSession';
 
-      log("Gen TOTP Key Request => $body");
       
       final res = await http.post(
         uri, 
@@ -218,7 +242,6 @@ class WebAuthApi {
         body: body,
       );
 
-      log("Gen TOTP Key Response => ${res.body}");
       
       if (res.statusCode == 200) {
         final json = jsonDecode(res.body);
@@ -230,29 +253,54 @@ class WebAuthApi {
     return null;
   }
 
-  /// Get or Generate TOTP - Tries to get existing, generates new if not found
+  /// Fetch existing TOTP only
+  /// Returns TotpData (possibly with empty pwd) so UI can show a
+  /// "Generate New Key" button when no key exists yet.
   static Future<TotpData?> getOrGenerateTotp({
     required String clientId,
     required String apiSession,
     required BuildContext context,
   }) async {
-    // First try to get existing TOTP
-    TotpData? totpData = await getTotpSecretKey(
+    return getTotpSecretKey(
       clientId: clientId,
       apiSession: apiSession,
       context: context,
     );
-    
-    // If no existing TOTP, generate new one
-    if (totpData == null) {
-      totpData = await generateTotpSecretKey(
-        clientId: clientId,
-        apiSession: apiSession,
-        context: context,
+  }
+
+  /// Invalidate QR Session API
+  ///
+  /// Tells the backend to mark the given QR session UUID as abandoned so
+  /// that a subsequent mobile-side confirmation for the same UUID is
+  /// rejected. Called whenever the user moves away from an active QR
+  /// session — clicks Scan QR again (new UUID), clicks Reload icon, or
+  /// the app boots and finds a stale UUID left over from a previous
+  /// session (e.g., browser crash where beforeunload didn't fire).
+  ///
+  /// Best-effort: failures are swallowed silently because the next entry
+  /// (or backend's own session timeout) will eventually clean up.
+  static Future<void> invalidateQrSession({
+    required String uniqueId,
+  }) async {
+    try {
+      // Backend expects only { unique_id } in the body.
+      // Response shape: { "detail": "QR invalid" } on success.
+      // Endpoint URL is repointed to the local dev server during integration
+      // testing — update to prod URL before release.
+      final uri = Uri.parse('https://ws.mynt.in/login/QRInvalidate');
+
+      final data = {
+        'unique_id': uniqueId,
+      };
+
+      await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
       );
+    } catch (e) {
+      // Swallow — invalidate is best-effort, retried on next entry.
     }
-    
-    return totpData;
   }
 
   /// QR Login API - For QR code based login
@@ -271,7 +319,6 @@ class WebAuthApi {
         'imei': imei,
       };
 
-      log("QR Login Request => $data");
       
       final res = await http.post(
         uri, 
@@ -279,7 +326,6 @@ class WebAuthApi {
         body: jsonEncode(data),
       );
 
-      log("QR Login Response => ${res.body}");
       
       if (res.statusCode == 200) {
         final json = jsonDecode(res.body);
@@ -305,7 +351,6 @@ class WebAuthApi {
         'value': mobileOrClientId.toUpperCase(),
       };
 
-      log("Forgot Password Request => $data");
       
       final res = await http.post(
         uri, 
@@ -313,13 +358,87 @@ class WebAuthApi {
         body: jsonEncode(data),
       );
 
-      log("Forgot Password Response => ${res.body}");
       
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
       }
     } catch (e) {
       ResponsiveSnackBar.showError(context, "Failed to process request. Please try again.");
+    }
+    return null;
+  }
+
+  /// Forgot Password — Send OTP
+  ///
+  /// First half of the new OTP-gated forgot-password flow. Backend sends a
+  /// 4-digit OTP to the user's registered mobile/email for the given
+  /// identifier. Frontend should then show the OTP-entry screen and call
+  /// [forgetPasswordOtpVerify] once the user types the OTP.
+  ///
+  /// Known responses:
+  /// - { "msg": "otp sended" } — success
+  /// - { "msg": "No data found" } — identifier doesn't exist
+  /// - { "emsg": "Your mobile registered in multiple accounts, Please login
+  ///     with client ID", "stat": "Not_Ok" } — ambiguous mobile
+  /// - { "emsg": "Invalid field", "stat": "Not_Ok" } — bad field name
+  static Future<Map<String, dynamic>?> forgetPasswordOtpSend({
+    required String mobileOrClientId,
+  }) async {
+    try {
+      final uri = Uri.parse('$_loginBaseUrl/ForgetPasswordOtpSend');
+      final data = {
+        'field': _getInputType(mobileOrClientId),
+        'value': mobileOrClientId.toUpperCase(),
+      };
+      final res = await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Caller handles user-facing error toast.
+    }
+    return null;
+  }
+
+  /// Forgot Password — Verify OTP
+  ///
+  /// Second half of the new OTP-gated forgot-password flow. Backend
+  /// validates the OTP and, on success, internally runs the old
+  /// ForgetPassword behavior (generates and sends the temp password to the
+  /// user's registered mobile/email). Frontend then jumps straight to the
+  /// Change Password screen — no separate ForgetPassword call needed.
+  ///
+  /// Known error responses:
+  /// - { "emsg": "clientid not found" } — identifier mismatch
+  /// - { "emsg": "Invalid field", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP expired, Please request a new one", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP already used", "stat": "Not_Ok" }
+  /// - { "emsg": "OTP not valid" }
+  static Future<Map<String, dynamic>?> forgetPasswordOtpVerify({
+    required String mobileOrClientId,
+    required String otp,
+  }) async {
+    try {
+      final uri = Uri.parse('$_loginBaseUrl/ForgetPasswordOtpVerify');
+      final data = {
+        'field': _getInputType(mobileOrClientId),
+        'value': mobileOrClientId.toUpperCase(),
+        'otp': otp,
+      };
+      final res = await http.post(
+        uri,
+        headers: _defaultHeaders,
+        body: jsonEncode(data),
+      );
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Caller handles user-facing error toast.
     }
     return null;
   }
@@ -339,7 +458,6 @@ class WebAuthApi {
         'name': name,
       };
 
-      log("Create Webhook Request => $data");
 
       final res = await http.post(
         uri,
@@ -347,7 +465,6 @@ class WebAuthApi {
         body: jsonEncode(data),
       );
 
-      log("Create Webhook Response => ${res.body}");
 
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
@@ -373,7 +490,6 @@ class WebAuthApi {
         'token': token,
       };
 
-      log("List Webhooks Request => $data");
 
       final res = await http.post(
         uri,
@@ -381,7 +497,6 @@ class WebAuthApi {
         body: jsonEncode(data),
       );
 
-      log("List Webhooks Response => ${res.body}");
 
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
@@ -405,15 +520,11 @@ class WebAuthApi {
         'token': token,
       };
 
-      log("Enable Webhook Request => id: $webhookId, data: $data");
-
       final res = await http.post(
         uri,
         headers: _defaultHeaders,
         body: jsonEncode(data),
       );
-
-      log("Enable Webhook Response => ${res.body}");
 
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
@@ -437,15 +548,11 @@ class WebAuthApi {
         'token': token,
       };
 
-      log("Disable Webhook Request => id: $webhookId, data: $data");
-
       final res = await http.post(
         uri,
         headers: _defaultHeaders,
         body: jsonEncode(data),
       );
-
-      log("Disable Webhook Response => ${res.body}");
 
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
@@ -472,15 +579,11 @@ class WebAuthApi {
         'to_date': toDate,
       };
 
-      log("Webhook Logs Request => $data");
-
       final res = await http.post(
         uri,
         headers: _defaultHeaders,
         body: jsonEncode(data),
       );
-
-      log("Webhook Logs Response => ${res.body}");
 
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
@@ -500,15 +603,11 @@ class WebAuthApi {
       
       final body = 'jData={"uid":"$clientId"}&jKey=$apiSession';
 
-      log("Validate Session Request => $body");
-      
       final res = await http.post(
         uri, 
         headers: {'Content-Type': 'text/plain'}, 
         body: body,
       );
-
-      log("Validate Session Response => ${res.body}");
       
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
@@ -550,5 +649,5 @@ class TotpData {
     return '';
   }
 
-  bool get isValid => uid != null && pwd != null;
+  bool get isValid => uid != null && uid!.isNotEmpty && pwd != ""  && pwd!.isNotEmpty && pwd != null;
 }

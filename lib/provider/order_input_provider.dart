@@ -412,7 +412,7 @@ class OrderInputProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
-// Clear all text field value on Gtt order
+  /// Resets all GTT/OCO controllers and derived state to defaults.
   clearTextField() {
     _reMarksCtrl.clear();
     _ocoTrgPrcCtrl.clear();
@@ -427,11 +427,32 @@ class OrderInputProvider extends DefaultChangeNotifier {
     _GTTOCOPriceTypeOrderIsMarket = false;
     _GTTPriceTypeIsMarket = false;
     _GTTOCOPriceTypeIsMarket = false;
+    _disableGTTCond = false;
+    _ait = "LTP_B_O";
+    _actCond = "Less than";
+    _actAlert = "LTP";
+    _actPrcType = "Limit";
+    _prcType = "LMT";
+    _actOcoPrcType = "Limit";
+    _ocoPrcType = "LMT";
     notifyListeners();
   }
 
   disableCondGTT(bool val) {
     _disableGTTCond = val;
+    notifyListeners();
+  }
+
+  /// Clears the OCO leg-2 controllers and price-type state.
+  clearOcoFields() {
+    _val2Ctrl.clear();
+    _ocoQtyCtrl.clear();
+    _ocoPriceCtrl.clear();
+    _ocoTrgPrcCtrl.clear();
+    _GTTOCOPriceTypeOrderIsMarket = false;
+    _GTTOCOPriceTypeIsMarket = false;
+    _actOcoPrcType = "Limit";
+    _ocoPrcType = "LMT";
     notifyListeners();
   }
 
@@ -504,17 +525,19 @@ class OrderInputProvider extends DefaultChangeNotifier {
 
 // This method for retrieving information from the GTT order book to Modify the order
 
-  getModifyData(GttOrderBookModel gttOrderBook) {
+  /// Pre-fills the controllers from an existing GTT order for the modify dialog.
+  /// Pass [lotSize] for MCX so the qty field shows lot count.
+  getModifyData(GttOrderBookModel gttOrderBook, {int? lotSize}) {
     _reMarksCtrl.text = "${gttOrderBook.remarks}";
     if (gttOrderBook.placeOrderParams != null) {
       if (gttOrderBook.placeOrderParams!.prctyp == "LMT") {
-        _actPrcType = "Limit";
+        chngGTTPriceType("Limit");
       } else if (gttOrderBook.placeOrderParams!.prctyp == "MKT") {
-        _actPrcType = "Market";
+        chngGTTPriceType("Market");
       } else if (gttOrderBook.placeOrderParams!.prctyp == "SL-LMT") {
-        _actPrcType = "SL Limit";
+        chngGTTPriceType("SL Limit");
       } else {
-        _actPrcType = "SL MKT";
+        chngGTTPriceType("SL MKT");
       }
       if (gttOrderBook.placeOrderParams!.prd == "C") {
         _ordType = "C";
@@ -533,20 +556,25 @@ class OrderInputProvider extends DefaultChangeNotifier {
         _priceCtrl.text = "${gttOrderBook.placeOrderParams!.prc}";
         _GTTPriceTypeIsMarket = false;
       }
-      // _priceCtrl.text = "${gttOrderBook.placeOrderParams!.prc}";
-      _qtyCtrl.text = "${gttOrderBook.placeOrderParams!.qty}";
+      final bool isMcx = gttOrderBook.exch == "MCX";
+      if (isMcx && lotSize != null && lotSize > 0) {
+        final int storedQty = int.tryParse("${gttOrderBook.placeOrderParams!.qty}") ?? 0;
+        _qtyCtrl.text = (storedQty ~/ lotSize).toString();
+      } else {
+        _qtyCtrl.text = "${gttOrderBook.placeOrderParams!.qty}";
+      }
       _trgPrcCtrl.text = "${gttOrderBook.placeOrderParams!.trgprc}";
     }
     if (gttOrderBook.placeOrderParamsLeg2 != null) {
       disableCondGTT(true);
       if (gttOrderBook.placeOrderParamsLeg2!.prctyp == "LMT") {
-        _actOcoPrcType = "Limit";
+        chngOCOPriceType("Limit");
       } else if (gttOrderBook.placeOrderParamsLeg2!.prctyp == "MKT") {
-        _actOcoPrcType = "Market";
+        chngOCOPriceType("Market");
       } else if (gttOrderBook.placeOrderParamsLeg2!.prctyp == "SL-LMT") {
-        _actOcoPrcType = "SL Limit";
+        chngOCOPriceType("SL Limit");
       } else {
-        _actOcoPrcType = "SL MKT";
+        chngOCOPriceType("SL MKT");
       }
 
       if (gttOrderBook.placeOrderParamsLeg2!.prd == "C") {
@@ -566,8 +594,13 @@ class OrderInputProvider extends DefaultChangeNotifier {
         _ocoPriceCtrl.text = "${gttOrderBook.placeOrderParamsLeg2!.prc}";
         _GTTOCOPriceTypeIsMarket = false;
       }
-      // _ocoPriceCtrl.text = "${gttOrderBook.placeOrderParamsLeg2!.prc}";
-      _ocoQtyCtrl.text = "${gttOrderBook.placeOrderParamsLeg2!.qty}";
+      final bool isMcxOco = gttOrderBook.exch == "MCX";
+      if (isMcxOco && lotSize != null && lotSize > 0) {
+        final int storedOcoQty = int.tryParse("${gttOrderBook.placeOrderParamsLeg2!.qty}") ?? 0;
+        _ocoQtyCtrl.text = (storedOcoQty ~/ lotSize).toString();
+      } else {
+        _ocoQtyCtrl.text = "${gttOrderBook.placeOrderParamsLeg2!.qty}";
+      }
       _ocoTrgPrcCtrl.text = "${gttOrderBook.placeOrderParamsLeg2!.trgprc}";
     } else {
       disableCondGTT(false);
@@ -582,52 +615,52 @@ class OrderInputProvider extends DefaultChangeNotifier {
 
     _ait = gttOrderBook.aiT!;
     if (_ait == "LTP_B_O") {
-      _actAlert == "LTP";
-      _actCond == "Less than";
+      _actAlert = "LTP";
+      _actCond = "Less than";
     }
     if (_ait == "LTP_A_O") {
-      _actAlert == "LTP";
-      _actCond == "Greater than";
+      _actAlert = "LTP";
+      _actCond = "Greater than";
     }
     if (_ait == "CH_PER_B_O") {
-      _actAlert == "Perc. Change";
-      _actCond == "Less than";
+      _actAlert = "Perc. Change";
+      _actCond = "Less than";
     }
     if (_ait == "CH_PER_A_O") {
-      _actAlert == "Perc. Change";
-      _actCond == "Greater than";
+      _actAlert = "Perc. Change";
+      _actCond = "Greater than";
     }
     if (_ait == "ATP_B_O") {
-      _actAlert == "ATP";
-      _actCond == "Less than";
+      _actAlert = "ATP";
+      _actCond = "Less than";
     }
     if (_ait == "ATP_A_O") {
-      _actAlert == "ATP";
-      _actCond == "Greater than";
+      _actAlert = "ATP";
+      _actCond = "Greater than";
     }
     if (_ait == "OI_B_O") {
-      _actAlert == "OI";
-      _actCond == "Less than";
+      _actAlert = "OI";
+      _actCond = "Less than";
     }
     if (_ait == "OI_A_O") {
-      _actAlert == "OI";
-      _actCond == "Greater than";
+      _actAlert = "OI";
+      _actCond = "Greater than";
     }
     if (_ait == "TOI_B_O") {
-      _actAlert == "TOI";
-      _actCond == "Less than";
+      _actAlert = "TOI";
+      _actCond = "Less than";
     }
     if (_ait == "TOI_A_O") {
-      _actAlert == "TOI";
-      _actCond == "Greater than";
+      _actAlert = "TOI";
+      _actCond = "Greater than";
     }
     if (_ait == "VOLUME_B_O") {
-      _actAlert == "Volume";
-      _actCond == "Less than";
+      _actAlert = "Volume";
+      _actCond = "Less than";
     }
     if (_ait == "VOLUME_A_O") {
-      _actAlert == "Volume";
-      _actCond == "Greater than";
+      _actAlert = "Volume";
+      _actCond = "Greater than";
     }
     notifyListeners();
   }

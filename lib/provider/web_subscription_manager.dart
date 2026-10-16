@@ -110,14 +110,18 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     _setupWebSocketListener();
   }
 
-  /// Handle browser tab visibility changes (visibilitychange event)
-  /// This fires reliably on tab switch, unlike Flutter's AppLifecycleState on web
+  /// Handle browser tab visibility changes (visibilitychange event).
+  /// This fires reliably on tab switch, unlike Flutter's AppLifecycleState on web.
   void _onBrowserVisibilityChange(html.Event event) {
     final isVisible = html.document.visibilityState == 'visible';
 
     if (!isVisible) {
-      // Tab is being hidden - record the time
+      // Tab is being hidden — record time and pause the probe so it doesn't
+      // fire (or queue up) under browser timer-throttling. Probe restarts
+      // automatically when the state machine re-enters `connected` after
+      // the tab returns and triggers a reconnect.
       _tabHiddenTime = DateTime.now();
+      try { ref.read(websocketProvider).pauseProbe(); } catch (_) {}
       log('WebSubscriptionManager: Browser tab hidden');
       return;
     }
@@ -131,19 +135,19 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         ? DateTime.now().difference(_tabHiddenTime!)
         : Duration.zero;
 
-
     _tabHiddenTime = null;
 
-    // If tab was hidden long enough for the connection to go stale, force full restore
+    // If tab was hidden long enough for the connection to go stale, force full restore.
     if (wasHiddenFor >= _staleConnectionThreshold) {
       log('WebSubscriptionManager: Forcing reconnect after tab was hidden for ${wasHiddenFor.inSeconds}s');
-
       _forceReconnectAndResubscribe();
     } else {
-      // Short switch - just verify connection is alive and data is flowing
+      // Short switch — just verify connection is alive and resume probing.
       final wsProvider = ref.read(websocketProvider);
       if (!wsProvider.wsConnected) {
         _forceReconnectAndResubscribe();
+      } else {
+        wsProvider.resumeProbe();
       }
     }
   }
@@ -157,59 +161,44 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     if (!_isUserLoggedIn()) return;
 
     // Prevent duplicate calls (e.g., visibilitychange + AppLifecycleState both firing)
-    if (_isForceReconnecting) {
-      return;
-    }
+    if (_isForceReconnecting) return;
     _isForceReconnecting = true;
 
     final wsProvider = ref.read(websocketProvider);
     final context = _getValidContext();
 
     // Rebuild the master list from what's actually needed right now
-    // instead of using the accumulated list which may have stale symbols
+    // instead of using the accumulated list which may have stale symbols.
     final freshSymbols = _rebuildActiveSymbols();
-
-
-    // Replace master list with only what's currently needed
-    _activeSubscriptions.clear();
-    _activeSubscriptions.addAll(freshSymbols);
+    _activeSubscriptions
+      ..clear()
+      ..addAll(freshSymbols);
 
     // Clear ALL subscription tracking so nothing blocks re-sends:
-    // 1. WebSubscriptionManager's deduplication and per-screen tracking
+    //  1. WebSubscriptionManager dedup + per-screen tracking
     _currentWebSocketSubscriptions.clear();
     _screenSubscriptions.clear();
-    // 2. WebSocketProvider's _sentSubscriptions (this was blocking re-sends!)
+    //  2. WebSocketProvider's _sentSubscriptions
     wsProvider.clearSentSubscriptions();
 
-    // Suppress "Connection lost"/"Connected" toasts — this is an intentional reconnect
+    // Suppress "Connection lost"/"Connected" toasts. The flag is now cleared
+    // by WebSocketProvider._onEnterConnected when the reconnect actually
+    // succeeds (instead of the old 500 ms Future.delayed that fired before
+    // the connection completed and missed late toasts).
     wsProvider.setTabSwitchReconnect(true);
 
-    // Force close the existing connection even if another connection is in progress.
-    // force: true bypasses the "_connecting" guard that was preventing close.
-    // preserveData: true keeps _socketDatas and _ltpCache so UI doesn't flash 0.0
-    // while reconnecting — stale prices are better than showing 0.0 with wrong P&L.
+    // Force close. force=true bypasses the _connecting guard.
+    // preserveData=true keeps stale prices visible during the brief reconnect
+    // window — better than 0.00 flashes that would mislead traders.
     wsProvider.closeSocket(true, force: true, preserveData: true);
 
-    // Give it a moment to clean up, then reconnect
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _isForceReconnecting = false;
-      if (!_isUserLoggedIn()) return;
-
-      final stillConnected = ref.read(websocketProvider).wsConnected;
-      if (stillConnected) {
-        // Already reconnected (fast reconnect) - just re-send subscriptions
-        _sendAllSubscriptionsFromMasterList();
-      } else if (context != null) {
-        // Need to reconnect - the _handleWebSocketStateChange listener will
-        // pick up the reconnection and call _sendAllSubscriptionsFromMasterList
-        // because _activeSubscriptions (master list) is not empty
-        ref.read(websocketProvider).reconnect(context);
-      }
-
-      // Clear tab-switch flag after reconnection completes
-      ref.read(websocketProvider).setTabSwitchReconnect(false);
-
-    });
+    // No artificial delay before reconnect: the state machine's first-attempt
+    // backoff is already 200 ms, which serves the same "give close time to
+    // settle" purpose without an extra Future.delayed cascade.
+    if (context != null) {
+      wsProvider.reconnect(context);
+    }
+    _isForceReconnecting = false;
   }
 
   /// Rebuild the set of symbols actually needed right now from ALL sources.
@@ -311,71 +300,71 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
     }
   }
 
-  // Track if this is the first WebSocket connection (initial page load)
-  bool _isInitialConnection = true;
-
   // Pending subscription queue - subscriptions waiting for WebSocket to be ready
   final List<_PendingSubscription> _pendingSubscriptionQueue = [];
   Timer? _retryTimer;
   static const int _maxRetries = 3;
   static const Duration _retryDelay = Duration(milliseconds: 500);
 
-  /// Handle websocket connection state changes
+  /// Handle websocket connection state changes (fired on every notify
+  /// from WebSocketProvider — gated to the false→true edge so we only act
+  /// when a fresh connection becomes available).
+  ///
+  /// The old code distinguished "initial connection" from "reconnect" via a
+  /// one-shot `_isInitialConnection` flag. The state machine + clean master
+  /// list make that distinction unnecessary: an empty master list naturally
+  /// no-ops `_sendAllSubscriptionsFromMasterList`, and screens populate the
+  /// list as they fetch data and subscribe.
   void _handleWebSocketStateChange() {
     try {
       final wsProvider = ref.read(websocketProvider);
       final isNowConnected = wsProvider.wsConnected;
 
-      // Check if socket just connected (was disconnected, now connected)
       if (!_lastKnownWsConnected && isNowConnected) {
         log('WebSubscriptionManager: WebSocket connected');
 
         // Clear deduplication tracking (NOT the master list!)
         _currentWebSocketSubscriptions.clear();
 
-        // Process any pending subscriptions first
+        // Drain any pending subscriptions queued while the socket was down.
         if (_pendingSubscriptionQueue.isNotEmpty) {
           _processPendingSubscriptions();
         }
 
-        // Check if we have subscriptions to restore from master list
-        if (_activeSubscriptions.isNotEmpty && _isUserLoggedIn()) {
+        if (!_isUserLoggedIn()) {
+          _lastKnownWsConnected = isNowConnected;
+          return;
+        }
 
-          // Minimal delay to let connection stabilize, then restore
-          Future.delayed(const Duration(milliseconds: 100), () {
-            // Double-check socket is still connected before restoring
-            final stillConnected = ref.read(websocketProvider).wsConnected;
-            if (stillConnected) {
+        // Re-send the full master list. Microtask (vs old 100 ms Future.delayed)
+        // fires immediately after the current event-loop turn — same safety,
+        // no arbitrary delay.
+        if (_activeSubscriptions.isNotEmpty) {
+          Future.microtask(() {
+            if (ref.read(websocketProvider).wsConnected) {
               _sendAllSubscriptionsFromMasterList();
-            } else {
-              log('WebSubscriptionManager: Socket disconnected before restore, skipping');
             }
           });
-        } else if (_activeScreens.isNotEmpty && _isUserLoggedIn()) {
-          // No master list but have active screens
-          if (_isInitialConnection) {
-            // INITIAL LOAD: Don't try to restore immediately - data hasn't been fetched yet
-            // Screen handlers (e.g., _handleDashboardTap) will call _updateSubscriptionManagerForPanels
-            // after fetching data, which will properly subscribe with the fetched data.
-            log('WebSubscriptionManager: Initial connection - skipping immediate restore, screen handlers will subscribe after data fetch');
-
-            // Mark initial connection as complete
-            _isInitialConnection = false;
-          } else {
-            // RECONNECTION: Try to restore via screen-based method with longer delay
-            // to give time for any pending data refreshes
-            Future.delayed(const Duration(milliseconds: 500), () {
-              final stillConnected = ref.read(websocketProvider).wsConnected;
-              if (stillConnected) {
-                _restoreActiveSubscriptions();
-              }
-            });
-          }
-        } else if (_isUserLoggedIn()) {
-          // No subscriptions yet - screens will register and subscribe later
-          log('WebSubscriptionManager: No subscriptions to restore, waiting for screens to register');
-          _isInitialConnection = false;
+        } else if (_activeScreens.isNotEmpty) {
+          // No master list yet but screens are active — try the per-screen
+          // restore path. This covers the rare case where a reconnect happens
+          // before any screen has populated the master list.
+          Future.microtask(() {
+            if (ref.read(websocketProvider).wsConnected) {
+              _restoreActiveSubscriptions();
+            }
+          });
         }
+
+        // Depth ("d") bypasses the master list and is re-sent only as touchline
+        // above, so an active Overview depth feed would silently stay gone after
+        // a reconnect (the socket's sent-subscription tracking was cleared).
+        // Restore it explicitly from the currently-tracked depth symbol.
+        Future.microtask(() {
+          if (ref.read(websocketProvider).wsConnected) {
+            _restoreDepthSubscription();
+          }
+        });
       }
 
       _lastKnownWsConnected = isNowConnected;
@@ -538,7 +527,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final symbolString = newSymbols.join('#');
 
       wsProvider.connectTouchLine(
-        task: "d",
+        task: "t",
         input: symbolString,
         context: context,
       );
@@ -590,9 +579,9 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         final batchNum = (i ~/ batchSize) + 1;
 
 
-        // Send directly via websocket - using depth subscription for web
+        // Send directly via websocket - touchline for web (depth panel keeps its own "d")
         wsProvider.connectTouchLine(
-          task: "d",
+          task: "t",
           input: batchString,
           context: context,
         );
@@ -606,7 +595,107 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       log('WebSubscriptionManager: Error sending subscriptions from master list: $e');
     }
   }
-  
+
+  /// Re-send the depth ("d") subscription for the currently-active Overview
+  /// scrip after a reconnect. Depth bypasses the master list (it is owned by
+  /// MarketWatchProvider via subscribeToDepthData), so the touchline resend in
+  /// [_sendAllSubscriptionsFromMasterList] does not cover it. Driven by
+  /// currentDepthSymbol, which is null when no depth panel is open, so a closed
+  /// depth panel is never wrongly re-subscribed.
+  void _restoreDepthSubscription() {
+    try {
+      final depthSymbol = ref.read(marketWatchProvider).currentDepthSymbol;
+      // if (depthSymbol == null || depthSymbol.isEmpty) return;
+      // The order-window depth panel's feed needs restoring too, even when no
+      // Overview depth is open.
+      final symbols = <String>{
+        if (depthSymbol != null && depthSymbol.isNotEmpty) depthSymbol,
+        ..._orderDepthRefs.keys,
+      };
+      if (symbols.isEmpty) return;
+
+      final context = _getValidContext();
+      if (context == null) {
+        log('WebSubscriptionManager: No valid context to restore depth subscription');
+        return;
+      }
+
+      ref.read(websocketProvider).connectTouchLine(
+            task: "d",
+            input: symbols.join('#'),
+            context: context,
+          );
+      log('WebSubscriptionManager: Restored depth subscription for ${symbols.join(', ')}');
+    } catch (e) {
+      log('WebSubscriptionManager: Error restoring depth subscription: $e');
+    }
+  }
+
+  // ---------------- Order-window market depth (Task #9168) ----------------
+  //
+  // The order window's depth panel needs its own depth ("d") feed: the
+  // Overview's is a single slot (MarketWatchProvider.currentDepthSymbol) and
+  // taking it would stop the Overview. Rules:
+  // - Only a feed the panel started itself is ever released with "ud". If the
+  //   symbol already had depth (Overview, chart engine, ...) when the panel
+  //   opened, the panel just reads it and leaves it alone on close.
+  // - While the panel holds a symbol, nobody else's "ud" may release it (see
+  //   unsubscribeTokens); the panel takes over releasing it instead.
+  // - The panel's symbols are re-sent after a reconnect
+  //   (_restoreDepthSubscription).
+  // Calls go to connectTouchLine, not establishConnection, so the global
+  // ConstantName.lastSubscribeDepth used by other reconnect paths is not
+  // overwritten.
+
+  /// "EXCH|TOKEN" -> number of open depth panels showing it.
+  final Map<String, int> _orderDepthRefs = {};
+
+  /// Symbols whose depth feed the order-window panel is responsible for
+  /// releasing.
+  final Set<String> _orderDepthOwned = {};
+
+  Set<String> get orderDepthSymbols => _orderDepthRefs.keys.toSet();
+
+  void acquireOrderDepth(String symbol, BuildContext context) {
+    if (symbol.isEmpty) return;
+    final count = (_orderDepthRefs[symbol] ?? 0) + 1;
+    _orderDepthRefs[symbol] = count;
+    if (count > 1) return;
+
+    final ws = ref.read(websocketProvider);
+    if (ws.hasDepthSubscription(symbol)) {
+      // Someone else's feed: read it, never release it.
+      return;
+    }
+    _orderDepthOwned.add(symbol);
+    ws.connectTouchLine(task: "d", input: symbol, context: context);
+  }
+
+  void releaseOrderDepth(String symbol) {
+    if (symbol.isEmpty || !_orderDepthRefs.containsKey(symbol)) return;
+    final count = _orderDepthRefs[symbol]! - 1;
+    if (count > 0) {
+      _orderDepthRefs[symbol] = count;
+      return;
+    }
+    _orderDepthRefs.remove(symbol);
+    if (!_orderDepthOwned.remove(symbol)) return;
+
+    // The Overview may have opened the same scrip meanwhile; it shares this
+    // feed and releases it itself when it closes.
+    if (ref.read(marketWatchProvider).currentDepthSymbol == symbol) return;
+
+    final context = _getValidContext();
+    if (context == null) return;
+    try {
+      ref
+          .read(websocketProvider)
+          .connectTouchLine(task: "ud", input: symbol, context: context);
+    } catch (e) {
+      log('WebSubscriptionManager: Error releasing order depth $symbol: $e');
+    }
+  }
+
   /// Initialize which subscription type each screen needs
   void _initializeSubscriptionTypes() {
     _screenSubscriptionTypes = {
@@ -625,6 +714,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       ScreenType.optionChain: SubscriptionType.marketWatch,
       ScreenType.pledgeUnpledge: SubscriptionType.none,
       ScreenType.corporateActions: SubscriptionType.none,
+      ScreenType.caBuyback: SubscriptionType.none,
       ScreenType.reports: SubscriptionType.none,
       ScreenType.settings: SubscriptionType.none,
       ScreenType.tradeAction: SubscriptionType.marketWatch,
@@ -820,9 +910,9 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final wsProvider = ref.read(websocketProvider);
       final symbolString = newSymbols.join('#');
 
-      // Use connectTouchLine which properly tracks subscriptions - using depth for web
+      // Use connectTouchLine which properly tracks subscriptions - touchline for web
       wsProvider.connectTouchLine(
-        task: "d",
+        task: "t",
         input: symbolString,
         context: context,
       );
@@ -1108,7 +1198,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final symbolString = symbolsToSubscribe.join('#');
 
       wsProvider.connectTouchLine(
-        task: "d",
+        task: "t",
         input: symbolString,
         context: context,
       );
@@ -1254,9 +1344,9 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final wsProvider = ref.read(websocketProvider);
       final symbolString = symbolsToUnsubscribe.join('#');
 
-      // Use connectTouchLine with unsubscribe depth task for web
+      // Screens subscribe via touchline ("t"), so tear down with "u"
       wsProvider.connectTouchLine(
-        task: "ud", // Unsubscribe depth task
+        task: "u", // Unsubscribe touchline task
         input: symbolString,
         context: context,
       );
@@ -1358,7 +1448,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       try {
         final symbolString = symbolsToUnsubscribe.join('#');
         wsProvider.connectTouchLine(
-          task: "ud",
+          task: "u",
           input: symbolString,
           context: context,
         );
@@ -1378,7 +1468,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       try {
         final symbolString = symbolsToSubscribe.join('#');
         wsProvider.connectTouchLine(
-          task: "d",
+          task: "t",
           input: symbolString,
           context: context,
         );
@@ -1403,10 +1493,16 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
   /// Unsubscribe specific tokens (for option chain, futures symbol changes)
   /// This method checks for protected symbols before unsubscribing
   /// Protected symbols: watchlist, depth, holdings, positions, indices, other active screens
+  ///
+  /// [bypassProtection] skips the protected-symbol filter entirely. Used only by
+  /// the depth teardown when the whole single-stock page is disposed: the depth
+  /// ("d") feed is genuinely no longer displayed anywhere, and a depth "ud"
+  /// does NOT affect the touchline ("t") feed the watchlist/holdings still use.
   Future<void> unsubscribeTokens({
     required Set<String> tokensToCheck,
     required BuildContext context,
     String source = 'unknown',
+    bool bypassProtection = false,
   }) async {
     if (tokensToCheck.isEmpty) {
       return;
@@ -1488,13 +1584,38 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
         protectedSymbols.addAll(_tickerSubscriptions);
       }
 
+      // 10. Protect symbols shown in the order window's depth panel
+      protectedSymbols.addAll(_orderDepthRefs.keys);
+
     } catch (e) {
     }
 
-    // Find tokens that can be unsubscribed (not protected)
-    final tokensToUnsubscribe = tokensToCheck.where((token) =>
-      !protectedSymbols.contains(token)
-    ).toSet();
+    // Find tokens that can be unsubscribed (not protected). When the page is
+    // being torn down, bypassProtection releases the depth feed unconditionally
+    // (touchline protections don't apply to a depth "ud").
+    // final tokensToUnsubscribe = bypassProtection
+    //     ? tokensToCheck.toSet()
+    //     : tokensToCheck.where((token) =>
+    //         !protectedSymbols.contains(token)
+    //       ).toSet();
+    // Except a depth feed the order window's panel is still showing: that one
+    // is kept, and the panel releases it when it closes.
+    final Set<String> tokensToUnsubscribe;
+    if (bypassProtection) {
+      final heldByOrderDepth = source == 'depth'
+          ? tokensToCheck.where(_orderDepthRefs.containsKey).toSet()
+          : <String>{};
+      _orderDepthOwned.addAll(heldByOrderDepth);
+      tokensToUnsubscribe = tokensToCheck.difference(heldByOrderDepth);
+    } else {
+      tokensToUnsubscribe = tokensToCheck
+          .where((token) => !protectedSymbols.contains(token))
+          .toSet();
+      if (source == 'depth') {
+        _orderDepthOwned
+            .addAll(tokensToCheck.where(_orderDepthRefs.containsKey));
+      }
+    }
 
     if (tokensToUnsubscribe.isEmpty) {
       return;
@@ -1508,9 +1629,11 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
       final wsProvider = ref.read(websocketProvider);
       final symbolString = tokensToUnsubscribe.join('#');
 
-      // Use unsubscribe depth task for web
+      // Only the depth panel (source 'depth') subscribes via the depth feed
+      // ("d") and must be torn down with "ud". Every other web source now
+      // subscribes via touchline ("t"), so it unsubscribes with "u".
       wsProvider.connectTouchLine(
-        task: "ud",
+        task: source == 'depth' ? "ud" : "u",
         input: symbolString,
         context: context,
       );
@@ -1605,18 +1728,31 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
   
   void _handleNetworkChange(ConnectivityResult result) {
     log('WebSubscriptionManager: Network changed from $_lastNetworkStatus to $result');
-    
+
     final wasConnected = _lastNetworkStatus != ConnectivityResult.none;
     final isNowConnected = result != ConnectivityResult.none;
-    
+
     _lastNetworkStatus = result;
-    
-    // If network came back online and we have active screens, restore subscriptions
-    if (!wasConnected && isNowConnected && _activeScreens.isNotEmpty) {
-      if (_isUserLoggedIn()) {
-        log('WebSubscriptionManager: Network restored, restoring subscriptions');
-        _restoreActiveSubscriptions();
-      }
+
+    final wsProvider = ref.read(websocketProvider);
+
+    // NETWORK LOSS: mark socket as zombie so the state machine knows not to
+    // attempt reconnects until network returns. Previously the socket would
+    // sit in a "still connected" state with the underlying TCP dead until
+    // the (now-removed) ping path detected it ~30 s later.
+    if (wasConnected && !isNowConnected) {
+      log('WebSubscriptionManager: Network lost, marking socket zombie');
+      wsProvider.markZombie();
+      return;
+    }
+
+    // NETWORK RESTORE: force a fresh reconnect rather than just re-subscribing
+    // on the existing channel. The browser may report online before the channel
+    // actually recovers — sending subscribes on a zombie channel was the old
+    // failure mode.
+    if (!wasConnected && isNowConnected && _isUserLoggedIn()) {
+      log('WebSubscriptionManager: Network restored, forcing fresh reconnect');
+      _forceReconnectAndResubscribe();
     }
   }
   
@@ -1712,7 +1848,7 @@ class WebSubscriptionManager extends ChangeNotifier with WidgetsBindingObserver 
           log('WebSubscriptionManager: Unsubscribing from ${_currentWebSocketSubscriptions.length} symbols');
 
           wsProvider.connectTouchLine(
-            task: "ud", // Unsubscribe depth for web
+            task: "u", // Unsubscribe touchline for web
             input: symbolString,
             context: context,
           );

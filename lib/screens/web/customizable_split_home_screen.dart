@@ -28,12 +28,14 @@ import 'package:mynt_plus/screens/web/chart/inline_chart_portal.dart';
 import 'package:mynt_plus/screens/web/option_flash/option_flash_panel.dart';
 import 'package:mynt_plus/screens/web/ordersbook/order_book_screen_web.dart';
 import 'package:mynt_plus/screens/web/funds/secure_fund_web.dart';
+import 'package:mynt_plus/screens/web/paper/paper_unavailable_screen.dart';
 import 'package:mynt_plus/screens/web/profile/profile_main_screen.dart';
 import 'package:mynt_plus/screens/web/profile/trading_preferences_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/nominee_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/form_download_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/profile_details_screen_web.dart';
 import 'package:mynt_plus/screens/web/profile/profile_section_screen_web.dart';
+import 'package:mynt_plus/screens/web/insta_options/insta_options_shell.dart';
 import 'package:mynt_plus/screens/web/strategy_builder/strategy_builder_screen.dart';
 import 'package:mynt_plus/screens/web/webhook/webhook_tradingview_screen.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
@@ -46,9 +48,10 @@ import '../../../provider/market_watch_provider.dart';
 import '../../../provider/network_state_provider.dart';
 import '../../../provider/order_provider.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/user_profile_provider.dart';
-import '../../../provider/version_provider.dart';
+// import '../../../provider/version_provider.dart'; // mobile-only store check
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/webview_chart_provider.dart';
 import '../../../provider/iop_provider.dart';
@@ -57,14 +60,19 @@ import '../../../provider/ledger_provider.dart';
 import '../../../provider/stocks_provider.dart';
 import '../../../provider/mf_provider.dart';
 import '../../../provider/web_subscription_manager.dart';
-import '../../../provider/dashboard_provider.dart';
+// import '../../../provider/dashboard_provider.dart'; // unused since the
+// duplicate portfolio-analysis fetch moved out of _handlePortfolioAnalysisTap
+import 'sharedWidget/build_update_banner.dart';
 import 'profile/Reports/ca_events_screen_web.dart';
+import 'profile/Reports/corporate_actions/corporate_actions_screen_web.dart';
 import 'profile/Reports/client_master_screen_web.dart';
 import '../../../res/res.dart';
+import '../../../provider/accessibility_provider.dart';
 import '../../../provider/sidebar_provider.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../res/web_colors.dart';
 
+import '../../../sharedWidget/accessibility/accessibility_panel.dart';
 import '../../../sharedWidget/internet_widget.dart';
 import '../../../sharedWidget/functions.dart';
 import '../../../utils/responsive_snackbar.dart';
@@ -88,6 +96,8 @@ import 'market_watch/watchlist_screen_web.dart';
 import 'holdings/holding_screen_web.dart';
 import 'position/position_screen_web.dart';
 import 'dashboard_screen_web.dart';
+import 'all_strategies_screen_web.dart';
+import 'all_algo_strategies_screen_web.dart';
 import 'trade_action_screen_web.dart';
 import 'portfolio_analysis_web.dart';
 // import '../Mobile/order_book/order_book_screen.dart';
@@ -102,6 +112,9 @@ import '../../../utils/custom_navigator.dart';
 import '../../../routes/route_names.dart';
 import '../../../routes/web_router.dart';
 import '../../models/marketwatch_model/get_quotes.dart';
+import '../../models/scanner_model/scan_explain.dart' show ExplainKey;
+import 'scanner/scanner_shell_screen.dart';
+import 'orderflow/orderflow_shell_screen.dart';
 import 'market_watch/chart_with_depth_web.dart';
 // import 'market_watch/scrip_tabs_manager.dart';
 
@@ -109,9 +122,11 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../res/mynt_web_text_styles.dart';
 import 'market_watch/index/index_bottom_sheet_web.dart';
 import 'home/widgets/app_bar/profile_dropdown.dart';
+import 'home/widgets/portfolio_summary_ticker_strip.dart';
 import 'home/widgets/app_bar/navigation_drawer_web.dart';
 import '../../../res/responsive_extensions.dart';
 import 'scalper/scalper_screen_web.dart';
+import 'chart_engine/widgets/workspace/chart_workspace_screen.dart';
 import 'collection_basket/basketlist_dashboard_web.dart';
 import 'collection_basket/create_baskerscreen_web.dart' as basket_create;
 import 'collection_basket/collection_basket_builder.dart';
@@ -144,6 +159,24 @@ Future<void> toggleTickerVisibility() async {
   tickerVisibilityNotifier.value = newValue;
 }
 
+/// Global ValueNotifier for watchlist (market watch) panel visibility.
+/// Reactive updates across the app so the split layout collapses/expands live.
+final watchlistVisibilityNotifier = ValueNotifier<bool>(true);
+
+/// Initialize watchlist visibility from preferences
+void initWatchlistVisibility() {
+  final Preferences pref = locator<Preferences>();
+  watchlistVisibilityNotifier.value = pref.isWatchlistVisible;
+}
+
+/// Toggle watchlist visibility and save to preferences
+Future<void> toggleWatchlistVisibility() async {
+  final Preferences pref = locator<Preferences>();
+  final newValue = !watchlistVisibilityNotifier.value;
+  await pref.setWatchlistVisible(newValue);
+  watchlistVisibilityNotifier.value = newValue;
+}
+
 /// Screen type parameter enum - used for URL routing
 /// Maps to internal ScreenType enum
 enum ScreenTypeParam {
@@ -155,6 +188,13 @@ enum ScreenTypeParam {
   funds,
   mutualFund,
   ipo,
+  bond,
+  scalper,
+  myAccount,
+  refer,
+  helpSupport,
+  notification,
+  pledgeUnpledge,
   optionChain,
   reports,
   settings,
@@ -167,6 +207,27 @@ enum ScreenTypeParam {
   benchmarkBacktest,
   saveBasketStrategy,
   profileDetails,
+  caBuyback,
+  instaOptions,
+  scanner,
+  orderflow,
+  charts
+}
+
+/// Sub-page within the Scanner shell — drives the top tab bar + IndexedStack.
+/// Order MUST match the IndexedStack children list in ScannerShellScreen.
+enum ScannerSubPage {
+  // Legacy tabs — no longer surfaced in the top tab bar. Kept commented so
+  // they can be re-enabled if the old flows need to come back.
+  // symbols,
+  // scanners,
+  // fundamentals,
+  customScans,
+  fundamentalsNew,
+  // Keep new values LAST — the shell's IndexedStack maps `.index` to child
+  // order, so inserting mid-list would misroute the existing tabs.
+  scannersNew,
+  // technicals,  // removed — chip-based tech scanner retired.
 }
 
 class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
@@ -178,11 +239,20 @@ class CustomizableSplitHomeScreen extends ConsumerStatefulWidget {
   final String? digilockerCode;
   final String? digilockerState;
 
+  /// Optional initial Scanner sub-page (used when arriving via /scanner/<sub>).
+  final ScannerSubPage? initialScannerSubPage;
+
+  /// Optional initial Scan-Explanation args (used when arriving via
+  /// /scanner/explain/{builtin|custom}/{id}/{ticker}).
+  final ExplainKey? initialExplainArgs;
+
   const CustomizableSplitHomeScreen({
     super.key,
     this.initialRightPanel,
     this.digilockerCode,
     this.digilockerState,
+    this.initialScannerSubPage,
+    this.initialExplainArgs,
   });
 
   @override
@@ -210,10 +280,23 @@ class _CustomizableSplitHomeScreenState
   final int _panelCount = 2; // Fixed to 2 panels
   bool _isInitialLoad = true; // Track if this is the initial load
   int _holdingsInitialTabIndex = 0; // Track initial tab for holdings screen
+  // Bumped on every navigation into Holdings so the screen honours the
+  // requested tab even when it is already open on another one.
+  int _holdingsTabRequestId = 0;
   bool _isScalperMode = false; // When true, hides watchlist and shows scalper full-width
+  bool _isChartsMode = false; // When true, hides watchlist body and shows chart workspace full-width with slim index strip on left
 
   // Scaffold key for drawer control
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // Accessibility dropdown anchor + overlay
+  final GlobalKey _a11yAnchorKey = GlobalKey();
+  OverlayEntry? _a11yOverlay;
+
+  // Measures the watchlist index-strip height so the absolutely-positioned
+  // collapse toggle can center itself on the indices/search seam.
+  final GlobalKey _watchlistIndexStripKey = GlobalKey();
+  double _watchlistIndexStripHeight = 64;
 
   /// Breakpoint below which hamburger menu is shown
   static const double _mobileBreakpoint = 1200.0;
@@ -326,6 +409,9 @@ class _CustomizableSplitHomeScreenState
     // Initialize ticker visibility from preferences
     initTickerVisibility();
 
+    // Initialize watchlist visibility from preferences
+    initWatchlistVisibility();
+
     // Initialize with default panels
     _initializeDefaultPanels();
 
@@ -399,7 +485,9 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            _handleHoldingsTap(initialTabIndex: 1);
+            // Mutual Fund is the demat-backed tab at index 3; index 2 is the
+            // retired MF tab, which renders no chip and no table.
+            _handleHoldingsTap(initialTabIndex: 3);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();
@@ -424,6 +512,12 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "scanner") {
+            _handleScannerTap();
+          } else if (routeName == "instaOptions") {
+            _handleInstaOptionsTap();
+          } else if (routeName == "charts") {
+            _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
             _handleWebHookTap();
           } else if (routeName == "mutualFund") {
@@ -446,6 +540,12 @@ class _CustomizableSplitHomeScreenState
             _navigateToScreen(ScreenType.mtfDetails);
           } else if (routeName == "myAccount") {
             _navigateToScreen(ScreenType.myAccount);
+          } else if (routeName == Routes.curatedStrategies ||
+              routeName == "curatedStrategies") {
+            _handleCuratedStrategiesTap();
+          } else if (routeName == Routes.algoStrategies ||
+              routeName == "algoStrategies") {
+            _handleAlgoStrategiesTap();
           }
         },
         replaceScreen: (routeName, {arguments}) {
@@ -474,7 +574,9 @@ class _CustomizableSplitHomeScreenState
                 initialTabIndex: arguments is int ? arguments : 0);
           } else if (routeName == Routes.mfmainscreen ||
               routeName == "mfMainScreen") {
-            _handleHoldingsTap(initialTabIndex: 1);
+            // Mutual Fund is the demat-backed tab at index 3; index 2 is the
+            // retired MF tab, which renders no chip and no table.
+            _handleHoldingsTap(initialTabIndex: 3);
           } else if (routeName == Routes.positionscreen ||
               routeName == "PositionScreen") {
             _handlePositionsTap();
@@ -499,6 +601,12 @@ class _CustomizableSplitHomeScreenState
           } else if (routeName == Routes.scalperScreen ||
               routeName == "scalper") {
             _handleScalperTap();
+          } else if (routeName == "scanner") {
+            _handleScannerTap();
+          } else if (routeName == "instaOptions") {
+            _handleInstaOptionsTap();
+          } else if (routeName == "charts") {
+            _handleChartsTap();
           } else if (routeName == "tradingViewWebHook") {
             _handleWebHookTap();
           } else if (routeName == "mutualFund") {
@@ -521,7 +629,13 @@ class _CustomizableSplitHomeScreenState
             _navigateToScreen(ScreenType.mtfDetails);
           } else if (routeName == "myAccount") {
             _navigateToScreen(ScreenType.myAccount);
-          } 
+          } else if (routeName == Routes.curatedStrategies ||
+              routeName == "curatedStrategies") {
+            _handleCuratedStrategiesTap();
+          } else if (routeName == Routes.algoStrategies ||
+              routeName == "algoStrategies") {
+            _handleAlgoStrategiesTap();
+          }
         },
         goBack: () {
           // Handle back navigation if needed
@@ -536,7 +650,9 @@ class _CustomizableSplitHomeScreenState
 
     ref.read(networkStateProvider).networkStream();
     ref.read(marketWatchProvider).fToast.init(context);
-    ref.read(versionProvider).checkVersion(context);
+    // Store-version check is mobile-only (compares against the strapi
+    // Play Store number); on web the build-update banner covers updates.
+    // ref.read(versionProvider).checkVersion(context);
 
     // Initialize websocket connection early to ensure real-time data is available
     if (mounted &&
@@ -570,6 +686,8 @@ class _CustomizableSplitHomeScreenState
       ConstantName.timer!.cancel();
       ConstantName.timer = null;
     }
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
     socketProvider.closeSocket(false);
     ConstantName.chartwebViewController?.dispose();
     super.dispose();
@@ -648,8 +766,32 @@ class _CustomizableSplitHomeScreenState
       case ScreenTypeParam.ipo:
         _handleIPOTap();
         break;
+      case ScreenTypeParam.bond:
+        _handleBondTap();
+        break;
+      case ScreenTypeParam.scalper:
+        _handleScalperTap();
+        break;
+      case ScreenTypeParam.charts:
+        _handleChartsTap();
+        break;
+      case ScreenTypeParam.myAccount:
+        _navigateToScreen(ScreenType.myAccount);
+        break;
+      case ScreenTypeParam.refer:
+        _navigateToScreen(ScreenType.refer);
+        break;
+      case ScreenTypeParam.helpSupport:
+        _navigateToScreen(ScreenType.helpSupport);
+        break;
+      case ScreenTypeParam.notification:
+        _navigateToScreen(ScreenType.notification);
+        break;
+      case ScreenTypeParam.pledgeUnpledge:
+        _navigateToScreen(ScreenType.pledgeUnpledge);
+        break;
       case ScreenTypeParam.mutualFund:
-        _handleHoldingsTap(initialTabIndex: 1); // Mutual funds tab
+        _handleMutualFundTap();
         break;
       case ScreenTypeParam.reports:
         _handleReportsTap();
@@ -683,6 +825,18 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenTypeParam.profileDetails:
         _replaceScreenInPanel(ScreenType.profileDetails);
+        break;
+      case ScreenTypeParam.caBuyback:
+        _handleCABuybackTap();
+        break;
+      case ScreenTypeParam.instaOptions:
+        _handleInstaOptionsTap();
+        break;
+      case ScreenTypeParam.scanner:
+        _replaceScreenInPanel(ScreenType.scanner);
+        break;
+      case ScreenTypeParam.orderflow:
+        _replaceScreenInPanel(ScreenType.orderflow);
         break;
       case ScreenTypeParam.dashboard:
       case ScreenTypeParam.watchlist:
@@ -926,6 +1080,8 @@ class _CustomizableSplitHomeScreenState
               screenType: BannerScreenType.homescreen,
               showImmediately: true,
             ),
+            // Floating "new build available" pill, top-center above all panes
+            const BuildUpdateBanner(),
             // DEBUG: Screen size overlay — remove after testing
             // Positioned(
             //   bottom: 8,
@@ -1049,9 +1205,28 @@ class _CustomizableSplitHomeScreenState
             builder: (context, ref, _) {
               final sidebarContent = ref.watch(sidebarProvider);
               if (sidebarContent == null) return const SizedBox.shrink();
+              // Width comes from whatever opened the panel. A conversation
+              // needs more room than a column of label/value rows, and the
+              // default is unchanged for everything that does not ask.
+              final width = ref.read(sidebarProvider.notifier).width;
               return Drawer(
-                width: 400,
-                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                width: width,
+                backgroundColor: resolveThemeColor(context,
+                    dark: MyntColors.cardDark, light: MyntColors.card),
+                // The scrim is transparent on purpose, so the page behind stays
+                // readable — which leaves nothing saying the panel sits above
+                // it. A shadow and a left edge do that job instead, and work
+                // whatever colour happens to be behind.
+                elevation: 16,
+                shadowColor: Colors.black.withValues(alpha: 0.35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                  side: BorderSide(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.borderMutedDark,
+                        light: MyntColors.borderMuted),
+                  ),
+                ),
                 child: sidebarContent,
               );
             },
@@ -1122,7 +1297,7 @@ class _CustomizableSplitHomeScreenState
 
     // Refresh portfolio data (holdings, positions)
     final portfolio = ref.read(portfolioProvider);
-    portfolio.fetchPositionBook(context, true).then((_) {
+    portfolio.fetchPositionBook(context, portfolio.isDay).then((_) {
       // After positions are fetched, refresh ticker subscriptions
       if (mounted) {
         final subscriptionManager = ref.read(webSubscriptionManagerProvider);
@@ -1146,9 +1321,30 @@ class _CustomizableSplitHomeScreenState
     _handleReconnectionSuccess();
   }
 
+  /// True when any panel currently shows the Scanner shell — the Scanner
+  /// page renders full-width with no watchlist (same pattern as Scalper).
+  bool get _isScannerActive => _isPanelScreenActive(ScreenType.scanner);
+
+  /// Strategy Builder also renders full-width with no watchlist.
+  bool get _isStrategyBuilderActive => _isPanelScreenActive(ScreenType.strategyBuilder);
+
+  bool _isPanelScreenActive(ScreenType type) {
+    for (final panel in _panels) {
+      if (panel.screenType == type) return true;
+      if (panel.screens.isNotEmpty &&
+          panel.activeScreenIndex >= 0 &&
+          panel.activeScreenIndex < panel.screens.length &&
+          panel.screens[panel.activeScreenIndex] == type) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// New layout: Watchlist full height on one side, AppBar + Content on other side
   /// Respects panel swap - checks which panel has watchlist
   /// In scalper mode: hides watchlist, shows AppBar + Scalper content full-width
+  /// In scanner mode: hides watchlist, shows AppBar + Scanner shell full-width
   Widget _buildNewLayout(ThemesProvider theme) {
     // Scalper mode: full-width AppBar + Scalper content, no watchlist
     if (_isScalperMode) {
@@ -1158,6 +1354,62 @@ class _CustomizableSplitHomeScreenState
           const Expanded(
             child: ScalperScreenWeb(embedded: true),
           ),
+        ],
+      );
+    }
+
+    // Scanner mode: full-width AppBar + Scanner shell, no watchlist
+    if (_isScannerActive) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          Expanded(
+            child: ScannerShellScreen(
+              initialSubPage: widget.initialScannerSubPage,
+              initialExplainArgs: widget.initialExplainArgs,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Strategy Builder: full-width AppBar + builder, no watchlist (same as Scanner)
+    if (_isStrategyBuilderActive) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          const Expanded(child: StrategyBuilderPanelWeb()),
+        ],
+      );
+    }
+
+    // Charts mode: full-width chart workspace. Top app bar carries an indices strip
+    // alongside the live-P&L ticker so we recover the watchlist column's space.
+    // ChartWorkspaceScreen hosts its own right-tray (Watchlist/Positions/Holdings/Orders/DOM).
+    if (_isChartsMode) {
+      return Column(
+        children: [
+          _buildRightSideAppBar(theme.isDarkMode),
+          Container(
+            color: resolveThemeColor(context,
+                dark: MyntColors.backgroundColorDark,
+                light: MyntColors.backgroundColor),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 320,
+                  child: _buildWatchlistIndexSlots(theme.isDarkMode),
+                ),
+                Container(
+                    width: 1,
+                    color: shadcn.Theme.of(context).colorScheme.border),
+                // Old auto-scrolling position ticker:
+                const Expanded(child: PortfolioTickerStrip()),
+                // const Expanded(child: PortfolioSummaryTickerStrip()),
+              ],
+            ),
+          ),
+          const Expanded(child: ChartWorkspaceScreen()),
         ],
       );
     }
@@ -1180,14 +1432,29 @@ class _CustomizableSplitHomeScreenState
       // Watchlist on LEFT, Content on RIGHT
       return Row(
         children: [
-          // Left side: Watchlist (full height)
-          SizedBox(
-            width: watchlistWidth,
-            child: _buildWatchlistPanel(theme, panelIndex: 0),
+          // Left side: Watchlist (full height) — collapsible to a thin rail
+          ValueListenableBuilder<bool>(
+            valueListenable: watchlistVisibilityNotifier,
+            builder: (context, visible, _) {
+              if (!visible) {
+                return _buildWatchlistCollapsedRail(theme, onLeft: true);
+              }
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: watchlistWidth,
+                    child: _buildWatchlistPanel(theme,
+                        panelIndex: 0, onLeft: true),
+                  ),
+                  // Divider
+                  Container(
+                      width: 1,
+                      color: shadcn.Theme.of(context).colorScheme.border),
+                ],
+              );
+            },
           ),
-          // Divider
-          Container(
-              width: 1, color: shadcn.Theme.of(context).colorScheme.border),
           // Right side: AppBar + TextNugget + Ticker + Content
           Expanded(
             child: Column(
@@ -1196,7 +1463,9 @@ class _CustomizableSplitHomeScreenState
                 const AutoLoadTextNuggetWidget(
                   screenType: TextNuggetScreenType.homescreen,
                 ),
-                const PortfolioTickerStrip(),
+                // Old auto-scrolling position ticker:
+                // const PortfolioTickerStrip(),
+                const PortfolioSummaryTickerStrip(),
                 Expanded(
                   child: _buildContentPanel(theme, panelIndex: 1),
                 ),
@@ -1217,20 +1486,37 @@ class _CustomizableSplitHomeScreenState
                 const AutoLoadTextNuggetWidget(
                   screenType: TextNuggetScreenType.homescreen,
                 ),
-                const PortfolioTickerStrip(),
+                // Old auto-scrolling position ticker:
+                // const PortfolioTickerStrip(),
+                const PortfolioSummaryTickerStrip(),
                 Expanded(
                   child: _buildContentPanel(theme, panelIndex: 0),
                 ),
               ],
             ),
           ),
-          // Divider
-          Container(
-              width: 1, color: shadcn.Theme.of(context).colorScheme.border),
-          // Right side: Watchlist (full height)
-          SizedBox(
-            width: watchlistWidth,
-            child: _buildWatchlistPanel(theme, panelIndex: 1),
+          // Right side: Watchlist (full height) — collapsible to a thin rail
+          ValueListenableBuilder<bool>(
+            valueListenable: watchlistVisibilityNotifier,
+            builder: (context, visible, _) {
+              if (!visible) {
+                return _buildWatchlistCollapsedRail(theme, onLeft: false);
+              }
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Divider
+                  Container(
+                      width: 1,
+                      color: shadcn.Theme.of(context).colorScheme.border),
+                  SizedBox(
+                    width: watchlistWidth,
+                    child: _buildWatchlistPanel(theme,
+                        panelIndex: 1, onLeft: false),
+                  ),
+                ],
+              );
+            },
           ),
         ],
       );
@@ -1257,33 +1543,182 @@ class _CustomizableSplitHomeScreenState
     return panel.screens.contains(ScreenType.watchlist);
   }
 
-  /// Build watchlist panel (full height) with index slots on top
-  Widget _buildWatchlistPanel(ThemesProvider theme, {required int panelIndex}) {
+  /// Build watchlist panel (full height) with index slots on top.
+  /// [onLeft] controls which edge the collapse arrow points toward.
+  Widget _buildWatchlistPanel(ThemesProvider theme,
+      {required int panelIndex, bool onLeft = true}) {
     return Container(
       color: resolveThemeColor(context,
           dark: MyntColors.backgroundColorDark,
           light: MyntColors.backgroundColor),
-      child: Column(
+      // Stack lets the collapse toggle float (absolutely positioned) over the
+      // header without reflowing the indices row — it stays centered on the
+      // indices/search seam and flush to the panel's outer edge.
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          // Index slots at top of watchlist
-          _buildWatchlistIndexSlots(theme.isDarkMode),
-          // Watchlist content
-          Expanded(
-            child: _getScreenForType(ScreenType.watchlist),
+          Column(
+            children: [
+              // Index slots row (toggle is rendered separately as an overlay).
+              _buildWatchlistIndexSlots(theme.isDarkMode, measure: true),
+              // Watchlist content
+              Expanded(
+                child: _getScreenForType(ScreenType.watchlist),
+              ),
+            ],
+          ),
+          // Absolutely-positioned collapse toggle: vertically centered on the
+          // seam between the index strip and the search bar, hugging the outer
+          // (divider-facing) edge.
+          Positioned(
+            top: _watchlistIndexStripHeight - 30,
+            right: onLeft ? 0 : null,
+            left: onLeft ? null : 0,
+            child: _buildWatchlistCollapseButton(
+              onLeft: onLeft,
+              isDarkMode: theme.isDarkMode,
+            ),
           ),
         ],
       ),
     );
   }
 
-  /// Build index slots for watchlist panel (above search)
-  Widget _buildWatchlistIndexSlots(bool isDarkMode) {
+  Widget _buildWatchlistCollapseButton({
+    required bool onLeft,
+    required bool isDarkMode,
+  }) {
+    final scheme = shadcn.Theme.of(context).colorScheme;
+    const radius = Radius.circular(10);
+    final side = BorderSide(color: scheme.border);
+    final borderRadius = onLeft
+        ? const BorderRadius.only(topLeft: radius, bottomLeft: radius)
+        : const BorderRadius.only(topRight: radius, bottomRight: radius);
+    final border = onLeft
+        ? Border(left: side, top: side, bottom: side)
+        : Border(right: side, top: side, bottom: side);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Tooltip(
+        message: 'Hide watchlist',
+        child: Material(
+          color : const Color(0xFF0037B7),
+          borderRadius: borderRadius,
+          elevation: 1.5,
+          shadowColor: Colors.black.withValues(alpha: 0.18),
+          child: InkWell(
+            onTap: () => toggleWatchlistVisibility(),
+            borderRadius: borderRadius,
+            // hoverColor: scheme.accent,
+            child: Container(
+              width: 28,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: borderRadius,
+                border: border,
+              ),
+              child: Icon(
+                onLeft
+                    ? shadcn.LucideIcons.chevronsLeft
+                    : shadcn.LucideIcons.chevronsRight,
+                size: 18,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildWatchlistCollapsedRail(ThemesProvider theme,
+      {required bool onLeft}) {
+    final scheme = shadcn.Theme.of(context).colorScheme;
+    final divider = Container(width: 1, color: scheme.border);
+    final rail = Material(
+      color: scheme.muted.withValues(alpha: 0.5),
+      child: InkWell(
+        onTap: () => toggleWatchlistVisibility(),
+        child: SizedBox(
+          width: 36,
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              Tooltip(
+                message: 'Show watchlist',
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color : const Color(0xFF0037B7),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: scheme.border),
+                  ),
+                  // Lucide for the same cache reason as the collapse button.
+                  child: Icon(
+                    onLeft
+                        ? shadcn.LucideIcons.chevronsRight
+                        : shadcn.LucideIcons.chevronsLeft,
+                    size: 18,
+                    color : Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: RotatedBox(
+                  quarterTurns: onLeft ? 3 : 1,
+                  child: Center(
+                    child: Text(
+                      'WATCHLIST',
+                      maxLines: 1,
+                      overflow: TextOverflow.clip,
+                      style: TextStyle(
+                        fontSize: 11,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.foreground,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: onLeft ? [rail, divider] : [divider, rail],
+    );
+  }
+
+  /// Build index slots for watchlist panel (above search).
+  /// [measure] attaches the strip-height probe used to position the floating
+  /// collapse toggle (only the watchlist panel needs it, not charts mode).
+  Widget _buildWatchlistIndexSlots(bool isDarkMode, {bool measure = false}) {
     return Consumer(
       builder: (context, ref, _) {
         final indexProvider = ref.watch(indexListProvider);
         final marketWatch = ref.read(marketWatchProvider);
         final theme = ref.watch(themeProvider);
         final indexValues = indexProvider.defaultIndexList?.indValues;
+        if (measure) {
+          // After layout, capture the strip height so the overlaid toggle can
+          // center on the indices/search seam. Cheap: only setState on change.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final box = _watchlistIndexStripKey.currentContext
+                ?.findRenderObject() as RenderBox?;
+            final h = box?.size.height;
+            if (h != null && mounted && (h - _watchlistIndexStripHeight).abs() > 0.5) {
+              setState(() => _watchlistIndexStripHeight = h);
+            }
+          });
+        }
 
         if (indexValues == null || indexValues.isEmpty) {
           return const SizedBox.shrink();
@@ -1295,27 +1730,18 @@ class _CustomizableSplitHomeScreenState
             : indexValues;
 
         return Container(
+          key: measure ? _watchlistIndexStripKey : null,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: resolveThemeColor(context,
                 dark: MyntColors.backgroundColorDark,
                 light: MyntColors.backgroundColor),
-            // border: Border(
-            //   bottom: BorderSide(
-            //     color: isDarkMode
-            //         ? WebDarkColors.divider.withOpacity(0.3)
-            //         : MyntColors.divider.withOpacity(0.2),
-            //     width: 1,
-            //   ),
-            // ),
+            // border: Border(bottom: BorderSide(color: scheme.border)),
           ),
           child: Row(
             children: List.generate(
               displayIndices.length,
               (index) {
-                if (index >= displayIndices.length) {
-                  return const SizedBox.shrink();
-                }
                 final item = displayIndices[index];
                 return Expanded(
                   child: Padding(
@@ -1384,6 +1810,8 @@ class _CustomizableSplitHomeScreenState
     bool? showOptionZ,
     bool? showOptionFlash,
     bool? showScalper,
+    bool? showScanner,
+    bool? showCharts,
   }) {
     final theme = ref.read(themeProvider);
     final userProfile = ref.read(userProfileProvider);
@@ -1392,6 +1820,14 @@ class _CustomizableSplitHomeScreenState
     final Preferences pref = locator<Preferences>();
     final clientId = userDetail?.actid ?? clientDetail?.actid ?? pref.clientId ?? '';
     final userName = userDetail?.uname ?? '';
+
+    // The drawer floats above the TradingView chart iframes, which sit in the
+    // DOM on top of the Flutter canvas and would otherwise swallow the hover /
+    // clicks meant for the menu. Same guard the app-bar Options dropdown uses;
+    // held for as long as the drawer is open because MouseRegion.onExit does
+    // not fire when the drawer is dismissed with the pointer still inside it.
+    ChartIframeGuard.acquire();
+    _disableAllChartIframes();
 
     shadcn.openDrawer(
       context: context,
@@ -1402,7 +1838,25 @@ class _CustomizableSplitHomeScreenState
       draggable: true,
       showDragHandle: false,
       builder: (drawerContext) {
-        return SizedBox(
+        return PointerInterceptor(
+          child: MouseRegion(
+            cursor: SystemMouseCursors.basic,
+            onEnter: (_) {
+              ChartIframeGuard.acquire();
+              _disableAllChartIframes();
+            },
+            onHover: (_) {
+              _disableAllChartIframes();
+            },
+            onExit: (_) {
+              ChartIframeGuard.release();
+              _enableAllChartIframes();
+            },
+            child: Listener(
+              onPointerMove: (_) {
+                _disableAllChartIframes();
+              },
+              child: SizedBox(
           width: 300,
           child: NavigationDrawerWeb(
           isDarkMode: theme.isDarkMode,
@@ -1462,9 +1916,25 @@ class _CustomizableSplitHomeScreenState
             shadcn.closeDrawer(drawerContext);
             _handleScalperTap();
           },
+          onScannerTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleScannerTap();
+          },
+          onOrderflowTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleOrderflowTap();
+          },
+          onChartsTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleChartsTap();
+          },
           onStrategyBuilderTap: () {
             shadcn.closeDrawer(drawerContext);
             _handleStrategyBuilderTap();
+          },
+          onInstaOptionsTap: () {
+            shadcn.closeDrawer(drawerContext);
+            _handleInstaOptionsTap();
           },
           onThemeToggle: () {
             shadcn.closeDrawer(drawerContext);
@@ -1481,34 +1951,59 @@ class _CustomizableSplitHomeScreenState
           showHoldings: showHoldings,
           showOrders: showOrders,
           showFunds: showFunds,
-          showMutualFund: showMutualFund,
-          showIPO: showIPO,
-          showBonds: showBonds,
+          showMutualFund: false, // Paper-only: hidden
+          showIPO: false,
+          showBonds: false,
           showOptionZ: showOptionZ,
           showOptionFlash: showOptionFlash,
           showScalper: showScalper,
+          // Scanner / Orderflow / Charts hidden from the sidebar menu too, to
+          // match the Options dropdown (features not ready for hosting).
+          // Restore by putting the show* variables back / removing these.
+          showScanner: showScanner,
+          showOrderflow: false,
+          showCharts: false,
         ),
+              ),
+            ),
+          ),
         );
       },
-    );
+    ).whenComplete(() {
+      ChartIframeGuard.release();
+      _enableAllChartIframes();
+    });
   }
 
   /// Build app bar for right side only - with responsive navigation
   Widget _buildRightSideAppBar(bool isDarkMode) {
     final screenWidth = MediaQuery.of(context).size.width;
 
+    // Accessibility widens the app-bar nav: a larger Font Size scale and the
+    // OpenDyslexic dyslexia face both need more horizontal room per item, so
+    // the fixed pixel breakpoints below would overflow the header off-screen.
+    // Inflate the thresholds by roughly the same factor the text grows by, so
+    // nav items collapse into the hamburger drawer a little earlier (they stay
+    // reachable there) instead of spilling past the right edge. Watched so the
+    // breakpoints recompute the moment the user toggles these options.
+    final a11y = ref.watch(accessibilityProvider);
+    // OpenDyslexic renders ~1.3x wider (wider glyphs + added letter spacing).
+    final a11yNavFactor =
+        a11y.textScale * (a11y.dyslexiaSupportEnabled ? 1.3 : 1.0);
+
     // Responsive breakpoints - Option 2 implementation
     final isMobileTablet = screenWidth < 900; // Full mobile/tablet mode
 
     // Left navigation - hide ALL at once when space is not available
-    final showAllLeftNav = screenWidth >= 1650; // Show MF, IPO, Bonds, Options together
+    final showAllLeftNav =
+        screenWidth >= 1650 * a11yNavFactor; // Show MF, IPO, Bonds, Options together
 
     // Right navigation - hide ALL at once (not one by one)
     // When left nav is visible: need more space, so hide right nav items earlier
     // When left nav is hidden: have more space, so can show right nav items longer
     final showAllRightNav = showAllLeftNav
-        ? (screenWidth >= 1550)  // If left nav visible, need 1550px to show all right nav
-        : (screenWidth >= 950);  // If left nav hidden, only need 950px to show all right nav
+        ? (screenWidth >= 1550 * a11yNavFactor)  // If left nav visible, need 1550px to show all right nav
+        : (screenWidth >= 950 * a11yNavFactor);  // If left nav hidden, only need 950px to show all right nav
 
     // Determine which items to show in hamburger drawer
     // Desktop mode: Show only hidden items in drawer
@@ -1551,7 +2046,11 @@ class _CustomizableSplitHomeScreenState
             if (showHamburger)
               Padding(
                 padding: const EdgeInsets.only(right: 12),
-                child: Material(
+                child: Semantics(
+                  button: true,
+                  label: 'Open navigation menu',
+                  excludeSemantics: true,
+                  child: Material(
                   color: Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                   child: InkWell(
@@ -1570,12 +2069,14 @@ class _CustomizableSplitHomeScreenState
                           showHoldings: !showAllRightNav,
                           showOrders: !showAllRightNav,
                           showFunds: !showAllRightNav,
-                          showMutualFund: !showAllLeftNav, // Show if left nav is hidden
-                          showIPO: !showAllLeftNav,
-                          showBonds: !showAllLeftNav,
+                          showMutualFund: false, // Paper-only: hidden
+                          showIPO: false,
+                          showBonds: false,
                           showOptionZ: !showAllLeftNav, // Options dropdown hidden with left nav
                           showOptionFlash: !showAllLeftNav,
                           showScalper: !showAllLeftNav,
+                          showScanner: !showAllLeftNav,
+                          showCharts: !showAllLeftNav,
                         );
                       }
                     },
@@ -1592,27 +2093,29 @@ class _CustomizableSplitHomeScreenState
                     ),
                   ),
                 ),
+                ),
               ),
 
             // Logo section
-            RepaintBoundary(
-              child: SvgPicture.asset(
-                assets.appLogoIcon,
-                width: context.responsive(mobile: 80.0, tablet: 90.0, desktop: 100.0),
-                height: 38,
-                fit: BoxFit.contain,
+            Semantics(
+              image: true,
+              label: 'Mynt by Zebu',
+              excludeSemantics: true,
+              child: RepaintBoundary(
+                child: SvgPicture.asset(
+                  assets.appLogoIcon,
+                  width: context.responsive(mobile: 80.0, tablet: 90.0, desktop: 100.0),
+                  height: 38,
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
 
             // Left navigation items - hide ALL at once when screen < 1500px
             if (!isMobileTablet && showAllLeftNav) ...[
               const SizedBox(width: 24),
-              _buildShadcnNavItem('Mutual Fund', isDarkMode, ScreenType.mutualFund, () => _handleMutualFundTap()),
-              const SizedBox(width: 4),
-              _buildShadcnNavItem('IPO', isDarkMode, ScreenType.ipo, () => _handleIPOTap()),
-              const SizedBox(width: 4),
-              _buildShadcnNavItem('Bonds', isDarkMode, ScreenType.bond, () => _handleBondTap()),
-              const SizedBox(width: 4),
+              // Paper-only platform: Mutual Fund / IPO / Bonds are hidden
+              // (see paperUnavailableFeatures).
               _buildTradingToolsMenu(isDarkMode),
             ],
 
@@ -1620,8 +2123,8 @@ class _CustomizableSplitHomeScreenState
 
             // Right navigation - hide ALL at once
             if (!isMobileTablet && showAllRightNav) ...[
-              // Paper / Live mode toggle — placed immediately before Home.
-              _buildPaperLiveToggle(isDarkMode),
+              // Paper trading badge — placed immediately before Home.
+              _buildPaperBadge(isDarkMode),
               const SizedBox(width: 4),
               // Home - always visible in desktop mode
               _buildShadcnNavItem('Home', isDarkMode, ScreenType.dashboard, () => _handleDashboardTap()),
@@ -1635,21 +2138,57 @@ class _CustomizableSplitHomeScreenState
               _buildShadcnNavItem('Funds', isDarkMode, ScreenType.funds, () => _handleFundsTap()),
               const SizedBox(width: 20),
             ] else if (!isMobileTablet) ...[
-              // When right nav is hidden, only show toggle + Home
-              _buildPaperLiveToggle(isDarkMode),
+              // When right nav is hidden, only show badge + Home
+              _buildPaperBadge(isDarkMode),
               const SizedBox(width: 4),
               _buildShadcnNavItem('Home', isDarkMode, ScreenType.dashboard, () => _handleDashboardTap()),
               const SizedBox(width: 20),
             ],
 
+            // Accessibility options (always visible)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: A11yIconButton(
+                key: const ValueKey('a11y_icon_btn'),
+                anchorKey: _a11yAnchorKey,
+                isDarkMode: isDarkMode,
+                active: ref.watch(accessibilityProvider).screenReaderEnabled,
+                onTap: () => _toggleAccessibilityDropdown(isDarkMode),
+              ),
+            ),
+
             // Profile section (always visible)
-            RepaintBoundary(
-              child: _buildProfileSection(isDarkMode),
+            Semantics(
+              button: true,
+              label: 'Profile menu',
+              child: RepaintBoundary(
+                child: _buildProfileSection(isDarkMode),
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  void _toggleAccessibilityDropdown(bool isDarkMode) {
+    if (_a11yOverlay != null) {
+      _closeAccessibilityDropdown();
+      return;
+    }
+    if (_a11yAnchorKey.currentContext == null) return;
+    _a11yOverlay = buildAccessibilityOverlay(
+      context: context,
+      anchorKey: _a11yAnchorKey,
+      isDarkMode: isDarkMode,
+      onClose: _closeAccessibilityDropdown,
+    );
+    Overlay.of(context, rootOverlay: true).insert(_a11yOverlay!);
+  }
+
+  void _closeAccessibilityDropdown() {
+    _a11yOverlay?.remove();
+    _a11yOverlay = null;
   }
 
   _buildAppBar(bool isDarkMode) {
@@ -1697,12 +2236,7 @@ class _CustomizableSplitHomeScreenState
                 ),
                 const SizedBox(width: 24),
                 // Primary actions
-                _buildNavItem('Mutual Fund', isDarkMode, ScreenType.mutualFund,
-                    () => _handleMutualFundTap()),
-                const SizedBox(width: 12),
-                _buildNavItem('IPO', isDarkMode, ScreenType.ipo,
-                    () => _handleIPOTap()),
-                const SizedBox(width: 12),
+                // Paper-only platform: Mutual Fund / IPO hidden.
                 _buildNavItem('OptionZ', isDarkMode, ScreenType.tradeAction,
                     () => _handleOptionZTap()),
                     const SizedBox(width: 12),
@@ -1714,7 +2248,7 @@ class _CustomizableSplitHomeScreenState
                 const SizedBox(width: 12),
                 _buildNavItem('StrBuilder', isDarkMode, ScreenType.strategyBuilder,
                     () => _handleStrategyBuilderTap()),
-             
+
 
                 const Spacer(),
 
@@ -2095,6 +2629,20 @@ class _CustomizableSplitHomeScreenState
     _replaceScreenInPanel(ScreenType.strategyBuilder);
   }
 
+  void _handleInstaOptionsTap() {
+    _replaceScreenInPanel(ScreenType.instaOptions);
+  }
+
+  void _handleCuratedStrategiesTap() {
+    // Show the Curated Strategies list in the panel like other full pages.
+    _replaceScreenInPanel(ScreenType.curatedStrategies);
+  }
+
+  void _handleAlgoStrategiesTap() {
+    // Show the Algo Strategies list in the panel like other full pages.
+    _replaceScreenInPanel(ScreenType.allAlgoStrategies);
+  }
+
   void _handleWebHookTap() {
     _replaceScreenInPanel(ScreenType.tradingViewWebHook);
   }
@@ -2105,6 +2653,47 @@ class _CustomizableSplitHomeScreenState
 
   void _handleScalperTap() {
     setState(() => _isScalperMode = true);
+    WebNavigationHelper.updateUrl(WebRoutes.scalper);
+  }
+
+  void _handleScannerTap({ScannerSubPage? initial}) {
+    _replaceScreenInPanel(ScreenType.scanner);
+    final path = initial == null
+        ? WebRoutes.scanner
+        : _scannerPath(initial);
+    WebNavigationHelper.updateUrl(path);
+  }
+
+  void _handleOrderflowTap() {
+    _replaceScreenInPanel(ScreenType.orderflow);
+    WebNavigationHelper.updateUrl(WebRoutes.orderflow);
+  }
+
+  String _scannerPath(ScannerSubPage p) {
+    switch (p) {
+      // Legacy cases kept commented alongside the enum values — re-enable
+      // together if the old tabs come back.
+      // case ScannerSubPage.symbols:
+      //   return WebRoutes.scannerSymbols;
+      // case ScannerSubPage.scanners:
+      //   return WebRoutes.scannerScanners;
+      // case ScannerSubPage.fundamentals:
+      //   return WebRoutes.scannerFundamentals;
+      case ScannerSubPage.customScans:
+        return WebRoutes.scannerCustom;
+      case ScannerSubPage.fundamentalsNew:
+        // Redesign scaffold — reuse the fundamentals route for now; a dedicated
+        // route is added when this tab replaces the old Fundamentals screen.
+        return WebRoutes.scannerFundamentals;
+      case ScannerSubPage.scannersNew:
+        // Dashboard redesign scaffold — reuse the scanners route for now.
+        return WebRoutes.scannerScanners;
+    }
+  }
+
+  void _handleChartsTap() {
+    setState(() => _isChartsMode = true);
+    WebNavigationHelper.updateUrl(WebRoutes.charts);
   }
 
   // Build navigation screens for app bar
@@ -2153,9 +2742,12 @@ class _CustomizableSplitHomeScreenState
       title: title,
       isActive: isActive,
       onTap: () {
-        // Exit scalper mode when navigating to another screen
-        if (_isScalperMode) {
-          setState(() => _isScalperMode = false);
+        // Exit scalper / charts mode when navigating to another screen
+        if (_isScalperMode || _isChartsMode) {
+          setState(() {
+            _isScalperMode = false;
+            _isChartsMode = false;
+          });
         }
         onTap();
       },
@@ -2181,161 +2773,35 @@ class _CustomizableSplitHomeScreenState
     );
   }
 
-  // Paper vs Live trading toggle shown inline in the navbar.
-  // UI: [P] [== sliding knob ==] [L]
-  //  - Left square: blue "P" (Paper)
-  //  - Middle: dark pill track with a colored knob that slides left/right
-  //  - Right square: red "L" (Live)
-  // Tapping asks for confirmation, persists the new value, then reloads
-  // the page on web so the lazy ApiExporter singleton is rebuilt against
-  // the new flag.
-  Widget _buildPaperLiveToggle(bool isDarkMode) {
-    const Color paperColor = Color(0xFF3B82F6); // blue — paper
-    const Color liveColor = Color(0xFFEF4444); // red  — live
-    final bool paperOn = isPaperTrading;
-    final Color knobColor = paperOn ? paperColor : liveColor;
-    final Color trackColor = isDarkMode
-        ? const Color(0xFF0F172A)
-        : const Color(0xFF1F2937);
-    final Color trackBorder = isDarkMode
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.15);
-
-    const double squareSize = 22;
-    const double trackWidth = 44;
-    const double trackHeight = 22;
-    const double knobSize = 16;
-
-    Widget labelSquare(String text, Color color, bool active) {
-      return Container(
-        width: squareSize,
-        height: squareSize,
-        decoration: BoxDecoration(
-          color: active ? color : color.withValues(alpha: 0.35),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          text,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            height: 1.0,
-          ),
-        ),
-      );
-    }
-
+  // Permanent "PAPER TRADING" badge in the navbar. This build is paper-only,
+  // so there is no live toggle — the badge just makes the mode unmistakable.
+  Widget _buildPaperBadge(bool isDarkMode) {
+    const Color paperColor = Color(0xFF3B82F6);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       child: Tooltip(
-        message: paperOn
-            ? 'Paper trading is ON. Tap to switch to LIVE.'
-            : 'Live trading is ON. Tap to switch to PAPER.',
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: () => _confirmTogglePaperMode(paperOn),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              labelSquare('P', paperColor, paperOn),
-              const SizedBox(width: 6),
-              // Track with animated sliding knob
-              Container(
-                width: trackWidth,
-                height: trackHeight,
-                padding: const EdgeInsets.symmetric(horizontal: 3),
-                decoration: BoxDecoration(
-                  color: trackColor,
-                  borderRadius: BorderRadius.circular(trackHeight / 2),
-                  border: Border.all(color: trackBorder, width: 1),
-                ),
-                child: AnimatedAlign(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOut,
-                  alignment:
-                      paperOn ? Alignment.centerLeft : Alignment.centerRight,
-                  child: Container(
-                    width: knobSize,
-                    height: knobSize,
-                    decoration: BoxDecoration(
-                      color: knobColor,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: knobColor.withValues(alpha: 0.45),
-                          blurRadius: 6,
-                          spreadRadius: 0,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              labelSquare('L', liveColor, !paperOn),
-            ],
+        message: 'Paper trading — all orders are simulated. '
+            'No real orders or money are involved.',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: paperColor.withValues(alpha: isDarkMode ? 0.18 : 0.12),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: paperColor.withValues(alpha: 0.6)),
           ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _confirmTogglePaperMode(bool currentlyPaper) async {
-    final bool target = !currentlyPaper;
-    final String targetLabel = target ? 'PAPER' : 'LIVE';
-    final bool? ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Switch to $targetLabel trading?'),
-        content: Text(
-          target
-              ? 'The app will reload and route all orders, funds and '
-                  'portfolio calls to the local paper-trading simulator. '
-                  'No real orders will be placed.'
-              : 'The app will reload and connect to the real trading '
-                  'backend. Orders will be placed against the live account.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text('Switch to $targetLabel'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-
-    await locator<Preferences>().setIsPaperTradingPref(target);
-    isPaperTrading = target;
-
-    if (kIsWeb) {
-      // Hard reload so setupLocator() re-runs and the lazy ApiExporter
-      // singleton is rebuilt against the new flag. Also clears any cached
-      // paper singletons in memory.
-      html.window.location.reload();
-    } else if (mounted) {
-      // Mobile: no reload primitive — prompt the user to restart.
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Restart required'),
-          content: Text(
-              'Please restart the app to finish switching to $targetLabel mode.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
+          child: const Text(
+            'PT',
+            style: TextStyle(
+              color: paperColor,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+              height: 1.0,
             ),
-          ],
+          ),
         ),
-      );
-    }
+      ),
+    );
   }
 
   // Build shadcn NavigationMenu for single nav items
@@ -2343,7 +2809,7 @@ class _CustomizableSplitHomeScreenState
       VoidCallback onTap) {
     // Check if this screen is currently active in any panel
     bool isActive = false;
-    if (!_isScalperMode) {
+    if (!_isScalperMode && !_isChartsMode) {
       for (int i = 0; i < _panels.length; i++) {
         final panel = _panels[i];
         if (panel.screenType == screenType ||
@@ -2511,6 +2977,50 @@ class _CustomizableSplitHomeScreenState
                           ),
                         ),
                       ),
+                      // InstaOptions
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleInstaOptionsTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.activity,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Option Analysis',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Transform.translate(
+                                offset: const Offset(0, -6),
+                                child: Text(
+                                  'NEW',
+                                  style: MyntWebTextStyles.caption(
+                                    context,
+                                    color: Colors.red,
+                                    fontWeight: MyntFonts.semiBold,
+                                  ).copyWith(fontSize: 10),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                       // Scalper
                       shadcn.MenuButton(
                         onPressed: (context) {
@@ -2539,6 +3049,9 @@ class _CustomizableSplitHomeScreenState
                                   lightColor: MyntColors.textPrimary,
                                 ),
                               ),
+                              // Scalper "Beta" badge removed — Scalper is no
+                              // longer beta. Kept commented for easy rollback.
+                              /*
                               const SizedBox(width: 4),
                               Transform.translate(
                                 offset: const Offset(0, -6),
@@ -2546,22 +3059,157 @@ class _CustomizableSplitHomeScreenState
                                   'Beta',
                                   style: MyntWebTextStyles.caption(
                                     context,
-                                    color: Colors.red,
+                                    color: resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.primaryDark,
+                                      light: MyntColors.primary,
+                                    ),
                                     fontWeight: MyntFonts.semiBold,
                                   ).copyWith(fontSize: 10),
+                                ),
+                              ),
+                              */
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Scanner is shown in the Options dropdown; Orderflow /
+                      // Charts stay hidden below (line-commented). Restore them
+                      // by un-commenting; handlers (_handleScannerTap etc.) remain.
+                      // Scanner
+                      shadcn.MenuButton(
+                        onPressed: (context) {
+                          _handleScannerTap();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                shadcn.LucideIcons.radar,
+                                size: 22,
+                                color: resolveThemeColor(
+                                  context,
+                                  dark: MyntColors.iconDark,
+                                  light: MyntColors.icon,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Scanner',
+                                style: MyntWebTextStyles.body(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textPrimaryDark,
+                                  lightColor: MyntColors.textPrimary,
                                 ),
                               ),
                             ],
                           ),
                         ),
                       ),
+
+
+                      //  Orderflow — nested under Scanner in the Options menu
+                      // shadcn.MenuButton(
+                      //   onPressed: (context) {
+                      //     _handleOrderflowTap();
+                      //   },
+                      //   child: Padding(
+                      //     padding: const EdgeInsets.symmetric(vertical: 10),
+                      //     child: Row(
+                      //       children: [
+                      //         Icon(
+                      //           shadcn.LucideIcons.activity,
+                      //           size: 22,
+                      //           color: resolveThemeColor(
+                      //             context,
+                      //             dark: MyntColors.iconDark,
+                      //             light: MyntColors.icon,
+                      //           ),
+                      //         ),
+                      //         const SizedBox(width: 14),
+                      //         Text(
+                      //           'Orderflow',
+                      //           style: MyntWebTextStyles.body(
+                      //             context,
+                      //             fontWeight: MyntFonts.medium,
+                      //             darkColor: MyntColors.textPrimaryDark,
+                      //             lightColor: MyntColors.textPrimary,
+                      //           ),
+                      //         ),
+                      //         const SizedBox(width: 6),
+                      //         Transform.translate(
+                      //           offset: const Offset(0, -6),
+                      //           child: Text(
+                      //             'Beta',
+                      //             style: MyntWebTextStyles.caption(
+                      //               context,
+                      //               color: resolveThemeColor(
+                      //                 context,
+                      //                 dark: MyntColors.primaryDark,
+                      //                 light: MyntColors.primary,
+                      //               ),
+                      //               fontWeight: MyntFonts.semiBold,
+                      //             ).copyWith(fontSize: 10),
+                      //           ),
+                      //         ),
+                      //       ],
+                      //     ),
+                      //   ),
+                      // ),
+                      // Charts
+                      // shadcn.MenuButton(
+                      //   onPressed: (context) {
+                      //     _handleChartsTap();
+                      //   },
+                      //   child: Padding(
+                      //     padding: const EdgeInsets.symmetric(vertical: 10),
+                      //     child: Row(
+                      //       children: [
+                      //         Icon(
+                      //           shadcn.LucideIcons.chartLine,
+                      //           size: 22,
+                      //           color: resolveThemeColor(
+                      //             context,
+                      //             dark: MyntColors.iconDark,
+                      //             light: MyntColors.icon,
+                      //           ),
+                      //         ),
+                      //         const SizedBox(width: 14),
+                      //         Text(
+                      //           'Charts',
+                      //           style: MyntWebTextStyles.body(
+                      //             context,
+                      //             fontWeight: MyntFonts.medium,
+                      //             darkColor: MyntColors.textPrimaryDark,
+                      //             lightColor: MyntColors.textPrimary,
+                      //           ),
+                      //         ),
+                      //       ],
+                      //     ),
+                      //   ),
+                      // ),
+                      
                     ],
                   ),
                       ),
                     ),
                   );
                 },
-              );
+              ).future.whenComplete(() {
+                // Backstop: the dropdown can close WITHOUT the MouseRegion's
+                // onExit firing (tapping a menu item, click-away dismiss, or
+                // Esc). When that happens the chart iframes were left at
+                // pointer-events:none by onEnter/_disableAllChartIframes and
+                // stayed unclickable until something else re-enabled them —
+                // the intermittent "can't click / hover the chart" bug.
+                // Restoring here guarantees the chart is interactive again
+                // no matter how the menu was dismissed. showDropdown returns
+                // an OverlayCompleter, whose `.future` resolves on close.
+                ChartIframeGuard.release();
+                _enableAllChartIframes();
+              });
             },
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -2627,6 +3275,19 @@ class _CustomizableSplitHomeScreenState
 
   // Navigate to a specific screen type in the main panel
   void _navigateToScreen(ScreenType screenType) {
+    // Exit scalper / charts mode when navigating to any other screen — otherwise
+    // the full-width view stays rendered regardless of panel state.
+    if (_isScalperMode && screenType != ScreenType.scalper) {
+      _isScalperMode = false;
+    }
+    if (_isChartsMode && screenType != ScreenType.charts) {
+      _isChartsMode = false;
+    }
+    if (screenType == ScreenType.charts) {
+      setState(() => _isChartsMode = true);
+      return;
+    }
+
     // Find the active panel (not watchlist) and switch to the new screen
     int targetPanelIndex = 0;
     for (int i = 0; i < _panels.length; i++) {
@@ -2652,6 +3313,8 @@ class _CustomizableSplitHomeScreenState
     });
     _saveLayout();
     _handleScreenTypeChange(screenType);
+    // Keep URL in sync (no-op for screens that don't map to a route)
+    _updateUrlForScreenType(screenType);
   }
 
   // Build index slots for app bar
@@ -2710,6 +3373,12 @@ class _CustomizableSplitHomeScreenState
   }
 
   Widget _getScreenForType(ScreenType type) {
+    // Paper-only platform: real-money features render a placeholder no matter
+    // how they are opened (nav, dashboard cards, search, deep link).
+    final String? paperBlocked = paperUnavailableFeatures[type];
+    if (paperBlocked != null) {
+      return PaperUnavailableScreen(feature: paperBlocked);
+    }
     switch (type) {
       case ScreenType.dashboard:
         return const DashboardScreenWeb();
@@ -2740,6 +3409,7 @@ class _CustomizableSplitHomeScreenState
             return HoldingScreenWeb(
               listofHolding: holdingsModel ?? [],
               initialTabIndex: _holdingsInitialTabIndex,
+              tabRequestId: _holdingsTabRequestId,
             );
           },
         );
@@ -2753,6 +3423,8 @@ class _CustomizableSplitHomeScreenState
                 ref.watch(portfolioProvider.select((p) => p.posloader));
             final allPostionList =
                 ref.watch(portfolioProvider.select((p) => p.allPostionList));
+
+           
 
             // Show loader only when actively loading, not when no data exists
             if (isLoading || posloader) {
@@ -2821,6 +3493,7 @@ class _CustomizableSplitHomeScreenState
               return ChartWithDepthWeb(
                 // Don't use dynamic key - it destroys/recreates the widget (and chart iframe)
                 // Instead, let didUpdateWidget handle symbol changes via postMessage
+                followChartSymbolSearch: true,
                 wlValue: DepthInputArgs(
                   exch: exch,
                   token: token,
@@ -2835,6 +3508,7 @@ class _CustomizableSplitHomeScreenState
             // Don't use dynamic key - let didUpdateWidget handle symbol changes via postMessage
             return ChartWithDepthWeb(
               wlValue: args,
+              followChartSymbolSearch: true,
             );
           },
         );
@@ -2847,6 +3521,8 @@ class _CustomizableSplitHomeScreenState
         return const PledgenUnpledge(ddd: "DDDDD");
       case ScreenType.corporateActions:
         return CAEventsScreenWeb(onBack: _goBackInRightPanel);
+      case ScreenType.caBuyback:
+        return CorporateActionsScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.clientMaster:
         return ClientMasterScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.reports:
@@ -2912,6 +3588,8 @@ class _CustomizableSplitHomeScreenState
         return const StrategyBuilderPanelWeb();
       case ScreenType.scalper:
         return const ScalperScreenWeb(embedded: true);
+      case ScreenType.charts:
+        return const ChartWorkspaceScreen();
       case ScreenType.tradingViewWebHook:
         return const WebHookTradingViewScreen();
       case ScreenType.basketDashboard:
@@ -2986,6 +3664,19 @@ class _CustomizableSplitHomeScreenState
         return FormDownloadScreenWeb(onBack: _goBackInRightPanel);
       case ScreenType.closureDetails:
         return ProfileSectionScreenWeb(sectionTitle: 'Closure', onBack: _goBackInRightPanel);
+      case ScreenType.instaOptions:
+        return const InstaOptionsShell();
+      case ScreenType.scanner:
+        return ScannerShellScreen(
+          initialSubPage: widget.initialScannerSubPage,
+          initialExplainArgs: widget.initialExplainArgs,
+        );
+      case ScreenType.orderflow:
+        return const OrderflowShellScreen();
+      case ScreenType.curatedStrategies:
+        return AllStrategiesScreenWeb(onBack: _handleDashboardTap);
+      case ScreenType.allAlgoStrategies:
+        return AllAlgoStrategiesScreenWeb(onBack: _handleDashboardTap);
       // caEvent and cpAction removed
     }
   }
@@ -3020,6 +3711,8 @@ class _CustomizableSplitHomeScreenState
         return 'Pledge/Unpledge';
       case ScreenType.corporateActions:
         return 'Corporate Actions';
+      case ScreenType.caBuyback:
+        return 'Corporate Action';
       case ScreenType.clientMaster:
         return 'Client Master';
       case ScreenType.reports:
@@ -3051,6 +3744,8 @@ class _CustomizableSplitHomeScreenState
         return 'Strategy Builder';
       case ScreenType.scalper:
         return 'Scalper';
+      case ScreenType.charts:
+        return 'Charts';
       case ScreenType.tradingViewWebHook:
         return 'WebHook';
       case ScreenType.basketDashboard:
@@ -3095,6 +3790,16 @@ class _CustomizableSplitHomeScreenState
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.instaOptions:
+        return 'Option Analysis';
+      case ScreenType.scanner:
+        return 'Scanner';
+      case ScreenType.orderflow:
+        return 'Orderflow';
+      case ScreenType.curatedStrategies:
+        return 'Strategies';
+      case ScreenType.allAlgoStrategies:
+        return 'Algo Strategies';
       // caEvent and cpAction removed
     }
   }
@@ -3129,6 +3834,8 @@ class _CustomizableSplitHomeScreenState
         return Icons.security;
       case ScreenType.corporateActions:
         return Icons.business;
+      case ScreenType.caBuyback:
+        return Icons.business_center_outlined;
       case ScreenType.clientMaster:
         return Icons.description;
       case ScreenType.reports:
@@ -3160,6 +3867,8 @@ class _CustomizableSplitHomeScreenState
         return Icons.architecture;
       case ScreenType.scalper:
         return Icons.speed;
+      case ScreenType.charts:
+        return Icons.show_chart;
       case ScreenType.tradingViewWebHook:
         return Icons.webhook;
       case ScreenType.basketDashboard:
@@ -3204,6 +3913,16 @@ class _CustomizableSplitHomeScreenState
         return Icons.download;
       case ScreenType.closureDetails:
         return Icons.cancel;
+      case ScreenType.instaOptions:
+        return Icons.candlestick_chart;
+      case ScreenType.scanner:
+        return Icons.radar;
+      case ScreenType.orderflow:
+        return Icons.show_chart;
+      case ScreenType.curatedStrategies:
+        return Icons.auto_awesome;
+      case ScreenType.allAlgoStrategies:
+        return Icons.smart_toy_outlined;
       // caEvent and cpAction removed
     }
   }
@@ -3572,6 +4291,9 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.corporateActions:
         _handleCorporateActionsTap();
         break;
+      case ScreenType.caBuyback:
+        _handleCABuybackTap();
+        break;
       case ScreenType.clientMaster:
         _addScreenAsPanelTab(ScreenType.clientMaster);
         break;
@@ -3610,6 +4332,9 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.scalper:
         setState(() => _isScalperMode = true);
         break;
+      case ScreenType.charts:
+        setState(() => _isChartsMode = true);
+        break;
       case ScreenType.refer:
         break;
       case ScreenType.helpSupport:
@@ -3644,6 +4369,20 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.formDownload:
         break;
       case ScreenType.closureDetails:
+        break;
+      case ScreenType.instaOptions:
+        break;
+      case ScreenType.scanner:
+        _replaceScreenInPanel(ScreenType.scanner);
+        break;
+      case ScreenType.orderflow:
+        _replaceScreenInPanel(ScreenType.orderflow);
+        break;
+      case ScreenType.curatedStrategies:
+        _replaceScreenInPanel(ScreenType.curatedStrategies);
+        break;
+      case ScreenType.allAlgoStrategies:
+        _replaceScreenInPanel(ScreenType.allAlgoStrategies);
         break;
       // caEvent and cpAction removed
     }
@@ -4401,9 +5140,12 @@ class _CustomizableSplitHomeScreenState
   }
 
   void _replaceScreenInPanel(ScreenType screenType) {
-    // Exit scalper mode when switching to any other screen
+    // Exit scalper / charts mode when switching to any other screen
     if (_isScalperMode && screenType != ScreenType.scalper) {
       _isScalperMode = false;
+    }
+    if (_isChartsMode && screenType != ScreenType.charts) {
+      _isChartsMode = false;
     }
 
     int targetPanelIndex = -1;
@@ -4463,6 +5205,27 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.ipo:
         urlPath = WebRoutes.ipo;
         break;
+      case ScreenType.bond:
+        urlPath = WebRoutes.bonds;
+        break;
+      case ScreenType.myAccount:
+        urlPath = WebRoutes.myAccount;
+        break;
+      case ScreenType.refer:
+        urlPath = WebRoutes.refer;
+        break;
+      case ScreenType.helpSupport:
+        urlPath = WebRoutes.helpSupport;
+        break;
+      case ScreenType.settings:
+        urlPath = WebRoutes.settings;
+        break;
+      case ScreenType.notification:
+        urlPath = WebRoutes.notification;
+        break;
+      case ScreenType.pledgeUnpledge:
+        urlPath = WebRoutes.pledge;
+        break;
       case ScreenType.mutualFund:
         urlPath = WebRoutes.mutualFunds;
         break;
@@ -4475,6 +5238,9 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.reports:
         urlPath = WebRoutes.reports;
         break;
+      case ScreenType.caBuyback:
+        urlPath = WebRoutes.caBuyback;
+        break;
       case ScreenType.ledger:
         urlPath = '/ledger';
         break;
@@ -4483,6 +5249,9 @@ class _CustomizableSplitHomeScreenState
         break;
       case ScreenType.strategyBuilder:
         urlPath = WebRoutes.strategyBuilder;
+        break;
+      case ScreenType.charts:
+        urlPath = WebRoutes.charts;
         break;
       case ScreenType.tradingViewWebHook:
         urlPath = WebRoutes.tradingViewWebHook;
@@ -4493,6 +5262,12 @@ class _CustomizableSplitHomeScreenState
       case ScreenType.dashboard:
       case ScreenType.watchlist:
         urlPath = WebRoutes.home;
+        break;
+      case ScreenType.scanner:
+        urlPath = WebRoutes.scanner;
+        break;
+      case ScreenType.orderflow:
+        urlPath = WebRoutes.orderflow;
         break;
       default:
         // Don't update URL for other screen types (like scripDepthInfo, etc.)
@@ -4697,6 +5472,33 @@ class _CustomizableSplitHomeScreenState
       case WebRoutes.ipo: // '/ipo'
         _handleIPOTap();
         break;
+      case WebRoutes.bonds: // '/bonds'
+        _handleBondTap();
+        break;
+      case WebRoutes.scalper: // '/scalper'
+        _handleScalperTap();
+        break;
+      case WebRoutes.charts: // '/charts'
+        _handleChartsTap();
+        break;
+      case WebRoutes.myAccount: // '/my-account'
+        _navigateToScreen(ScreenType.myAccount);
+        break;
+      case WebRoutes.refer: // '/refer'
+        _navigateToScreen(ScreenType.refer);
+        break;
+      case WebRoutes.helpSupport: // '/help-support'
+        _navigateToScreen(ScreenType.helpSupport);
+        break;
+      case WebRoutes.settings: // '/settings'
+        _handleSettingsTap();
+        break;
+      case WebRoutes.notification: // '/notification'
+        _navigateToScreen(ScreenType.notification);
+        break;
+      case WebRoutes.pledge: // '/pledge'
+        _navigateToScreen(ScreenType.pledgeUnpledge);
+        break;
       case WebRoutes.mutualFunds: // '/mutual-funds'
         _handleMutualFundTap();
         break;
@@ -4731,6 +5533,7 @@ class _CustomizableSplitHomeScreenState
     // Set loading state immediately
     setState(() {
       _holdingsInitialTabIndex = initialTabIndex;
+      _holdingsTabRequestId++;
       _screenLoadingStates[ScreenType.holdings] = true;
     });
 
@@ -4910,6 +5713,27 @@ class _CustomizableSplitHomeScreenState
     }
   }
 
+  // Handle CA Buyback / Takeover / OFS tap (Profile dropdown → "Corporate Action")
+  void _handleCABuybackTap() async {
+    _addScreenAsPanelTab(ScreenType.caBuyback);
+
+    final portfolio = ref.read(portfolioProvider);
+    final reportsprovider = ref.read(ledgerProvider);
+
+    portfolio.cancelTimer();
+
+    await portfolio.requestWSHoldings(context: context, isSubscribe: false);
+    await portfolio.requestWSPosition(context: context, isSubscribe: false);
+    await ref
+        .read(orderProvider)
+        .requestWSOrderBook(context: context, isSubscribe: false);
+
+    if (reportsprovider.cpactiondata == null &&
+        reportsprovider.cpactionloader != true) {
+      reportsprovider.fetchcpactiondata(context);
+    }
+  }
+
   // Handle corporate actions tap
   void _handleCorporateActionsTap() async {
     // Add corporate actions as a panel tab
@@ -4948,8 +5772,10 @@ class _CustomizableSplitHomeScreenState
 
   // Handle reports tap
   void _handleReportsTap() async {
-    // Add reports as a panel tab
-    _addScreenAsPanelTab(ScreenType.reports);
+    // Show reports in the right (content) panel. `_addScreenAsPanelTab` adds
+    // to panel 0, but panel 0 is the watchlist panel and renders watchlist
+    // regardless of its screens list — so the tab would be invisible.
+    _replaceScreenInPanel(ScreenType.reports);
 
     final portfolio = ref.read(portfolioProvider);
     final reportsprovider = ref.read(ledgerProvider);
@@ -4983,8 +5809,9 @@ class _CustomizableSplitHomeScreenState
 
   // Handle settings tap
   void _handleSettingsTap() async {
-    // Add settings as a panel tab
-    _addScreenAsPanelTab(ScreenType.settings);
+    // Show settings in the right (content) panel — panel 0 always renders
+    // watchlist, so `_addScreenAsPanelTab` would add an invisible tab.
+    _replaceScreenInPanel(ScreenType.settings);
 
     final portfolio = ref.read(portfolioProvider);
 
@@ -5015,7 +5842,6 @@ class _CustomizableSplitHomeScreenState
       if (!mounted) return;
 
       final portfolio = ref.read(portfolioProvider);
-      final dashboard = ref.read(dashboardProvider);
 
       portfolio.cancelTimer();
 
@@ -5026,10 +5852,13 @@ class _CustomizableSplitHomeScreenState
           .read(orderProvider)
           .requestWSOrderBook(context: context, isSubscribe: false);
 
-      // Fetch portfolio analysis data
-      if (dashboard.portfolioAnalysis == null) {
-        await dashboard.getPortfolioAnalysis();
-      }
+      // Portfolio analysis is fetched by PortfolioDashboardScreen's own
+      // initState. Fetching here too sent the request twice on every open —
+      // the guard below never held, because the data is still null at this
+      // point — and the second response could overwrite the first one's.
+      // if (dashboard.portfolioAnalysis == null) {
+      //   await dashboard.getPortfolioAnalysis();
+      // }
 
       // Clear loading state
       if (mounted) {
@@ -5576,6 +6405,7 @@ enum ScreenType {
   optionChain,
   pledgeUnpledge,
   corporateActions,
+  caBuyback,
   reports,
   settings,
   tradeAction,
@@ -5590,6 +6420,7 @@ enum ScreenType {
   portfolioAnalysis,
   strategyBuilder,
   scalper,
+  charts,
   tradingViewWebHook,
   basketDashboard,
   createBasketStrategy,
@@ -5615,7 +6446,28 @@ enum ScreenType {
   nomineeDetails,
   formDownload,
   closureDetails,
+  instaOptions,
+  scanner,
+  orderflow,
+  curatedStrategies,
+  allAlgoStrategies,
 }
+
+/// Screens that involve real money / real orders outside the paper engine.
+/// They are hidden from navigation and render [PaperUnavailableScreen]
+/// if reached any other way. Value = user-facing feature name.
+const Map<ScreenType, String> paperUnavailableFeatures = {
+  ScreenType.mutualFund: 'Mutual Funds',
+  ScreenType.mfNfo: 'Mutual Funds',
+  ScreenType.mfCollection: 'Mutual Funds',
+  ScreenType.mfCategory: 'Mutual Funds',
+  ScreenType.mfStockDetail: 'Mutual Funds',
+  ScreenType.ipo: 'IPO',
+  ScreenType.bond: 'Bonds',
+  ScreenType.pledgeUnpledge: 'Pledge & Unpledge',
+  ScreenType.corporateActions: 'Corporate Actions',
+  ScreenType.caBuyback: 'Corporate Actions',
+};
 
 // Hoverable navigation item widget
 class _HoverableNavItem extends StatefulWidget {
@@ -6235,6 +7087,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
   Widget _buildTickerContent(BuildContext context) {
     final theme = ref.watch(themeProvider);
     final portfolio = ref.watch(portfolioProvider);
+    final privacy = ref.watch(privacyProvider);
     // Commented out for future use - Holdings and Fund data
     // final fund = ref.watch(fundProvider);
     final isDarkMode = theme.isDarkMode;
@@ -6280,6 +7133,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
               groupPositionSym: groupPositionSym,
               totalPnL: totalPnL,
               isDarkMode: isDarkMode,
+              isPrivate: privacy.isPrivate,
             );
 
             // If no positions, show empty state message
@@ -6343,6 +7197,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
     required List<String> groupPositionSym,
     required double totalPnL,
     required bool isDarkMode,
+    required bool isPrivate,
   }) {
     final List<Widget> items = [];
 
@@ -6353,6 +7208,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
         value: totalPnL,
         isDarkMode: isDarkMode,
         showAsAmount: true,
+        isMasked: isPrivate,
         onTap: () {
           if (WebNavigationHelper.isAvailable) {
             WebNavigationHelper.navigateTo(Routes.positionscreen);
@@ -6388,6 +7244,7 @@ class _PortfolioTickerStripState extends ConsumerState<PortfolioTickerStrip>
           value: pnl,
           isDarkMode: isDarkMode,
           showAsAmount: true,
+          isMasked: isPrivate,
           onTap: () {
             if (WebNavigationHelper.isAvailable) {
               WebNavigationHelper.navigateTo(Routes.positionscreen);
@@ -6490,6 +7347,8 @@ class _TickerItem extends StatefulWidget {
   final bool isDarkMode;
   final bool showAsAmount;
   final bool isNeutral;
+  // Privacy Mode: hides the amount (and its sign/colour) behind a mask.
+  final bool isMasked;
   final VoidCallback? onTap;
 
   const _TickerItem({
@@ -6498,6 +7357,7 @@ class _TickerItem extends StatefulWidget {
     required this.isDarkMode,
     this.showAsAmount = false,
     this.isNeutral = false,
+    this.isMasked = false,
     this.onTap,
   });
 
@@ -6512,11 +7372,11 @@ class _TickerItemState extends State<_TickerItem> {
   Widget build(BuildContext context) {
     final isPositive = widget.value >= 0;
     final displayValue = widget.showAsAmount
-        ? "₹${_formatAmount(widget.value.abs())}"
+        ? _formatAmount(widget.value.abs())
         : widget.value.toStringAsFixed(2);
 
     Color valueColor;
-    if (widget.isNeutral || widget.value == 0) {
+    if (widget.isMasked || widget.isNeutral || widget.value == 0) {
       valueColor = widget.isDarkMode
           ? MyntColors.textPrimaryDark
           : MyntColors.textPrimary;
@@ -6557,9 +7417,11 @@ class _TickerItemState extends State<_TickerItem> {
               ),
               const SizedBox(width: 8),
               Text(
-                widget.showAsAmount
-                    ? (isPositive ? displayValue : "-$displayValue")
-                    : displayValue,
+                widget.isMasked
+                    ? kPrivacyMask
+                    : (widget.showAsAmount
+                        ? (isPositive ? displayValue : "-$displayValue")
+                        : displayValue),
                 style: MyntWebTextStyles.body(
                   context,
                   fontWeight: MyntFonts.semiBold,

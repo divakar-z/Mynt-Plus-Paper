@@ -103,7 +103,7 @@ mixin NotificationApi on ApiCore {
 // Get Information Messages from nlog
   Future<List<InformationMessageModel>> getInformationMessages() async {
     try {
-      final uri = Uri.parse('https://besim.zebull.in/nlog/get_messages');
+      final uri = Uri.parse('https://besim.mynt.in/nlog/get_messages');
       final res = await apiClient.post(
         uri,
         headers: {'Content-Type': 'application/json'},

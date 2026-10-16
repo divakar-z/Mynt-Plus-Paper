@@ -14,6 +14,7 @@ import '../themes/theme.dart';
 import 'core/default_change_notifier.dart';
 import 'user_profile_provider.dart';
 import 'market_watch_provider.dart';
+import '../sharedWidget/functions.dart';
 import '../screens/web/chart/web_chart_manager.dart';
 import '../utils/pip_service.dart';
 
@@ -243,6 +244,8 @@ class ThemesProvider extends DefaultChangeNotifier {
           token: activeTab.token,
           tsym: activeTab.tsym,
           isDarkMode: isDarkMode,
+          decorativeName:
+              DerivativeMaster.nameFor(activeTab.exch, activeTab.token),
         );
       }
       // Update PiP window theme if open

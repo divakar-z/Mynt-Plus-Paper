@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../res/assets.dart';
@@ -225,7 +226,7 @@ class _PositionGroupScreenState extends ConsumerState<PositionGroupScreen> {
 }
 
 // Total P&L/MTM Display Widget (same as position screen)
-class _PnLDisplay extends StatelessWidget {
+class _PnLDisplay extends ConsumerWidget {
   final bool isNetPnl;
   final bool isDay;
   final String totUnRealMtm;
@@ -257,7 +258,12 @@ class _PnLDisplay extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Privacy Mode: the group total P&L/MTM is masked and colour neutralized.
+    final privacy = ref.watch(privacyProvider);
+    final rawValue = !isNetPnl
+        ? (isDay ? totUnRealMtm : totMtM)
+        : (isDay ? totBookedPnL : totPnL);
     return Padding(
       padding:
           const EdgeInsets.only(top: 10.0, left: 8.0, right: 8.0, bottom: 15),
@@ -302,11 +308,10 @@ class _PnLDisplay extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
-          !isNetPnl
-              ? _buildValueText(context, isDay ? totUnRealMtm : totMtM,
-                  isDay ? _getValueColor(totUnRealMtm, context) : _getValueColor(totMtM, context))
-              : _buildValueText(context, isDay ? totBookedPnL : totPnL,
-                  isDay ? _getValueColor(totBookedPnL, context) : _getValueColor(totPnL, context))
+          _buildValueText(
+              context,
+              privacy.mask(rawValue),
+              _getValueColor(privacy.isPrivate ? "0.00" : rawValue, context))
         ],
       ),
     );

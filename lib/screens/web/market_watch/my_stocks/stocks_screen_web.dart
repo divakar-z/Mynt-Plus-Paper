@@ -7,6 +7,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../../../models/marketwatch_model/get_quotes.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/res.dart';
@@ -186,9 +187,12 @@ class _HoldingsCardWebState extends ConsumerState<_HoldingsCardWeb> {
                     try {
                       setState(() => _isNavigating = true);
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
-                        ref
-                            .read(marketWatchProvider)
-                            .setIsDepthVisibleWeb(false);
+                        // Depth visibility is managed by chart_with_depth_web.dart
+                        // (same as the watchlist row). Hiding it here closed depth
+                        // on a re-click of the same scrip with nothing to reopen it.
+                        // ref
+                        //     .read(marketWatchProvider)
+                        //     .setIsDepthVisibleWeb(false);
 
                         DepthInputArgs depthArgs = DepthInputArgs(
                           exch: _exch,
@@ -332,7 +336,9 @@ class _HoldingsCardWebState extends ConsumerState<_HoldingsCardWeb> {
                                     ),
                                     const SizedBox(width: 4),
                                     Text(
-                                      _currentQty,
+                                      ref
+                                          .watch(privacyProvider)
+                                          .mask(_currentQty),
                                       style: MyntWebTextStyles.exch(
                                         context,
                                         fontWeight: FontWeight.w500,

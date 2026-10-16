@@ -62,10 +62,33 @@ class PortfolioProvider extends DefaultChangeNotifier {
   List<HoldingsModel> _nonSealableHoldings = [];
   List<HoldingsModel> get nonSealableHoldings => _nonSealableHoldings;
 
+  // ---------------------------------------------------------------------------
+  // MTF (Margin Trading Facility) holdings — fetched with prd:"F".
+  // Kept as a SEPARATE parallel state from the equity (prd:"C") holdings above
+  // so the live-shipping Equity tab can never regress from this addition.
+  // ---------------------------------------------------------------------------
+  List<HoldingsModel>? _tmtfHoldingsModel = [];
+  List<HoldingsModel>? _mtfHoldingsModel = [];
+  List<HoldingsModel>? get mtfHoldingsModel => _mtfHoldingsModel;
+  List<HoldingsModel>? _mtfHoldingSearchItem = [];
+  List<HoldingsModel>? get mtfHoldingSearchItem => _mtfHoldingSearchItem;
+
   List<PositionBookModel>? _tpostionBookModel = [];
 
   List<PositionBookModel>? _postionBookModel = [];
   List<PositionBookModel>? get postionBookModel => _postionBookModel;
+
+  // Set true whenever the position-book API returned an unexpected/error
+  // status or the fetch threw. Reset at the start of every fetchPositionBook
+  // call. The manual refresh button reads `lastRefreshSucceeded` after
+  // awaiting to decide whether to surface an error toaster.
+  bool _positionFetchErrored = false;
+
+  /// True if the last `fetchPositionBook` call finished without an API error
+  /// ('success' or 'no data' — both valid). False if the API returned an
+  /// unknown status or the call threw.
+  bool get lastRefreshSucceeded => !_positionFetchErrored;
+
   List<PositionBookModel>? _openPosition = [];
   List<PositionBookModel>? get openPosition => _openPosition;
   List<PositionBookModel>? _closedPosion = [];
@@ -98,6 +121,20 @@ class PortfolioProvider extends DefaultChangeNotifier {
   String get totPnlPercHolding => _totPnlPercHolding;
   String _totInvesHold = "0.00";
   String get totInvesHold => _totInvesHold;
+
+  // MTF holdings summary totals (mirror of the equity totals above).
+  double _totalMtfPnl = 0.00;
+  double get totalMtfPnl => _totalMtfPnl;
+  double _totalMtfCurrentVal = 0.00;
+  double get totalMtfCurrentVal => _totalMtfCurrentVal;
+  double _mtfOneDayChng = 0.00;
+  double get mtfOneDayChng => _mtfOneDayChng;
+  double _mtfOneDayChngPer = 0.00;
+  double get mtfOneDayChngPer => _mtfOneDayChngPer;
+  String _totMtfPnlPerc = "0.00";
+  String get totMtfPnlPerc => _totMtfPnlPerc;
+  String _totMtfInvest = "0.00";
+  String get totMtfInvest => _totMtfInvest;
 
   int _exitPositionQty = 0;
   int get exitPositionQty => _exitPositionQty;
@@ -196,6 +233,12 @@ class PortfolioProvider extends DefaultChangeNotifier {
   bool _isRefreshingHoldings = false;
   bool get isRefreshingHoldings => _isRefreshingHoldings;
 
+  // MTF loader flags (mirror of the equity holdings loaders above).
+  bool _mtfHoldLoader = false;
+  bool get mtfHoldLoader => _mtfHoldLoader;
+  bool _isRefreshingMtf = false;
+  bool get isRefreshingMtf => _isRefreshingMtf;
+
   bool _mfhloader = false;
   bool get mfhloader => _mfhloader;
 
@@ -230,6 +273,30 @@ class PortfolioProvider extends DefaultChangeNotifier {
   final List<String> _posGrpNames = ["All position", "Group by symbol"];
 
   List<String> get posGrpNames => _posGrpNames;
+
+  // Position group filter: 'underlying' (default) groups by symbol only,
+  // 'underlying_expiry' groups by symbol + expiry (only affects default
+  // F&O groups — equity rows without expDate stay grouped by symbol; custom
+  // groups are not affected).
+  String _positionGroupFilter = 'underlying';
+  String get positionGroupFilter => _positionGroupFilter;
+
+  void setPositionGroupFilter(String value) {
+    if (value != 'underlying' && value != 'underlying_expiry') return;
+    if (_positionGroupFilter == value) return;
+    _positionGroupFilter = value;
+    getPositionGroupNames();
+    for (var symbol in _groupPositionSym) {
+      if (_groupedBySymbol.containsKey(symbol)) {
+        final groupData = _groupedBySymbol[symbol]['groupList'];
+        final isCustomGrp = _groupedBySymbol[symbol]['isCustomGrp'] ?? false;
+        if (groupData != null && groupData.isNotEmpty) {
+          positionGroupCal(_isDay, groupData, symbol, isCustomGrp);
+        }
+      }
+    }
+    notifyListeners();
+  }
 
   List<GetGroupSymbol> _getPositionGroupSymbol = [];
   List<GetGroupSymbol> get getPositionGroupSymbol => _getPositionGroupSymbol;
@@ -577,8 +644,13 @@ changeHoldingsTabIndex(int index) {
       } else {
         if (result['stat'] == 'no data') {
           _postionBookModel = [];
-        }else if(result['emsg'] == "Session Expired :  Invalid Session Key"){
+        } else if (result['emsg'] == "Session Expired :  Invalid Session Key") {
           ref.read(authProvider).ifSessionExpired(context);
+          _positionFetchErrored = true;
+        } else {
+          // Real API error (not 'success', not 'no data', not session expired).
+          // Mark the flag so the manual refresh caller shows an error toaster.
+          _positionFetchErrored = true;
         }
         _tpostionBookModel = [];
       }
@@ -687,6 +759,10 @@ changeHoldingsTabIndex(int index) {
             element.exchTsym![0].symbol = "${spilitSymbol["symbol"]}";
             element.exchTsym![0].expDate = "${spilitSymbol["expDate"]}";
             element.exchTsym![0].option = "${spilitSymbol["option"]}";
+            // After e-DIS, the broker mirrors the SAME shares into both the
+            // POA and Non-POA fields — settled into dpQty + npoadqty, and T1
+            // into btstqty + npoadt1qty. Use max() on each pair so the mirrored
+            // qty is counted once (summing would double-count an e-DIS'd holding).
             int qty = (
                     // int.parse("${element.npoadqty ?? 0}") +
                     // int.parse("${element.brkcolqty ?? 0}") +
@@ -694,7 +770,8 @@ changeHoldingsTabIndex(int index) {
                     max(int.parse("${element.dpQty ?? 0}"),
                             int.parse("${element.npoadqty ?? 0}")) +
                         int.parse("${element.holdqty ?? 0}") +
-                        int.parse("${element.btstqty ?? 0}")) -
+                        max<int>(int.parse("${element.btstqty ?? 0}"),
+                            int.parse("${element.npoadt1qty ?? 0}"))) -
                 int.parse("${element.trdqty ?? 0}");
             element.currentQty = qty;
             // FIX: Update holdQty without wiping existing socket data
@@ -712,7 +789,7 @@ changeHoldingsTabIndex(int index) {
                 "${element.upldprc == "0.00" ? element.exchTsym![0].close ?? 0.0 : element.upldprc ?? 0.00}");
 
             element.avgPrc = "$avgCost";
-            element.invested = ((qty + int.parse(element.npoadt1qty ?? "0")) * avgCost).toStringAsFixed(2);
+            element.invested = (qty * avgCost).toStringAsFixed(2);
 
             invest += double.parse("${element.invested}");
             if (element.npoadqty.toString() != "null" ||
@@ -775,7 +852,306 @@ changeHoldingsTabIndex(int index) {
     }
   }
 
+  // ===========================================================================
+  // MTF (Margin Trading Facility) holdings — prd:"F".
+  // These methods are a deliberate, isolated mirror of the equity holdings
+  // logic above. They operate ONLY on the MTF state so the live Equity tab is
+  // unaffected. Row processing is intentionally duplicated (not refactored into
+  // a shared helper) to avoid any risk of regressing the equity path.
+  // ===========================================================================
+  Future fetchMtfHoldings(context, String initail,
+      {bool isRefresh = false}) async {
+    double invest = 0.0;
+    try {
+      if (isRefresh) {
+        _isRefreshingMtf = true;
+      } else if (_mtfHoldingsModel == null || _mtfHoldingsModel!.isEmpty) {
+        _mtfHoldLoader = true;
+      }
+      notifyListeners();
+
+      // Fetch holdings under the MTF product (prd:"F").
+      final result = await api.getHolding(prd: "F");
+      if (result['stat'] == 'success') {
+        _tmtfHoldingsModel = result['data'];
+      } else {
+        if (result['stat'] == 'no data') {
+          _mtfHoldingsModel = [];
+        } else if (result['emsg'] == "Session Expired :  Invalid Session Key") {
+          ref.read(authProvider).ifSessionExpired(context);
+        }
+        _tmtfHoldingsModel = [];
+      }
+
+      // Merge fresh data into existing rows (preserve socket-updated values),
+      // mirroring the equity merge.
+      if (_mtfHoldingsModel!.isNotEmpty && _tmtfHoldingsModel!.isNotEmpty) {
+        for (var newHolding in _tmtfHoldingsModel!) {
+          final index = _mtfHoldingsModel!.indexWhere((oldHolding) =>
+              oldHolding.exchTsym![0].token == newHolding.exchTsym![0].token);
+          if (index != -1) {
+            _mtfHoldingsModel![index].updateFrom(newHolding);
+          } else {
+            _mtfHoldingsModel!.add(newHolding);
+          }
+        }
+      } else {
+        _totMtfInvest = "0.00";
+        _totMtfPnlPerc = "0.00";
+        _totalMtfPnl = 0.00;
+        _totalMtfCurrentVal = 0.00;
+        _mtfOneDayChng = 0.00;
+        _mtfOneDayChngPer = 0.00;
+        _mtfHoldingsModel = _tmtfHoldingsModel;
+      }
+
+      if (_mtfHoldingsModel!.isNotEmpty &&
+          _mtfHoldingsModel![0].stat != "Not_Ok") {
+        // Sort A→Z by trading symbol (same as equity).
+        _mtfHoldingsModel!.sort(
+            (a, b) => a.exchTsym![0].tsym!.compareTo(b.exchTsym![0].tsym!));
+
+        for (var element in _mtfHoldingsModel!) {
+          element.isExitHoldings = false;
+
+          Map spilitSymbol = spilitTsym(value: "${element.exchTsym![0].tsym}");
+          element.exchTsym![0].symbol = "${spilitSymbol["symbol"]}";
+          element.exchTsym![0].expDate = "${spilitSymbol["expDate"]}";
+          element.exchTsym![0].option = "${spilitSymbol["option"]}";
+
+          int qty = (max(int.parse("${element.dpQty ?? 0}"),
+                          int.parse("${element.npoadqty ?? 0}")) +
+                      int.parse("${element.holdqty ?? 0}") +
+                      max<int>(int.parse("${element.btstqty ?? 0}"),
+                          int.parse("${element.npoadt1qty ?? 0}"))) -
+                  int.parse("${element.trdqty ?? 0}");
+          element.currentQty = qty;
+
+          double avgCost = double.parse(
+              "${element.upldprc == "0.00" ? element.exchTsym![0].close ?? 0.0 : element.upldprc ?? 0.00}");
+          element.avgPrc = "$avgCost";
+          element.invested = (qty * avgCost).toStringAsFixed(2);
+          invest += double.parse("${element.invested}");
+
+          element.saleableQty = (int.parse("${element.holdqty ?? 0}") +
+                  int.parse("${element.dpQty ?? 0}") +
+                  int.parse("${element.btstqty ?? 0}")) -
+              int.parse("${element.usedqty ?? 0}");
+          if (element.sellAmt != null && element.sellAmt != "0.000000") {
+            element.rpnl = (double.parse("${element.sellAmt ?? 0.00}") -
+                    ((double.parse("${element.trdqty ?? 0.00}")) *
+                        (double.parse("${element.avgPrc ?? 0.00}"))))
+                .toStringAsFixed(2);
+          }
+        }
+
+        _totMtfInvest = invest.toStringAsFixed(2);
+
+        if (initail == "Refresh") {
+          await requestWSMtfHoldings(isSubscribe: true, context: context);
+        }
+      } else if (_mtfHoldingsModel!.isNotEmpty &&
+          _mtfHoldingsModel![0].emsg ==
+              "Session Expired :  Invalid Session Key" &&
+          _mtfHoldingsModel![0].stat == "Not_Ok") {
+        ref.read(authProvider).ifSessionExpired(context);
+      }
+
+      // Seed row values + totals from the live socket cache for first paint.
+      seedMtfHoldingsFromCache();
+      notifyListeners();
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API MTF Holdings", "Error": "$e"});
+      notifyListeners();
+    } finally {
+      _mtfHoldLoader = false;
+      _isRefreshingMtf = false;
+      notifyListeners();
+    }
+  }
+
+  // WebSocket subscription request for MTF holdings scrips (mirror of
+  // requestWSHoldings but built from the MTF list).
+  requestWSMtfHoldings(
+      {required bool isSubscribe, required BuildContext context}) {
+    if (kIsWeb && !isSubscribe) return;
+    try {
+      String input = "";
+      if (_mtfHoldingsModel != null &&
+          _mtfHoldingsModel!.isNotEmpty &&
+          _mtfHoldingsModel![0].stat != "Not_Ok") {
+        for (var i = 0; i < _mtfHoldingsModel!.length; i++) {
+          input +=
+              "${_mtfHoldingsModel![i].exchTsym![0].exch}|${_mtfHoldingsModel![i].exchTsym![0].token}#";
+        }
+      }
+      if (input.isNotEmpty) {
+        ref.read(websocketProvider).establishConnection(
+            channelInput: input,
+            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            context: context);
+      }
+    } catch (e) {}
+  }
+
+  // Seed MTF rows + totals from the cached socket data (used right after a
+  // fetch so the first paint shows live LTP / current value / P&L).
+  void seedMtfHoldingsFromCache() {
+    if (_mtfHoldingsModel == null || _mtfHoldingsModel!.isEmpty) return;
+    try {
+      final socketDatas = ref.read(websocketProvider).socketDatas;
+      for (final holding in _mtfHoldingsModel!) {
+        final token = holding.exchTsym?.isNotEmpty == true
+            ? holding.exchTsym![0].token
+            : null;
+        if (token == null) continue;
+        final cached = socketDatas[token];
+        if (cached is Map<String, dynamic>) {
+          updateMtfHoldingValues(token, cached);
+        }
+      }
+    } catch (e) {}
+    mtfPnlHoldCal();
+  }
+
+  // Per-tick update for an MTF row (mirror of updateHoldingValues). Driven by
+  // the holdings screen's own socket-stream listener so the shared WebSocket
+  // provider stays untouched.
+  void updateMtfHoldingValues(String token, Map<String, dynamic> socketData) {
+    if (_mtfHoldingsModel == null) return;
+
+    var index = -1;
+    for (int i = 0; i < _mtfHoldingsModel!.length; i++) {
+      if (_mtfHoldingsModel![i].exchTsym![0].token == token) {
+        index = i;
+        break;
+      }
+    }
+    if (index == -1) return;
+
+    var holding = _mtfHoldingsModel![index];
+    bool hasUpdates = false;
+
+    final newLp = socketData['lp']?.toString();
+    final newPc = socketData['pc']?.toString();
+    final newChng = socketData['chng']?.toString();
+    final newClose = socketData['c']?.toString();
+
+    if (_isValidValue(newLp)) {
+      holding.exchTsym![0].lp = newLp;
+      hasUpdates = true;
+    }
+    if (_isValidValue(newPc)) {
+      holding.exchTsym![0].perChange = newPc;
+      hasUpdates = true;
+    }
+    if (_isValidValue(newChng)) {
+      holding.exchTsym![0].change = newChng;
+      hasUpdates = true;
+    }
+    if (_isValidValue(newClose)) {
+      holding.exchTsym![0].close = newClose;
+      hasUpdates = true;
+    }
+
+    if (hasUpdates) {
+      _updateMtfDerivedValues(holding);
+    }
+  }
+
+  // Mirror of _updateDerivedValues, scoped to a single MTF row. Totals are
+  // recomputed separately via mtfPnlHoldCal (called by the screen listener).
+  void _updateMtfDerivedValues(HoldingsModel holding) {
+    final qty = holding.currentQty ?? 0;
+    if (qty < 0) return;
+
+    final lpDouble = double.tryParse(holding.exchTsym![0].lp ?? '0.0') ?? 0.0;
+    if (lpDouble <= 0) return;
+
+    holding.currentValue = (qty * lpDouble).toStringAsFixed(2);
+
+    final closeVal =
+        double.tryParse(holding.exchTsym![0].close ?? "0.00") ?? 0.0;
+    final avgCost = double.tryParse(holding.upldprc == "0.00"
+            ? (closeVal > 0
+                ? closeVal.toString()
+                : holding.exchTsym![0].close ?? '0.0')
+            : holding.upldprc ?? '0.00') ??
+        0.0;
+    if (avgCost <= 0) return;
+
+    holding.invested = (qty * avgCost).toStringAsFixed(2);
+    final investedValue = double.tryParse(holding.invested ?? '0.00') ?? 0.00;
+
+    final currentValue = double.tryParse(holding.currentValue ?? "0.00") ?? 0.0;
+    holding.exchTsym![0].profitNloss = ((currentValue - investedValue) +
+            double.tryParse(holding.rpnl ?? '0.0')!)
+        .toStringAsFixed(2);
+
+    if (investedValue > 0.0 || double.tryParse(holding.sellAmt ?? '0.0')! > 0) {
+      final profitValue =
+          double.tryParse(holding.exchTsym![0].profitNloss ?? "0.00") ?? 0.0;
+      holding.exchTsym![0].pNlChng = ((profitValue /
+                  (investedValue +
+                      (double.tryParse(holding.sellAmt ?? '0.0')!))) *
+              100)
+          .toStringAsFixed(2);
+    }
+
+    if (closeVal > 0) {
+      holding.exchTsym![0].oneDayChg =
+          ((lpDouble - closeVal) * qty).toStringAsFixed(2);
+    }
+  }
+
+  // Recompute MTF headline totals (mirror of pnlHoldCal, synchronous since the
+  // MTF list is small).
+  void mtfPnlHoldCal() {
+    if (_mtfHoldingsModel == null || _mtfHoldingsModel!.isEmpty) return;
+
+    double totalPnl = 0.0;
+    double dayChange = 0.0;
+    double invest = 0.0;
+    double currentVal = 0.0;
+
+    for (final holding in _mtfHoldingsModel!) {
+      if (holding.exchTsym == null || holding.exchTsym!.isEmpty) continue;
+      final profitNlossStr = holding.exchTsym![0].profitNloss;
+      final profitNloss = profitNlossStr != null
+          ? (double.tryParse(profitNlossStr) ?? 0.0)
+          : (double.tryParse(holding.rpnl ?? '0.0') ?? 0.0);
+      final oneDayChg =
+          double.tryParse(holding.exchTsym![0].oneDayChg ?? '0.0') ?? 0.0;
+      final invested = double.tryParse(holding.invested ?? '0.0') ?? 0.0;
+      final currentValue =
+          double.tryParse(holding.currentValue ?? '0.0') ?? 0.0;
+
+      totalPnl += profitNloss;
+      dayChange += oneDayChg;
+      invest += invested;
+      currentVal += currentValue;
+    }
+
+    _totalMtfPnl = totalPnl;
+    _mtfOneDayChng = dayChange;
+    _totalMtfCurrentVal = currentVal;
+    _totMtfInvest = invest.toStringAsFixed(2);
+    _mtfOneDayChngPer = currentVal > 0 ? (dayChange / currentVal) * 100 : 0.0;
+    _totMtfPnlPerc =
+        invest > 0 ? ((totalPnl / invest) * 100).toStringAsFixed(2) : '0.00';
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      notifyListeners();
+    });
+  }
+
   Future fetchPositionBook(BuildContext context, bool isDay, {bool isRefresh = false}) async {
+    // Reset flag at the start of every fetch so lastRefreshSucceeded
+    // reflects THIS call's outcome, not a previous one.
+    _positionFetchErrored = false;
     try {
       // Use separate loader states: full-screen loader for initial load, refresh loader for updates
       if (isRefresh) {
@@ -786,9 +1162,14 @@ changeHoldingsTabIndex(int index) {
       notifyListeners();
 
       await setPortfolioupdate('P',context);
+      // [POS_DIAG] Capture what the API actually returned vs what we had before.
+      debugPrint('🔍 [POS_DIAG] fetchPositionBook — isDay=$isDay, old _postionBookModel.length=${_postionBookModel?.length ?? 0}, new _tpostionBookModel.length=${_tpostionBookModel?.length ?? 0}');
       if (_postionBookModel!.isNotEmpty) {
         if (_tpostionBookModel!.isNotEmpty) {
           _postionBookModel = _tpostionBookModel;
+        } else {
+          // [POS_DIAG] API returned empty but we had data — stale-data path.
+          debugPrint('🔍 [POS_DIAG] ⚠️ STALE PATH — _tpostionBookModel is empty but _postionBookModel has ${_postionBookModel!.length} items. Old data kept.');
         }
       } else {
         _posloader = true;
@@ -835,7 +1216,16 @@ changeHoldingsTabIndex(int index) {
 
           ConstantName.sessCheck = true;
           _isDay = isDay;
+
+          // Patch positions where the broker returned lp=0 using the last-good LTP
+          // from the WebSocket cache. Happens when the API is called right after an
+          // order fills — the broker's position aggregator lags the latest tick.
+          // Without this, UI shows 0 P&L until the next df update or manual refresh.
+          _patchStaleLtpsFromSocketCache();
+
           await splitPositionBook(isDay);
+          // [POS_DIAG] After split: see how many ended up in each bucket.
+          debugPrint('🔍 [POS_DIAG] splitPositionBook done — isDay=$isDay, openPosition=${_openPosition?.length ?? 0}, closedPosion=${_closedPosion?.length ?? 0}, allPostionList=${_allPostionList.length}');
 
           // Reapply sorting if previously set
           if (_currentPositionSortOption.isNotEmpty) {
@@ -848,8 +1238,8 @@ changeHoldingsTabIndex(int index) {
           // Merges custom group data with live positions after fetch completes.
           _refreshCustomGroups();
         } else {
-          //
-
+          // [POS_DIAG] API returned stat=Not_Ok — positions cleared.
+          debugPrint('🔍 [POS_DIAG] ⚠️ stat=Not_Ok — emsg=${_postionBookModel![0].emsg}, clearing _openPosition');
           if (_postionBookModel![0].emsg ==
                   "Session Expired :  Invalid Session Key" &&
               _postionBookModel![0].stat == "Not_Ok") {
@@ -862,11 +1252,15 @@ changeHoldingsTabIndex(int index) {
       notifyListeners();
       return _postionBookModel;
     } catch (e) {
-      // print("qwqwqw pos sw catch ${e}");
+      // [POS_DIAG] Exception thrown during fetchPositionBook — positions may be stale.
+      debugPrint('🔍 [POS_DIAG] ❌ fetchPositionBook CATCH — error: $e');
       ref
           .read(indexListProvider)
           .logError
           .add({"type": "API Position Book", "Error": "$e"});
+      // Exception during fetch counts as a refresh failure so
+      // lastRefreshSucceeded reports false to the caller.
+      _positionFetchErrored = true;
       notifyListeners();
     } finally {
       _posloader = false;
@@ -1033,10 +1427,15 @@ changeHoldingsTabIndex(int index) {
       for (int i = startIndex; i < endIndex; i++) {
         final holding = holdingsModel![i];
 
-        // Direct non-null access with fallbacks
-        final profitNloss =
-            double.tryParse(holding.exchTsym![0].profitNloss ?? '0.0')! +
-                double.tryParse(holding.rpnl ?? '0.0')!;
+        // Per-row profitNloss is set by _updateDerivedValues as
+        // (currentValue - invested) + rpnl, so it already includes the
+        // realized component. Falling back to rpnl only when profitNloss
+        // hasn't been written yet (pre-first-WS-tick window) keeps sold
+        // rows from briefly contributing 0 to the aggregate.
+        final profitNlossStr = holding.exchTsym![0].profitNloss;
+        final profitNloss = profitNlossStr != null
+            ? (double.tryParse(profitNlossStr) ?? 0.0)
+            : (double.tryParse(holding.rpnl ?? '0.0') ?? 0.0);
         final oneDayChg =
             double.tryParse(holding.exchTsym![0].oneDayChg ?? '0.0') ?? 0.0;
         final invested = double.tryParse(holding.invested ?? '0.0') ?? 0.0;
@@ -1665,10 +2064,13 @@ changeHoldingsTabIndex(int index) {
                   channel: defaultTargetPlatform == TargetPlatform.android
                       ? '${ref.read(authProvider).deviceInfo["brand"]}'
                       : "${ref.read(authProvider).deviceInfo["model"]}",
+                  frzqty: ((int.parse(element.frzqty?.toString() ?? "0") /
+                              int.parse(element.ls?.toString() ?? "1"))
+                          .floor() *
+                      int.parse(element.ls?.toString() ?? "1")),
                   token: element.token ?? '',
                   dname: element.dname ?? '');
-              _placeOrderModel = await api.getPlaceOrder(
-                  placeOrderInput, ref.read(orderProvider).ip);
+              await fetchExitPosition(context, placeOrderInput, true, true);
 
               if (_placeOrderModel?.emsg ==
                       "Session Expired :  Invalid Session Key" &&
@@ -1677,6 +2079,7 @@ changeHoldingsTabIndex(int index) {
                 return;
               }
 
+              // TC_389.2 — success toast is owned solely by fetchExitPosition.
               if (_placeOrderModel?.stat == "Ok") {
                 anyExited = true;
               }
@@ -1865,7 +2268,7 @@ changeHoldingsTabIndex(int index) {
 
         final groupName = group.posname ?? '';
         final syncedPositions = <PositionBookModel>[];
-        final staleSymbols = <String>[];
+        final staleSymbols = <Map<String, String>>[];
 
         for (var savedPos in group.posdata!) {
           // Find matching live position by token + prd
@@ -1878,15 +2281,21 @@ changeHoldingsTabIndex(int index) {
             syncedPositions.add(livePos);
           } else if (savedPos.tsym != null && groupName.isNotEmpty) {
             // Position no longer exists — queue for server cleanup
-            staleSymbols.add(savedPos.tsym!);
+            staleSymbols.add({
+              'tsym': savedPos.tsym!,
+              's_prdt_ali': savedPos.sPrdtAli ?? ''
+            });
           }
         }
 
         group.posdata = syncedPositions;
 
         // Remove stale positions from server in background (fire-and-forget)
-        for (var tsym in staleSymbols) {
-          api.deletePositionGrpSym(groupName, tsym).ignore();
+        for (var stale in staleSymbols) {
+          api
+              .deletePositionGrpSym(
+                  groupName, stale['tsym']!, stale['s_prdt_ali'] ?? '')
+              .ignore();
         }
       }
 
@@ -1921,8 +2330,11 @@ changeHoldingsTabIndex(int index) {
         successMessage(c, "Group '$name' created successfully");
         // Navigator.pop is already called in create_group_web.dart before this method
       } else {
-        // Handle error cases
-        final status = _groupName!.status ?? "Unknown error";
+        // Handle error cases. A rejected create carries no `status` - the
+        // reason is in `detail` ("Name already exists"), which is what the
+        // duplicate branch below matches on.
+        final status =
+            _groupName!.status ?? _groupName!.detail ?? "Unknown error";
         if (status.toLowerCase().contains("already exists") ||
             status.toLowerCase().contains("duplicate")) {
           warningMessage(c, "Group name '$name' already exists");
@@ -1946,8 +2358,15 @@ changeHoldingsTabIndex(int index) {
         successMessage(c, "Symbol added to group '$name' successfully");
         // Navigator.pop(c);
       } else {
-        final status = _groupName!.status ?? "Unknown error";
-        error(c, "$status to group '$name'");
+        // The backend's own `status` reads as a sentence with the group
+        // appended ("symbol not added to group 'X'"). A `detail` is a
+        // standalone message, so it is shown as it came.
+        final status = _groupName!.status;
+        if (status != null) {
+          error(c, "$status to group '$name'");
+        } else {
+          error(c, _groupName!.detail ?? "Unknown error");
+        }
       }
     } catch (e) {}
   }
@@ -1963,7 +2382,8 @@ changeHoldingsTabIndex(int index) {
         successMessage(c, "Group '$name' deleted successfully");
         // Navigator.pop(c);
       } else {
-        final status = _groupName!.status ?? "Unknown error";
+        final status =
+            _groupName!.status ?? _groupName!.detail ?? "Unknown error";
         error(c, status);
       }
     } finally {
@@ -1973,16 +2393,17 @@ changeHoldingsTabIndex(int index) {
 
 // Fetching data from the api and stored in a variable
   Future fetchDeleteGroupSymbol(
-      String name, BuildContext c, String tsym) async {
+      String name, BuildContext c, String tsym, String prdAli) async {
     try {
-      _groupName = await api.deletePositionGrpSym(name, tsym);
+      _groupName = await api.deletePositionGrpSym(name, tsym, prdAli);
 
       if (_groupName!.status == "symbol removed") {
         await fetchPosGroupSymbol(name, false);
         successMessage(c, "Symbol '$tsym' removed from group '$name'");
         // Navigator.pop(c);
       } else {
-        final status = _groupName!.status ?? "Unknown error";
+        final status =
+            _groupName!.status ?? _groupName!.detail ?? "Unknown error";
         error(c, status);
       }
     } catch (e) {}
@@ -2059,7 +2480,7 @@ changeHoldingsTabIndex(int index) {
     if (lpDouble <= 0) return; // Can't calculate with invalid price
 
     // Update current value
-    holding.currentValue = ((qty + int.parse(holding.npoadt1qty ?? "0"))  * lpDouble).toStringAsFixed(2);
+    holding.currentValue = (qty * lpDouble).toStringAsFixed(2);
 
     // Get average cost with fallback to closing price
     final closeVal =
@@ -2073,7 +2494,7 @@ changeHoldingsTabIndex(int index) {
 
     if (avgCost <= 0) return; // Can't calculate with invalid cost
 
-    holding.invested = ((qty + int.parse(holding.npoadt1qty ?? "0")) * avgCost).toStringAsFixed(2);
+    holding.invested = (qty * avgCost).toStringAsFixed(2);
     final investedValue = double.tryParse(holding.invested ?? '0.00') ?? 0.00;
 
     // Calculate profit/loss
@@ -2095,9 +2516,9 @@ changeHoldingsTabIndex(int index) {
     }
 
     // Calculate one day change if close value is valid
-    if (closeVal > 0) {
+  if (closeVal > 0) {
       holding.exchTsym![0].oneDayChg =
-          ((lpDouble - closeVal) * (qty+ int.parse(holding.npoadt1qty ?? "0"))).toStringAsFixed(2);
+          ((lpDouble - closeVal) * qty).toStringAsFixed(2);
     }
 
     // Update totals
@@ -2108,6 +2529,51 @@ changeHoldingsTabIndex(int index) {
     _totalCurrentVal = 0.0;
     for (var holdingJson in holdingsModel!) {
       _totalCurrentVal += double.parse("${holdingJson.currentValue ?? 0.0}");
+    }
+  }
+
+  /// Patch positions whose lp came back as 0 / null / empty from the API using
+  /// the last-good LTP cached by the WebSocket provider.
+  ///
+  /// Why: when an order fills, the broker's position-book endpoint may return
+  /// lp=0 for a few seconds because its aggregator lags the latest market tick.
+  /// Meanwhile _socketDatas has the real last-traded price from the live feed.
+  /// Without this patch, the user sees 0 P&L until the next df update or a
+  /// manual refresh.
+  void _patchStaleLtpsFromSocketCache() {
+    if (_postionBookModel == null || _postionBookModel!.isEmpty) return;
+
+    try {
+      final socketDatas = ref.read(websocketProvider).socketDatas;
+      if (socketDatas.isEmpty) return;
+
+      int patched = 0;
+      for (final position in _postionBookModel!) {
+        final token = position.token;
+        if (token == null || token.isEmpty) continue;
+
+        // Only patch when the API-returned lp is missing or zero
+        final apiLp = position.lp;
+        final apiLpNum = double.tryParse(apiLp ?? '') ?? 0.0;
+        if (apiLpNum != 0.0) continue;
+
+        final cached = socketDatas[token];
+        if (cached is! Map) continue;
+        final cachedLp = cached['lp']?.toString();
+        if (cachedLp == null || cachedLp.isEmpty) continue;
+
+        final cachedLpNum = double.tryParse(cachedLp) ?? 0.0;
+        if (cachedLpNum == 0.0) continue;
+
+        position.lp = cachedLp;
+        patched++;
+      }
+
+      if (patched > 0) {
+        debugPrint('🔍 [POS_DIAG] Patched $patched position(s) with cached WebSocket LTP');
+      }
+    } catch (e) {
+      debugPrint('🔍 [POS_DIAG] _patchStaleLtpsFromSocketCache error: $e');
     }
   }
 
@@ -2169,7 +2635,7 @@ changeHoldingsTabIndex(int index) {
       // Update chart provider if chart dialog is open
       try {
         final chartProv = ref.read(groupPnlChartProvider);
-        if (chartProv.activeGroupName != null && newLp != null) {
+        if (chartProv.isOpen && newLp != null) {
           chartProv.onTickUpdate(
             token: token,
             ltp: newLp,
@@ -2457,7 +2923,8 @@ changeHoldingsTabIndex(int index) {
           List<String> splitVal = element.dname!.split(" ");
 
           element.symbol = splitVal[0];
-          element.expDate = "${splitVal[1]} ${splitVal[2]}";
+          // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+          element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
           element.option = splitVal.length > 4
               ? "${splitVal[3]} ${splitVal[4]}"
               : splitVal[3];
@@ -2479,6 +2946,7 @@ changeHoldingsTabIndex(int index) {
       _exitAll = false;
       if (isDay) {
         int check = 0;
+        int skippedCount = 0;
         for (var element in _openPosition!) {
           if (element.daybuyqty != "0" || element.daysellqty != "0") {
             check = check + 1;
@@ -2487,7 +2955,14 @@ changeHoldingsTabIndex(int index) {
             if (check >= 2) {
               _exitAll = true;
             }
+          } else {
+            skippedCount++;
+            // [POS_DIAG] This open position is being DROPPED from allPostionList in Day mode.
+            debugPrint('🔍 [POS_DIAG] ⚠️ isDay SKIP — tsym=${element.tsym}, netqty=${element.netqty}, daybuyqty=${element.daybuyqty}, daysellqty=${element.daysellqty}');
           }
+        }
+        if (skippedCount > 0) {
+          debugPrint('🔍 [POS_DIAG] ⚠️ isDay=true dropped $skippedCount open positions from allPostionList');
         }
       } else {
         int check = 0;
@@ -2536,12 +3011,18 @@ changeHoldingsTabIndex(int index) {
     try {
       _groupedBySymbol = {};
       for (var element in _allPostionList) {
-        if (_groupedBySymbol.containsKey(element.symbol)) {
-          _groupedBySymbol['${element.symbol}']["groupList"]
+        final expDate = element.expDate?.toString() ?? '';
+        final hasExpiry = expDate.isNotEmpty && expDate != '-';
+        final groupKey =
+            (_positionGroupFilter == 'underlying_expiry' && hasExpiry)
+                ? "${element.symbol} $expDate"
+                : "${element.symbol}";
+        if (_groupedBySymbol.containsKey(groupKey)) {
+          _groupedBySymbol[groupKey]["groupList"]
               .add(jsonDecode(jsonEncode(element)));
         } else {
           _groupedBySymbol.addAll({
-            "${element.symbol}": {
+            groupKey: {
               "isCustomGrp": false,
               "totMtm": "0.00",
               "totPnl": "0.00",
@@ -2652,7 +3133,11 @@ changeHoldingsTabIndex(int index) {
         ConstantName.sessCheck = true;
         if (isPosition) {
           await fetchPositionBook(context, _isDay);
-          successMessage(context, "Position exited successfully.");
+          // "Ok" only means the order was accepted — the websocket reports executed / rejected.
+          // successMessage(context, "Position exited successfully.");
+          final exitSymbol =
+              placeOrderInput.tsym.replaceAll(RegExp(r'-EQ$'), "");
+          successMessage(context, "Exit order placed for $exitSymbol.");
         } else {
           await fetchHoldings(context, "Refresh");
         }
@@ -2792,11 +3277,27 @@ changeHoldingsTabIndex(int index) {
     }
   }
 
+  /// True when at least one open position is still ticked for exit.
+  /// Reads the per-position flags, which are what exitPosition() acts on —
+  /// not the counters, which can be reset independently.
+  bool get hasExitSelection =>
+      _openPosition?.any((p) => p.isExitSelection == true) ?? false;
+
   // Reset exit position selection state
   void resetExitPositionSelection() {
     _exitPositionQty = 0;
     _isExitAllPosition = false;
     _exitSelectedPositions.clear();
+
+    // CRITICAL: exitPosition() places a MARKET exit order for every position
+    // whose isExitSelection is true and never looks at the counters above.
+    // Clearing only the counters would hide the count while still squaring
+    // off those positions, so the per-position flags must be cleared here.
+    if (_openPosition != null) {
+      for (final position in _openPosition!) {
+        position.isExitSelection = false;
+      }
+    }
 
     notifyListeners();
   }
@@ -2856,7 +3357,16 @@ changeHoldingsTabIndex(int index) {
         if (context.mounted) {
         Navigator.pop(context);
           // Show error message from API
-          final errorMsg = _positionConvertionModel!.emsg ?? "Conversion failed";
+          // final errorMsg = _positionConvertionModel!.emsg ?? "Conversion failed";
+          final rawMsg = _positionConvertionModel!.emsg ?? "";
+          final symbol = input.tsym.replaceAll(RegExp(r'-EQ$'), "");
+          final String errorMsg;
+          if (rawMsg.contains("No Holdings uploaded")) {
+            errorMsg =
+                "This position can't be converted to $toProduct. $symbol is not in your holdings.";
+          } else {
+            errorMsg = rawMsg.isNotEmpty ? rawMsg : "Conversion failed";
+          }
           if (kIsWeb) {
             ResponsiveSnackBar.showWarning(context, errorMsg);
           } else {

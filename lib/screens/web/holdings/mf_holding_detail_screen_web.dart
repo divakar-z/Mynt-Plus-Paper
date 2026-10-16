@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../../provider/thems.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 
@@ -106,8 +107,11 @@ class _MfHoldingDetailScreenWebState
   }
 
   Widget _buildDetailsSection(ThemesProvider theme) {
-    final pnlValue = widget.holding.profitLoss ?? "0.00";
-    final pnlPer = widget.holding.changeprofitLoss ?? "0.00";
+    // Privacy Mode: everything here except the fund's current NAV is the
+    // user's own position data, so it is masked.
+    final privacy = ref.watch(privacyProvider);
+    final pnlValue = privacy.mask(widget.holding.profitLoss ?? "0.00");
+    final pnlPer = privacy.mask(widget.holding.changeprofitLoss ?? "0.00");
     final pnlColor = _getValueColor(pnlValue, context);
 
     return Column(
@@ -137,8 +141,8 @@ class _MfHoldingDetailScreenWebState
         _rowOfInfoData(
           "Units",
           Text(
-            (double.tryParse(widget.holding.avgQty ?? '0') ?? 0.0)
-                .toStringAsFixed(4),
+            privacy.mask((double.tryParse(widget.holding.avgQty ?? '0') ?? 0.0)
+                .toStringAsFixed(4)),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -147,8 +151,8 @@ class _MfHoldingDetailScreenWebState
         _rowOfInfoData(
           "Avg Price",
           Text(
-            (double.tryParse(widget.holding.avgNav ?? '0') ?? 0.0)
-                .toStringAsFixed(4),
+            privacy.mask((double.tryParse(widget.holding.avgNav ?? '0') ?? 0.0)
+                .toStringAsFixed(4)),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -167,7 +171,7 @@ class _MfHoldingDetailScreenWebState
         _rowOfInfoData(
           "Pledged Units",
           Text(
-            "0",
+            privacy.mask("0"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -176,7 +180,7 @@ class _MfHoldingDetailScreenWebState
         _rowOfInfoData(
           "Current",
           Text(
-            "${widget.holding.currentValue ?? '0.00'}",
+            privacy.mask("${widget.holding.currentValue ?? '0.00'}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -185,8 +189,9 @@ class _MfHoldingDetailScreenWebState
         _rowOfInfoData(
           "Invested",
           Text(
-            (double.tryParse(widget.holding.investedValue ?? '0.00') ?? 0.0)
-                .toStringAsFixed(2),
+            privacy.mask(
+                (double.tryParse(widget.holding.investedValue ?? '0.00') ?? 0.0)
+                    .toStringAsFixed(2)),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),

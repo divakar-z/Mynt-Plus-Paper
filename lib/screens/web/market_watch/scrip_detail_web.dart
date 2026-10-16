@@ -165,7 +165,12 @@ class _ScripDetailWebState extends ConsumerState<ScripDetailWeb> {
                           "Company Name",
                           scripInfo.cname ?? "-",
                           "Symbol Name",
-                          scripInfo.symname ?? "-",
+                          // BFO symname is the instrument code ("BSXOPT"); show the
+                          // friendly symbol ("SENSEX") instead. Other exch unchanged.
+                          (scripInfo.exch == "BFO"
+                                  ? scripInfo.symbol
+                                  : scripInfo.symname) ??
+                              "-",
                         ),
                         const SizedBox(height: 3),
                         _rowOfInfoData(

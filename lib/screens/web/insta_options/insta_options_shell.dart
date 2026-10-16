@@ -1,0 +1,118 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/insta_options/insta_live_ticks.dart';
+import 'package:mynt_plus/screens/web/insta_options/insta_options_theme.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/buildup_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/chain_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/find_strategy_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/index_contributors_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/markets_dashboard_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/oi_stats_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/pcr_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/per_strike_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/screens/trending_oi_screen.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/basket_chip.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/insta_top_tabs.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/side_rail.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/symbol_expiry_bar.dart';
+
+/// Root widget for the InstaOptions Analytics module. Lives inside
+/// `CustomizableSplitHomeScreen` as the right-panel for
+/// `ScreenTypeParam.instaOptions`.
+///
+/// Owns the active sub-screen state and switches between the 9 sub-views via
+/// an internal side-rail. There is no per-sub-screen GoRoute; deep-linking is
+/// a Phase-10 follow-up.
+class InstaOptionsShell extends ConsumerStatefulWidget {
+  const InstaOptionsShell({super.key});
+
+  @override
+  ConsumerState<InstaOptionsShell> createState() => _InstaOptionsShellState();
+}
+
+class _InstaOptionsShellState extends ConsumerState<InstaOptionsShell> {
+  InstaSubScreen _active = InstaSubScreen.markets;
+
+  void _onSelect(InstaSubScreen sub) {
+    if (sub == _active) return;
+    setState(() => _active = sub);
+  }
+
+  @override
+  void dispose() {
+    // Leaving the module → drop every InstaOptions socket subscription.
+    ref.read(instaLiveTicksProvider).clear();
+    super.dispose();
+  }
+
+  Widget _buildActiveSubScreen() {
+    switch (_active) {
+      case InstaSubScreen.markets:
+        return const MarketsDashboardScreen();
+      case InstaSubScreen.contributors:
+        return const IndexContributorsScreen();
+      case InstaSubScreen.chain:
+        return const ChainScreen();
+      case InstaSubScreen.oiStats:
+        return const OiStatsScreen();
+      case InstaSubScreen.trending:
+        return const TrendingOiScreen();
+      case InstaSubScreen.pcr:
+        return const PcrScreen();
+      case InstaSubScreen.strike:
+        return const PerStrikeScreen();
+      case InstaSubScreen.buildup:
+        return const BuildupScreen();
+      case InstaSubScreen.findStrategy:
+        return const FindStrategyScreen();
+    }
+  }
+
+  bool get _showSymbolExpiryBar =>
+      _active != InstaSubScreen.markets &&
+      _active != InstaSubScreen.contributors &&
+      _active != InstaSubScreen.chain &&
+      _active != InstaSubScreen.oiStats &&
+      _active != InstaSubScreen.pcr &&
+      _active != InstaSubScreen.trending;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = InstaOptionsTokens.of(context);
+    return Container(
+      color: tokens.bgPrimary,
+      child: Stack(
+        children: [
+          // Navigation switched from the left side-rail to a top tab strip
+          // (Holdings-style). Sub-screen switching is unchanged — the tabs call
+          // the same `_onSelect`. `stretch` makes the tab strip span full width
+          // so its chips left-align (Column defaults to centering otherwise).
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              InstaTopTabs(active: _active, onSelect: _onSelect),
+              if (_showSymbolExpiryBar) const SymbolExpiryBar(),
+              Expanded(child: _buildActiveSubScreen()),
+            ],
+          ),
+          // ---- Old left side-rail layout (kept for quick revert) ----
+          // Row(
+          //   crossAxisAlignment: CrossAxisAlignment.stretch,
+          //   children: [
+          //     InstaSideRail(active: _active, onSelect: _onSelect),
+          //     Expanded(
+          //       child: Column(
+          //         children: [
+          //           if (_showSymbolExpiryBar) const SymbolExpiryBar(),
+          //           Expanded(child: _buildActiveSubScreen()),
+          //         ],
+          //       ),
+          //     ),
+          //   ],
+          // ),
+          const BasketChip(),
+        ],
+      ),
+    );
+  }
+}

@@ -452,7 +452,7 @@ class _CollectionBasketBuilderState
               switch (col) {
                 case 0: cellText = fund.name; break;
                 case 1: cellText = fund.aum > 0 ? fund.aum.toStringAsFixed(2) : '-'; break;
-                case 2: cellText = fund.fiveYearCAGR > 0 ? '${fund.fiveYearCAGR.toStringAsFixed(2)}%' : '-'; break;
+                case 2: cellText = fund.oneYearCAGR > 0 ? '${fund.oneYearCAGR.toStringAsFixed(2)}%' : '-'; break;
                 case 3: cellText = fund.nav > 0 ? '₹${fund.nav.toStringAsFixed(2)}' : '-'; break;
                 case 4: cellText = '100'; break; // max possible weight text
                 case 5: cellText = showInvestCols ? '₹1,00,000' : ''; break;
@@ -739,8 +739,8 @@ class _CollectionBasketBuilderState
                   if (!isSplit)
                   _buildDataCell(
                     child: Text(
-                      fund.fiveYearCAGR > 0
-                          ? '${fund.fiveYearCAGR.toStringAsFixed(2)}%'
+                      fund.oneYearCAGR > 0
+                          ? '${fund.oneYearCAGR.toStringAsFixed(2)}%'
                           : '-',
                       style: MyntWebTextStyles.tableCell(context,
                           darkColor: MyntColors.textPrimaryDark,
@@ -1191,6 +1191,10 @@ class _CollectionBasketBuilderState
         TextEditingController();
 
     void updateWeight(int delta) {
+      if (!strategy.canChangeWeightOf(fund)) {
+        error(context, 'Unlock at least one other fund to change this weight');
+        return;
+      }
       final current = int.tryParse(controller.text) ?? 0;
       final newVal = (current + delta).clamp(1, 100);
       final newText = '$newVal';
@@ -1285,6 +1289,16 @@ class _CollectionBasketBuilderState
               onChanged: (value) {
                 final intValue = int.tryParse(value);
                 if (intValue != null && intValue > 0 && intValue <= 100) {
+                  if (!strategy.canChangeWeightOf(fund)) {
+                    // Revert the field so the visible value matches the model.
+                    final currentText = fund.percentage.round().toString();
+                    controller.value = TextEditingValue(
+                      text: currentText,
+                      selection: TextSelection.collapsed(offset: currentText.length),
+                    );
+                    error(context, 'Unlock at least one other fund to change this weight');
+                    return;
+                  }
                   strategy.updateFundPercentage(fund, intValue.toDouble());
                 } else if (value.isEmpty) {
                   // User is mid-edit (clearing to retype) — don't update the model
@@ -2670,6 +2684,7 @@ class _FundSearchDialogContentState
               name: item.name ?? "Unknown Scheme",
               schemeName: item.schemeName ?? "Unknown Scheme",
               type: item.type ?? '',
+              oneYearCAGR: double.tryParse(item.oneYearData ?? "0") ?? 0.0,
               fiveYearCAGR: double.tryParse(item.fIVEYEARDATA ?? "0") ?? 0.0,
               threeYearCAGR: double.tryParse(item.tHREEYEARDATA ?? "0") ?? 0.0,
               aum: double.tryParse(item.aUM ?? "0") ?? 0.0,

@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/models/bonds_model/bonds_order_book_model.dart';
 import 'package:mynt_plus/provider/bonds_provider.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
@@ -38,7 +38,7 @@ class BondCancelAlertWeb extends ConsumerWidget {
                 children: [
                   Text(
                     "Cancel Bond Order",
-                    style: GoogleFonts.inter(
+                    style: dysInter(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                       color: isDark ? Colors.white : Colors.black,
@@ -71,7 +71,7 @@ class BondCancelAlertWeb extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
               child: Text(
                 'Are you sure you want to cancel "${bondcancel.symbol}"?',
-                style: GoogleFonts.inter(
+                style: dysInter(
                   fontSize: 14,
                   color: isDark ? Colors.white70 : Colors.black87,
                 ),
@@ -99,7 +99,7 @@ class BondCancelAlertWeb extends ConsumerWidget {
                   ),
                   child: Text(
                     "Cancel",
-                    style: GoogleFonts.inter(
+                    style: dysInter(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: Colors.white,
@@ -190,7 +190,7 @@ class _YesButton extends ConsumerWidget {
 }
 
 TextStyle _textStyle(Color color, double fontSize, FontWeight fWeight) {
-  return GoogleFonts.inter(
+  return dysInter(
     textStyle: TextStyle(
       fontWeight: fWeight,
       color: color,

@@ -2,11 +2,14 @@
 
 import 'dart:html' as html;
 
+// ignore: unused_import  (kept for the commented-out `excel` version below)
 import 'package:excel/excel.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:syncfusion_flutter_xlsio/xlsio.dart' as xlsio;
 
 import '../../../models/order_book_model/order_book_model.dart';
 import '../../../models/order_book_model/trade_book_model.dart';
@@ -395,6 +398,200 @@ class OrdersDownloadHelper {
   // SHARED EXCEL GENERATOR
   // ════════════════════════════════════════════════════════════════════
 
+  /// Builds and downloads the Excel file for all three order tables
+  /// (Open Orders, Executed Orders and Trade Book).
+  ///
+  /// Built on Syncfusion xlsio rather than the `excel` package, because that
+  /// package has no image support at all and the client asked for the logo in
+  /// the Excel the way it already appears in the PDF. Everything else - the
+  /// columns, their order, the styles, the client block, the footer and the
+  /// file name - is a like-for-like port of the previous version, which is
+  /// kept commented out directly below for rollback.
+  static Future<void> _generateExcel({
+    required String title,
+    required String clientId,
+    required String clientName,
+    required List<String> headers,
+    required int numericFromIndex,
+    required String fileName,
+    required List<dynamic> Function(int index) rowBuilder,
+    required int rowCount,
+  }) async {
+    final workbook = xlsio.Workbook();
+    final sheet = workbook.worksheets[0];
+    sheet.name = title;
+
+    final now = DateTime.now();
+    final dateStr = DateFormat('dd/MM/yyyy').format(now);
+
+    // Track max content length per column for auto-fit. Columns stay 0-based
+    // here and are converted on the way out, since xlsio indexes from 1.
+    final Map<int, int> colWidths = {};
+    void trackWidth(int col, String value) {
+      if (value.length > (colWidths[col] ?? 0)) colWidths[col] = value.length;
+    }
+
+    // -- Style definitions --
+    const numberFormat = '#,##0.00'; // was NumFormat.standard_4
+
+    void addBorders(xlsio.Style style) {
+      style.borders.all.lineStyle = xlsio.LineStyle.thin;
+    }
+
+    final titleStyle = workbook.styles.add('titleStyle');
+    titleStyle.bold = true;
+    titleStyle.fontSize = 14;
+    titleStyle.fontName = 'Arial';
+    addBorders(titleStyle);
+
+    final rightStyle = workbook.styles.add('rightStyle');
+    rightStyle.hAlign = xlsio.HAlignType.right;
+    addBorders(rightStyle);
+
+    final colHeaderStyle = workbook.styles.add('colHeaderStyle');
+    colHeaderStyle.bold = true;
+    colHeaderStyle.fontColor = '#FFFFFF';
+    colHeaderStyle.backColor = '#1F226B';
+    addBorders(colHeaderStyle);
+
+    final colHeaderRightStyle = workbook.styles.add('colHeaderRightStyle');
+    colHeaderRightStyle.bold = true;
+    colHeaderRightStyle.fontColor = '#FFFFFF';
+    colHeaderRightStyle.backColor = '#1F226B';
+    colHeaderRightStyle.hAlign = xlsio.HAlignType.right;
+    addBorders(colHeaderRightStyle);
+
+    final textStyle = workbook.styles.add('textStyle');
+    addBorders(textStyle);
+
+    final numStyle = workbook.styles.add('numStyle');
+    numStyle.hAlign = xlsio.HAlignType.right;
+    numStyle.numberFormat = numberFormat;
+    addBorders(numStyle);
+
+    // -- Helpers (col/row stay 0-based to match the previous version) --
+    void setTextCell(int col, int row, String value, xlsio.Style style) {
+      if (value.isEmpty) return;
+      sheet.getRangeByIndex(row + 1, col + 1)
+        ..setText(value)
+        ..cellStyle = style;
+      trackWidth(col, value);
+    }
+
+    void setNumCell(int col, int row, double value, xlsio.Style style) {
+      sheet.getRangeByIndex(row + 1, col + 1)
+        ..setNumber(value)
+        ..cellStyle = style;
+      trackWidth(col, value.toStringAsFixed(2));
+    }
+
+    // ============================================================
+    // ROW 0: Logo + Title + Client info
+    // ============================================================
+    // Logo sits in A1, the same asset the PDF header uses. The row height set
+    // at the end reserves space for it.
+    try {
+      final logoBytes = await rootBundle.load('assets/icon/logo.png');
+      // Pass the Uint8List itself, NOT .toList(). xlsio's Picture constructor
+      // casts the data with `as Uint8List` before decoding the PNG, so a plain
+      // List<int> throws a TypeError and the picture is silently dropped.
+      final picture =
+          sheet.pictures.addStream(1, 1, logoBytes.buffer.asUint8List());
+      // The PDF's 60x30 are POINTS on an A4 page; in Excel they are pixels,
+      // which renders the logo smaller than the asset itself. Sized on the
+      // asset's own 106x50 aspect ratio instead, matching Positions.
+      picture.width = 127;
+      picture.height = 60;
+    } catch (e) {
+      // Logo is decoration - a missing asset must never fail the download.
+      debugPrint('[OrdersDownload] Excel logo skipped: $e');
+    }
+
+    setTextCell(1, 0, title, titleStyle);
+    final lastCol = headers.length - 2;
+    setTextCell(lastCol, 0, 'Client ID', rightStyle);
+    setTextCell(lastCol + 1, 0, clientId, rightStyle);
+    setTextCell(lastCol, 1, 'Client Name', rightStyle);
+    setTextCell(lastCol + 1, 1, clientName, rightStyle);
+    setTextCell(lastCol, 2, 'Date', rightStyle);
+    setTextCell(lastCol + 1, 2, dateStr, rightStyle);
+
+    // Column headers (row 4)
+    for (int i = 0; i < headers.length; i++) {
+      final style = i >= numericFromIndex ? colHeaderRightStyle : colHeaderStyle;
+      setTextCell(i, 4, headers[i], style);
+    }
+
+    // Data rows (row 5+)
+    for (int r = 0; r < rowCount; r++) {
+      final values = rowBuilder(r);
+      final row = 5 + r;
+      for (int c = 0; c < values.length; c++) {
+        if (values[c] is double) {
+          setNumCell(c, row, values[c] as double, numStyle);
+        } else {
+          setTextCell(c, row, values[c].toString(), textStyle);
+        }
+      }
+    }
+
+    // Footer
+    final footerStart = 5 + rowCount + 1;
+    final footerLines = [
+      'Zebu Share And Wealth Management Private Limited',
+      'Correspondence Office: No: 301, 4th Main Road, Burma Colony, Perungudi, Chennai, Tamil Nadu 600 096.',
+      'Phone No: 044-4855 7991',
+      'TRADING MEMBER CODE: NSE-EQ,F&O,CDS,COM: 13179 , BSE-EQ,F&O,CD,COM: 6550, MSEI - EQ,F&O,CDS:83300',
+      'CIN NO: U67120TZ2013PTC019704 Website: www.zebuetrade.com, Email: grievance@zebuetrade.com',
+    ];
+    for (int i = 0; i < footerLines.length; i++) {
+      // Footer text must not stretch column A, so it skips trackWidth.
+      sheet.getRangeByIndex(footerStart + i + 1, 1)
+        ..setText(footerLines[i])
+        ..cellStyle = textStyle;
+    }
+
+    // Auto-fit column widths
+    for (final entry in colWidths.entries) {
+      final w = entry.value < 10 ? 10.0 : (entry.value + 2).toDouble();
+      sheet.getRangeByIndex(1, entry.key + 1).columnWidth = w;
+    }
+    // Column A must stay at least as wide as the logo, or the picture spills
+    // out of A1 and sits on top of the title in B1. The logo is 127px and a
+    // width of 19 characters is 138px, which clears it. Trade Book is the case
+    // that exposed this: its first column is Trade ID, whose short values left
+    // column A narrower than the logo. Was 15.
+    if ((colWidths[0] ?? 0) < 19) {
+      sheet.getRangeByIndex(1, 1).columnWidth = 19;
+    }
+    // Instrument column wider
+    final instrCol = headers.indexOf('Instrument');
+    if (instrCol >= 0 && (colWidths[instrCol] ?? 0) < 25) {
+      sheet.getRangeByIndex(1, instrCol + 1).columnWidth = 25;
+    }
+    // Row 1 height reserves space for the logo: 60px is 45pt, plus a little
+    // breathing room so the logo does not touch the row border. Was 33.
+    sheet.getRangeByIndex(1, 1).rowHeight = 48;
+
+    final bytes = workbook.saveAsStream();
+    workbook.dispose();
+
+    _downloadFile(
+      Uint8List.fromList(bytes),
+      '${fileName}_${DateFormat('dd-MM-yyyy').format(now)}.xlsx',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+  }
+
+  // -- Retired 2026-09-23: the `excel` package version of the shared Excel
+  // generator. Kept for rollback. It cannot carry a logo - that package has no
+  // image API at all - which is the only reason it was replaced. A copy also
+  // sits in orders_download_helper.dart.bak.
+  /*
+  // ════════════════════════════════════════════════════════════════════
+  // SHARED EXCEL GENERATOR
+  // ════════════════════════════════════════════════════════════════════
+
   static Future<void> _generateExcel({
     required String title,
     required String clientId,
@@ -525,6 +722,7 @@ class OrdersDownloadHelper {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
   }
+  */
 
   /// Helper: summary box for PDF
   static pw.Widget _summaryBox(String label, String value, {PdfColor? color}) {

@@ -12,6 +12,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mynt_plus/routes/web_router.dart';
 import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
 import 'package:mynt_plus/sharedWidget/functions.dart';
+import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
@@ -20,7 +21,11 @@ import '../../../../res/mynt_web_color_styles.dart';
 
 class PledgenUnpledge extends StatefulWidget {
   final String ddd;
-  const PledgenUnpledge({super.key, required this.ddd});
+
+  /// When set, an app-bar back button is shown that calls this instead of
+  /// popping — used by the Holdings screen to return to its own view.
+  final VoidCallback? onBack;
+  const PledgenUnpledge({super.key, required this.ddd, this.onBack});
 
   @override
   State<PledgenUnpledge> createState() => _PledgenUnpledgeScreenState();
@@ -42,6 +47,15 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
   @override
   void initState() {
     super.initState();
+    // TC_344 — the search field's X button empties the controller without
+    // firing onChanged/onClear, so the filter kept the old query. Reset it
+    // whenever the field becomes empty (same approach as Positions).
+    searchController.addListener(() {
+      if (!mounted) return;
+      if (searchController.text.isEmpty && searchQuery.isNotEmpty) {
+        _onSearchChanged('');
+      }
+    });
   }
 
   void _onSearchChanged(String value) {
@@ -75,30 +89,38 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
       // Calculate counts for cards
       int pledgeListCount = 0;
       int unpledgeListCount = 0;
+      int nonApprovedCount = 0;
 
       if (ledgerprovider.pledgeandunpledge?.data != null) {
         for (var item in ledgerprovider.pledgeandunpledge!.data!) {
-          double soh = double.tryParse(item.sOHQTY?.toString() ?? '0') ?? 0;
-          double nsoh = double.tryParse(item.nSOHQTY?.toString() ?? '0') ?? 0;
-          if ((soh + nsoh) > 0) pledgeListCount++;
+          final int soh =
+              (double.tryParse(item.sOHQTY?.toString() ?? '0') ?? 0).toInt();
+          final int nsoh =
+              (double.tryParse(item.nSOHQTY?.toString() ?? '0') ?? 0).toInt();
+          final int colQty =
+              (double.tryParse(item.cOLQTY?.toString() ?? '0') ?? 0).toInt();
 
-          double colQty = double.tryParse(item.cOLQTY?.toString() ?? '0') ?? 0;
-          if (colQty > 0) unpledgeListCount++;
+          // Tab "0" — Available Balance (Pledge)
+          if (item.initiated == "0" &&
+              item.status == 'Ok' &&
+              (soh + nsoh) != 0) {
+            pledgeListCount++;
+          }
+          // Tab "1" — Pledge Balance (Unpledge)
+          if (colQty != 0) {
+            unpledgeListCount++;
+          }
+          // Tab "2" — Non Approved
+          if ((item.status ?? '').trim().toLowerCase() == "not_ok") {
+            nonApprovedCount++;
+          }
         }
       }
-
-      int nonApprovedCount = int.tryParse(
-              ledgerprovider.pledgeandunpledge?.noOfNonApprovedStocks
-                      ?.toString() ??
-                  '0') ??
-          0;
 
       double nonApprovedSum = 0.0;
       if (ledgerprovider.pledgeandunpledge?.data != null) {
         for (var item in ledgerprovider.pledgeandunpledge!.data!) {
-          if (item.status == "Not_ok" &&
-              (double.tryParse(item.cOLQTY?.toString() ?? '0') ?? 0).toInt() ==
-                  0) {
+          if ((item.status ?? '').trim().toLowerCase() == "not_ok") {
             double scripValue =
                 double.tryParse(item.aMOUNT?.toString() ?? '0') ?? 0.0;
             nonApprovedSum += scripValue;
@@ -275,17 +297,20 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
           backgroundColor: resolveThemeColor(context,
               dark: MyntColors.backgroundColorDark,
               light: MyntColors.backgroundColor),
-          // leadingWidth: 41,
+          leadingWidth: widget.onBack == null ? null : 44,
           titleSpacing: 6,
           centerTitle: false,
-          // leading: CustomBackBtn(onBack: () => context.go(WebRoutes.home)),
+          leading: widget.onBack == null
+              ? null
+              : CustomBackBtn(onBack: widget.onBack),
           elevation: 0,
           surfaceTintColor: Colors.transparent,
           title: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Padding(
-                padding: const EdgeInsets.only(left: 16.0),
+                padding:
+                    EdgeInsets.only(left: widget.onBack == null ? 16.0 : 0),
                 child: Text("Pledge",
                     overflow: TextOverflow.ellipsis,
                     style: MyntWebTextStyles.title(context,
@@ -508,7 +533,16 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
                                               4),
                                     ),
                                   ),
-                                          onPressed: () {
+                                          onPressed: () async {
+                                            // Skip confirmation dialog on
+                                            // Pledge Balance tab (unpledge).
+                                            if (selectedFilterType != '1') {
+                                              final confirmed =
+                                                  await _showPledgeConfirmDialog(
+                                                      context, ledgerprovider);
+                                              if (confirmed != true) return;
+                                              if (!context.mounted) return;
+                                            }
                                             ledgerprovider
                                                 .changesegvaldummy('');
                                             if (ledgerprovider
@@ -592,6 +626,228 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
   }
 
   // ============================================================
+  // Pledge / Unpledge Confirmation Dialog
+  // ============================================================
+
+  Future<bool?> _showPledgeConfirmDialog(
+      BuildContext context, LDProvider ledgerprovider) async {
+    final isDelete =
+        ledgerprovider.pledgeoruppledgedelete == 'unpledgedelete';
+    final base = ledgerprovider.pledgeorunpledge;
+    final mode = isDelete ? 'cancel_$base' : base;
+
+    final String title;
+    final String submitLabel;
+    switch (mode) {
+      case 'unpledge':
+        title = 'Unpledge Details';
+        submitLabel = 'Submit Request';
+        break;
+      case 'cancel_pledge':
+        title = 'Delete Pledge request';
+        submitLabel = 'Submit Request';
+        break;
+      case 'cancel_unpledge':
+        title = 'Delete Unpledge request';
+        submitLabel = 'Submit Request';
+        break;
+      case 'pledge':
+      default:
+        title = 'Pledge Details';
+        submitLabel = 'Submit Request';
+        break;
+    }
+
+    return showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withOpacity(0.3),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screenWidth = MediaQuery.of(dialogContext).size.width;
+        final screenHeight = MediaQuery.of(dialogContext).size.height;
+        final dialogWidth =
+            screenWidth * 0.9 > 400.0 ? 400.0 : screenWidth * 0.9;
+        final listMaxHeight = screenHeight * 0.5;
+        final items = ledgerprovider.listforpledge;
+
+        return Center(
+          child: shadcn.Card(
+            borderRadius: BorderRadius.circular(8),
+            padding: EdgeInsets.zero,
+            child: Container(
+              width: dialogWidth,
+              decoration: BoxDecoration(
+                color: resolveThemeColor(dialogContext,
+                    dark: MyntColors.dialogDark,
+                    light: MyntColors.dialog),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: shadcn.Theme.of(dialogContext)
+                              .colorScheme
+                              .border,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            overflow: TextOverflow.ellipsis,
+                            style: MyntWebTextStyles.title(
+                              dialogContext,
+                              color: resolveThemeColor(dialogContext,
+                                  dark: MyntColors.textPrimaryDark,
+                                  light: MyntColors.textPrimary),
+                            ),
+                          ),
+                        ),
+                        MyntCloseButton(
+                          onPressed: () =>
+                              Navigator.of(dialogContext).pop(false),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Content
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ConstrainedBox(
+                            constraints:
+                                BoxConstraints(maxHeight: listMaxHeight),
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  for (int i = 0; i < items.length; i++) ...[
+                                    _buildConfirmScriptRow(
+                                        dialogContext, items[i]),
+                                    if (i != items.length - 1)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 12),
+                                        child: Divider(
+                                          height: 1,
+                                          thickness: 0.5,
+                                          color: shadcn.Theme.of(dialogContext)
+                                              .colorScheme
+                                              .border,
+                                        ),
+                                      ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          MyntButton(
+                            type: MyntButtonType.primary,
+                            size: MyntButtonSize.large,
+                            label: submitLabel,
+                            isFullWidth: true,
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(true),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curvedAnimation = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOut,
+          reverseCurve: Curves.easeIn,
+        );
+        return FadeTransition(
+          opacity: curvedAnimation,
+          child: ScaleTransition(
+            scale:
+                Tween<double>(begin: 0.95, end: 1.0).animate(curvedAnimation),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildConfirmScriptRow(
+      BuildContext context, Map<dynamic, dynamic> value) {
+    final symbol = '${value['symbol'] ?? '-'}';
+    final qty = '${value['quantity'] ?? '-'}';
+    final segment = '${value['segments'] ?? '-'}';
+
+    final labelStyle = MyntWebTextStyles.bodySmall(
+      context,
+      darkColor: MyntColors.textSecondaryDark,
+      lightColor: MyntColors.textSecondary,
+      fontWeight: MyntFonts.medium,
+    );
+    final valueStyle = MyntWebTextStyles.bodySmall(
+      context,
+      darkColor: MyntColors.textPrimaryDark,
+      lightColor: MyntColors.textPrimary,
+      fontWeight: MyntFonts.semiBold,
+    );
+
+    Widget row(String label, String val) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 90,
+              child: Text(label, style: labelStyle),
+            ),
+            Expanded(
+              child: Text(
+                val,
+                style: valueStyle,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row('Symbol :', symbol),
+        row('Total Qty :', qty),
+        row('Segment :', segment),
+      ],
+    );
+  }
+
+  // ============================================================
   // CDSL Report Full-Panel Screen (shadcn table)
   // ============================================================
 
@@ -657,10 +913,11 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
   Widget _buildCdslReportScreen(
       LDProvider ledgerprovider, ThemesProvider theme) {
     final data = ledgerprovider.cdslresponsedata!;
-    final status =
-        data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo?.resstatus;
-    final isinList =
-        data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo?.isinresdtls ?? [];
+    final two = data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo;
+    // CDSL's new pledge API: rejected if either reqstatus or resstatus == '1'.
+    // Anything else is treated as Success (Pending state dropped).
+    final rejected = two?.reqstatus == '1' || two?.resstatus == '1';
+    final isinList = two?.isinresdtls ?? [];
 
     final isDark = theme.isDarkMode;
     final borderColor =
@@ -757,32 +1014,23 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
                                   decoration: BoxDecoration(
                                     borderRadius:
                                         BorderRadius.circular(4),
-                                    color: status == '0'
-                                        ? MyntColors.profitDark
+                                    color: rejected
+                                        ? MyntColors.lossDark
                                             .withValues(alpha: 0.15)
-                                        : status == '1'
-                                            ? MyntColors.lossDark
-                                                .withValues(alpha: 0.15)
-                                            : MyntColors.pending
-                                                .withValues(alpha: 0.15),
+                                        : MyntColors.profitDark
+                                            .withValues(alpha: 0.15),
                                   ),
                                   child: Text(
-                                    status == '0'
-                                        ? 'Completed'
-                                        : status == '1'
-                                            ? 'Rejected'
-                                            : 'Pending',
+                                    rejected ? 'Rejected' : 'Success',
                                     style: MyntWebTextStyles.para(context,
                                         fontWeight: MyntFonts.semiBold,
-                                        color: status == '0'
+                                        color: rejected
                                             ? resolveThemeColor(context,
+                                                dark: MyntColors.lossDark,
+                                                light: MyntColors.loss)
+                                            : resolveThemeColor(context,
                                                 dark: MyntColors.profitDark,
-                                                light: MyntColors.profit)
-                                            : status == '1'
-                                                ? resolveThemeColor(context,
-                                                    dark: MyntColors.lossDark,
-                                                    light: MyntColors.loss)
-                                                : MyntColors.pending),
+                                                light: MyntColors.profit)),
                                   ),
                                 ),
                               ],
@@ -796,11 +1044,6 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
                             _summaryRow(
                                 'CDSL Response Time',
                                 '${data.cDSLRespTime}',
-                                theme),
-                            const SizedBox(height: 12),
-                            _summaryRow(
-                                'CDSL ID',
-                                '${data.cDSLResp?.pledgeresdtls?.pledgeresdtlstwo?.resid}',
                                 theme),
                           ],
                         ),

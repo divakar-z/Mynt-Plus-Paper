@@ -111,7 +111,8 @@ class _GttOrderBookDetailScreenWebState
         _gttOrder.perChange = pc;
       }
 
-      if (chng != null && chng != "null") {
+      if (chng != null && chng != "null" && chng != "" &&
+          chng != "0" && chng != "0.0" && chng != "0.00") {
         _gttOrder.change = chng;
       }
     }
@@ -292,12 +293,14 @@ class _GttOrderBookDetailScreenWebState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Symbol (exchange removed to match executed order detail)
+          // Symbol with its exchange beside it, the way the trade and order
+          // detail panes already show it. The exchange used to be a row down
+          // among the order fields, which is not where the other panes put it.
           Row(
             children: [
               Flexible(
                 child: Text(
-                  "${_gttOrder.symbol?.replaceAll("-EQ", "").toUpperCase() ?? ''} ${_gttOrder.expDate ?? ''} ${_gttOrder.option ?? ''} ",
+                  "${_gttOrder.displayName} ",
                   style: MyntWebTextStyles.title(
                     context,
                     color: resolveThemeColor(context,
@@ -305,6 +308,16 @@ class _GttOrderBookDetailScreenWebState
                         light: MyntColors.textPrimary),
                   ),
                   overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _gttOrder.exch ?? '',
+                style: MyntWebTextStyles.bodySmall(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary),
                 ),
               ),
             ],
@@ -410,104 +423,103 @@ class _GttOrderBookDetailScreenWebState
   }
 
   Widget _buildOrderParametersSection(ThemesProvider theme) {
+    // Leg 1 is always the Target and leg 2 always the Stoploss, on both buy and
+    // sell - GttOrderBookModel.fromJson normalises a buy OCO back into that
+    // order. A single GTT has one leg that is neither, so it keeps a plain
+    // trigger header.
+    final bool isOco = _gttOrder.placeOrderParamsLeg2 != null;
+    final conds = _gttOrder.oivariable;
+    final String leg1Trigger = (conds != null && conds.isNotEmpty)
+        ? (conds.first.d ?? '-')
+        : (_gttOrder.d ?? '-');
+    final String leg2Trigger =
+        (conds != null && conds.length > 1) ? (conds.last.d ?? '-') : '-';
+
+    // Which direction each trigger fires in. A single GTT states it outright in
+    // ai_t; an OCO carries one ai_t for the pair, so the higher of the two
+    // levels is the "above" leg and the lower one the "below" leg. Without
+    // this the header said only "Trigger @ 18.00", which does not say whether
+    // it fires on a rise or a fall to that level.
+    String leg1Cond = '';
+    String leg2Cond = '';
+    if (isOco) {
+      // Taken from the wire position, not by comparing the two levels. The
+      // broker's first slot is always the "above" condition; fromJson reverses
+      // that pair for a buy, so after normalising leg 1 is the above leg on a
+      // sell and the below leg on a buy. Comparing the numbers instead would
+      // read a non-straddling pair backwards - the vendor terminal accepts one
+      // (a buy with "above 9" and "below 16"), and such a rule can reach this
+      // screen even though our own screens block it.
+      final String side =
+          _gttOrder.trantype ?? _gttOrder.placeOrderParams?.trantype ?? '';
+      final bool leg1IsAbove = side != 'B';
+      leg1Cond = _conditionLabel(leg1IsAbove);
+      leg2Cond = _conditionLabel(!leg1IsAbove);
+    } else {
+      final String ait = _gttOrder.aiT ?? '';
+      if (ait == 'LTP_A_O') {
+        leg1Cond = _conditionLabel(true);
+      } else if (ait == 'LTP_B_O') {
+        leg1Cond = _conditionLabel(false);
+      }
+    }
+
     return Padding(
       padding: const EdgeInsets.only(top: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _rowOfInfoData("Order Id", _gttOrder.alId ?? "-", theme),
+          // Facts about the whole GTT, listed once. These used to sit inside the
+          // leg 1 block, which made them read as if they described that leg
+          // alone while leg 2 appeared to be missing them.
+          //
+          // "GTT Id" not "Order Id": while the rule is pending no order exists
+          // and this is the rule's own al_id, shared by both legs. Each leg
+          // gets its own order id only once it fires, and the pending response
+          // does not carry one.
+          _rowOfInfoData("GTT Order Id", _gttOrder.alId ?? "-", theme),
+          _rowOfInfoData("Created on", _formatCreatedAt(), theme),
+          // Exchange moved up beside the symbol, where the other detail panes
+          // put it. Validity read "GTT" on every rule and Status was a constant
+          // stamped on at parse time, so neither varied or told the reader
+          // anything on this screen.
+          /*
+          _rowOfInfoData("Exchange", _gttOrder.exch ?? '-', theme),
+          _rowOfInfoData("Validity", _gttOrder.validity ?? '-', theme),
+          _rowOfInfoDataWithColor(
+            "Status",
+            _getGttStatusText(),
+            theme,
+            _getGttStatusColor(theme),
+          ),
+          */
 
           if (_gttOrder.placeOrderParams != null) ...[
-            _rowOfInfoData(
-              "Type",
-              _gttOrder.placeOrderParams?.trantype == 'B' ? 'Buy' : 'Sell',
+            _legHeader(
+              isOco
+                  ? "Target trigger @ $leg1Trigger$leg1Cond"
+                  : "Trigger @ $leg1Trigger$leg1Cond",
               theme,
             ),
-            _rowOfInfoData(
-              "Qty",
-              "${_gttOrder.placeOrderParams?.qty ?? 0}",
-              theme,
+            ..._legRows(
+              theme: theme,
+              trantype: _gttOrder.placeOrderParams?.trantype,
+              qty: _gttOrder.placeOrderParams?.qty,
+              prd: _gttOrder.placeOrderParams?.prd,
+              prctyp: _gttOrder.placeOrderParams?.prctyp,
+              prc: _gttOrder.placeOrderParams?.prc,
             ),
-            _rowOfInfoData(
-              "Trigger Price",
-              _gttOrder.oivariable?.isNotEmpty == true
-                  ? "${_gttOrder.oivariable?.first.d}"
-                  : _gttOrder.d ?? "-",
-              theme,
-            ),
-            _rowOfInfoData(
-              "Exchange",
-              _gttOrder.exch ?? '-',
-              theme,
-            ),
-            _rowOfInfoData(
-              "Validity",
-              _gttOrder.validity ??
-                  '-', // Assuming validity is available or use what's appropriate
-              theme,
-            ),
-            _rowOfInfoDataWithColor(
-              "Status",
-              _getGttStatusText(),
-              theme,
-              _getGttStatusColor(theme),
-            ),
-            // Older fields kept just in case but hidden if not needed per design
-            /*
-            _rowOfInfoData(
-              "Product",
-              _getProductName(_gttOrder.placeOrderParams?.prd),
-              theme,
-            ),
-            _rowOfInfoData(
-              "Order Type",
-              _gttOrder.placeOrderParams?.prctyp ?? '-',
-              theme,
-            ),
-            _rowOfInfoData(
-              "Price",
-              _gttOrder.placeOrderParams?.prctyp == "MKT"
-                  ? "MKT"
-                  : _gttOrder.placeOrderParams?.prc ?? '-',
-              theme,
-            ),
-            */
           ],
-          // Leg 2 for OCO orders
+
           if (_gttOrder.placeOrderParamsLeg2 != null) ...[
-            const SizedBox(height: 24),
-            Text(
-              "Leg 2: ${_gttOrder.placeOrderParamsLeg2?.trantype == 'B' ? 'Buy' : 'Sell'} Trigger @ ${_gttOrder.oivariable?.isNotEmpty == true ? _gttOrder.oivariable?.last.d ?? '' : '-'}",
-              style: MyntWebTextStyles.title(
-                context,
-                color: resolveThemeColor(context,
-                    dark: MyntColors.textPrimaryDark,
-                    light: MyntColors.textPrimary),
-                fontWeight: MyntFonts.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _rowOfInfoData(
-              "Type",
-              _gttOrder.placeOrderParamsLeg2?.trantype == 'B' ? 'Buy' : 'Sell',
-              theme,
-            ),
-            _rowOfInfoData(
-              "Qty",
-              "${_gttOrder.placeOrderParamsLeg2?.qty ?? 0}",
-              theme,
-            ),
-            _rowOfInfoData(
-              "Product",
-              _getProductName(_gttOrder.placeOrderParamsLeg2?.prd),
-              theme,
-            ),
-            _rowOfInfoData(
-              "Price",
-              _gttOrder.placeOrderParamsLeg2?.prctyp == "MKT"
-                  ? "MKT"
-                  : _gttOrder.placeOrderParamsLeg2?.prc ?? '-',
-              theme,
+            _legHeader("Stoploss trigger @ $leg2Trigger$leg2Cond", theme),
+            ..._legRows(
+              theme: theme,
+              trantype: _gttOrder.placeOrderParamsLeg2?.trantype,
+              qty: _gttOrder.placeOrderParamsLeg2?.qty,
+              prd: _gttOrder.placeOrderParamsLeg2?.prd,
+              prctyp: _gttOrder.placeOrderParamsLeg2?.prctyp,
+              prc: _gttOrder.placeOrderParamsLeg2?.prc,
             ),
           ],
           if (_gttOrder.remarks != null && _gttOrder.remarks != "") ...[
@@ -561,6 +573,88 @@ class _GttOrderBookDetailScreenWebState
         ],
       ),
     );
+  }
+
+  /// Header above a leg's rows, carrying that leg's own trigger level. Leg 1
+  /// previously had no header at all while leg 2 was labelled "Leg 2", so the
+  /// two blocks did not read as a pair and leg 1's trigger had to be repeated
+  /// as a row.
+  /// Suffix naming the direction a trigger fires in.
+  String _conditionLabel(bool isAbove) =>
+      isAbove ? " (LTP goes above)" : " (LTP goes below)";
+
+  Widget _legHeader(String label, ThemesProvider theme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 24, bottom: 12),
+      child: Text(
+        label,
+        style: MyntWebTextStyles.title(
+          context,
+          color: resolveThemeColor(context,
+              dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
+          fontWeight: MyntFonts.bold,
+        ),
+      ),
+    );
+  }
+
+  /// The rows under a leg header. Both legs carry the same fields in the
+  /// response, so both blocks now show the same five. Leg 1 used to show a
+  /// trigger price and no price while leg 2 showed a price and no trigger,
+  /// which read as missing data on each side.
+  List<Widget> _legRows({
+    required ThemesProvider theme,
+    String? trantype,
+    int? qty,
+    String? prd,
+    String? prctyp,
+    String? prc,
+  }) {
+    final bool isMarket = prctyp == "MKT" || prctyp == "SL-MKT";
+    return [
+      _rowOfInfoData("Type", trantype == 'B' ? 'Buy' : 'Sell', theme),
+      _rowOfInfoData("Qty", "${qty ?? 0}", theme),
+      _rowOfInfoData("Product", _getProductName(prd), theme),
+      _rowOfInfoData("Order type", _orderTypeLabel(prctyp), theme),
+      // A market leg carries a price of 0.00 on the wire, which would read as a
+      // real limit of zero. The Order type row above already says MARKET.
+      _rowOfInfoData("Price", isMarket ? "-" : (prc ?? '-'), theme),
+    ];
+  }
+
+  /// Creation stamp for the top block. norentm arrives as "HH:mm:ss dd-MM-yyyy"
+  /// on this call, so it is reordered into "yyyy-MM-dd HH:mm:ss" to read the
+  /// same way as the Created on column in the GTT table.
+  String _formatCreatedAt() {
+    final String raw = _gttOrder.norentm ?? '';
+    if (raw.isEmpty) return _gttOrder.ordDate ?? '-';
+
+    if (raw.contains('T')) return raw.replaceFirst('T', ' ');
+
+    final parts = raw.split(' ');
+    if (parts.length >= 2) {
+      final dateParts = parts[1].split('-');
+      if (dateParts.length == 3) {
+        return '${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[0]}';
+      }
+      return '${parts[1]} ${parts[0]}';
+    }
+    return raw;
+  }
+
+  String _orderTypeLabel(String? prctyp) {
+    switch (prctyp) {
+      case "LMT":
+        return "LIMIT";
+      case "MKT":
+        return "MARKET";
+      case "SL-LMT":
+        return "SL";
+      case "SL-MKT":
+        return "SL-M";
+      default:
+        return prctyp ?? '-';
+    }
   }
 
   String _getProductName(String? prd) {
@@ -627,6 +721,9 @@ class _GttOrderBookDetailScreenWebState
     );
   }
 
+  // Retired with the Status row above - kept commented rather than deleted
+  // so the badge can be restored if the Triggered tab ever needs it here.
+  /*
   Widget _rowOfInfoDataWithColor(
       String title, String value, ThemesProvider theme, Color valueColor) {
     return Container(
@@ -683,7 +780,11 @@ class _GttOrderBookDetailScreenWebState
       ),
     );
   }
+  */
 
+  // Retired with the Status row above - kept commented rather than deleted
+  // so the badge can be restored if the Triggered tab ever needs it here.
+  /*
   String _getGttStatusText() {
     final status = _gttOrder.gttOrderCurrentStatus?.toUpperCase() ?? 'PENDING';
     switch (status) {
@@ -704,7 +805,11 @@ class _GttOrderBookDetailScreenWebState
         return status;
     }
   }
+  */
 
+  // Retired with the Status row above - kept commented rather than deleted
+  // so the badge can be restored if the Triggered tab ever needs it here.
+  /*
   Color _getGttStatusColor(ThemesProvider theme) {
     final status = _gttOrder.gttOrderCurrentStatus?.toUpperCase() ?? 'PENDING';
 
@@ -730,6 +835,7 @@ class _GttOrderBookDetailScreenWebState
             light: MyntColors.textSecondary);
     }
   }
+  */
 
   Future<void> _handleCancel() async {
     try {
@@ -770,7 +876,8 @@ class _GttOrderBookDetailScreenWebState
       }
 
       // Cancel the GTT order using saved provider reference
-      await orderProviderRef.cancelGttOrder(gttOrderId, targetContext);
+      await orderProviderRef.cancelGttOrder(gttOrderId, targetContext,
+          isOco: _gttOrder.placeOrderParamsLeg2 != null);
     } catch (e) {
       final rootCtx = getNavigatorContext();
       if (rootCtx != null && rootCtx.mounted) {
@@ -782,7 +889,7 @@ class _GttOrderBookDetailScreenWebState
 
   Future<bool?> _showCancelGttOrderDialog(
       ThemesProvider theme, BuildContext targetContext) async {
-    final symbol = _gttOrder.tsym?.replaceAll("-EQ", "") ?? 'N/A';
+    final symbol = _gttOrder.displayName.trim();
 
     return showDialog<bool>(
       context: targetContext,
@@ -882,7 +989,7 @@ class _GttOrderBookDetailScreenWebState
                         child: TextButton(
                           onPressed: () => Navigator.of(dialogContext).pop(true),
                           style: TextButton.styleFrom(
-                            backgroundColor: resolveThemeColor(context,
+                            backgroundColor: resolveThemeColor(dialogContext,
                                 dark: MyntColors.errorDark,
                                 light: MyntColors.tertiary),
                             shape: RoundedRectangleBorder(

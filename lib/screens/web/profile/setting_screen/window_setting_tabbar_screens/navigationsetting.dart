@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 import 'package:mynt_plus/res/global_state_text.dart';
 
 import 'package:mynt_plus/sharedWidget/nofitication_coustom_switch.dart';
@@ -126,7 +126,7 @@ class _NavigationSettingsState extends State<NavigationSettings> {
   }
 
   TextStyle textStyle(Color color, double fontSize, fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle: TextStyle(
       fontWeight: fWeight,
       color: color,

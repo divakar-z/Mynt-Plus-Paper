@@ -71,6 +71,11 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   ];
   String _actDeptBtn = "Overview";
   String get actDeptBtn => _actDeptBtn;
+
+  // When true, the next ChartWithDepthWeb panel that opens lands on the Chart
+  // tab (index 1) instead of its default. Set by the watchlist option-chain
+  // "Chart" action; consumed (reset) by ChartWithDepthWeb once it switches.
+  bool openOnChartTab = false;
   final List<Tab> _scipOverViewTab = [
     const Tab(text: "Overview"),
     const Tab(text: "Chart")
@@ -419,6 +424,35 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   List<Futures>? _fut = [];
   List<OptionExp>? _optExp = [];
   List<Equls>? get equls => _equls;
+
+  // ── NSE/BSE pair for the order screen ──────────────────────────────────
+  // Place Order needs a stock's linked NSE/BSE pair to draw the exchange
+  // toggle, but it can be opened from Positions, Holdings or the order book,
+  // where nothing has fetched linked scrips — so the toggle only ever showed
+  // if a Watchlist tap happened to have left that scrip in _equls (TC_87).
+  // This keeps its own per-token cache instead of calling fetchLinkeScrip,
+  // which would also overwrite _equls, _fut and _optExp while the scrip
+  // detail or option chain screens are reading them under the dialog.
+  final Map<String, List<Equls>> _orderExchangeList = {};
+
+  List<Equls> orderExchangeList(String token) =>
+      _orderExchangeList[token] ?? const [];
+
+  Future<void> fetchOrderExchangeList(String token, String exch) async {
+    if (token.isEmpty || _orderExchangeList.containsKey(token)) return;
+    try {
+      final linked = await api.getLinkedScrip(token, exch);
+      if (linked.stat == "Ok") {
+        _orderExchangeList[token] = linked.equls ?? [];
+        notifyListeners();
+      }
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Order Exchange List", "Error": "$e"});
+    }
+  }
   List<Futures>? get fut => _fut;
   List<OptionExp>? get optExp => _optExp;
   OptionChainModel? _optionChainModel;
@@ -457,6 +491,29 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     _wlName = "";  // Reset watchlist name to force selection of first watchlist
     _saveCurrentPageIndex();
     notifyListeners();
+  }
+
+  /// Loads the derivative contract master into the DerivativeMaster cache
+  /// ("EXCH:token" -> ready display name), for only the derivative exchanges the
+  /// user is entitled to (from userDetail.exarr). Background, non-blocking;
+  /// failures are swallowed so login is never affected.
+  Future<void> fetchDerivativeMaster() async {
+    try {
+      // Cash equity exchanges (NSE/BSE) hold no derivatives and, sent as parent
+      // codes, expand to the whole family. Skip only those and send every other
+      // segment the user is entitled to (F&O, commodity, currency) from exarr.
+      const cashExch = {'NSE', 'BSE'};
+      final exarr = ref.read(userProfileProvider).userDetailModel?.exarr ?? [];
+      var exchanges = exarr.where((e) => !cashExch.contains(e)).toList();
+      // Fallback so it never fetches an empty list (e.g. user detail not ready).
+      if (exchanges.isEmpty) exchanges = ['NFO', 'BFO', 'MCX'];
+      final data = await api.getDerivativeMaster(exchanges: exchanges);
+      DerivativeMaster.setAll(data);
+      debugPrint(
+          '[DerivativeMaster] loaded ${data.length} contracts for $exchanges');
+    } catch (e) {
+      debugPrint('[DerivativeMaster] fetch error: $e');
+    }
   }
 
   // Save current page index to SharedPreferences
@@ -513,6 +570,9 @@ class MarketWatchProvider extends DefaultChangeNotifier {
     try {
       _exarr = [];
       _pendingWatchlists.clear();
+      // Reset the derivative-master cache so the next account starts clean and
+      // never reads the previous session's fetched set.
+      DerivativeMaster.clear();
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('pending_watchlists');
     } catch (e) {
@@ -609,10 +669,10 @@ class MarketWatchProvider extends DefaultChangeNotifier {
             socketDatas.containsKey(token)) {
           final socketData = socketDatas[token];
 
-          // Update ltp from socket 'lp' field
-          if (socketData['lp'] != null &&
-              socketData['lp'].toString() != "null" &&
-              socketData['lp'].toString() != "0.00") {
+          // Update ltp from socket 'lp' field. Zero/null filtering happens
+          // centrally in WebSocketProvider._sanitizePriceFields, so a simple
+          // null check is enough here.
+          if (socketData['lp'] != null) {
             _scrips[i]['ltp'] = socketData['lp'].toString();
             dataUpdated = true;
           }
@@ -830,17 +890,17 @@ class MarketWatchProvider extends DefaultChangeNotifier {
       String? finalTsym = tsym ?? _activeTab?.tsym;
 
       if (finalExch != null && finalToken != null && finalTsym != null) {
-        final newDepthSymbol = "$finalExch|$finalToken";
-
-        // Only subscribe if it's a different scrip or not already loaded
-        if (newDepthSymbol != _currentDepthSymbol || !_depthDataLoaded) {
-          await subscribeToDepthData(
-            exch: finalExch,
-            token: finalToken,
-            tsym: finalTsym,
-            context: context,
-          );
-        }
+        // Always delegate to subscribeToDepthData — it idempotently reconciles
+        // against the socket's actual "d" subscription state. Gating here on the
+        // stale _currentDepthSymbol/_depthDataLoaded flags is what caused depth
+        // to silently not re-subscribe when returning to Overview after a
+        // tab/panel switch cleared the websocket's sent-subscription tracking.
+        await subscribeToDepthData(
+          exch: finalExch,
+          token: finalToken,
+          tsym: finalTsym,
+          context: context,
+        );
       }
     } else if (!value && _currentDepthSymbol != null) {
       // Unsubscribe when depth panel is closed
@@ -858,18 +918,36 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   }) async {
     try {
       final depthSymbol = "$exch|$token";
+      debugPrint('[DEPTH_TRACK] subscribeToDepthData called for $depthSymbol (current: $_currentDepthSymbol, loaded: $_depthDataLoaded)');
 
-      // Unsubscribe from old depth socket if different scrip
+      // Unsubscribe from old depth socket if different scrip.
+      // force: true — the old symbol is almost always still in the watchlist
+      // (touchline), so a non-forced depth "ud" would be swallowed by the
+      // protected-symbol filter and the old symbol's depth "d" feed would keep
+      // streaming. A depth "ud" only releases the depth feed and leaves the
+      // watchlist's touchline "t" intact, so forcing it here is safe.
       if (_currentDepthSymbol != null && _currentDepthSymbol != depthSymbol) {
-        await unsubscribeFromDepthData(context: context);
+        debugPrint('[DEPTH_TRACK] Symbol changed: unsubscribing old depth $_currentDepthSymbol before subscribing $depthSymbol');
+        await unsubscribeFromDepthData(context: context, force: true);
       }
 
-      // Skip if already subscribed to this symbol
-      if (_currentDepthSymbol == depthSymbol && _depthDataLoaded) {
+      // Skip only if a depth ("d") subscription is STILL live on the socket for
+      // this symbol. _depthDataLoaded alone is not trustworthy: a tab/panel
+      // switch can trigger a preserveData reconnect that clears the websocket's
+      // sent-subscription tracking while these provider flags stay set — leaving
+      // us "loaded" in state but with no "d" on the wire. Gating on the socket's
+      // actual state is what makes returning to Overview re-send the "d".
+      final depthLiveOnSocket =
+          ref.read(websocketProvider).hasDepthSubscription(depthSymbol);
+      if (_currentDepthSymbol == depthSymbol &&
+          _depthDataLoaded &&
+          depthLiveOnSocket) {
+        debugPrint('[DEPTH_TRACK] SKIPPED: depth already live on socket for $depthSymbol');
         return;
       }
 
 
+      debugPrint('[DEPTH_TRACK] SUBSCRIBING depth "d" for $depthSymbol');
       await ref.read(websocketProvider).establishConnection(
             channelInput: depthSymbol,
             task: "d",
@@ -878,6 +956,7 @@ class MarketWatchProvider extends DefaultChangeNotifier {
 
       _currentDepthSymbol = depthSymbol;
       _depthDataLoaded = true;
+      debugPrint('[DEPTH_TRACK] SUBSCRIBED depth "d" for $depthSymbol ✅');
     } catch (e) {
       _depthDataLoaded = false;
       _currentDepthSymbol = null;
@@ -885,32 +964,50 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   }
 
   /// Unsubscribe from market depth data
-  Future<void> unsubscribeFromDepthData({BuildContext? context}) async {
-    if (_currentDepthSymbol == null) return;
+  ///
+  /// [force] is set when the whole single-stock page is being disposed (the user
+  /// left Overview for Holdings/Positions/etc). In that case the depth panel AND
+  /// the chart are both unmounting, so the depth ("d") feed is genuinely no longer
+  /// displayed and must be released with "ud" even for watchlisted symbols — the
+  /// separate touchline ("t") feed the watchlist uses is unaffected by a depth ud.
+  /// Without [force] (e.g. an Overview→Chart tab switch) the protective check is
+  /// kept so the chart's still-open depth feed is not torn down.
+  Future<void> unsubscribeFromDepthData(
+      {BuildContext? context, bool force = true}) async {
+    if (_currentDepthSymbol == null) {
+      debugPrint('[DEPTH_TRACK] unsubscribeFromDepthData: SKIPPED (no current depth symbol)');
+      return;
+    }
 
     try {
       final depthSymbol = _currentDepthSymbol!;
+      debugPrint('[DEPTH_TRACK] UNSUBSCRIBING depth "ud" for $depthSymbol (force: $force)');
 
-      // Clear tracking first to prevent race conditions
+      // Clear tracking first so the protective check in WebSubscriptionManager
+      // does not see this symbol as "currentDepthSymbol" and block its own ud.
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
 
-      // Only send unsubscribe if context is available and valid
-      if (context != null && context.mounted) {
+      // On a forced (page-dispose) teardown the context is usually already
+      // unmounted, so don't gate on context.mounted — the ud send needs the
+      // live WS channel, not a mounted widget.
+      if (context != null && (force || context.mounted)) {
         try {
-          await ref.read(websocketProvider).establishConnection(
-                channelInput: depthSymbol,
-                task: "ud", // Unsubscribe depth task
+          // Route through WebSubscriptionManager so the ud is skipped when the
+          // symbol is still needed by the watchlist / holdings / positions /
+          // indices / ticker (touchline). [force] bypasses that protection when
+          // the page is closing so the depth feed is actually released.
+          await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
+                tokensToCheck: {depthSymbol},
                 context: context,
+                source: 'depth',
+                bypassProtection: force,
               );
         } catch (e) {
           // If unsubscribe fails, it's okay - we've already cleared tracking
         }
-      } else {
-        // Context not available, but we've cleared tracking
       }
     } catch (e) {
-      // Ensure tracking is cleared even on error
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
     }
@@ -1489,10 +1586,13 @@ getOptionawait(String exch, String token) {
   }
 
   void setChartScript(String exch, String token, String tsym) async {
-    // Unsubscribe from old depth and reset depth loaded state when changing scrip
-    // Note: We don't pass context here as it might not be available,
-    // unsubscribe will happen on next depth panel open if needed
-    resetDepthLoadedState();
+    // Force a fresh depth fetch on the next depth-panel open, but DO NOT clear
+    // _currentDepthSymbol here. This runs on the scrip-change microtask BEFORE
+    // subscribeToDepthData(new) fires; if we nulled _currentDepthSymbol now, that
+    // later call could no longer tell which old symbol to release, so the old
+    // symbol's depth "d" feed would keep streaming (no "ud" ever sent). Keeping
+    // the tracking lets subscribeToDepthData unsubscribe the old token first.
+    _depthDataLoaded = false;
 
     if (kIsWeb) {
       // On Flutter Web, use WebChartManager to change symbol via postMessage
@@ -1502,6 +1602,7 @@ getOptionawait(String exch, String token) {
         token: token,
         tsym: tsym,
         isDarkMode: isDarkMode,
+        decorativeName: DerivativeMaster.nameFor(exch, token),
       );
     } else {
       await ConstantName.chartwebViewController!.evaluateJavascript(
@@ -1660,12 +1761,24 @@ getOptionawait(String exch, String token) {
 
   scripSearch(
       String value, BuildContext context, int? seg, String options) async {
+    _latestScripSearchText = value;
     if (value.length > 2) {
       await fetchSearchScrip(
           searchText: value,
           context: context,
           segment: ["", "EQ", "FO", "CUR", "COM", "IDX"][seg ?? 0],
           option: options == "Option||Is");
+      // TC_257: the basket hides indices (not tradable). For text like
+      // "NIFTY" the all-segment result is only indices (they fill the
+      // server's result limit), so the basket showed nothing. Then search
+      // the tradable segments too: F&O first, then ETFs (EQ).
+      if (options == "Basket" &&
+          (seg ?? 0) == 0 &&
+          _latestScripSearchText == value &&
+          !(_allSearchScrip ?? [])
+              .any((s) => s.idx?.toUpperCase() != 'YES')) {
+        await _basketTradableFallback(value);
+      }
     } else {
       searchClear();
     }
@@ -1731,7 +1844,10 @@ getOptionawait(String exch, String token) {
       if (_marketWatchlist!.stat == "Ok") {
         ConstantName.sessCheck = true;
         if (_marketWatchlist!.values!.isEmpty) {
-          _marketWatchlist!.values!.add("My");
+          // Default custom watchlist name for new users (when backend
+          // returns an empty list). Renamed from "My" → "My Watchlist"
+          // for clarity per tester feedback (TC discussion).
+          _marketWatchlist!.values!.add("My Watchlist");
         } else {
           _marketWatchlist!.values!.sort((a, b) => a.compareTo(b));
 
@@ -1864,7 +1980,8 @@ getOptionawait(String exch, String token) {
               List<String> splitVal = element.dname!.split(" ");
 
               element.symbol = splitVal[0];
-              element.expDate = "${splitVal[1]} ${splitVal[2]}";
+              // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+              element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
               element.option = splitVal.length > 4
                   ? "${splitVal[3]} ${splitVal[4]}"
                   : splitVal[3];
@@ -2110,7 +2227,9 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _scripInfoModel!.dname!.split(" ");
 
             _scripInfoModel!.symbol = splitVal[0];
-            _scripInfoModel!.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+            _scripInfoModel!.expDate =
+                bfoExpiryWithYear(splitVal, _scripInfoModel!.tsym);
             _scripInfoModel!.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2164,7 +2283,8 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _getQuotes.cname!.split(" ");
 
             _getQuotes.symbol = splitVal[0];
-            _getQuotes.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep cname's day+month, append the year from the tsym. (TC_440)
+            _getQuotes.expDate = bfoExpiryWithYear(splitVal, _getQuotes.tsym);
             _getQuotes.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2255,7 +2375,8 @@ getOptionawait(String exch, String token) {
             List<String> splitVal = _getQuotes.cname!.split(" ");
 
             _getQuotes.symbol = splitVal[0];
-            _getQuotes.expDate = "${splitVal[1]} ${splitVal[2]}";
+            // BFO: keep cname's day+month, append the year from the tsym. (TC_440)
+            _getQuotes.expDate = bfoExpiryWithYear(splitVal, _getQuotes.tsym);
             _getQuotes.option = splitVal.length > 4
                 ? "${splitVal[3]} ${splitVal[4]}"
                 : splitVal[3];
@@ -2377,6 +2498,69 @@ getOptionawait(String exch, String token) {
   }
 
 // Fetching data from the api and stored in a variable
+  /// Text of the newest scripSearch, so a slower, older answer is dropped
+  /// instead of replacing the results for what the user typed since.
+  String _latestScripSearchText = "";
+
+  /// TC_257: F&O and EQ searches run together and the list updates once,
+  /// so there is no flash of partial results. Indices are left out.
+  Future<void> _basketTradableFallback(String value) async {
+    toggleLoadingOn(true);
+    try {
+      final results = await Future.wait([
+        for (final categ in const ["FO", "EQ"])
+          api.getSearchScripNew(
+              searchText: value, categ: categ, exchs: _exarr, opt: false),
+      ]);
+      if (_latestScripSearchText != value) return;
+      final List<ScripNewValue> tradable = [];
+      for (final model in results) {
+        if (model.stat != "Ok") continue;
+        for (final val in model.values ?? <ScripNewValue>[]) {
+          if (val.idx?.toUpperCase() == 'YES') continue;
+          _decorateSearchValue(val);
+          tradable.add(val);
+        }
+      }
+      _allSearchScrip = tradable;
+      _isAdded = List<bool>.filled(tradable.length, false);
+      notifyListeners();
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Search", "Error": "$e"});
+    } finally {
+      toggleLoadingOn(false);
+    }
+  }
+
+  /// Fills symbol / expDate / option on one search row for display.
+  void _decorateSearchValue(ScripNewValue val) {
+    final exch = val.exch;
+    final dname = val.dname;
+    final tsym = val.tsym;
+    if (exch == "BFO" && dname != null) {
+      final splitVal = dname.split(" ");
+      val.symbol = splitVal[0];
+      // BFO: keep dname's day+month, append the year from the tsym —
+      // same helper as every other BFO branch. (TC_440)
+      val.expDate = bfoExpiryWithYear(splitVal, tsym);
+      // Search sends BFO futures as "... FUT 0" (empty strike slot); drop
+      // the "0" so it reads just "FUT". Options keep type + strike. (FUT0)
+      val.option = (splitVal.length > 3 && splitVal[3].toUpperCase() == "FUT")
+          ? "FUT"
+          : (splitVal.length > 4
+              ? "${splitVal[3]} ${splitVal[4]}"
+              : splitVal[3]);
+    } else {
+      final spilitSymbol = spilitTsym(value: tsym ?? "");
+      val.symbol = spilitSymbol["symbol"];
+      val.expDate = spilitSymbol["expDate"];
+      val.option = spilitSymbol["option"];
+    }
+  }
+
   Future fetchSearchScrip(
       {required String searchText,
       required BuildContext context,
@@ -2428,24 +2612,10 @@ getOptionawait(String exch, String token) {
 
           for (int i = 0; i < values.length; i++) {
             final val = values[i];
-            final exch = val.exch;
-            final dname = val.dname;
             // final instname = val.instname?.toUpperCase() ?? "";
             final tsym = val.tsym;
 
-            if (exch == "BFO" && dname != null) {
-              final splitVal = dname.split(" ");
-              val.symbol = splitVal[0];
-              val.expDate = "${splitVal[1]} ${splitVal[2]}";
-              val.option = splitVal.length > 4
-                  ? "${splitVal[3]} ${splitVal[4]}"
-                  : splitVal[3];
-            } else {
-              final spilitSymbol = spilitTsym(value: tsym ?? "");
-              val.symbol = spilitSymbol["symbol"];
-              val.expDate = spilitSymbol["expDate"];
-              val.option = spilitSymbol["option"];
-            }
+            _decorateSearchValue(val);
 
             for (var scrip in _scrips) {
               if (tsym == scrip['tsym']) {
@@ -2495,6 +2665,37 @@ getOptionawait(String exch, String token) {
     }
   }
 
+  // Normalises an expiry string to the expiry-list format "DD-MON-YYYY"
+  // (e.g. "14 JUL 26" -> "14-JUL-2026"), so a selected contract's expiry can be
+  // matched against the option expiry list regardless of separators / year length.
+  String _normalizeExpiry(String e) {
+    final parts = e.trim().toUpperCase().split(RegExp(r'[\s\-]+'));
+    if (parts.length != 3) return e.trim().toUpperCase();
+    final day = parts[0].padLeft(2, '0');
+    final mon = parts[1];
+    var yr = parts[2];
+    if (yr.length == 2) yr = '20$yr';
+    return '$day-$mon-$yr';
+  }
+
+  // When the option chain is opened from a specific option contract, returns
+  // that contract's expiry (in the expiry-list format) so the chain opens on the
+  // selected contract's expiry instead of the nearest. Returns null for
+  // indices/stocks (no own expiry), for expiries not in the list, or when the
+  // current quote isn't this token (guards against a stale quote from another
+  // scrip, so only a genuine contract-open is ever affected). (TC_408)
+  String? _matchedContractExpiry(String token) {
+    if (_getQuotes.token?.toString() != token) return null;
+    final raw = _getQuotes.expDate;
+    if (raw == null || raw.trim().isEmpty) return null;
+    final target = _normalizeExpiry(raw);
+    for (final e in (_optExp ?? [])) {
+      final exd = e.exd;
+      if (exd != null && _normalizeExpiry(exd) == target) return exd;
+    }
+    return null;
+  }
+
   // Fetching data from the api and stored in a variable
 
   Future fetchLinkeScrip(
@@ -2524,6 +2725,18 @@ getOptionawait(String exch, String token) {
 
           _optionExch = storeQuotes[token]?['l']['optionExch'];
           _selectedTradeSym = storeQuotes[token]?['l']['selectedTradeSym'];
+          // If opened from a specific option contract, prefer that contract's
+          // expiry over the nearest and re-derive its exch/tradeSym (TC_408).
+          final matchedExp = _matchedContractExpiry(token);
+          if (matchedExp != null) {
+            _selectedExpDate = matchedExp;
+            for (var i = 0; i < _optExp!.length; i++) {
+              if (_selectedExpDate == _optExp![i].exd) {
+                _optionExch = _optExp![i].exch;
+                _selectedTradeSym = _optExp![i].tsym;
+              }
+            }
+          }
         }
         if (_fut!.isNotEmpty) {
           _futToken = "${_fut![0].token}";
@@ -2596,6 +2809,11 @@ getOptionawait(String exch, String token) {
 
             // print("########### $_sortedDate");
             _selectedExpDate = _sortedDate[0];
+            // If opened from a specific option contract, default the expiry to
+            // that contract's expiry instead of the nearest (TC_408). Falls back
+            // to nearest for indices/stocks or unknown expiries.
+            final matchedExp = _matchedContractExpiry(token);
+            if (matchedExp != null) _selectedExpDate = matchedExp;
             for (var i = 0; i < _optExp!.length; i++) {
               if (_selectedExpDate == _optExp![i].exd) {
                 _optionExch = _optExp![i].exch;
@@ -2634,6 +2852,13 @@ getOptionawait(String exch, String token) {
           ref.read(authProvider).ifSessionExpired(context);
         }
       }
+      // Share the pair with the order screen's cache so opening Place Order
+      // from the Watchlist doesn't fetch the same linked scrips twice. Only
+      // seeded when it actually has data, so a failed call still retries.
+      if ((_equls ?? []).isNotEmpty) {
+        _orderExchangeList[token] = _equls!;
+      }
+
       notifyListeners();
       return _linkedScrips;
     } catch (e) {
@@ -3176,11 +3401,11 @@ getOptionawait(String exch, String token) {
           source: 'optionChain',
         );
       } else {
-        // Subscribe using depth task for web
+        // Subscribe using touchline task for web (option chain only needs LTP)
         final input = optionTokens.join('#');
         await ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: "d",
+            task: "t",
             context: context);
       }
     } else {
@@ -3219,11 +3444,11 @@ getOptionawait(String exch, String token) {
           source: 'futures',
         );
       } else {
-        // Subscribe using depth task for web
+        // Subscribe using touchline task for web (futures list only needs LTP)
         final input = futuresTokens.join('#');
         await ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: "d",
+            task: "t",
             context: context);
       }
     } else {
@@ -3649,9 +3874,9 @@ getOptionawait(String exch, String token) {
           try {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             if (kIsWeb) {
-              ResponsiveSnackBar.showSuccess(context, "Scrip order was changed");
+              ResponsiveSnackBar.showSuccess(context, "Stocks reordered successfully.");
             } else {
-              successMessage(context, "Scrip order was changed");
+              successMessage(context, "Stocks reordered successfully.");
             }
           } catch (e) {
             if (e.toString().contains("widget was disposed") ||
@@ -3664,17 +3889,19 @@ getOptionawait(String exch, String token) {
           try {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             if (kIsWeb) {
+              // TC_208: neutral wording (was 'Stock added/removed ...') —
+              // watchlists hold F&O, indices, commodities, currency too.
               ResponsiveSnackBar.showSuccess(
                   context,
                   isAdd
-                      ? "Scrip was added to watchlist $wlName"
-                      : "Scrip was removed from watchlist $wlName");
+                      ? 'Added to your watchlist "$wlName"'
+                      : 'Removed from your watchlist "$wlName"');
             } else {
               successMessage(
                   context,
                   isAdd
-                      ? "Scrip was added to watchlist $wlName"
-                      : "Scrip was removed from watchlist $wlName");
+                      ? 'Added to your watchlist "$wlName"'
+                      : 'Removed from your watchlist "$wlName"');
             }
           } catch (e) {
             if (e.toString().contains("widget was disposed") ||
@@ -3685,7 +3912,7 @@ getOptionawait(String exch, String token) {
         if (isEdit && isOptionStike) {
           try {
             Fluttertoast.showToast(
-                msg: "Scrip was added to watchlist $wlName",
+                msg: 'Added to your watchlist "$wlName"',
                 timeInSecForIosWeb: 2,
                 backgroundColor: colors.colorBlack,
                 textColor: colors.colorWhite,
@@ -3702,11 +3929,15 @@ getOptionawait(String exch, String token) {
         }
       } else if (_addDeleteScripModel!.emsg ==
           "Invalid Input : At least one stock must remain in the Market Watch.") {
+        // Backend `emsg` above is left untouched — it's the exact vendor
+        // error string we're matching against. User-facing toast below uses
+        // friendlier wording per the test-case feedback (TC_17).
         // _delScripQty = 1;
         if (kIsWeb) {
-          ResponsiveSnackBar.showError(context, "At least one stock must remain in the Market Watch.");
+          ResponsiveSnackBar.showError(
+              context, "You need at least one stock in your watchlist");
         } else {
-          error(context, "At least one stock must remain in the Market Watch.");
+          error(context, "You need at least one stock in your watchlist");
         }
       }
       return false;
@@ -4068,14 +4299,44 @@ getOptionawait(String exch, String token) {
     // Force UI update
     notifyListeners();
 
-    // Update the backend in the background
-    _updateBackendSortOrderNonBlocking(wlName, context);
+    // Update the backend in the background. Pass an action-specific toast
+    // message so the user sees what they actually did (e.g. "Sorted by name
+    // (A-Z)") instead of a generic "Stock order was changed" — clearer UX
+    // and distinguishes a sort from a drag-drop reorder.
+    _updateBackendSortOrderNonBlocking(
+      wlName,
+      context,
+      toastMessage: _sortToastMessage(sorting),
+    );
+  }
+
+  // Maps a sort key (as stored in _sortByWL) to a human-friendly toast
+  // message. Returns the generic "Stock order was changed" for any unknown
+  // value (defensive — keeps drag-drop and any other reorder paths working).
+  String _sortToastMessage(String sortKey) {
+    switch (sortKey) {
+      case "Scrip - A to Z":
+        return "Sorted by name (A-Z)";
+      case "Scrip - Z to A":
+        return "Sorted by name (Z-A)";
+      case "Price - Low to High":
+        return "Sorted by price (Low to High)";
+      case "Price - High to Low":
+        return "Sorted by price (High to Low)";
+      case "Per.Chng - High to Low":
+        return "Sorted by % change (High to Low)";
+      case "Per.Chng - Low to High":
+        return "Sorted by % change (Low to High)";
+      default:
+        return "Stock order was changed";
+    }
   }
 
   // Non-blocking backend update to avoid UI stutters
-  void _updateBackendSortOrderNonBlocking(String wlName, BuildContext context) {
+  void _updateBackendSortOrderNonBlocking(String wlName, BuildContext context,
+      {String toastMessage = "Stock order was changed"}) {
     Future.delayed(const Duration(milliseconds: 500), () {
-      _updateBackendSortOrder(wlName, context);
+      _updateBackendSortOrder(wlName, context, toastMessage: toastMessage);
     });
   }
 
@@ -4102,8 +4363,13 @@ getOptionawait(String exch, String token) {
     }
   }
 
-  // Helper method to update the backend without blocking UI
-  void _updateBackendSortOrder(String wlName, BuildContext context) {
+  // Helper method to update the backend without blocking UI.
+  // Uses the dedicated ReorderMWScrips endpoint — a single atomic call that
+  // takes the full ordered list and updates positions on the backend.
+  // Replaces the older delete-all + add-all flow that always tripped the
+  // "at least 1 stock must remain" rule on the delete step.
+  void _updateBackendSortOrder(String wlName, BuildContext context,
+      {String toastMessage = "Stock order was changed"}) {
     // Use a longer delay to ensure UI has fully updated before backend operations
     Future.delayed(const Duration(milliseconds: 300), () async {
       try {
@@ -4116,17 +4382,32 @@ getOptionawait(String exch, String token) {
           return;
         }
 
-        // First step: Delete all scrips (but only from backend, not UI)
-        final deleteResult = await addDelMarketScrip(
-            wlName, "$scripTokens#", context, false, true, true, false,
-            showSnackBar: false);
+        await api.getReorderMWScrips(
+          wlname: wlName,
+          scripToken: "$scripTokens#",
+        );
 
-        // Second step: Add all scrips back in the new order (only to backend)
-        if (deleteResult) {
-          await addDelMarketScrip(
-              wlName, "$scripTokens#", context, true, true, true, false,
-              showSnackBar: false);
+        // Sync the local scrip-data cache with the new order. Without this,
+        // any later changeWLScrip / restoreFromCache call (e.g. after a
+        // browser tab return triggers the WS reconnect resubscribe chain)
+        // would re-hydrate _scrips from the stale cached JSON and silently
+        // revert the order.
+        _marketWatchScripData[wlName] = jsonEncode(_scrips);
 
+        // Toast wording is set by the caller — sort actions get an
+        // action-specific message (e.g. "Sorted by name (A-Z)"), while
+        // drag-drop reorder uses the default "Stock order was changed".
+        if (context.mounted) {
+          try {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            if (kIsWeb) {
+              ResponsiveSnackBar.showSuccess(context, toastMessage);
+            } else {
+              successMessage(context, toastMessage);
+            }
+          } catch (_) {
+            // Widget may have been disposed during the delay — ignore.
+          }
         }
       } catch (e) {
         // Silently handle errors in the background operation
@@ -4532,26 +4813,41 @@ getOptionawait(String exch, String token) {
     if (newI > oldI) {
       newI -= 1;
     }
-    String addInput = "";
-    String deleteInput = "";
 
     final element = _scrips.removeAt(oldI);
-    deleteInput = "${element['exch']}|${element['token']}#";
-    for (var elementa in _scrips) {
-      deleteInput += "${elementa['exch']}|${elementa['token']}#";
-    }
-
     _scrips.insert(newI, element);
 
-    await addDelMarketScrip(
-        wlName, deleteInput, context, false, true, true, false);
-
+   
+    String addInput = "";
     for (var elements in _scrips) {
       addInput += "${elements['exch']}|${elements['token']}#";
     }
+    try {
+      await api.getReorderMWScrips(
+        wlname: wlName,
+        scripToken: addInput,
+      );
+      // Sync the local scrip-data cache with the new order so a later
+      // changeWLScrip/restoreFromCache (e.g. from the WS reconnect chain
+      // after a browser tab return) doesn't silently revert the order.
+      _marketWatchScripData[wlName] = jsonEncode(_scrips);
 
-    await addDelMarketScrip(
-        wlName, addInput, context, true, true, false, false);
+      // Restore the success toast that the old delete-then-add flow used
+      // to show via addDelMarketScrip's isReOrder branch.
+      if (context.mounted) {
+        try {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          if (kIsWeb) {
+            ResponsiveSnackBar.showSuccess(context, "Stocks reordered successfully.");
+          } else {
+            successMessage(context, "Stocks reordered successfully.");
+          }
+        } catch (_) {}
+      }
+    } catch (_) {
+      // Silently swallow — reorder is best-effort; the UI already reflects
+      // the new order and the backend remains consistent with the old order.
+    }
 
     // Reset sorting after reordering to maintain natural order
     await _resetSortPreference();
@@ -4656,19 +4952,19 @@ getOptionawait(String exch, String token) {
         // Close the dialog
         Navigator.of(context).pop();
 
-        // Small delay to ensure dialog pop completes, then add Order Book tab and switch to Alerts
+       
         Future.delayed(const Duration(milliseconds: 200), () {
           if (kIsWeb && WebNavigationHelper.isAvailable) {
-            // Navigate to Order Book in web panel using WebNavigationHelper
+            // Navigate to Order Book in web panel
             WebNavigationHelper.navigateTo("orderBook");
 
-            // Additional delay to ensure Order Book screen loads, then switch to Alerts tab within it
+          
             Future.delayed(const Duration(milliseconds: 300), () {
-              ref.read(orderProvider).changeTabIndex(5, context);
+              ref.read(orderProvider).setSelectedTabSilent(6);
             });
           } else {
             // Fallback for non-web platforms
-            ref.read(orderProvider).changeTabIndex(5, context);
+            ref.read(orderProvider).setSelectedTabSilent(6);
           }
         });
       } else if (_setAlertModel!.stat! == "Not_Ok" &&
@@ -4763,10 +5059,12 @@ getOptionawait(String exch, String token) {
   }
 
   Future fetchmodifyalert(String exch, String tysm, String value,
-      String alertTypeVal, String alid, BuildContext context) async {
+      String alertTypeVal, String alid, BuildContext context,
+      {String? remarks}) async {
     try {
-      _modifyalertmodel =
-          await api.getmodifyalert(exch, tysm, value, alertTypeVal, alid);
+      _modifyalertmodel = await api.getmodifyalert(
+          exch, tysm, value, alertTypeVal, alid,
+          remarks: remarks);
 
       if (_modifyalertmodel!.stat! == "OI replaced") {
         ConstantName.sessCheck = true;
@@ -4852,13 +5150,20 @@ getOptionawait(String exch, String token) {
         }
 
         toggleLoadingOn(false);
-        Navigator.pop(context);
+        // On mobile the rename UI is two nested bottom sheets — this pop
+        // dismisses the WatchListRename sheet (the outer sheet has its own
+        // pop chain). On web, the caller pops its own dialog before calling
+        // us, so popping here would eat a live route on the nested right-
+        // panel Navigator and trigger Navigator._debugLocked on unmount.
+        if (!kIsWeb) {
+          Navigator.pop(context);
+        }
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         } else {
           successMessage(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         }
         notifyListeners();
         return;
@@ -4887,19 +5192,26 @@ getOptionawait(String exch, String token) {
           await changeWLScrip(newName, context);
         }
 
-        Navigator.pop(context);
-        Navigator.pop(context);
+        // See the pending-branch comment above for why these pops are
+        // mobile-only. The two pops dismiss the nested rename + watchlist
+        // bottom sheets on mobile.
+        if (!kIsWeb) {
+          Navigator.pop(context);
+          Navigator.pop(context);
+        }
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         } else {
           successMessage(context,
-              "The name of the watchlist has been successfully changed.");
+              "Watchlist renamed successfully");
         }
         notifyListeners();
       } else if (_watchlistRenameModel!.stat == "Not_Ok") {
-        Navigator.pop(context);
-        Navigator.pop(context);
+        if (!kIsWeb) {
+          Navigator.pop(context);
+          Navigator.pop(context);
+        }
         if (kIsWeb) {
           ResponsiveSnackBar.showWarning(context, "${_watchlistRenameModel!.emsg}");
         } else {

@@ -11,7 +11,9 @@ import 'package:mynt_plus/models/mf_model/all_mf_holdings_model.dart';
 import 'package:mynt_plus/models/mf_model/allcatlistviewmodel.dart';
 import 'package:mynt_plus/models/mf_model/mf_bestnewapi_list_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_hold_singlepage_model.dart';
+import 'package:mynt_plus/models/mf_model/mf_demat_holding_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_holding_new_model.dart';
+import 'package:mynt_plus/models/mf_model/mf_holding_new_model.dart' as mfh;
 import 'package:mynt_plus/models/mf_model/mf_order_det_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_sip_cancel_mess_model.dart';
 import 'package:mynt_plus/models/mf_model/mf_sip_reject_reason.dart';
@@ -179,6 +181,14 @@ class MFProvider extends DefaultChangeNotifier {
 
   mf_holdoing_new? _mfholdingnew;
   mf_holdoing_new? get mfholdingnew => _mfholdingnew;
+
+  // "Mutual Fund Beta" holdings (demat_holdings endpoint) — separate from the
+  // live MF holdings above so the existing tab is untouched.
+  MfDematHolding? _mfDematHolding;
+  MfDematHolding? get mfDematHolding => _mfDematHolding;
+
+  bool _dematHoldLoad = false;
+  bool get dematHoldLoad => _dematHoldLoad;
 
   bool _mforderloader = false;
   bool get mforderloader => _mforderloader;
@@ -409,7 +419,9 @@ class MFProvider extends DefaultChangeNotifier {
     // await fetchBestMF();
     // Navigator.pushNamed(ctx, Routes.mfmainscreen);
     // await fetchsiprejreasin();
-    await fetchmfholdingnew();
+    // Old MF holdings API is being decommissioned — demat holdings replace it.
+    // await fetchmfholdingnew();
+    await fetchmfdematholding();
 
     await fetchMfOrderbook(ctx);
     // await fetchmfallcatnew();
@@ -452,6 +464,14 @@ class MFProvider extends DefaultChangeNotifier {
 
   void recdemevalu() {
     redemptionQty.text = _holssinglelist![0].avgQty!;
+  }
+
+  /// Sets the single-holding list directly from a caller-supplied item.
+  /// Used by the Mutual Fund Beta tab, which already has its own holding object
+  /// (with scheme code) rather than one looked up from [mfholdingnew].
+  void setHoldSingleListItem(dynamic item) {
+    _holssinglelist = [item];
+    notifyListeners();
   }
 
   String _paymentName = "UPI";
@@ -1571,6 +1591,9 @@ class MFProvider extends DefaultChangeNotifier {
     }
   }
 
+  // RETIRED: the backing endpoint is being decommissioned. No live code
+  // calls this any more — mfholdingnew data is now adapted from the demat
+  // response inside fetchmfdematholding(). Kept for reference only.
   Future<void> fetchmfholdingnew() async {
     try {
       _holdstatload = true;
@@ -1588,6 +1611,89 @@ class MFProvider extends DefaultChangeNotifier {
       _holdstatload = false;
       notifyListeners();
     }
+  }
+
+  Future<void> fetchmfdematholding() async {
+    try {
+      _dematHoldLoad = true;
+      _holdstatload = true;
+      notifyListeners();
+      _mfDematHolding = await api.getmfdemathldapi();
+      // The old MF holdings endpoint is being decommissioned. The MF section
+      // screens (holdings list, search, single page, redeem) still read the
+      // mfholdingnew shape, so mirror the demat response into it here —
+      // display and order/redeem flows keep working unchanged while ALL
+      // network traffic goes to the demat endpoint only.
+      _mfholdingnew = _dematToMfHoldingNew(_mfDematHolding);
+    } catch (e) {
+      _dematHoldLoad = false;
+      _holdstatload = false;
+    } finally {
+      _dematHoldLoad = false;
+      _holdstatload = false;
+      notifyListeners();
+    }
+  }
+
+  /// Adapts the demat holdings response into the legacy mfholdingnew shape.
+  ///
+  /// Field mapping: SCRIP_NAME -> name, total_units -> avg_qty,
+  /// Scheme_Code -> sCHEMECODE (backend now sends it, so redemption order
+  /// placement works), Minimum_Redemption_Qty -> minRedemptionQty (parsed
+  /// whenever the response carries it). Folio number has no demat
+  /// equivalent and stays null — the redemption API takes only scheme code
+  /// and quantity, so nothing downstream needs it.
+  mf_holdoing_new? _dematToMfHoldingNew(MfDematHolding? demat) {
+    if (demat == null) return null;
+    final rows = <mfh.Data>[];
+    for (final d in demat.data ?? <MfDematHoldingData>[]) {
+      final row = mfh.Data(
+        name: d.scripName,
+        iSIN: d.iSIN,
+        avgQty: d.totalUnits,
+        avgNav: d.avgNav,
+        curNav: d.curNav,
+        investedValue: d.investedValue,
+        currentValue: d.currentValue,
+        profitLoss: d.profitLoss,
+        changeprofitLoss: d.changeprofitLoss,
+      );
+      row.sCHEMECODE = d.schemeCode;
+      row.minRedemptionQty = d.minimumRedemptionQty;
+      row.minimumPurchaseAmount = d.minimumPurchaseAmount;
+      row.purchaseAllowed = d.purchaseAllowed;
+      row.redemptionAllowed = d.redemptionAllowed;
+      rows.add(row);
+    }
+
+    // Prefer the API summary; compute totals from rows when the demat
+    // response omits its summary block.
+    mfh.Summary summary;
+    if (demat.summary != null) {
+      summary = mfh.Summary(
+        invested: demat.summary!.invested,
+        currentValue: demat.summary!.currentValue,
+        absReturnValue: demat.summary!.absReturnValue,
+        absReturnPercent: demat.summary!.absReturnPercent,
+      );
+    } else {
+      double invested = 0;
+      double current = 0;
+      for (final r in rows) {
+        invested += double.tryParse(r.investedValue ?? '0') ?? 0;
+        current += double.tryParse(r.currentValue ?? '0') ?? 0;
+      }
+      final pnl = current - invested;
+      summary = mfh.Summary(
+        invested: invested.toStringAsFixed(2),
+        currentValue: current.toStringAsFixed(2),
+        absReturnValue: pnl.toStringAsFixed(2),
+        absReturnPercent:
+            (invested != 0 ? (pnl / invested) * 100 : 0).toStringAsFixed(2),
+      );
+    }
+
+    return mf_holdoing_new(data: rows, summary: summary, stat: demat.stat);
   }
 
   void fetchmfholdsingpage(String isin, {bool isAllMf = false}) async {
@@ -2693,7 +2799,16 @@ class MFProvider extends DefaultChangeNotifier {
         _investloader = false;
         _loadingMessage = null;
         notifyListeners();
-        warningMessage(context, "${_mfPlaceOrderResponces?.remarks}");
+        // Show the backend error (emsg) in a toast; fall back to remarks /
+        // response_message so the regular MF tab's existing messages still work.
+        final res = _mfPlaceOrderResponces;
+        final candidates = [res?.emsg, res?.remarks, res?.responseMessage];
+        final errMsg = candidates.firstWhere(
+          (m) => m != null && m.isNotEmpty && m != 'null',
+          orElse: () => 'Unable to place the order.',
+        )!;
+        warningMessage(
+            context, "$errMsg\nPlease contact our support team.");
       }
       //     // showModalBottomSheet(
       //     //     context: context,
@@ -3469,53 +3584,56 @@ class MFProvider extends DefaultChangeNotifier {
       resolvedMax = mfData.maximumPurchaseAmount;
     }
 
+    // The demat holdings response may not carry the purchase limits the old
+    // MF holdings API sent. A missing or unparseable bound must SKIP that
+    // check — the previous `double.parse(resolvedMin!)` null-assert crashed
+    // the payment button silently when the limit was absent.
+    final double? minAmt = double.tryParse(resolvedMin ?? '');
+    final double? maxAmt = double.tryParse(resolvedMax ?? '');
+
     {
       if (mfOrderTpye == "One-time") {
         if (invAmt.text.isEmpty) {
           invAmtError = "Please enter Investment amount";
-        } else if (double.parse(invAmt.text) <
-            double.parse(resolvedMin!)) {
+        } else if (minAmt != null && double.parse(invAmt.text) < minAmt) {
           invAmtError =
-              "Investment amount should not be less than ${double.parse(resolvedMin).toStringAsFixed(2)}";
-        } else if (resolvedMax != null &&
-                   resolvedMax.isNotEmpty &&
-                   double.parse(resolvedMax) > 0 &&
-                   double.parse(invAmt.text) > double.parse(resolvedMax)) {
+              "Investment amount should not be less than ${minAmt.toStringAsFixed(2)}";
+        } else if (maxAmt != null &&
+                   maxAmt > 0 &&
+                   double.parse(invAmt.text) > maxAmt) {
           invAmtError =
-              "Investment amount should not be more than ${double.parse(resolvedMax).toStringAsFixed(2)}";
+              "Investment amount should not be more than ${maxAmt.toStringAsFixed(2)}";
         } else {
           invAmtError = "";
         }
       } else {
         if (invAmt.text.isEmpty) {
           invAmtError = "Please enter Investment amount";
-        } else if (double.parse(invAmt.text) <
-                double.parse(resolvedMin!) &&
+        } else if (minAmt != null &&
+            double.parse(invAmt.text) < minAmt &&
             isInitalPay) {
           invAmtError =
-              "Investment amount should not be less than ${double.parse(resolvedMin).toStringAsFixed(2)}";
-        } else if (resolvedMax != null &&
-                   resolvedMax.isNotEmpty &&
-                   double.parse(resolvedMax) > 0 &&
-                   double.parse(invAmt.text) > double.parse(resolvedMax)) {
+              "Investment amount should not be less than ${minAmt.toStringAsFixed(2)}";
+        } else if (maxAmt != null &&
+                   maxAmt > 0 &&
+                   double.parse(invAmt.text) > maxAmt) {
           invAmtError =
-              "Investment amount should not be more than ${double.parse(resolvedMax).toStringAsFixed(2)}";
+              "Investment amount should not be more than ${maxAmt.toStringAsFixed(2)}";
         } else {
           invAmtError = "";
         }
 
         if (installmentAmt.text.isEmpty) {
           installmentAmtError = "Please enter Installment amount";
-        } else if (double.parse(installmentAmt.text) <
-            double.parse(resolvedMin!)) {
+        } else if (minAmt != null &&
+            double.parse(installmentAmt.text) < minAmt) {
           installmentAmtError =
-              "Installment amount should not be less than ${double.parse(resolvedMin).toStringAsFixed(2)}";
-        } else if (resolvedMax != null &&
-                   resolvedMax.isNotEmpty &&
-                   double.parse(resolvedMax) > 0 &&
-                   double.parse(installmentAmt.text) > double.parse(resolvedMax)) {
+              "Installment amount should not be less than ${minAmt.toStringAsFixed(2)}";
+        } else if (maxAmt != null &&
+                   maxAmt > 0 &&
+                   double.parse(installmentAmt.text) > maxAmt) {
           installmentAmtError =
-              "Installment amount should not be more than ${double.parse(resolvedMax).toStringAsFixed(2)}";
+              "Installment amount should not be more than ${maxAmt.toStringAsFixed(2)}";
         } else {
           installmentAmtError = "";
         }

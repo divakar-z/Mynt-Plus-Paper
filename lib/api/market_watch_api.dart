@@ -143,15 +143,39 @@ mixin MarketWatchApi on ApiCore {
   }
 
 // Get Predefined MArket scrips (NIFTY,BANK NIFTY,SENSEX)
+// New endpoint accepts one wlname per call, so fire 3 in parallel and stitch
+// the results back into the existing PreDefinedMWlist shape.
+
+  Future<List<WatchListValues>> _fetchPreDefMWByName(String wlname) async {
+    final uri = Uri.parse(apiLinks.preDefdMWatchScrip);
+    final res = await apiClient.post(uri,
+        headers: defaultHeaders,
+        body:
+            '''jData={"uid":"${prefs.clientId}","wlname":"$wlname"}&jKey=${prefs.clientSession}''');
+    final json = jsonDecode(res.body) as Map<String, dynamic>;
+    if (json['stat'] != 'Ok') return [];
+    final List<WatchListValues> values = [];
+    if (json['values'] != null) {
+      for (final v in (json['values'] as List)) {
+        values.add(WatchListValues.fromJson(v as Map<String, dynamic>));
+      }
+    }
+    return values;
+  }
 
   Future<PreDefinedMWlist> getPreDefMWScrip() async {
     try {
-      final uri = Uri.parse(apiLinks.preDefdMWatchScrip);
-      final res = await apiClient.post(uri, headers: defaultHeaders);
-      // log(" Pre Def Market WatchScrip => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return PreDefinedMWlist.fromJson(json as Map<String, dynamic>);
+      final results = await Future.wait([
+        _fetchPreDefMWByName('NIFTY50:NSE'),
+        _fetchPreDefMWByName('NIFTYBANK:NSE'),
+        _fetchPreDefMWByName('SENSEX:BSE'),
+      ]);
+      return PreDefinedMWlist(
+        nIFTY50NSE: results[0],
+        nIFTYBANKNSE: results[1],
+        sENSEXBSE: results[2],
+        stat: 'Ok',
+      );
     } catch (e) {
       rethrow;
     }
@@ -218,6 +242,28 @@ mixin MarketWatchApi on ApiCore {
     }
   }
 
+  // Reorder scrips within a watchlist — vendor endpoint that takes the full
+  // ordered list and atomically updates positions on the backend. Replaces
+  // the older delete-all + add-all dance which always tripped the "at least
+  // 1 stock must remain" rule on the delete step.
+  Future<AddDeleteScripModel> getReorderMWScrips({
+    required String wlname,
+    required String scripToken,
+  }) async {
+    try {
+      final uri = Uri.parse(apiLinks.reorderMWScrips);
+      final res = await apiClient.post(uri,
+          headers: defaultHeaders,
+          body:
+              '''jData={"uid":"${prefs.clientId}","wlname":"$wlname","scrips":"$scripToken"}&jKey=${prefs.clientSession}''');
+
+      final json = jsonDecode(res.body);
+      return AddDeleteScripModel.fromJson(json as Map<String, dynamic>);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
 // Get Trade symbol wise search from kambala
 
   Future<SearchScripModel> getSearchScrip({required String searchText}) async {
@@ -249,6 +295,26 @@ mixin MarketWatchApi on ApiCore {
       final json = jsonDecode(res.body);
       //  print("Search Scrip => ${json['values'].length}");
       return SearchScripNewModel.fromJson(json as Map<String, dynamic>);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Derivative contract master (NFO/BFO/MCX/NCOM): a flat map of "EXCH:token" ->
+  /// ready display name, fetched once on login and cached in DerivativeMaster so
+  /// every screen can resolve a contract's name from one source. [exchanges] are
+  /// the user's entitled derivative exchanges, sent as ?exch=NFO,BFO,MCX.
+  Future<Map<String, String>> getDerivativeMaster(
+      {required List<String> exchanges}) async {
+    try {
+      final uri = Uri.parse(
+          '${apiLinks.derivativeMaster}?exch=${exchanges.join(',')}');
+      final res = await apiClient.get(uri, headers: defaultHeaders);
+      final json = jsonDecode(res.body);
+      if (json is Map) {
+        return json.map((k, v) => MapEntry(k.toString(), v.toString()));
+      }
+      return <String, String>{};
     } catch (e) {
       rethrow;
     }
@@ -395,10 +461,15 @@ mixin MarketWatchApi on ApiCore {
       String alertTypeVal, String remark) async {
     try {
       final uri = Uri.parse(apiLinks.setAlert);
+      // Free-text remark: JSON-escape (quotes, backslashes) then URL-encode
+      // (&, %, +) so characters like "!@#$%^&*()_+" don't break jData.
+      final jsonRemark = jsonEncode(remark);
+      final encodedRemark = UrlUtils.encodeParameter(
+          jsonRemark.substring(1, jsonRemark.length - 1));
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","d":"$value","remarks":"$remark"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","d":"$value","remarks":"$encodedRemark"}&jKey=${prefs.clientSession}''');
 
       // log("SetAlert => ${res.body}");
       final json = jsonDecode(res.body);
@@ -457,13 +528,23 @@ mixin MarketWatchApi on ApiCore {
   }
 
   Future<ModifyAlertModel> getmodifyalert(String exch, String tysm,
-      String value, String alertTypeVal, String alid) async {
+      String value, String alertTypeVal, String alid,
+      {String? remarks}) async {
     try {
       final uri = Uri.parse(apiLinks.modifyalert);
+      // TC_469.1: remarks only when the caller passes them (web Modify Alert);
+      // same JSON-escape + URL-encode as SetAlert.
+      String remarksField = "";
+      if (remarks != null) {
+        final jsonRemark = jsonEncode(remarks);
+        final encodedRemark = UrlUtils.encodeParameter(
+            jsonRemark.substring(1, jsonRemark.length - 1));
+        remarksField = ',"remarks":"$encodedRemark"';
+      }
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","al_id":"$alid","d":"$value"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","exch":"$exch","tsym":"${UrlUtils.encodeParameter(tysm)}","ai_t":"$alertTypeVal","validity":"GTT","al_id":"$alid","d":"$value"$remarksField}&jKey=${prefs.clientSession}''');
 
       // log("Modify Alert => ${res.body}");
       final json = jsonDecode(res.body);
@@ -475,6 +556,42 @@ mixin MarketWatchApi on ApiCore {
   }
 
 
+
+  // Variant used by the chart engine. Takes explicit from/to unix-epoch
+  // seconds (matches the EODChartData API contract directly) so callers
+  // that already compute their own time range — like the chart engine's
+  // infinite-scroll extend path — don't have to round-trip through a
+  // timeframe-string enum.
+  Future<List<EodChartData>> getEODChartDataRange({
+    required String tsym,
+    required String exch,
+    required int fromEpoch,
+    required int toEpoch,
+  }) async {
+    final uri = Uri.parse(apiLinks.eodchartdata);
+    final formattedSymbol = "$exch:$tsym";
+    final payload =
+        'jData={"sym": "$formattedSymbol","from": "$fromEpoch","to": "$toEpoch"}'
+        '&jKey=${prefs.clientSession}';
+    final res = await apiClient.post(uri, headers: defaultHeaders, body: payload);
+    final json = jsonDecode(res.body);
+    if (json is Map &&
+        json['stat'] == 'Not_Ok' &&
+        json['emsg'] == 'Session Expired :  Invalid Session Key') {
+      throw Exception('Session Expired :  Invalid Session Key');
+    }
+    if (json is List) {
+      return json.map((item) {
+        // Backend wraps each row as a JSON string inside the outer array.
+        final itemData = jsonDecode(item as String);
+        return EodChartData.fromJson(itemData as Map<String, dynamic>);
+      }).toList();
+    }
+    if (json is Map) {
+      return [EodChartData.fromJson(json as Map<String, dynamic>)];
+    }
+    throw Exception('Unexpected EOD response format');
+  }
 
   Future<List<EodChartData>> getEODChartData(String tsym, String exch, {String timeframe = "1Y"}) async {
     try {

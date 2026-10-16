@@ -1157,8 +1157,12 @@ class LDProvider extends DefaultChangeNotifier {
       _holdingsloading = true;
 
       notifyListeners();
+      
+      // _holdingsAllData = await api.mockHoldingsResponse();
 
-      _holdingsAllData = await api.getHoldingsdata(from);
+      _holdingsAllData = await _holdingsFromNoren();
+
+  
       _holdingsloading = false;
       notifyListeners();
 
@@ -1173,18 +1177,57 @@ class LDProvider extends DefaultChangeNotifier {
     }
   }
 
+  /// Re-uses the Noren `Holdings` call from PortfolioAPI (the same one that
+  /// powers the Holdings tab) and transforms each item into the legacy
+  /// {ISIN, NET, APPROVED, NPOADQTY} map shape.
+  ///
+  /// - `APPROVED` is the computed `saleableQty` (= holdqty+dpqty+btstqty-usedqty)
+  ///   — represents what the user can actually tender.
+  /// - `NPOADQTY` is Noren's raw npoadqty value, used by Gate 2 with the
+  ///   same condition as the Holdings tab's e-DIS button: if present
+  ///   (not the literal "null"), user needs to authorize e-DIS.
+  Future<HoldingModel> _holdingsFromNoren() async {
+    final result = await api.getHolding();
+    final data = result['data'];
+    if (data is! List) return HoldingModel.fromJson({});
+    int parseQty(String? v) => int.tryParse(v ?? '0') ?? 0;
+    final List<Map<String, dynamic>> mapped = [];
+    for (final h in data) {
+      final exchTsym = h.exchTsym;
+      String? isin;
+      if (exchTsym != null && exchTsym.isNotEmpty) {
+        isin = exchTsym.first.isin;
+      }
+      if (isin == null || isin.isEmpty) continue;
+      final saleable = (parseQty(h.holdqty) +
+              parseQty(h.dpQty) +
+              parseQty(h.btstqty)) -
+          parseQty(h.usedqty);
+      mapped.add({
+        'ISIN': isin,
+        'NET': h.holdqty ?? '0',
+        'APPROVED': saleable.toString(),
+        'NPOADQTY': h.npoadqty,
+      });
+    }
+    return HoldingModel.fromJson({'Holdings': mapped});
+  }
+
   Future fetchcpactiondata(BuildContext context) async {
     try {
       _cpactionloader = true;
       // notifyListeners();
 
       _cpactiondata = await api.getcpactiondata();
-      // print(
-      //     "${_cpactiondata?.corporateAction} ........................._cpactiondata");
 
-      // if (_cpactiondata != null) {
+      // Make sure holdings are loaded *before* the ISIN eligibility check.
+      // The screen kicks off both fetches in parallel — if holdings haven't
+      // arrived yet, every row would stamp as "no" → "Not Eligible".
+      if (_holdingsAllData == null) {
+        await fetchholdingsData('', context);
+      }
+
       await hodlingshavecheckfunction();
-      // }
 
       //  _ledgerAllData = new LedgerModelData();
 
@@ -1212,12 +1255,14 @@ class LDProvider extends DefaultChangeNotifier {
           // Search for matching order details
           for (var j = 0; j < _orderdetailsdatacop!.msg!.length; j++) {
             final data2 = _orderdetailsdatacop!.msg![j];
-            if (data.symbol == data2.symbol) {
+            if (data.symbol == data2.symbol &&
+                data.issueType == data2.series) {
               // Match found - set order details
               data.orderstatus = data2.status;
               data.bidqty = data2.bidQuan;
               data.appno = data2.applicationNo;
               data.orderprice = data2.price;
+              data.rejectionreason = data2.rejectionreason;
 
               matchFound = true;
               // Exit inner loop once match is found
@@ -1231,10 +1276,13 @@ class LDProvider extends DefaultChangeNotifier {
           data.bidqty = 'null';
           data.appno = 'null';
           data.orderprice = 'null';
+          data.rejectionreason = null;
         }
       }
 
-      await edischeckfunction('');
+      // Backend confirmed EdisReport is deprecated/down — approvedqty now
+      // comes from Noren saleableQty stamped in hodlingshavecheckfunction.
+      // await edischeckfunction('');
       notifyListeners();
     } catch (e) {
     }
@@ -1244,12 +1292,19 @@ class LDProvider extends DefaultChangeNotifier {
     for (var i = 0; i < _cpactiondata!.corporateAction!.length; i++) {
       final data = _cpactiondata!.corporateAction![i];
       data.eligibleornot = 'no';
+      // Default approvedqty so non-matching rows show 0 instead of stale state
+      data.approvedqty = '0';
       if (_holdingsAllData != null) {
         for (var y = 0; y < _holdingsAllData!.holdings!.length; y++) {
           final data2 = _holdingsAllData!.holdings![y];
           if (data.isin == data2['ISIN']) {
             data.eligibleornot = 'yes';
             data.havingqty = data2['NET'].toString();
+            // approvedqty = computed saleableQty (cap for tendering)
+            // npoadqty   = raw Noren value, used by Gate 2 (same logic as
+            //              the Holdings tab's e-DIS button)
+            data.approvedqty = data2['APPROVED']?.toString() ?? '0';
+            data.npoadqty = data2['NPOADQTY']?.toString();
             _isinlistforcopedisdata.add(data2['ISIN']);
 
             break;
@@ -1305,28 +1360,30 @@ class LDProvider extends DefaultChangeNotifier {
       final res = await api.putorderapicopaction(
           tabval, sym, exchange, issueType, qty, price, ordertype, appno);
 
+      // The dialog has already been popped above, so `context.mounted` is
+      // false here. The shared snackbar helpers fall back to the global
+      // navigator context — they don't need a live dialog context to render.
       if (res.msg == 'success') {
         await ordercheckfunction();
         _cpactionloader = false;
-
-        // Safely show snackbar
-        if (context.mounted) {
-            successMessage(
-              context,
-              ordertype == 'ER' ? 'Order placed' : 'Order cancelled',
-          );
-        }
+        successMessage(
+          context,
+          ordertype == 'ER' ? 'Order placed' : 'Order cancelled',
+        );
       } else if (res.msg == 'error occured on data fetch') {
         await ordercheckfunction();
         _cpactionloader = false;
-
-        // Safely show snackbar
-        if (context.mounted) {
-            warningMessage(
-              context,
-              "${res.msg}", // 'Order cancelled',
-          );
-        }
+        warningMessage(context, "${res.msg}");
+      } else {
+        // Any other response — surface whatever the backend sent (msg, emsg,
+        // or a generic message) instead of silently swallowing it.
+        _cpactionloader = false;
+        final fallback = (res.emsg?.isNotEmpty == true)
+            ? res.emsg!
+            : (res.msg?.isNotEmpty == true
+                ? res.msg!
+                : 'Something went wrong, please try again');
+        warningMessage(context, fallback);
       }
     } catch (e) {
       if (context.mounted) {
@@ -3347,6 +3404,8 @@ class LDProvider extends DefaultChangeNotifier {
     }
     if (_listforpledge.isEmpty) {
       _pledgeorunpledge = '';
+      _segmentvalue = '';
+      _segmentvaluedummy = '';
     }
     notifyListeners();
   }
@@ -3380,6 +3439,24 @@ class LDProvider extends DefaultChangeNotifier {
     }
     //  _pledgeandunpledge!.data = [];
 
+    notifyListeners();
+  }
+
+  void clearOnLogout() {
+    _segmentvalue = '';
+    _segmentvaluedummy = '';
+    _listforpledge = [];
+    _pledgeorunpledge = '';
+    _pledgeoruppledgedelete = '';
+    pledgesubtn = true;
+    if (_pledgeandunpledge?.data != null) {
+      for (final item in _pledgeandunpledge!.data!) {
+        item.dummvalue = 'null';
+        item.dummunpledgevalue = 'null';
+        item.segmentselect = 'null';
+        item.deleteselected = '';
+      }
+    }
     notifyListeners();
   }
 

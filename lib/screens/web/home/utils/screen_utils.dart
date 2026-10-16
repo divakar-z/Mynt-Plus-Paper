@@ -63,6 +63,8 @@ class ScreenUtils {
         return 'Strategy Builder';
       case ScreenType.scalper:
         return 'Scalper';
+      case ScreenType.charts:
+        return 'Charts';
       case ScreenType.tradingViewWebHook:
         return 'WebHook';
       case ScreenType.refer:
@@ -99,6 +101,12 @@ class ScreenUtils {
         return 'Form Download';
       case ScreenType.closureDetails:
         return 'Closure';
+      case ScreenType.caBuyback:
+        return 'Buyback';
+      case ScreenType.scanner:
+        return 'Scanner';
+      case ScreenType.orderflow:
+        return 'Orderflow';
     }
   }
 
@@ -163,6 +171,8 @@ class ScreenUtils {
         return Icons.architecture;
       case ScreenType.scalper:
         return Icons.speed;
+      case ScreenType.charts:
+        return Icons.show_chart;
       case ScreenType.tradingViewWebHook:
         return Icons.web;
       case ScreenType.refer:
@@ -199,6 +209,12 @@ class ScreenUtils {
         return Icons.download;
       case ScreenType.closureDetails:
         return Icons.cancel;
+      case ScreenType.caBuyback:
+        return Icons.recycling;
+      case ScreenType.scanner:
+        return Icons.radar;
+      case ScreenType.orderflow:
+        return Icons.show_chart;
     }
   }
 

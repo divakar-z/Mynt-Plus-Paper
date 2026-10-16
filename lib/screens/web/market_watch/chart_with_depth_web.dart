@@ -9,13 +9,16 @@ import 'package:mynt_plus/provider/user_profile_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/screens/web/chart/web_chart_manager.dart';
 import 'package:mynt_plus/screens/web/market_watch/scrip_depth_info_web.dart';
+import 'package:mynt_plus/screens/web/market_watch/state/trade_from_chart_mode_provider.dart';
 import 'package:mynt_plus/screens/web/market_watch/tv_chart/webview_chart.dart';
+import 'package:mynt_plus/screens/web/market_watch/widgets/embedded_chart_view.dart';
 import 'package:mynt_plus/screens/web/market_watch/options/option_chain_ss_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/search_dialog_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/set_alert_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/stock_report_web.dart';
 import 'package:mynt_plus/screens/web/market_watch/scrip_detail_web.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:pointer_interceptor/pointer_interceptor.dart';
@@ -31,8 +34,18 @@ class ChartWithDepthWeb extends ConsumerStatefulWidget {
   final DepthInputArgs wlValue;
   final String isBasket;
 
+  /// When true, picking a scrip from the chart's own search box reloads this
+  /// page (Market Info, depth, Options, Stock Report) for that scrip, same as
+  /// a watchlist click (Kite behaviour, TC_180). Only the main scrip-details
+  /// panel sets this — Scanner hosts its own copy and must not be pulled into
+  /// the main panel.
+  final bool followChartSymbolSearch;
+
   const ChartWithDepthWeb(
-      {super.key, required this.wlValue, this.isBasket = ""});
+      {super.key,
+      required this.wlValue,
+      this.isBasket = "",
+      this.followChartSymbolSearch = false});
 
   @override
   ConsumerState<ChartWithDepthWeb> createState() => _ChartWithDepthWebState();
@@ -45,6 +58,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
   VoidCallback?
       _tabControllerListener; // Store listener reference for proper cleanup
   int _selectedTabIndex = 0; // 0 for Overview, 1 for Chart, 2 for Options (if hasOptions), 2/3 for Stock Report
+  // Whether the current TabController was built with an Options tab. Needed
+  // because index 2 means Options when true but Stock Report when false.
+  bool _controllerHasOptions = false;
   bool _isBasketMode = false; // Track basket mode from OptionChainSSWeb
   VoidCallback? _toggleBasketModeCallback; // Callback to toggle basket mode
   BuildContext? _storedContext; // Store context for cleanup in dispose
@@ -54,9 +70,68 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
   // LayerLink for persistent chart portal positioning
   final LayerLink _chartLayerLink = LayerLink();
 
+  // Latest scrip requested from the chart's search box — a slower earlier
+  // request must not override a newer one.
+  String? _pendingChartSearchToken;
+
+  /// Chart search box picked [s] — reload the page for it through the same
+  /// path a watchlist click uses (calldepthApis → scrip panel → didUpdateWidget).
+  /// The chart itself is already on [s]; calldepthApis' setChartScript is a
+  /// no-op for the same symbol.
+  Future<void> _onChartSymbolSearched(ExternalChartSymbol s) async {
+    if (!mounted || s.token.isEmpty || s.exch.isEmpty) return;
+    if (s.token == widget.wlValue.token && s.exch == widget.wlValue.exch) {
+      return;
+    }
+    _pendingChartSearchToken = s.token;
+    final mw = ref.read(marketWatchProvider);
+
+    // instname drives index/commodity handling (no depth, no trading info).
+    // The search box supplies it; a saved-layout switch doesn't, so read it
+    // from the quote.
+    var instname = s.instname;
+    if (instname.isEmpty) {
+      try {
+        await mw.fetchScripQuote(s.token, s.exch, context);
+      } catch (_) {}
+      if (!mounted || _pendingChartSearchToken != s.token) return;
+      if (mw.getQuotes?.token?.toString() == s.token) {
+        instname = mw.getQuotes?.instname?.toString() ?? '';
+      }
+    }
+
+    final split = spilitTsym(value: s.tsym);
+    final depthArgs = DepthInputArgs(
+      exch: s.exch,
+      token: s.token,
+      tsym: s.tsym,
+      instname: instname,
+      symbol: split['symbol']?.toString() ?? s.tsym,
+      expDate: split['expDate']?.toString() ?? '',
+      option: split['option']?.toString() ?? '',
+    );
+    mw.scripdepthsize(false);
+    await mw.calldepthApis(context, depthArgs, "");
+  }
+
+  /// TradingView is one shared chart that moves between screens via the
+  /// inline portal. Only follow a search made while it's docked on THIS page
+  /// — e.g. not while Scanner's copy is hosting it in another panel.
+  void _onTvChartSymbolSearched(ExternalChartSymbol s) {
+    final profile = ref.read(userProfileProvider);
+    if (!profile.showInlineChart ||
+        profile.inlineChartLayerLink != _chartLayerLink) {
+      return;
+    }
+    _onChartSymbolSearched(s);
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.followChartSymbolSearch) {
+      webChartManager.setExternalSymbolListener(_onTvChartSymbolSearched);
+    }
     // Store context and container for later use in dispose
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -92,8 +167,11 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     // Check if isOption flag changed (even for the same scrip)
     if (oldWidget.wlValue.isOption != widget.wlValue.isOption) {
       if (_tabController != null) {
-        // Options tab is now at index 2 (Overview=0, Chart=1, Options=2)
-        final targetIndex = widget.wlValue.isOption ? 2 : 0;
+        // Options tab is now at index 2 (Overview=0, Chart=1, Options=2).
+        // TC_17 — only jump to index 2 when the controller actually has an
+        // Options tab; otherwise index 2 is Stock Report (or out of range).
+        final targetIndex =
+            widget.wlValue.isOption && _controllerHasOptions ? 2 : 0;
         if (_tabController!.index != targetIndex) {
           _tabController!.animateTo(targetIndex);
         }
@@ -116,11 +194,21 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
           // and preserves the user's current tab state
           final isOverviewTab = _selectedTabIndex == 0;
 
-          // Only change depth visibility if we're on Overview tab
-          // For other tabs (Chart, Options, Stock Report), preserve current depth state
-          // This prevents depth from opening and closing when switching symbols
-          if (isOverviewTab) {
-            // Overview tab: show depth with new scrip data
+          // ALWAYS unsubscribe the old depth when symbol changes,
+          // regardless of which tab is active. The old symbol's depth feed
+          // is no longer needed once a new symbol is selected.
+          // This fixes the bug where depth from option chain chart lingered
+          // when changing symbols via watchlist on a non-Overview tab.
+          if (mw.currentDepthSymbol != null) {
+            mw.unsubscribeFromDepthData(context: context);
+          }
+
+          // Subscribe to the new symbol's depth if we're on the Overview tab,
+          // OR if the depth sidebar is currently open on any other tab.
+          // This prevents depth from staying blank when changing symbols while
+          // the depth sidebar is manually opened on the Chart tab.
+          if (isOverviewTab || mw.isDepthVisible) {
+            // Show depth with new scrip data
             mw.setIsDepthVisibleWeb(
               true,
               context: context,
@@ -152,6 +240,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
 
   @override
   void dispose() {
+    // Only clears if still ours — a newer page may have registered already.
+    webChartManager.clearExternalSymbolListener(_onTvChartSymbolSearched);
+
     // Remove listener before disposing to prevent memory leaks
     if (_tabController != null && _tabControllerListener != null) {
       _tabController!.removeListener(_tabControllerListener!);
@@ -171,16 +262,14 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       }
     }
 
-    // Unsubscribe from depth data using stored container (ref is not available in dispose)
+    // Unsubscribe from depth data using stored container (ref is not available in dispose).
+    // force: true — the whole single-stock page is going away (chart included), so
+    // release the depth "ud" even for watchlisted symbols. The context is typically
+    // unmounted here, which is why the depth teardown no longer gates on mounted.
     if (_storedContainer != null) {
       try {
         final mw = _storedContainer!.read(marketWatchProvider);
-        if (_storedContext != null && _storedContext!.mounted) {
-          mw.unsubscribeFromDepthData(context: _storedContext);
-        } else {
-          // Context not mounted, but still try to unsubscribe without context
-          mw.unsubscribeFromDepthData(context: _storedContext);
-        }
+        mw.unsubscribeFromDepthData(context: _storedContext, force: true);
       } catch (e) {
         // Depth will be cleaned up when scrip changes anyway
       }
@@ -215,9 +304,21 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     if (hasOptions) targetLength++; // +1 for Options
     if (hasFundamentalData) targetLength++; // +1 for Stock Report
 
-    if (_tabController == null || _tabController!.length != targetLength) {
+    // Also rebuild when Options availability flips at the same tab count
+    // (e.g. [Overview, Chart, Options] -> [Overview, Chart, Stock Report]),
+    // otherwise index 2 silently switches from Options to Stock Report.
+    if (_tabController == null ||
+        _tabController!.length != targetLength ||
+        _controllerHasOptions != hasOptions) {
       // Preserve the current selected tab index if possible
       final previousIndex = _selectedTabIndex;
+      // TC_17 — the user was on the Options tab and the new scrip has no
+      // Options: land on Overview instead of whichever tab now sits at/near
+      // index 2 (Chart or Stock Report).
+      final lostOptionsTab = _tabController != null &&
+          _controllerHasOptions &&
+          !hasOptions &&
+          previousIndex == 2;
 
       // Remove old listener before disposing to prevent memory leaks
       if (_tabController != null && _tabControllerListener != null) {
@@ -230,7 +331,14 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       // 1. If we had a previous selection, try to preserve it (clamped to valid range)
       // 2. Otherwise, use Options tab (index 2) if isOption, else Overview (index 0)
       int initialIndex;
-      if (previousIndex > 0 && previousIndex < targetLength) {
+      if (ref.read(marketWatchProvider).openOnChartTab && targetLength > 1) {
+        // A Chart-tab open was requested (watchlist option-chain "Chart" action).
+        // Force the Chart tab (index 1) even across controller recreations that
+        // happen while scrip data loads; the flag is cleared after the panel settles.
+        initialIndex = 1;
+      } else if (lostOptionsTab) {
+        initialIndex = 0;
+      } else if (previousIndex > 0 && previousIndex < targetLength) {
         // Preserve current tab if it's still valid
         initialIndex = previousIndex;
       } else if (previousIndex >= targetLength) {
@@ -243,7 +351,24 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
 
       _tabController = TabController(
           length: targetLength, vsync: this, initialIndex: initialIndex);
+      _controllerHasOptions = hasOptions;
       _selectedTabIndex = _tabController!.index;
+
+      // A rebuilt controller does not fire the tab listener, so the Overview
+      // depth panel would stay hidden (it was hidden when the user moved to
+      // Options). Show it the same way the listener does for index 0.
+      if (lostOptionsTab && initialIndex == 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _selectedTabIndex != 0) return;
+          ref.read(marketWatchProvider).setIsDepthVisibleWeb(
+                true,
+                context: context,
+                exch: widget.wlValue.exch,
+                token: widget.wlValue.token,
+                tsym: widget.wlValue.tsym,
+              );
+        });
+      }
       // Store listener reference for proper cleanup
       _tabControllerListener = () {
         // Update UI when tab changes (for search icon visibility)
@@ -282,6 +407,23 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       };
       _tabController!.addListener(_tabControllerListener!);
     }
+  }
+
+  /// Re-enable any chart iframe left at pointer-events:none by the app's
+  /// dropdown/menu cursor-bleed guard (whose restore can race), so the chart is
+  /// interactive again. Cheap and idempotent — only touches a stuck iframe.
+  void _ensureChartIframesEnabled() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (final f in iframes) {
+        if (f is html.IFrameElement &&
+            f.id.contains('chart-iframe') &&
+            f.style.pointerEvents != 'auto') {
+          f.style.pointerEvents = 'auto';
+          f.style.cursor = '';
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _placeOrderInput(
@@ -441,6 +583,43 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     );
   }
 
+  /// Title for the option-chain / depth header.
+  /// - Underlying index or stock (no option type) → its full display name
+  ///   (e.g. "NIFTY 50"), matching the watchlist and search. `symname` is
+  ///   skipped here because for an index that field is the base trading symbol
+  ///   ("NIFTY"), which drops the "50".
+  /// - Option contract (has an option type) → base symbol + expiry + CE/PE
+  ///   (e.g. "NIFTY 24JUL26 CE"), unchanged from before.
+  String _optionChainHeaderTitle(GetQuotes? depthData) {
+    // Prefer the backend display name for any derivative (DerivativeMaster,
+    // keyed by exch:token). Indices/equities aren't in the master and fall
+    // through to the existing logic below.
+    final master = depthData?.masterName;
+    if (master != null && master.isNotEmpty) return "$master ";
+    final String option =
+        (depthData?.option ?? widget.wlValue.option).trim();
+    if (option.isEmpty) {
+      final name =
+          (depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol)
+              .replaceAll('-EQ', '')
+              .toUpperCase();
+      return "$name ";
+    }
+    // For BFO the symname is the instrument code ("BSXOPT"), so use the derived
+    // symbol ("SENSEX") as the base; other exchanges keep symname (e.g. NIFTY).
+    final primary =
+        depthData?.exch == "BFO" ? depthData?.symbol : depthData?.symname;
+    final base = (primary ??
+            depthData?.symname ??
+            depthData?.symbol ??
+            depthData?.tsym ??
+            widget.wlValue.symbol)
+        .replaceAll('-EQ', '')
+        .toUpperCase();
+    final exp = depthData?.expDate ?? widget.wlValue.expDate;
+    return "$base $exp $option ";
+  }
+
   @override
   Widget build(BuildContext context) {
     final mw = ref.watch(marketWatchProvider);
@@ -451,6 +630,22 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final hasFundamentalData = mw.fundamentalData != null &&
         mw.fundamentalData?.msg != "no data found";
     _setupTabControllerIfNeeded(hasOptions: hasOptions, hasFundamentalData: hasFundamentalData);
+
+    // If a Chart-tab open was requested (e.g. from the watchlist option-chain
+    // "Chart" action, which opens this panel fresh), switch to the Chart tab
+    // (index 1) once — mirroring the in-panel onChartRequested behaviour — then
+    // consume the flag so it doesn't affect later opens.
+    if (mw.openOnChartTab) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_tabController != null &&
+            _tabController!.length > 1 &&
+            _tabController!.index != 1) {
+          _tabController!.animateTo(1);
+        }
+        ref.read(marketWatchProvider).openOnChartTab = false;
+      });
+    }
 
     return Container(
       color: resolveThemeColor(context,
@@ -618,8 +813,14 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             ),
                             const SizedBox(width: 8),
                           ],
-                          // Sidebar toggle icon
-                          Material(
+                          // Sidebar toggle icon — always visible. The depth
+                          // panel is user-controlled and stays open/closed
+                          // independent of the Trade-from-Chart mode.
+                          Tooltip(
+                            message: mw.isDepthVisible
+                                ? "Hide Market Depth"
+                                : "Show Market Depth",
+                            child: Material(
                             color: Colors.transparent,
                             child: InkWell(
                               customBorder: const CircleBorder(),
@@ -659,6 +860,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                               ),
                             ),
                           ),
+                          ),
                         ],
                       ),
                     ),
@@ -688,7 +890,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  "${(depthData?.symname ?? depthData?.symbol ?? depthData?.tsym ?? widget.wlValue.symbol).replaceAll('-EQ', '').toUpperCase()}${depthData?.expDate ?? widget.wlValue.expDate} ${depthData?.option ?? widget.wlValue.option} ",
+                                  _optionChainHeaderTitle(depthData),
                                   overflow: TextOverflow.ellipsis,
                                   style: MyntWebTextStyles.title(
                                     context,
@@ -887,7 +1089,9 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                             ),
                             const Spacer(),
                             // Basket mode toggle button
-                            Material(
+                            Tooltip(
+                              message: "Basket Mode",
+                              child: Material(
                               color: Colors.transparent,
                               child: InkWell(
                                 customBorder: const CircleBorder(),
@@ -922,6 +1126,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                                 ),
                               ),
                             ),
+                            ),
                           ],
                         ),
                       ),
@@ -954,6 +1159,18 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
                       isBasket: widget.isBasket,
                       onClose: () {
                         mw.setIsDepthVisibleWeb(false);
+                      },
+                      // Futures row hover chart — same deferred switch as the
+                      // option chain's onChartRequested (tab controller may be
+                      // recreated when the contract changes).
+                      onChartRequested: () {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          if (_tabController != null &&
+                              _tabController!.index != 1) {
+                            _tabController!.animateTo(1);
+                          }
+                        });
                       },
                     ),
                   ),
@@ -1115,6 +1332,7 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
       return OptionChainSSWeb(
         wlValue: widget.wlValue,
         onBasketModeChanged: (bool isBasketMode) {
+          if (!mounted) return;
           setState(() {
             _isBasketMode = isBasketMode;
           });
@@ -1122,6 +1340,19 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
         onToggleCallbackReady: (VoidCallback toggleCallback) {
           setState(() {
             _toggleBasketModeCallback = toggleCallback;
+          });
+        },
+        onChartRequested: () {
+          // Defer one frame: a strike change can trigger _setupTabControllerIfNeeded
+          // to dispose and recreate _tabController (e.g. underlying with fundamentals
+          // -> option without fundamentals: 4 tabs -> 3 tabs). Switching synchronously
+          // would target the old controller and the recreated one would land back on
+          // its initialIndex.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_tabController != null && _tabController!.index != 1) {
+              _tabController!.animateTo(1);
+            }
           });
         },
       );
@@ -1137,6 +1368,30 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     }
 
     // Overview (index 0) and Chart (index 1) tabs - show chart via persistent portal
+    // UNLESS the user has toggled "Trade from Chart" on, in which case the
+    // in-house chart engine replaces the TradingView portal here.
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider).isOn;
+    if (tradeFromChart) {
+      // Hide the TradingView portal so it doesn't bleed through behind the
+      // embedded iframe. The portal stays mounted (its state persists) —
+      // we just flip its visibility flag.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(userProfileProvider).hideInlineChart();
+      });
+      return EmbeddedChartView(
+        wlValue: widget.wlValue,
+        // ZChart's own search box → page follows, same as TradingView's.
+        onSymbolPicked: widget.followChartSymbolSearch
+            ? (scrip) => _onChartSymbolSearched(ExternalChartSymbol(
+                  exch: scrip.exch,
+                  token: scrip.token,
+                  tsym: scrip.tsym,
+                  instname: scrip.instname,
+                ))
+            : null,
+      );
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         // Set up the portal target and update symbol
@@ -1150,22 +1405,39 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
               token: widget.wlValue.token,
               tsym: widget.wlValue.tsym,
               isDarkMode: ref.read(themeProvider).isDarkMode,
+              decorativeName: DerivativeMaster.nameFor(
+                  widget.wlValue.exch, widget.wlValue.token),
             );
             // Then update portal position and make it visible
             ref.read(userProfileProvider).setInlineChartTarget(
               _chartLayerLink,
               Size(constraints.maxWidth, constraints.maxHeight),
             );
+            // The portal is never unmounted, so returning from Option Chain
+            // leaves the old candles in place and the changeSymbol above is a
+            // no-op for an unchanged symbol. Tell the manager the chart is on
+            // screen again — it re-fetches only after a real absence.
+            webChartManager.markChartVisible();
           }
         });
 
         // Return placeholder target that the portal follows
         return CompositedTransformTarget(
           link: _chartLayerLink,
-          child: Container(
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            color: Colors.transparent, // Transparent placeholder, chart renders via portal
+          child: MouseRegion(
+            // The chart iframe can be left at pointer-events:none by the app's
+            // dropdown/menu cursor-bleed guard when its restore doesn't fire
+            // (confirmed root cause of the "frozen chart" bug). While disabled,
+            // the iframe passes pointer events through to this placeholder — so
+            // re-enable it the instant the cursor is over the chart. Self-heals
+            // for every chart flow.
+            onEnter: (_) => _ensureChartIframesEnabled(),
+            onHover: (_) => _ensureChartIframesEnabled(),
+            child: Container(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              color: Colors.transparent, // Transparent placeholder, chart renders via portal
+            ),
           ),
         );
       },
@@ -1181,6 +1453,12 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
     final theme = shadcn.Theme.of(context);
     final isDark = isDarkMode(context);
 
+    final tradeFromChart = ref.watch(tradeFromChartModeProvider).isOn;
+    // The Trade from Chart pill only makes sense when the chart area is
+    // actually visible — Overview (0) and Chart (1) tabs. Hidden on
+    // Options / Stock Report tabs where the chart isn't shown.
+    final showTradeFromChartPill =
+        _selectedTabIndex == 0 || _selectedTabIndex == 1;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1222,6 +1500,77 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
             ),
           ),
           if (index < tabs.length - 1) const SizedBox(width: 8),
+        ],
+        // "Trade from Chart" toggle pill — swaps the chart area between
+        // the TradingView portal (OFF, default) and our in-house chart
+        // engine (ON). Persisted via SharedPreferences per session. Only
+        // visible on Overview/Chart tabs (chart-bearing tabs).
+        if (showTradeFromChartPill) ...[
+          const SizedBox(width: 8),
+          MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () =>
+                ref.read(tradeFromChartModeProvider).toggle(),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: tradeFromChart
+                      ? (isDark
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.black.withValues(alpha: 0.05))
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: null,
+               ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.candlestick_chart,
+                    size: 14,
+                    color: tradeFromChart
+                          ? theme.colorScheme.foreground
+                          : theme.colorScheme.mutedForeground,
+                    ),
+                  const SizedBox(width: 6),
+                  Text(
+                    // 'Trade from Chart',
+                    'ZChart',
+                    style: MyntWebTextStyles.body(
+                      context,
+                        fontWeight: tradeFromChart
+                            ? MyntFonts.semiBold
+                            : MyntFonts.medium,
+                      ).copyWith(
+                        color: tradeFromChart
+                            ? theme.colorScheme.foreground
+                            : theme.colorScheme.mutedForeground,
+                      ),
+                  ),
+                  // Beta label removed — Trade from Chart is now the default chart
+                  // const SizedBox(width: 4),
+                  // Transform.translate(
+                  //   offset: const Offset(0, -6),
+                  //   child: Text(
+                  //     'Beta',
+                  //     style: MyntWebTextStyles.caption(
+                  //       context,
+                  //       color: resolveThemeColor(
+                  //         context,
+                  //         dark: MyntColors.primaryDark,
+                  //         light: MyntColors.primary,
+                  //       ),
+                  //       fontWeight: MyntFonts.semiBold,
+                  //     ).copyWith(fontSize: 10),
+                  //   ),
+                  // ),
+                ],
+              ),
+            ),
+          ),
+        ),
         ],
       ],
     );

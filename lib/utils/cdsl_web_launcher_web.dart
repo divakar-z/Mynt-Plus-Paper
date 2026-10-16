@@ -25,7 +25,7 @@ void openCdslInPopup(Map data, {Function? onPopupClosed}) {
   final form = html.FormElement()
     ..method = 'POST'
     ..action =
-        'https://api.cdslindia.com/APIServices/pledgeapi/pledgesetup'
+        'https://apigt.cdsl.co.in/PledgeServices/MPSetup'
     ..target = popupName;
 
   final fields = {

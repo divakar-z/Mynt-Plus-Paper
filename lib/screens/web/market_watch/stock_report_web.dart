@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'dart:math' as math;
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../models/marketwatch_model/scrip_overview/eodchartdata_model.dart';
@@ -85,6 +86,10 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
 
   // Track last converted data to avoid unnecessary re-conversions
   String? _lastConvertedTimeframe;
+  // Events card: selected type chip (null = first type with data).
+  String? _selectedEventType;
+  // Holdings pie: hovered slice (-1 = none) — name + % shown in the centre.
+  int _touchedHoldingIndex = -1;
   int? _lastConvertedDataLength;
 
   // Event colors for each type
@@ -203,14 +208,17 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
 
   // Process WebSocket data for live updates (same as scrip_depth_info.dart)
   void _processDepthData(GetQuotes depthData, Map<String, dynamic> socketData) {
+    // Price fields are nullable post-sanitisation (null when broker emits
+    // "0"/"0.00" defaults for illiquid contracts). Fall back to "0.00" so
+    // downstream double.parse() doesn't see "null".
     depthData.ap = "${socketData['ap']}";
-    depthData.lp = "${socketData['lp']}";
-    depthData.pc = "${socketData['pc']}";
-    depthData.o = "${socketData['o']}";
-    depthData.l = "${socketData['l']}";
-    depthData.c = "${socketData['c']}";
-    depthData.chng = "${socketData['chng']}";
-    depthData.h = "${socketData['h']}";
+    depthData.lp = socketData['lp']?.toString() ?? "0.00";
+    depthData.pc = socketData['pc']?.toString() ?? "0.00";
+    depthData.o = socketData['o']?.toString() ?? "0.00";
+    depthData.l = socketData['l']?.toString() ?? "0.00";
+    depthData.c = socketData['c']?.toString() ?? "0.00";
+    depthData.chng = socketData['chng']?.toString() ?? "0.00";
+    depthData.h = socketData['h']?.toString() ?? "0.00";
     depthData.poi = "${socketData['poi']}";
     depthData.v = "${socketData['v']}";
     depthData.toi = "${socketData['toi']}";
@@ -294,6 +302,14 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
     int dataPointsToShow;
 
     switch (selectedTimeframe) {
+      // TC_419: 3Y / 5Y from the 5Y EOD data already fetched on open.
+      case "5Y":
+        dataPointsToShow = allPriceData.length;
+        break;
+      case "3Y":
+        // Approximate 750 trading days in 3 years
+        dataPointsToShow = 750;
+        break;
       case "1Y":
         // Approximate 250 trading days in a year
         dataPointsToShow = 250;
@@ -813,6 +829,14 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                             ),
                             const SizedBox(height: 24),
 
+                            // Events (same stockEvents data the chart dots use;
+                            // mobile shows it as a list, web only had the dots).
+                            // Removed (user): events already show on the chart.
+                            // if (marketWatch.fundamentalData?.stockEvents != null) ...[
+                            //   _buildEventsCard(marketWatch, theme),
+                            //   const SizedBox(height: 24),
+                            // ],
+
                             // Holdings Trend & Income Statement Section - Side by Side (Responsive)
                             LayoutBuilder(
                               builder: (context, constraints) {
@@ -1175,6 +1199,317 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Events card — web port of mobile's Events section (stock_events.dart).
+  // Columns mirror mobile's fields; rows newest first. Display only — nothing
+  // is derived from the data.
+  // ---------------------------------------------------------------------------
+
+  static const List<String> _eventTypes = [
+    'Announcement',
+    'Dividend',
+    'Bonus',
+    'Rights',
+    'Split',
+  ];
+
+  /// Headers + rows for one event type (first cell = the row's main date).
+  ({List<String> headers, List<List<String>> rows}) _eventTable(
+      StockEvents ev, String type) {
+    String v(String? s) => (s == null || s.trim().isEmpty) ? '-' : s.trim();
+    List<List<String>> newestFirst(List<List<String>> rows) {
+      rows.sort((a, b) {
+        final da = DateTime.tryParse(a.first);
+        final db = DateTime.tryParse(b.first);
+        if (da == null && db == null) return 0;
+        if (da == null) return 1;
+        if (db == null) return -1;
+        return db.compareTo(da);
+      });
+      return rows;
+    }
+
+    switch (type) {
+      case 'Announcement':
+        return (
+          headers: ['Board meeting date', 'Agenda', 'Source date'],
+          rows: newestFirst([
+            for (final a in ev.announcement ?? <Announcement>[])
+              [
+                v(a.boardMeetingDate),
+                // Agenda arrives with a leading separator character.
+                v(a.agenda?.replaceFirst(RegExp(r'^[^A-Za-z0-9]+'), '')),
+                v(a.sourceDate),
+              ]
+          ]),
+        );
+      case 'Dividend':
+        return (
+          headers: [
+            'Ex date',
+            'Record date',
+            'Dividend date',
+            'Dividend %',
+            'Per share',
+            'Details'
+          ],
+          rows: newestFirst([
+            for (final d in ev.dividend ?? <Dividend>[])
+              [
+                v(d.exDate),
+                v(d.recordDate),
+                v(d.dividendDate),
+                v(d.dividendPercent),
+                v(d.dividendpershare),
+                v(d.details),
+              ]
+          ]),
+        );
+      case 'Bonus':
+        return (
+          headers: [
+            'Ex bonus date',
+            'Record date',
+            'Cum bonus date',
+            'Ratio N',
+            'Ratio D',
+            'Source date'
+          ],
+          rows: newestFirst([
+            for (final b in ev.bonus ?? <Bonus>[])
+              [
+                v(b.exBonusDate),
+                v(b.recordDate),
+                v(b.cumBonusDate),
+                v(b.ratioN),
+                v(b.ratioD),
+                v(b.sourceDate),
+              ]
+          ]),
+        );
+      case 'Rights':
+        return (
+          headers: [
+            'Ex rights date',
+            'Record date',
+            'Offer price',
+            'Premium',
+            'Ratio N',
+            'Ratio D'
+          ],
+          rows: newestFirst([
+            for (final r in ev.rights ?? <Rights>[])
+              [
+                v(r.exRightsDate),
+                v(r.recordDate),
+                v(r.offerPrice),
+                v(r.premiumRs),
+                v(r.ratioN),
+                v(r.rationD),
+              ]
+          ]),
+        );
+      default: // Split
+        return (
+          headers: ['Ex date', 'Record date', 'Face value from', 'Face value to'],
+          rows: newestFirst([
+            for (final sp in ev.split ?? const [])
+              [
+                v(sp.exDate),
+                v(sp.recordDate),
+                v(sp.fvChangeFrom),
+                v(sp.fvChangeTo),
+              ]
+          ]),
+        );
+    }
+  }
+
+  /// "2022-07-28" -> "28 Jul 2022"; anything else is shown as received.
+  String _formatEventCell(String value) {
+    final d = DateTime.tryParse(value);
+    if (d == null) return value;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return '${d.day.toString().padLeft(2, '0')} ${months[d.month - 1]} ${d.year}';
+  }
+
+  Widget _buildEventsCard(MarketWatchProvider marketWatch, ThemesProvider theme) {
+    final ev = marketWatch.fundamentalData!.stockEvents!;
+    final counts = {
+      for (final t in _eventTypes) t: _eventTable(ev, t).rows.length,
+    };
+    final available = _eventTypes.where((t) => counts[t]! > 0).toList();
+    final selected = available.contains(_selectedEventType)
+        ? _selectedEventType!
+        : (available.isNotEmpty ? available.first : null);
+
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final divider = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: resolveThemeColor(context,
+            dark: MyntColors.backgroundColorDark,
+            light: MyntColors.backgroundColor),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: divider, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                "Events",
+                style: MyntWebTextStyles.title(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (available.isNotEmpty)
+                // Same toggle look as Income Statement's Standalone/Consolidated.
+                Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: theme.isDarkMode
+                        ? colors.darkGrey
+                        : const Color(0xffF1F3F8),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: available.map((type) {
+                      final isSelected = type == selected;
+                      return GestureDetector(
+                        onTap: () => setState(() => _selectedEventType = type),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? MyntColors.secondary
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(
+                            "$type (${counts[type]})",
+                            style: MyntWebTextStyles.para(
+                              context,
+                              color: isSelected ? colors.colorWhite : null,
+                              darkColor: isSelected
+                                  ? null
+                                  : MyntColors.textSecondaryDark,
+                              lightColor:
+                                  isSelected ? null : MyntColors.textPrimary,
+                              fontWeight: isSelected
+                                  ? MyntFonts.bold
+                                  : MyntFonts.medium,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (selected == null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text(
+                  "No events available",
+                  style: MyntWebTextStyles.para(context,
+                      darkColor: MyntColors.textSecondaryDark,
+                      lightColor: MyntColors.textSecondary),
+                ),
+              ),
+            )
+          else
+            Builder(builder: (context) {
+              final table = _eventTable(ev, selected);
+              // Announcement agenda / dividend details are long text.
+              int flexFor(String h) =>
+                  (h == 'Agenda' || h == 'Details') ? 3 : 1;
+              Widget cell(String text, String header, {bool isHeader = false}) {
+                final shown = isHeader ? text : _formatEventCell(text);
+                return Expanded(
+                  flex: flexFor(header),
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Tooltip(
+                      message: isHeader ? '' : shown,
+                      child: Text(
+                        shown,
+                        maxLines: isHeader ? 1 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: isHeader
+                            ? MyntWebTextStyles.para(context,
+                                color: secondary, fontWeight: MyntFonts.medium)
+                            : MyntWebTextStyles.body(
+                                context,
+                                color: resolveThemeColor(context,
+                                    dark: MyntColors.textPrimaryDark,
+                                    light: MyntColors.textPrimary),
+                              ),
+                      ),
+                    ),
+                  ),
+                );
+              }
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(children: [
+                      for (final h in table.headers) cell(h, h, isHeader: true),
+                    ]),
+                  ),
+                  Divider(height: 1, color: divider),
+                  ConstrainedBox(
+                    // Long dividend histories scroll inside the card.
+                    constraints: const BoxConstraints(maxHeight: 360),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      itemCount: table.rows.length,
+                      separatorBuilder: (_, __) =>
+                          Divider(height: 1, color: divider),
+                      itemBuilder: (context, i) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (int c = 0; c < table.headers.length; c++)
+                              cell(table.rows[i][c], table.headers[c]),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
   // Allocation card wrapper for consistent styling
   Widget _buildAllocationCard({
     required String title,
@@ -1236,7 +1571,7 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    "${widget.wlValue.symbol.replaceAll("-EQ", "").toUpperCase()}${widget.wlValue.expDate} ${widget.wlValue.option}",
+                    "${DerivativeMaster.nameFor(widget.wlValue.exch, widget.wlValue.token) ?? "${widget.wlValue.symbol.replaceAll("-EQ", "").toUpperCase()}${widget.wlValue.expDate} ${widget.wlValue.option}"}",
                     style: MyntWebTextStyles.title(
                       context,
                       darkColor: MyntColors.textPrimaryDark,
@@ -2393,12 +2728,17 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemBuilder: (context, index) {
-                    final timeframes = ["1W", "1M", "3M", "1Y"];
+                    final timeframes = _chartTimeframes(marketWatch);
                     final timeframe = timeframes[index];
                     final isSelected =
                         marketWatch.selectedTimeframe == timeframe;
 
-                    final returnPercentage = _getTechnicalReturnPercentage(marketWatch.returnsGridview, timeframe);
+                    // TC_419: no 3Y/5Y return from the backend — leave blank
+                    // (the helper would fall back to the 1W figure).
+                    final hasReturn = timeframe != "3Y" && timeframe != "5Y";
+                    final returnPercentage = hasReturn
+                        ? _getTechnicalReturnPercentage(marketWatch.returnsGridview, timeframe)
+                        : " "; // keeps chip height equal
 
                     final percentValue = double.tryParse(returnPercentage.replaceAll(RegExp(r'[+%]'), '')) ?? 0.0;
                     final isPositive = percentValue >= 0;
@@ -2468,7 +2808,7 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                   separatorBuilder: (context, index) {
                     return const SizedBox(width: 8);
                   },
-                  itemCount: 4, // 1W, 1M, 3M, 1Y
+                  itemCount: _chartTimeframes(marketWatch).length, // 1W, 1M, 3M, 1Y (+3Y, 5Y)
                 ),
               ),
             ],
@@ -2536,6 +2876,8 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
                           ];
 
                           switch (marketWatch.selectedTimeframe) {
+                            case "5Y":
+                            case "3Y":
                             case "1Y":
                               
                               final monthName = months[date.month - 1];
@@ -2870,6 +3212,20 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
     );
   }
 
+  /// TC_419: 3Y / 5Y only when the stock has more than ~1 year of EOD history
+  /// (a recent listing would just repeat the 1Y chart). Shorter-than-range
+  /// history plots from the listing date, like Kite.
+  List<String> _chartTimeframes(MarketWatchProvider marketWatch) {
+    final hasLongHistory = marketWatch.eodChartData.length > 250;
+    return [
+      "1W",
+      "1M",
+      "3M",
+      "1Y",
+      if (hasLongHistory) ...["3Y", "5Y"],
+    ];
+  }
+
   String _getTechnicalReturnPercentage(List returnsGridview, String timeframe) {
     String durationKey = '';
     
@@ -3138,23 +3494,46 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
     // Prepare chart data
     final chartData = _prepareShareholdersChartData(latestData);
 
+    final totalSum = chartData.fold(0.0, (sum, item) => sum + item.value);
+    final touched = (_touchedHoldingIndex >= 0 &&
+            _touchedHoldingIndex < chartData.length)
+        ? chartData[_touchedHoldingIndex]
+        : null;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Center(
         child: SizedBox(
           height: 240,
           width: 240,
-          child: PieChart(
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+          PieChart(
             PieChartData(
-              sections: chartData.map((data) {
-                final totalSum = chartData.fold(0.0, (sum, item) => sum + item.value);
+              // Hover a slice: it grows and its name + % show in the centre
+              // (Zerodha-style).
+              pieTouchData: PieTouchData(
+                touchCallback: (event, response) {
+                  final index = (!event.isInterestedForInteractions ||
+                          response?.touchedSection == null)
+                      ? -1
+                      : response!.touchedSection!.touchedSectionIndex;
+                  if (index != _touchedHoldingIndex) {
+                    setState(() => _touchedHoldingIndex = index);
+                  }
+                },
+              ),
+              sections: chartData.asMap().entries.map((entry) {
+                final data = entry.value;
+                final isTouched = entry.key == _touchedHoldingIndex;
                 final percentage = (data.value / totalSum * 100);
 
                 return PieChartSectionData(
                   value: data.value,
                   title: '${percentage.toStringAsFixed(1)}%',
                   color: data.color,
-                  radius: 70,
+                  radius: isTouched ? 78 : 70,
                   titleStyle: MyntWebTextStyles.para(
                     context,
                     color: theme.isDarkMode
@@ -3171,6 +3550,42 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
               centerSpaceRadius: 50,
               sectionsSpace: 2,
             ),
+          ),
+          if (touched != null)
+            IgnorePointer(
+              child: SizedBox(
+                width: 92,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      touched.category,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: MyntWebTextStyles.para(
+                        context,
+                        darkColor: MyntColors.textSecondaryDark,
+                        lightColor: MyntColors.textSecondary,
+                        fontWeight: MyntFonts.medium,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${(touched.value / totalSum * 100).toStringAsFixed(1)}%',
+                      style: MyntWebTextStyles.body(
+                        context,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textPrimary),
+                        fontWeight: MyntFonts.semiBold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            ],
           ),
         ),
       ),
@@ -3201,27 +3616,27 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
   List<_ShareholderChartData> _prepareShareholdersChartData(Shareholdings data) {
     final holdingsData = [
       {
-        'name': 'Institutions',
+        'name': 'Foreign Institution', // was 'Institutions'
         'value': double.tryParse(data.fiiFpi ?? '0') ?? 0.0,
         'color': const Color(0xFF2563EB), // Modern Blue
       },
       {
-        'name': 'Corporation',
+        'name': 'Mutual Funds', // was 'Corporation'
         'value': double.tryParse(data.mutualFunds ?? '0') ?? 0.0,
         'color': const Color(0xFFDC2626), // Modern Red
       },
       {
-        'name': 'Holding Company',
+        'name': 'Other Domestic Institution', // was 'Holding Company'
         'value': double.tryParse(data.dii ?? '0') ?? 0.0,
         'color': const Color(0xFF059669), // Modern Green
       },
       {
-        'name': 'Insiders',
+        'name': 'Promoter Holding', // was 'Insiders'
         'value': double.tryParse(data.promoters ?? '0') ?? 0.0,
         'color': const Color(0xFF7C3AED), // Modern Purple
       },
       {
-        'name': 'Others',
+        'name': 'Retail and Others', // was 'Others'
         'value': double.tryParse(data.retailAndOthers ?? '0') ?? 0.0,
         'color': const Color(0xFFEA580C), // Modern Orange
       },

@@ -19,6 +19,7 @@ import '../core/api_export.dart';
 import 'paper_ltp_service.dart';
 import 'paper_order_engine.dart';
 import 'paper_portfolio_service.dart';
+import 'paper_safety_guard.dart';
 import 'virtual_wallet.dart';
 
 /// Drop-in replacement for ApiExporter that intercepts all trading operations
@@ -28,7 +29,7 @@ import 'virtual_wallet.dart';
 /// are NOT overridden — they still hit real APIs so users see live prices.
 ///
 /// Register this in GetIt instead of ApiExporter when paper trading is enabled.
-class PaperApiExporter extends ApiExporter {
+class PaperApiExporter extends ApiExporter with PaperSafetyGuard {
   // ════════════════════════════════════════════════════════════════
   //  AUTHENTICATION — mock login, always succeed
   // ════════════════════════════════════════════════════════════════
@@ -267,7 +268,9 @@ class PaperApiExporter extends ApiExporter {
   // ════════════════════════════════════════════════════════════════
 
   @override
-  Future<Map<String, dynamic>> getHolding() async {
+  Future<Map<String, dynamic>> getHolding({String prd = "C"}) async {
+    // Paper trading has no MTF book — only delivery (C) holdings exist.
+    if (prd != "C") return {"stat": "no data", "data": []};
     return PaperPortfolioService.instance.getHoldings();
   }
 

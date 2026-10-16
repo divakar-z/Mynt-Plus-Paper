@@ -24,6 +24,7 @@ import 'package:mynt_plus/provider/fund_provider.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
+import 'package:mynt_plus/sharedWidget/password_error_bubble.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart' show ScreenType;
 
@@ -533,12 +534,29 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   OrdQtyPref QtyPrefer = OrdQtyPref.mktqty;
 
   // Text controllers for editable fields
-  TextEditingController mktProtCtrl = TextEditingController(text: "1");
+  TextEditingController mktProtCtrl = TextEditingController(text: "5");
   TextEditingController qtyCtrl = TextEditingController(text: "1");
 
   // Additional web-specific settings
   bool _stickyOrderWindow = false;
   bool _quickOrderScreen = false;
+
+  // New Password (Change Password section) — transient max-length error.
+  // Same pattern as the login screen's Forgot/Change Password field: fired
+  // only when the user actually attempts to type/paste beyond 12 chars
+  // (caught by the custom inputFormatter). Auto-hides after 2 seconds.
+  bool _showNewPwdMaxLengthError = false;
+
+  // Validation bubble under the New Password field, shown only on a submit
+  // that falls short. Same behaviour as the login Change Password screen.
+  final PasswordErrorBubbleController _newPwdBubble =
+      PasswordErrorBubbleController();
+  Timer? _newPwdMaxLengthHideTimer;
+
+  // True once we've kicked off the TOTP fetch for this mounting of the
+  // settings section. Reset on widget dispose (i.e., on logout/navigate-away),
+  // so re-entering settings after re-login refetches cleanly.
+  bool _totpFetchTriggered = false;
 
   @override
   void initState() {
@@ -555,7 +573,36 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   void dispose() {
     mktProtCtrl.dispose();
     qtyCtrl.dispose();
+    _newPwdMaxLengthHideTimer?.cancel();
+    _newPwdBubble.dispose();
     super.dispose();
+  }
+
+  /// Triggered by the New Password field's custom inputFormatter when the
+  /// user attempts to type/paste beyond 12 chars. Shows the inline red
+  /// "Maximum 12 characters allowed" error briefly, then auto-hides
+  /// after 2 seconds so the message disappears once the user stops trying.
+  // Only a RULES failure goes in the bubble. An empty field gets the same
+  // inline red message as every other field on this screen.
+  void _showNewPwdBubble(ChangePasswordProvider changePassword) {
+    if (changePassword.newPasswordRulesUnmet && mounted) {
+      _newPwdBubble.show(
+        context,
+        passwordRulesHeading,
+        points: changePassword.newPasswordMissing,
+      );
+    } else {
+      _newPwdBubble.hide();
+    }
+  }
+
+  void _triggerNewPwdMaxLengthError() {
+    if (!mounted) return;
+    _newPwdMaxLengthHideTimer?.cancel();
+    setState(() => _showNewPwdMaxLengthError = true);
+    _newPwdMaxLengthHideTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showNewPwdMaxLengthError = false);
+    });
   }
 
   /// Load saved order preferences from authProvider (same logic as order_prefere_screen.dart)
@@ -572,7 +619,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
             ? OrdQtyPref.mktlot
             : OrdQtyPref.mktqty;
         qtyCtrl = TextEditingController(text: "${userSavedOrderPreference['qty'] ?? '1'}");
-        mktProtCtrl = TextEditingController(text: "${userSavedOrderPreference['mrkprot'] ?? '1'}");
+        mktProtCtrl = TextEditingController(text: "${userSavedOrderPreference['mrkprot'] ?? '5'}");
         expriceType = ["Limit", "Market"].contains(userSavedOrderPreference['expos'])
             ? userSavedOrderPreference['expos']
             : 'Market';
@@ -649,13 +696,20 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
             
             // TOTP
             shadcn.AccordionItem(
-              trigger: shadcn.AccordionTrigger(
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Text('TOTP', style: MyntWebTextStyles.titlesub(context, 
-                      color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),fontWeight: MyntFonts.medium).copyWith(decoration: TextDecoration.none)),
+              trigger: Listener(
+                // Listener observes pointer events without consuming them, so
+                // AccordionTrigger still toggles expansion normally. We use it
+                // to lazily fetch the TOTP key the first time the section is
+                // tapped instead of on screen load.
+                onPointerDown: (_) => _ensureTotpFetched(),
+                child: shadcn.AccordionTrigger(
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Text('TOTP', style: MyntWebTextStyles.titlesub(context,
+                        color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),fontWeight: MyntFonts.medium).copyWith(decoration: TextDecoration.none)),
+                    ),
                   ),
                 ),
               ),
@@ -774,20 +828,52 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
     );
   }
 
+  /// Kick off a TOTP fetch the first time the user expands the TOTP section.
+  /// Idempotent for the lifetime of this State — re-running has no effect.
+  /// State is reset when the widget is disposed (e.g., on logout/navigation),
+  /// so a fresh login starts with a clean fetch.
+  void _ensureTotpFetched() {
+    if (_totpFetchTriggered) return;
+    _totpFetchTriggered = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(apikeyprovider).fetchTotp();
+    });
+  }
+
   Widget _buildTotpContent(ThemesProvider theme, BuildContext context) {
     final apikeys = ref.watch(apikeyprovider);
     final isDark = theme.isDarkMode;
 
-    // If we have a TOTP key, show the inline TOTP widget
-    final totpPwd = apikeys.totpkey?.pwd;
-    if (totpPwd != null) {
-      return _TotpInlineWidget(
-        secretKey: totpPwd,
-        isDark: isDark,
+    // In-flight fetch/generate — show a loader.
+    if (apikeys.isFetchingTotp) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
       );
     }
 
-    // Otherwise show generate button
+    // Key already exists (non-empty pwd) — show the inline TOTP widget.
+    // Regenerate hits the same GenSecretKey endpoint as the initial generate.
+    final totpPwd = apikeys.totpkey?.pwd;
+    if (totpPwd != null && totpPwd.isNotEmpty) {
+      return _TotpInlineWidget(
+        // Keyed by the secret so a regenerate forces the timer/HMAC
+        // state inside the widget to reset cleanly.
+        key: ValueKey(totpPwd),
+        secretKey: totpPwd,
+        isDark: isDark,
+        onRegenerate: () => ref.read(apikeyprovider).generateTotp(),
+      );
+    }
+
+    // GetSecretKey returned empty (or hasn't run yet) — show generate button.
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
@@ -802,10 +888,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
           const SizedBox(height: 16),
           MyntPrimaryButton(
             label: "Generate TOTP",
-            onPressed: () async {
-              await ref.read(apikeyprovider).fetchTotp();
-              if (mounted) setState(() {});
-            },
+            onPressed: () => ref.read(apikeyprovider).generateTotp(),
           ),
         ],
       ),
@@ -822,10 +905,11 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Update your account password',
-            style: MyntWebTextStyles.bodySmall(context,
-                darkColor: MyntColors.textSecondaryDark,
-                lightColor: MyntColors.textSecondary),
+            'Change Your Password',
+            style: MyntWebTextStyles.title(context,
+                fontWeight: MyntFonts.semiBold,
+                darkColor: MyntColors.textPrimaryDark,
+                lightColor: MyntColors.textPrimary),
           ),
           const SizedBox(height: 20),
 
@@ -893,12 +977,37 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
           const SizedBox(height: 10),
           SizedBox(
             width: 400,
-            child: MyntFormTextField(
+            // Wrapped so the validation bubble can hang off the bottom of
+            // this exact field.
+            child: CompositedTransformTarget(
+              link: _newPwdBubble.link,
+              child: MyntFormTextField(
               controller: changePassword.newPassword,
               placeholder: 'Enter new password',
               height: 40,
               obscureText: changePassword.hidenewpassword,
               readOnly: changePassword.loading,
+              // Backend enforces max 12 chars + alphanumeric + allowed
+              // specials (#, $, -, *, @). Mirror that at the input level so
+              // disallowed characters can't be typed and overflow gets
+              // surfaced via the transient red error below.
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(
+                  RegExp(r'[A-Za-z0-9#$\-*@]'),
+                ),
+                TextInputFormatter.withFunction((oldValue, newValue) {
+                  if (newValue.text.length > 12) {
+                    _triggerNewPwdMaxLengthError();
+                    final truncated = newValue.text.substring(0, 12);
+                    return TextEditingValue(
+                      text: truncated,
+                      selection: TextSelection.collapsed(
+                          offset: truncated.length),
+                    );
+                  }
+                  return newValue;
+                }),
+              ],
               trailingWidget: IconButton(
                 icon: Icon(
                   changePassword.hidenewpassword ? Icons.visibility_off : Icons.visibility,
@@ -915,12 +1024,34 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                 constraints: const BoxConstraints(),
               ),
               onChanged: (v) {
+                // Typing dismisses the bubble, the way a browser drops its
+                // own validation popup.
+                _newPwdBubble.hide();
                 changePassword.validateNewPassword();
                 changePassword.activateChangePass();
               },
             ),
+            ),
           ),
-          if (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty)
+          // Transient red error: takes priority over the missing-requirements
+          // error so the user sees the most recent reason their input was
+          // rejected (overflow attempt vs unmet requirements).
+          if (_showNewPwdMaxLengthError)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                "Maximum 12 characters allowed",
+                style: MyntWebTextStyles.caption(context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.lossDark,
+                        light: MyntColors.loss)),
+              ),
+            )
+          // The rules message lives in the bubble; the plain "field is empty"
+          // message stays inline so this field reads like the two around it.
+          else if (!changePassword.newPasswordRulesUnmet &&
+              changePassword.newPasswordError != null &&
+              changePassword.newPasswordError!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 5),
               child: Text(
@@ -931,6 +1062,80 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                         light: MyntColors.loss)),
               ),
             ),
+          const SizedBox(height: 16),
+
+          // Repeat New Password Field
+          //
+          // Client feedback 15 Sep 2026 on the Forgot Password flow: the two
+          // password boxes read as new + retype but weren't. Added here too so
+          // both change-password surfaces behave the same. Client-side only —
+          // the change-password API takes uid/oldpwd/pwd, this never leaves
+          // the app.
+          Text(
+            'Repeat New Password',
+            style: MyntWebTextStyles.body(context,
+                fontWeight: MyntFonts.medium,
+                color: resolveThemeColor(context,
+                    dark: MyntColors.textPrimaryDark,
+                    light: MyntColors.textPrimary)),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: 400,
+            child: MyntFormTextField(
+              controller: changePassword.confirmPassword,
+              placeholder: 'Repeat new password',
+              height: 40,
+              obscureText: changePassword.hideconfirmpassword,
+              readOnly: changePassword.loading,
+              // Same charset and 12-char ceiling as New Password, so a valid
+              // password can always be retyped in full. No transient
+              // max-length error here — New Password already explains it.
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(
+                  RegExp(r'[A-Za-z0-9#$\-*@]'),
+                ),
+                LengthLimitingTextInputFormatter(12),
+              ],
+              trailingWidget: IconButton(
+                icon: Icon(
+                  changePassword.hideconfirmpassword ? Icons.visibility_off : Icons.visibility,
+                  size: 18,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary),
+                ),
+                onPressed: () {
+                  changePassword.hiddeconfirmpasswords();
+                  changePassword.activateChangePass();
+                },
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+              // Only clear a standing mismatch while typing — don't nag with
+              // "do not match" on every keystroke before the retype is done.
+              onChanged: (v) {
+                if (changePassword.confirmPasswordError != null &&
+                    changePassword.confirmPasswordError!.isNotEmpty) {
+                  changePassword.validateConfirmPassword();
+                }
+                changePassword.activateChangePass();
+              },
+            ),
+          ),
+          if (changePassword.confirmPasswordError != null &&
+              changePassword.confirmPasswordError!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                changePassword.confirmPasswordError!,
+                style: MyntWebTextStyles.caption(context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.lossDark,
+                        light: MyntColors.loss)),
+              ),
+            ),
+
           const SizedBox(height: 24),
 
           // Buttons
@@ -940,6 +1145,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                 height: 36,
                 child: OutlinedButton(
                   onPressed: () {
+                    _newPwdBubble.hide();
                     changePassword.changePassMethod();
                   },
                   style: OutlinedButton.styleFrom(
@@ -973,10 +1179,13 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                   onPressed: changePassword.loading
                       ? null
                       : changePassword.oldPassword.text.isEmpty ||
-                              changePassword.newPassword.text.isEmpty
+                              changePassword.newPassword.text.isEmpty ||
+                              changePassword.confirmPassword.text.isEmpty
                           ? () {
                               changePassword.validateOldPassword();
                               changePassword.validateNewPassword();
+                              changePassword.validateConfirmPassword();
+                              _showNewPwdBubble(changePassword);
                             }
                           : () async {
                               // Set userId if not already set
@@ -988,10 +1197,13 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
                               // Validate fields
                               changePassword.validateOldPassword();
                               changePassword.validateNewPassword();
+                              changePassword.validateConfirmPassword();
                               changePassword.activateChangePass();
+                              _showNewPwdBubble(changePassword);
 
                               if ((changePassword.oldPasswordError != null && changePassword.oldPasswordError!.isNotEmpty) ||
-                                  (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty)) {
+                                  (changePassword.newPasswordError != null && changePassword.newPasswordError!.isNotEmpty) ||
+                                  (changePassword.confirmPasswordError != null && changePassword.confirmPasswordError!.isNotEmpty)) {
                                 return;
                               }
 
@@ -1317,7 +1529,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
       priceType = "Limit";
       orderType = "Delivery";
       validity = "DAY";
-      mktProtCtrl.text = "1";
+      mktProtCtrl.text = "5";
       qtyCtrl.text = "1";
       QtyPrefer = OrdQtyPref.mktqty;
       expriceType = "Market";
@@ -1786,6 +1998,16 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
     return (text.length > maxLength)
         ? '${text.substring(0, maxLength)}...'
         : text;
+  }
+
+  // ─── Bank logo URL ───
+  // The logo is keyed by the 4-character bank code that prefixes the IFSC.
+  // Guarded because a malformed/short IFSC would otherwise throw a RangeError
+  // and take the whole bank list down.
+  String _bankLogoUrl(String? ifsc) {
+    final code = (ifsc ?? '').trim();
+    final bank = (code.length >= 4 ? code.substring(0, 4) : code).toLowerCase();
+    return 'https://rekycbe.mynt.in/static/logos/$bank/symbol.svg';
   }
 
   // Add this variable
@@ -3018,7 +3240,7 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
                           ),
                           child: ClipOval(
                             child: SvgPicture.network(
-                              "https://rekycbe.mynt.in/autho/banklogo?bank=${(bank.iFSCCode ?? "").substring(0, 4).toLowerCase()}&type=svg&t=${DateTime.now().millisecondsSinceEpoch}",
+                              _bankLogoUrl(bank.iFSCCode),
                               fit: BoxFit.contain,
                               height: 22,
                               width: 22,
@@ -4573,10 +4795,13 @@ class _ApiKeyBottomTabsState extends ConsumerState<ApiKeyBottomTabs>
 class _TotpInlineWidget extends StatefulWidget {
   final String secretKey;
   final bool isDark;
+  final VoidCallback? onRegenerate;
 
   const _TotpInlineWidget({
+    super.key,
     required this.secretKey,
     required this.isDark,
+    this.onRegenerate,
   });
 
   @override
@@ -4732,13 +4957,47 @@ class _TotpInlineWidgetState extends State<_TotpInlineWidget> {
           ),
           const SizedBox(height: 16),
 
-          // Authenticator Key Label
-          Text(
-            'Authenticator Key',
-            style: MyntWebTextStyles.bodySmall(context,
-                darkColor: MyntColors.textSecondaryDark,
-                lightColor: MyntColors.textSecondary,
-                fontWeight: MyntFonts.medium),
+          // Authenticator Key Label + inline Regenerate action
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                'Authenticator Key',
+                style: MyntWebTextStyles.bodySmall(context,
+                    darkColor: MyntColors.textSecondaryDark,
+                    lightColor: MyntColors.textSecondary,
+                    fontWeight: MyntFonts.medium),
+              ),
+              if (widget.onRegenerate != null)
+                InkWell(
+                  onTap: widget.onRegenerate,
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.refresh,
+                          size: 14,
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.primaryDark,
+                              light: MyntColors.primary),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Regenerate',
+                          style: MyntWebTextStyles.bodySmall(context,
+                              darkColor: MyntColors.primaryDark,
+                              lightColor: MyntColors.primary,
+                              fontWeight: MyntFonts.medium),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 8),
 
@@ -4750,7 +5009,9 @@ class _TotpInlineWidgetState extends State<_TotpInlineWidget> {
                   dark: MyntColors.listItemBgDark,
                   light: MyntColors.listItemBg),
               borderRadius: BorderRadius.circular(5),
-              border: Border.all(color: MyntColors.primary, width: 1),
+              border: Border.all(color: resolveThemeColor(context,
+                  dark: MyntColors.primaryDark,
+                  light: MyntColors.primary), width: 1),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4784,7 +5045,7 @@ class _TotpInlineWidgetState extends State<_TotpInlineWidget> {
                           color: resolveThemeColor(context,
                               dark: MyntColors.textSecondaryDark,
                               light: MyntColors.textSecondary)),
-                      onPressed: () => _copyToClipboard(widget.secretKey, 'Auth key copied to clipboard'),
+                      onPressed: () => _copyToClipboard(widget.secretKey, 'Auth Key is copied to Clipboard'),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                     ),

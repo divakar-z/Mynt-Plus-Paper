@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:flutter_swipe_action_cell/flutter_swipe_action_cell.dart';
 import 'package:intl/intl.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:mynt_plus/screens/web/market_watch/options/option_chain_row_web.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import '../../../../models/marketwatch_model/opt_chain_model.dart';
@@ -38,6 +39,8 @@ class OptionChainSSWeb extends ConsumerStatefulWidget {
       onBasketModeChanged; // Callback to notify parent of basket mode changes
   final Function(VoidCallback)?
       onToggleCallbackReady; // Callback to provide toggle function to parent
+  final VoidCallback?
+      onChartRequested; // Notify parent to switch its right-panel to the Chart tab
   // final String isBasket;
 
   const OptionChainSSWeb({
@@ -45,6 +48,7 @@ class OptionChainSSWeb extends ConsumerStatefulWidget {
     required this.wlValue,
     this.onBasketModeChanged,
     this.onToggleCallbackReady,
+    this.onChartRequested,
     // required this.isBasket
   });
 
@@ -161,6 +165,13 @@ class _OptionChainSSState extends ConsumerState<OptionChainSSWeb> {
     // Timer removed - no longer needed
     if (kDebugMode) {
     }
+    // Basket mode lives here; reset the parent's header icon when this chain goes away
+    // (tab switch / scrip without options). Deferred: parent can't setState mid-unmount.
+    if (isBasketMode) {
+      final notifyParent = widget.onBasketModeChanged;
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => notifyParent?.call(false));
+    }
     super.dispose();
   }
 
@@ -176,9 +187,11 @@ class _OptionChainSSState extends ConsumerState<OptionChainSSWeb> {
         await ref
             .read(marketWatchProvider)
             .requestWSOptChain(context: context, isSubscribe: false);
+        // Underlying index is subscribed via touchline ("t") now, so tear it
+        // down with "u" (depth "ud" is reserved for the market-depth panel).
         await ref.read(websocketProvider).establishConnection(
               channelInput: "${widget.wlValue.exch}|${widget.wlValue.token}",
-              task: "ud",
+              task: "u",
               context: context,
             );
         Navigator.pop(context);
@@ -298,6 +311,7 @@ class _OptionChainSSState extends ConsumerState<OptionChainSSWeb> {
                         swipecontroller: swipecontroller,
                         showPriceView: showPriceView,
                         isBasketMode: isBasketMode,
+                        onChartRequested: widget.onChartRequested,
                       ),
                     ),
                   ],
@@ -878,7 +892,7 @@ class _ColumnHeaders extends ConsumerWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          "CALLS",
+                          "CALL",
                           style: MyntWebTextStyles.body(context,
                               fontWeight: MyntFonts.medium,
                               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary)),
@@ -938,7 +952,7 @@ class _ColumnHeaders extends ConsumerWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          "PUTS",
+                          "PUT",
                           style: MyntWebTextStyles.body(context,
                               fontWeight: MyntFonts.medium,
                               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary)),
@@ -1124,6 +1138,7 @@ class _OptionChainContent extends ConsumerStatefulWidget {
   final SwipeActionController swipecontroller;
   final bool showPriceView;
   final bool isBasketMode;
+  final VoidCallback? onChartRequested;
 
   const _OptionChainContent({
     required this.strikePriceKey,
@@ -1131,6 +1146,7 @@ class _OptionChainContent extends ConsumerStatefulWidget {
     required this.swipecontroller,
     required this.showPriceView,
     required this.isBasketMode,
+    this.onChartRequested,
   });
 
   @override
@@ -1199,6 +1215,8 @@ class _OptionChainContentState extends ConsumerState<_OptionChainContent> {
     final bool isLoading = isLoad || (!hasCallData && !hasPutData);
 
     if (isLoading) {
+      // Re-arm the ATM scroll so the reloaded chain (e.g. new scrip) re-centres once
+      _hasScrolledInitially = false;
       // Create a timeout to handle cases where loading gets stuck
       return FutureBuilder(
           future: Future.delayed(const Duration(seconds: 5)),
@@ -1447,6 +1465,9 @@ class _OptionChainContentState extends ConsumerState<_OptionChainContent> {
                     swipeController: widget.swipecontroller,
                     index: dataIndex,
                     atmKey: rowData.isATM ? widget.strikePriceKey : null,
+                    onChartRequested: widget.onChartRequested == null
+                        ? null
+                        : (_) => widget.onChartRequested!.call(),
                   );
                 },
               ),
@@ -1758,20 +1779,25 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
   }
 
   /// Checks if the basket contains scripts from multiple exchanges
-  bool _hasMultipleExchanges(List scriptList) {
-    if (scriptList.isEmpty) return false;
-
-    // Extract all exchanges from the basket scripts
-    Set<String> exchanges = {};
-    for (var script in scriptList) {
-      if (script['exch'] != null) {
-        exchanges.add(script['exch'].toString());
-      }
-    }
-
-    // If there's more than one unique exchange, return true
-    return exchanges.length > 1;
-  }
+  // TC_263: mixed segments are allowed in one basket (vendor and Kite
+  // allow it; basket margin verified against the vendor on 12 Oct 2026 for
+  // NSE+NFO, BSE+NSE+BFO and NSE+NFO+MCX). Returning false removes the
+  // "only 1 segment" warning and the Place block. Old check kept below.
+  bool _hasMultipleExchanges(List scriptList) => false;
+  // bool _hasMultipleExchanges(List scriptList) {
+  //   if (scriptList.isEmpty) return false;
+// 
+  //   // Extract all exchanges from the basket scripts
+  //   Set<String> exchanges = {};
+  //   for (var script in scriptList) {
+  //     if (script['exch'] != null) {
+  //       exchanges.add(script['exch'].toString());
+  //     }
+  //   }
+// 
+  //   // If there's more than one unique exchange, return true
+  //   return exchanges.length > 1;
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -2009,6 +2035,13 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
   }
 
   Widget _buildMarginsSection(ThemesProvider theme, OrderProvider orderProv) {
+    // The basket margin API rejects some baskets (e.g. more than 20 rows);
+    // show "Not available" with its reason instead of a misleading 0.00.
+    final marginError = orderProv.bsktScripList.isNotEmpty &&
+            orderProv.bsktOrderMargin?.stat != null &&
+            orderProv.bsktOrderMargin!.stat != 'Ok'
+        ? (orderProv.bsktOrderMargin!.emsg ?? 'Margin not available')
+        : null;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -2020,23 +2053,28 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
               Text(
                 "Pre Trade Margin",
                 style: TextStyle(
-                  fontFamily: 'Geist',
+                  fontFamily: dyslexiaFontOr('Geist'),
                   fontSize: 13,
                   fontWeight: FontWeight.w400,
                   color: shadcn.Theme.of(context).colorScheme.mutedForeground,
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                orderProv.bsktScripList.isEmpty ||
-                        orderProv.bsktOrderMargin == null
-                    ? "0.00"
-                    : orderProv.bsktOrderMargin!.basketMargin.toIndianFormat(),
-                style: TextStyle(
-                  fontFamily: 'Geist',
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: shadcn.Theme.of(context).colorScheme.foreground,
+              Tooltip(
+                message: marginError ?? "",
+                child: Text(
+                  marginError != null
+                      ? "Not available"
+                      : orderProv.bsktScripList.isEmpty ||
+                              orderProv.bsktOrderMargin == null
+                          ? "0.00"
+                          : orderProv.bsktOrderMargin!.basketMargin.toIndianFormat(),
+                  style: TextStyle(
+                    fontFamily: dyslexiaFontOr('Geist'),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: shadcn.Theme.of(context).colorScheme.foreground,
+                  ),
                 ),
               ),
             ],
@@ -2047,23 +2085,28 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
               Text(
                 "Post Trade Margin",
                 style: TextStyle(
-                  fontFamily: 'Geist',
+                  fontFamily: dyslexiaFontOr('Geist'),
                   fontSize: 13,
                   fontWeight: FontWeight.w400,
                   color: shadcn.Theme.of(context).colorScheme.mutedForeground,
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                orderProv.bsktScripList.isEmpty ||
-                        orderProv.bsktOrderMargin == null
-                    ? "0.00"
-                    : orderProv.bsktOrderMargin!.postTradeMargin.toIndianFormat(),
-                style: TextStyle(
-                  fontFamily: 'Geist',
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: shadcn.Theme.of(context).colorScheme.foreground,
+              Tooltip(
+                message: marginError ?? "",
+                child: Text(
+                  marginError != null
+                      ? "Not available"
+                      : orderProv.bsktScripList.isEmpty ||
+                              orderProv.bsktOrderMargin == null
+                          ? "0.00"
+                          : orderProv.bsktOrderMargin!.postTradeMargin.toIndianFormat(),
+                  style: TextStyle(
+                    fontFamily: dyslexiaFontOr('Geist'),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: shadcn.Theme.of(context).colorScheme.foreground,
+                  ),
                 ),
               ),
             ],
@@ -2090,7 +2133,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
           Text(
             "Basket should contain orders of only 1 segment",
             style: TextStyle(
-              fontFamily: 'Geist',
+              fontFamily: dyslexiaFontOr('Geist'),
               fontSize: 12,
               fontWeight: FontWeight.w500,
               color: Colors.white,
@@ -2266,7 +2309,9 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
             if (script['exch'] == "BFO" && script["dname"] != "null") {
               List<String> splitVal = script["dname"].toString().split(" ");
               script['symbol'] = splitVal[0];
-              script['expDate'] = "${splitVal[1]} ${splitVal[2]}";
+              // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+              script['expDate'] =
+                  bfoExpiryWithYear(splitVal, script['tsym']?.toString());
               script['option'] = splitVal.length > 4
                   ? "${splitVal[3]} ${splitVal[4]}"
                   : splitVal[3];
@@ -2644,6 +2689,15 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
               : basketStatus == 'placing'
                   ? null // Disable button while placing
                   : () async {
+                      // A basket may hold at most 20 orders; older baskets
+                      // can still have more.
+                      final extra = orderProv.bsktScripList.length -
+                          orderProv.basketMaxOrders;
+                      if (extra > 0) {
+                        showResponsiveWarning(context,
+                            "A basket can have up to ${orderProv.basketMaxOrders} orders. Delete $extra ${extra == 1 ? 'order' : 'orders'} to place.");
+                        return;
+                      }
                       await orderProv.placeBasketOrder(context,
                           navigateToOrderBook: false);
                     },
@@ -2798,7 +2852,8 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
       case 'placed':
         return 'PLACED';
       case 'complete':
-        return 'EXECUTED';
+        // return 'EXECUTED';
+        return 'COMPLETE';
       case 'rejected':
         return 'REJECTED';
       case 'canceled':
@@ -3198,7 +3253,7 @@ class _BasketBottomSheetState extends ConsumerState<_BasketBottomSheet>
                         padding: const EdgeInsets.only(top: 8),
                         child: TextWidget.paraText(
                           text:
-                              "${basket['curLength']} / ${basket['max']} items",
+                              "${basket['curLength']} / ${ref.read(orderProvider).basketMaxOrders} items",
                           theme: isDark,
                           textOverflow: TextOverflow.ellipsis,
                           maxLines: 1,

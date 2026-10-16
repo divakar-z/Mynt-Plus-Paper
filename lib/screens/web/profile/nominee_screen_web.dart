@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,12 +7,14 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/sharedWidget/snack_bar.dart';
 import 'package:mynt_plus/utils/digio_esign.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NomineeScreenWeb extends ConsumerStatefulWidget {
   final VoidCallback? onBack;
@@ -33,13 +36,22 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   int _activePanel = 0;
   int _nomineeCount = 1; // 1, 2, or 3
 
+  // Pincode loader - fetching city/state/country.
+  final Set<TextEditingController> _pincodeLoading = {};
+
   // Nominee status from /nom_stat
   bool _hasExistingNominee = false;
+  bool _nomStatLoaded = false;
   bool _esignPending = false;
   bool _esignCompleted = false;
+  // True once user has completed Digio e-sign for the current change request;
+  bool _esignRequestInProcess = false;
   String? _fileId;
   String? _esignEmail;
   String? _esignSession;
+
+  String _esignPrefKey() =>
+      'nominee_esigned_${locator<Preferences>().clientId ?? ""}';
 
   // ── Nominee 1 Fields ──
   final _name1 = TextEditingController();
@@ -50,7 +62,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   final _address1 = TextEditingController();
   final _city1 = TextEditingController();
   final _state1 = TextEditingController();
-  final _country1 = TextEditingController(text: 'INDIA');
+  final _country1 = TextEditingController(text: 'India');
   final _pincode1 = TextEditingController();
   final _mobile1 = TextEditingController();
   final _email1 = TextEditingController();
@@ -66,7 +78,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   final _address2 = TextEditingController();
   final _city2 = TextEditingController();
   final _state2 = TextEditingController();
-  final _country2 = TextEditingController(text: 'INDIA');
+  final _country2 = TextEditingController(text: 'India');
   final _pincode2 = TextEditingController();
   final _mobile2 = TextEditingController();
   final _email2 = TextEditingController();
@@ -82,7 +94,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   final _address3 = TextEditingController();
   final _city3 = TextEditingController();
   final _state3 = TextEditingController();
-  final _country3 = TextEditingController(text: 'INDIA');
+  final _country3 = TextEditingController(text: 'India');
   final _pincode3 = TextEditingController();
   final _mobile3 = TextEditingController();
   final _email3 = TextEditingController();
@@ -93,22 +105,50 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   final _guardianName1 = TextEditingController();
   DateTime? _guardianDob1;
   String? _guardianRelation1;
-  final _guardianMobile1 = TextEditingController();
+  final _guardianAddress1 = TextEditingController();
+  final _guardianPincode1 = TextEditingController();
+  final _guardianCity1 = TextEditingController();
+  final _guardianState1 = TextEditingController();
+  final _guardianCountry1 = TextEditingController();
 
   final _guardianName2 = TextEditingController();
   DateTime? _guardianDob2;
   String? _guardianRelation2;
-  final _guardianMobile2 = TextEditingController();
+  final _guardianAddress2 = TextEditingController();
+  final _guardianPincode2 = TextEditingController();
+  final _guardianCity2 = TextEditingController();
+  final _guardianState2 = TextEditingController();
+  final _guardianCountry2 = TextEditingController();
 
   final _guardianName3 = TextEditingController();
   DateTime? _guardianDob3;
   String? _guardianRelation3;
-  final _guardianMobile3 = TextEditingController();
+  final _guardianAddress3 = TextEditingController();
+  final _guardianPincode3 = TextEditingController();
+  final _guardianCity3 = TextEditingController();
+  final _guardianState3 = TextEditingController();
+  final _guardianCountry3 = TextEditingController();
+
+  // ── Court-appointed guardian proof (PDF, max 5 MB) ──
+  // Only required when nominee is minor AND guardian relation == COURT-APPOINTED GUARDIAN.
+  PlatformFile? _guardianDocFile1;
+  PlatformFile? _guardianDocFile2;
+  PlatformFile? _guardianDocFile3;
+  static const int _guardianDocMaxBytes = 5 * 1024 * 1024;
+
+  bool _needsGuardianDoc(DateTime? dob, String? relation) =>
+      _isMinor(dob) && relation == 'COURT-APPOINTED GUARDIAN';
 
   static const _relations = [
     'MOTHER', 'FATHER', 'BROTHER', 'SISTER', 'DAUGHTER',
     'WIFE', 'HUSBAND', 'SON', 'GRAND-SON', 'GRAND-FATHER',
     'GRAND-DAUGHTER', 'GRAND-MOTHER', 'FRIEND',
+  ];
+
+  static const _guardianRelations = [
+    'MOTHER', 'FATHER', 'BROTHER', 'SISTER', 'DAUGHTER',
+    'WIFE', 'HUSBAND', 'SON', 'GRAND-SON', 'GRAND-FATHER',
+    'GRAND-DAUGHTER', 'GRAND-MOTHER', 'COURT-APPOINTED GUARDIAN',
   ];
 
   static const _proofTypes = [
@@ -121,6 +161,107 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     if (dob == null) return false;
     final age = DateTime.now().difference(dob).inDays / 365.25;
     return age < 18;
+  }
+
+  /// Guardian DOB >> when picked DOB is < 18 it clears only the DOB field
+  ValueChanged<DateTime?> _onGuardianDobChanged(int slot) {
+    return (DateTime? picked) {
+      DateTime? next = picked;
+      if (picked != null && _isMinor(picked)) {
+        warningMessage(context, 'Guardian must be above age 18');
+        next = null;
+      }
+      setState(() {
+        if (slot == 1) {
+          _guardianDob1 = next;
+        } else if (slot == 2) {
+          _guardianDob2 = next;
+        } else if (slot == 3) {
+          _guardianDob3 = next;
+        }
+      });
+    };
+  }
+
+  PlatformFile? _guardianDocForSlot(int slot) {
+    switch (slot) {
+      case 1: return _guardianDocFile1;
+      case 2: return _guardianDocFile2;
+      case 3: return _guardianDocFile3;
+    }
+    return null;
+  }
+
+  void _setGuardianDocForSlot(int slot, PlatformFile? file) {
+    setState(() {
+      switch (slot) {
+        case 1: _guardianDocFile1 = file; break;
+        case 2: _guardianDocFile2 = file; break;
+        case 3: _guardianDocFile3 = file; break;
+      }
+    });
+  }
+
+  Future<void> _pickGuardianDoc(int slot) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    final ext = (file.extension ?? '').toLowerCase();
+    if (ext != 'pdf') {
+      if (mounted) warningMessage(context, 'Only PDF files are allowed');
+      return;
+    }
+    if (file.size > _guardianDocMaxBytes) {
+      if (mounted) warningMessage(context, 'File size must be 5 MB or less');
+      return;
+    }
+    _setGuardianDocForSlot(slot, file);
+  }
+
+  /// Returns the tooltip message when the nominee section is not editable,
+  /// or `null` when edits/additions are allowed.
+
+  /// - account closed       → `clientData.isClientClosed`
+  /// - non-individual       → `clientData.isIndividual == false`
+  /// - inactive segment     → `mobStatus.accSgtAtveSts != 'active'`
+  /// - within 7 days        → `mobStatus.last7DaysCheck != true`, and only when
+  ///   a nominee already exists. The 7-day post-activation block covers nominee
+  ///   *modification* but not *addition*, so a client with no nominee on record
+  ///   can declare one inside that window.
+  String? _editDisabledReason() {
+    final provider = ref.watch(profileAllDetailsProvider);
+    final mobStatus = provider.mobEmailStatus;
+    final clientData = provider.clientAllDetailsSafe?.clientData;
+
+    // Profile data hasn't finished loading yet — don't block the user
+    // pre-emptively, since we can't know which gate (if any) actually applies.
+    // The user couldn't have changed anything yet either way.
+    if (mobStatus == null || clientData == null) return null;
+
+    if (clientData.isClientClosed) {
+      return 'Your trading account is closed.';
+    }
+    if (!clientData.isIndividual) {
+      return "Non-individual accounts can't modify data here. "
+          "Please contact support at (+91) 93 8010 8010 for help.";
+    }
+    if ((mobStatus.accSgtAtveSts ?? '').toLowerCase() != 'active') {
+      return 'Modification not allowed for inactive client codes. '
+          'Please reactivate the account.';
+    }
+    if (_hasExistingNominee && mobStatus.last7DaysCheck != true) {
+      return 'Modification request not allowed within 7 days of activation';
+    }
+    return null;
+  }
+
+  Widget _gatedTooltip(Widget child, String? reason) {
+    if (reason == null) return child;
+    return Tooltip(message: reason, child: child);
   }
 
   String _proofTypeToApiKey(String? type) {
@@ -153,9 +294,12 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       _mobile2, _email2, _proofValue2,
       _name3, _percent3, _address3, _city3, _state3, _country3, _pincode3,
       _mobile3, _email3, _proofValue3,
-      _guardianName1, _guardianMobile1,
-      _guardianName2, _guardianMobile2,
-      _guardianName3, _guardianMobile3,
+      _guardianName1, _guardianAddress1, _guardianPincode1,
+      _guardianCity1, _guardianState1, _guardianCountry1,
+      _guardianName2, _guardianAddress2, _guardianPincode2,
+      _guardianCity2, _guardianState2, _guardianCountry2,
+      _guardianName3, _guardianAddress3, _guardianPincode3,
+      _guardianCity3, _guardianState3, _guardianCountry3,
     ]) {
       c.dispose();
     }
@@ -169,15 +313,22 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     if (!mounted) return;
 
     final statusData = provider.nomineeStatusData;
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    // Restore the "in process" flag persisted at e-sign time.
+    final bool inProcess = prefs.getBool(_esignPrefKey()) ?? false;
+
     if (statusData != null) {
       final appStatus = statusData['app_status']?.toString() ?? '';
       final name1 = statusData['nominee1_name']?.toString() ?? '';
+      final fileId = statusData['file_id']?.toString() ?? '';
 
       setState(() {
         _hasExistingNominee = name1.isNotEmpty;
-        _esignPending = appStatus == 'e-signed pending';
+        _esignPending = appStatus == 'e-signed pending' && !inProcess;
         _esignCompleted = appStatus == 'e-signed completed';
-        _fileId = statusData['file_id']?.toString();
+        _esignRequestInProcess = inProcess;
+        _fileId = fileId.isEmpty ? null : fileId;
         _esignEmail = statusData['client_email']?.toString();
         _esignSession = statusData['session']?.toString();
 
@@ -185,7 +336,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         if (_hasExistingNominee) {
           _name1.text = name1;
           _relation1 = statusData['nominee1_relation']?.toString();
-          _percent1.text = statusData['nominee1_percentage']?.toString() ?? '';
+          _percent1.text =
+              _fmtPercent(statusData['nominee1_percentage']?.toString());
           final dob1Str = statusData['nominee1_DOB']?.toString() ?? '';
           if (dob1Str.isNotEmpty) {
             try { _dob1 = DateFormat('yyyy-MM-dd').parse(dob1Str); } catch (_) {}
@@ -197,7 +349,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
             _nomineeCount = _nomineeCount < 2 ? 2 : _nomineeCount;
             _name2.text = name2;
             _relation2 = statusData['nominee2_relation']?.toString();
-            _percent2.text = statusData['nominee2_percentage']?.toString() ?? '';
+            _percent2.text =
+                _fmtPercent(statusData['nominee2_percentage']?.toString());
             final dob2Str = statusData['nominee2_DOB']?.toString() ?? '';
             if (dob2Str.isNotEmpty) {
               try { _dob2 = DateFormat('yyyy-MM-dd').parse(dob2Str); } catch (_) {}
@@ -210,7 +363,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
             _nomineeCount = 3;
             _name3.text = name3;
             _relation3 = statusData['nominee3_relation']?.toString();
-            _percent3.text = statusData['nominee3_percentage']?.toString() ?? '';
+            _percent3.text =
+                _fmtPercent(statusData['nominee3_percentage']?.toString());
             final dob3Str = statusData['nominee3_DOB']?.toString() ?? '';
             if (dob3Str.isNotEmpty) {
               try { _dob3 = DateFormat('yyyy-MM-dd').parse(dob3Str); } catch (_) {}
@@ -220,34 +374,115 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       });
     }
 
-    // Fallback: if nom_stat didn't have nominee data, use profile API data
-    if (!_hasExistingNominee) {
-      final clientData = provider.clientAllDetailsSafe?.clientData;
-      if (clientData != null) {
-        final nomName = clientData.nomineeName ?? '';
-        if (nomName.isNotEmpty) {
-          setState(() {
-            _hasExistingNominee = true;
-            _name1.text = nomName;
-            _relation1 = clientData.nomineeRelation?.toUpperCase();
-            _percent1.text = '100';
-            final nomDob = clientData.nomineeDOB ?? '';
-            if (nomDob.isNotEmpty) {
-              try { _dob1 = DateFormat('dd/MM/yyyy').parse(nomDob); } catch (_) {
-                try { _dob1 = DateFormat('yyyy-MM-dd').parse(nomDob); } catch (_) {}
-              }
-            }
-            _mobile1.text = clientData.nomineePhone ?? '';
-            _address1.text = clientData.nomineeAddress ?? '';
-          });
-        }
-      }
-    }
+    // Back-office nominees from /profile. Re-run from build() via ref.listen
+    // when /profile arrives after /nom_stat.
+    _nomStatLoaded = true;
+    setState(_applyBackOfficeNominees);
 
     setState(() => _loading = false);
   }
 
+  /// Trims and treats null / "null" / blank as empty.
+  String _clean(String? v) {
+    final s = v?.trim() ?? '';
+    return s == 'null' ? '' : s;
+  }
+
+  /// "50.00" → 50, "33.330" → 33.33, "12.50" → 12.5. Blank/invalid → ''.
+  String _fmtPercent(String? v) {
+    final n = num.tryParse(_clean(v));
+    if (n == null) return '';
+    return n == n.truncate() ? n.toInt().toString() : n.toDouble().toString();
+  }
+
+  /// Accepts "1995-03-23 00:00:00", "1995-03-23" and "23/03/1995".
+  DateTime? _parseNomDob(String? v) {
+    final s = _clean(v);
+    if (s.isEmpty) return null;
+    final iso = DateTime.tryParse(s);
+    if (iso != null) return iso;
+    try { return DateFormat('dd/MM/yyyy').parse(s); } catch (_) { return null; }
+  }
+
+  /// Shows back-office nominees from /profile: nominee 1 from client_data
+  /// (falling back to nominee_data[0]), nominees 2 and 3 from nominee_data[0].
+  /// Skipped while /nom_stat holds an app request pending e-sign, so that
+  /// request stays on screen. Call inside setState.
+  void _applyBackOfficeNominees() {
+    final provider = ref.read(profileAllDetailsProvider);
+    final statusData = provider.nomineeStatusData;
+    final pendingName =
+        _clean(statusData?['nominee1_name']?.toString());
+    if (statusData?['app_status']?.toString() == 'e-signed pending' &&
+        pendingName.isNotEmpty) {
+      return;
+    }
+
+    final details = provider.clientAllDetailsSafe;
+    final clientData = details?.clientData;
+    final nomList = details?.nomineeData;
+    final bo = (nomList != null && nomList.isNotEmpty) ? nomList.first : null;
+
+    var name1 = _clean(clientData?.nomineeName);
+    var relation1 = _clean(clientData?.nomineeRelation);
+    var dob1 = _clean(clientData?.nomineeDOB);
+    if (name1.isEmpty) {
+      name1 = _clean(bo?.nominationName);
+      relation1 = _clean(bo?.nomRelation);
+      dob1 = _clean(bo?.nomDOB);
+    }
+    // No back-office nominee — keep whatever /nom_stat showed.
+    if (name1.isEmpty) return;
+    // client_data may carry the name but not the relation/DOB.
+    if (relation1.isEmpty) relation1 = _clean(bo?.nomRelation);
+    if (_parseNomDob(dob1) == null) dob1 = _clean(bo?.nomDOB);
+
+    final name2 = _clean(bo?.nominationName2);
+    final name3 = _clean(bo?.nominationName3);
+    final percent2 = name2.isNotEmpty ? _fmtPercent(bo?.sharePercentage2) : '';
+    final percent3 = name3.isNotEmpty ? _fmtPercent(bo?.sharePercentage3) : '';
+
+    var percent1 = _fmtPercent(bo?.sharePercentage);
+    if (percent1.isEmpty) {
+      final others =
+          (num.tryParse(percent2) ?? 0) + (num.tryParse(percent3) ?? 0);
+      if (others < 100) percent1 = _fmtPercent('${100 - others}');
+    }
+
+    _hasExistingNominee = true;
+    _nomineeCount = name3.isNotEmpty ? 3 : (name2.isNotEmpty ? 2 : 1);
+
+    _name1.text = name1;
+    _relation1 = relation1.isEmpty ? null : relation1.toUpperCase();
+    _dob1 = _parseNomDob(dob1);
+    _percent1.text = percent1;
+    _mobile1.text = _clean(clientData?.nomineePhone).isNotEmpty
+        ? _clean(clientData?.nomineePhone)
+        : _clean(bo?.nomPhone);
+    _email1.text = _clean(bo?.nOMEMAIL);
+    _address1.text = _clean(clientData?.nomineeAddress);
+
+    _name2.text = name2;
+    _relation2 = name2.isEmpty || _clean(bo?.nomRelation2).isEmpty
+        ? null
+        : _clean(bo?.nomRelation2).toUpperCase();
+    _dob2 = name2.isEmpty ? null : _parseNomDob(bo?.nomDOB2);
+    _percent2.text = percent2;
+    _mobile2.text = name2.isEmpty ? '' : _clean(bo?.nomPhone2);
+    _email2.text = name2.isEmpty ? '' : _clean(bo?.nomEmail2);
+
+    _name3.text = name3;
+    _relation3 = name3.isEmpty || _clean(bo?.nomRelation3).isEmpty
+        ? null
+        : _clean(bo?.nomRelation3).toUpperCase();
+    _dob3 = name3.isEmpty ? null : _parseNomDob(bo?.nomDOB3);
+    _percent3.text = percent3;
+    _mobile3.text = name3.isEmpty ? '' : _clean(bo?.nomPhone3);
+    _email3.text = name3.isEmpty ? '' : _clean(bo?.nomEmail3);
+  }
+
   Future<void> _submitNominee() async {
+    if (_editDisabledReason() != null) return;
     if (_yesOrNo == 'yes') {
       // Trigger form field validation (text fields, dropdowns)
       if (!(_formKey.currentState?.validate() ?? false)) {
@@ -283,6 +518,32 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         return;
       }
 
+      // Block submission if guardian DOB is under 18
+      final guardianDobs = [_guardianDob1, _guardianDob2, _guardianDob3];
+      final nomineeDobs = [_dob1, _dob2, _dob3];
+      for (var i = 0; i < _nomineeCount; i++) {
+        if (_isMinor(nomineeDobs[i]) && _isMinor(guardianDobs[i])) {
+          warningMessage(context, 'Guardian for nominee ${i + 1} must be above age 18');
+          return;
+        }
+      }
+
+      // Court-appointed guardian → PDF proof is required
+      final guardianRelations = [
+        _guardianRelation1, _guardianRelation2, _guardianRelation3,
+      ];
+      final guardianDocs = [
+        _guardianDocFile1, _guardianDocFile2, _guardianDocFile3,
+      ];
+      for (var i = 0; i < _nomineeCount; i++) {
+        if (_needsGuardianDoc(nomineeDobs[i], guardianRelations[i]) &&
+            guardianDocs[i] == null) {
+          warningMessage(context,
+              'Please upload the guardian document (PDF) for nominee ${i + 1}');
+          return;
+        }
+      }
+
       // Validate percentages add up to 100
       final p1 = int.tryParse(_percent1.text) ?? 0;
       final p2 = _nomineeCount >= 2 ? (int.tryParse(_percent2.text) ?? 0) : 0;
@@ -303,28 +564,24 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       return;
     }
 
+    final clientJson = clientData.toJson();
+    String dob(DateTime? d) =>
+        d != null ? DateFormat('yyyy-MM-dd').format(d) : '';
     final fields = <String, String>{
-      'clientcode': clientData.toJson()['CLIENT_ID'] ?? '',
-      'client_email': clientData.toJson()['CLIENT_ID_MAIL'] ?? '',
-      'client_pan': clientData.toJson()['PAN_NO'] ?? '',
-      'client_name': clientData.toJson()['CLIENT_NAME'] ?? '',
-      'dp_code': clientData.toJson()['CLIENT_DP_CODE'] ?? '',
-      'nominee_req': _yesOrNo ?? 'no',
+      'clientcode': clientJson['CLIENT_ID'] ?? '',
 
-      // Nominee 1
+      // ── Nominee 1 ──
       'Nominee1_name': _yesOrNo == 'yes' ? _name1.text : '',
       'Nominee1_PAN': _yesOrNo == 'yes' ? _proofValue1.text : '',
-      'Nominee1_DOB': _yesOrNo == 'yes' && _dob1 != null
-          ? DateFormat('yyyy-MM-dd').format(_dob1!)
-          : '',
+      'Nominee1_DOB': _yesOrNo == 'yes' ? dob(_dob1) : '',
       'Nominee1_relation': _yesOrNo == 'yes' ? (_relation1 ?? '') : '',
       'Nominee1_address1': _yesOrNo == 'yes'
           ? (_sameAddress1
-              ? (clientData.toJson()['CL_RESI_ADD1'] ?? '')
+              ? (clientJson['CL_RESI_ADD1'] ?? '')
               : _address1.text)
           : '',
       'Nominee1_address2': _yesOrNo == 'yes' && _sameAddress1
-          ? (clientData.toJson()['CL_RESI_ADD2'] ?? '')
+          ? (clientJson['CL_RESI_ADD2'] ?? '')
           : '',
       'Nominee1_city': _yesOrNo == 'yes' ? _city1.text : '',
       'Nominee1_state': _yesOrNo == 'yes' ? _state1.text : '',
@@ -332,21 +589,23 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       'Nominee1_pincode': _yesOrNo == 'yes' ? _pincode1.text : '',
       'Nominee1_mobile': _yesOrNo == 'yes' ? _mobile1.text : '',
       'Nominee1_email': _yesOrNo == 'yes' ? _email1.text : '',
+      'client_email': clientJson['CLIENT_ID_MAIL'] ?? '',
+      'client_pan': clientJson['PAN_NO'] ?? '',
       'Nominee1_percentage': _yesOrNo == 'yes' ? _percent1.text : '',
-      'Nominee1_Select_id': _yesOrNo == 'yes'
-          ? _proofTypeToApiKey(_proofType1)
-          : '',
+      'Nominee1_Select_id':
+          _yesOrNo == 'yes' ? _proofTypeToApiKey(_proofType1) : '',
 
-      // Nominee 2
+      // ── Nominee
       'Nominee2_name': _nomineeCount >= 2 ? _name2.text : '',
+      'dp_code': clientJson['CLIENT_DP_CODE'] ?? '',
+      'nominee_req': _yesOrNo ?? 'no',
+      'client_name': clientJson['CLIENT_NAME'] ?? '',
       'Nominee2_PAN': _nomineeCount >= 2 ? _proofValue2.text : '',
-      'Nominee2_DOB': _nomineeCount >= 2 && _dob2 != null
-          ? DateFormat('yyyy-MM-dd').format(_dob2!)
-          : '',
+      'Nominee2_DOB': _nomineeCount >= 2 ? dob(_dob2) : '',
       'Nominee2_relation': _nomineeCount >= 2 ? (_relation2 ?? '') : '',
       'Nominee2_address1': _nomineeCount >= 2
           ? (_sameAddress2
-              ? (clientData.toJson()['CL_RESI_ADD1'] ?? '')
+              ? (clientJson['CL_RESI_ADD1'] ?? '')
               : _address2.text)
           : '',
       'Nominee2_address2': '',
@@ -357,20 +616,17 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       'Nominee2_mobile': _nomineeCount >= 2 ? _mobile2.text : '',
       'Nominee2_email': _nomineeCount >= 2 ? _email2.text : '',
       'Nominee2_percentage': _nomineeCount >= 2 ? _percent2.text : '',
-      'Nominee2_Select_id': _nomineeCount >= 2
-          ? _proofTypeToApiKey(_proofType2)
-          : '',
+      'Nominee2_Select_id':
+          _nomineeCount >= 2 ? _proofTypeToApiKey(_proofType2) : '',
 
-      // Nominee 3
+      // ── Nominee 3
       'Nominee3_name': _nomineeCount >= 3 ? _name3.text : '',
       'Nominee3_PAN': _nomineeCount >= 3 ? _proofValue3.text : '',
-      'Nominee3_DOB': _nomineeCount >= 3 && _dob3 != null
-          ? DateFormat('yyyy-MM-dd').format(_dob3!)
-          : '',
+      'Nominee3_DOB': _nomineeCount >= 3 ? dob(_dob3) : '',
       'Nominee3_relation': _nomineeCount >= 3 ? (_relation3 ?? '') : '',
       'Nominee3_address1': _nomineeCount >= 3
           ? (_sameAddress3
-              ? (clientData.toJson()['CL_RESI_ADD1'] ?? '')
+              ? (clientJson['CL_RESI_ADD1'] ?? '')
               : _address3.text)
           : '',
       'Nominee3_address2': '',
@@ -387,59 +643,78 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
 
       // Guardian 1
       'Guardian_name': _isMinor(_dob1) ? _guardianName1.text : '',
-      'Guardian_dob': _isMinor(_dob1) && _guardianDob1 != null
-          ? DateFormat('yyyy-MM-dd').format(_guardianDob1!)
-          : '',
-      'Guardian_relation': _isMinor(_dob1) ? (_guardianRelation1 ?? '') : '',
-      'Guardian_mobile': _isMinor(_dob1) ? _guardianMobile1.text : '',
-      'Guardian_address': '',
-      'Guardian_city': '',
-      'Guardian_state': '',
-      'Guardian_country': '',
+      'Guardian_dob': _isMinor(_dob1) ? dob(_guardianDob1) : '',
+      'Guardian_address': _isMinor(_dob1) ? _guardianAddress1.text : '',
+      'Guardian_city': _isMinor(_dob1) ? _guardianCity1.text : '',
+      'Guardian_state': _isMinor(_dob1) ? _guardianState1.text : '',
+      'Guardian_country': _isMinor(_dob1) ? _guardianCountry1.text : '',
+      'Guardian_mobile': '',
       'Guardian_email': '',
+      'Guardian_relation': _isMinor(_dob1) ? (_guardianRelation1 ?? '') : '',
       'Guardian_doc_type': '',
-      'Guardian_pincode': '',
+      'Guardian_pincode': _isMinor(_dob1) ? _guardianPincode1.text : '',
 
-      // Guardian 2
+      // ── Guardian 2 ──
       'Guardian_name2': _isMinor(_dob2) ? _guardianName2.text : '',
-      'Guardian_dob2': _isMinor(_dob2) && _guardianDob2 != null
-          ? DateFormat('yyyy-MM-dd').format(_guardianDob2!)
-          : '',
-      'Guardian_relation2': _isMinor(_dob2) ? (_guardianRelation2 ?? '') : '',
-      'Guardian_mobile2': _isMinor(_dob2) ? _guardianMobile2.text : '',
-      'Guardian_address2': '',
-      'Guardian_city2': '',
-      'Guardian_state2': '',
-      'Guardian_country2': '',
+      'Guardian_dob2': _isMinor(_dob2) ? dob(_guardianDob2) : '',
+      'Guardian_address2': _isMinor(_dob2) ? _guardianAddress2.text : '',
+      'Guardian_city2': _isMinor(_dob2) ? _guardianCity2.text : '',
+      'Guardian_state2': _isMinor(_dob2) ? _guardianState2.text : '',
+      'Guardian_country2': _isMinor(_dob2) ? _guardianCountry2.text : '',
+      'Guardian_mobile2': '',
       'Guardian_email2': '',
+      'Guardian_relation2': _isMinor(_dob2) ? (_guardianRelation2 ?? '') : '',
       'Guardian_doc_type2': '',
-      'Guardian_pincode2': '',
+      'Guardian_pincode2': _isMinor(_dob2) ? _guardianPincode2.text : '',
 
-      // Guardian 3
+      // ── Guardian 3 ──
       'Guardian_name3': _isMinor(_dob3) ? _guardianName3.text : '',
-      'Guardian_dob3': _isMinor(_dob3) && _guardianDob3 != null
-          ? DateFormat('yyyy-MM-dd').format(_guardianDob3!)
-          : '',
-      'Guardian_relation3': _isMinor(_dob3) ? (_guardianRelation3 ?? '') : '',
-      'Guardian_mobile3': _isMinor(_dob3) ? _guardianMobile3.text : '',
-      'Guardian_address3': '',
-      'Guardian_city3': '',
-      'Guardian_state3': '',
-      'Guardian_country3': '',
+      'Guardian_dob3': _isMinor(_dob3) ? dob(_guardianDob3) : '',
+      'Guardian_address3': _isMinor(_dob3) ? _guardianAddress3.text : '',
+      'Guardian_city3': _isMinor(_dob3) ? _guardianCity3.text : '',
+      'Guardian_state3': _isMinor(_dob3) ? _guardianState3.text : '',
+      'Guardian_country3': _isMinor(_dob3) ? _guardianCountry3.text : '',
+      'Guardian_mobile3': '',
       'Guardian_email3': '',
+      'Guardian_relation3': _isMinor(_dob3) ? (_guardianRelation3 ?? '') : '',
       'Guardian_doc_type3': '',
-      'Guardian_pincode3': '',
+      'Guardian_pincode3': _isMinor(_dob3) ? _guardianPincode3.text : '',
 
-      // Documents (empty for web)
+      // ── Documents trailer (binary OR empty string for guardian_doc*) ──
       'nominee_doc1': '',
       'nominee_doc2': '',
       'nominee_doc3': '',
-      'guardian_doc': '',
-      'guardian_doc2': '',
-      'guardian_doc3': '',
     };
 
-    final result = await provider.submitNominee(fields: fields);
+    // Attach guardian PDF only for slots that need it (minor + court-appointed).
+    final files = <String, ({String filename, Uint8List bytes})>{};
+    void attachIfNeeded(
+        String key, DateTime? dob, String? relation, PlatformFile? file) {
+      if (!_needsGuardianDoc(dob, relation) || file == null) {
+        fields[key] = '';
+        return;
+      }
+      final bytes = file.bytes;
+      if (bytes == null) {
+        fields[key] = '';
+        return;
+      }
+      files[key] = (filename: file.name, bytes: bytes);
+    }
+
+    attachIfNeeded('guardian_doc', _dob1, _guardianRelation1, _guardianDocFile1);
+    attachIfNeeded(
+        'guardian_doc2',
+        _nomineeCount >= 2 ? _dob2 : null,
+        _nomineeCount >= 2 ? _guardianRelation2 : null,
+        _nomineeCount >= 2 ? _guardianDocFile2 : null);
+    attachIfNeeded(
+        'guardian_doc3',
+        _nomineeCount >= 3 ? _dob3 : null,
+        _nomineeCount >= 3 ? _guardianRelation3 : null,
+        _nomineeCount >= 3 ? _guardianDocFile3 : null);
+
+    final result = await provider.submitNominee(fields: fields, files: files);
 
     if (!mounted) return;
     setState(() => _loading = false);
@@ -479,13 +754,15 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     setState(() => _esignLoading = false);
 
     if (result == 'success') {
-      await ref.read(profileAllDetailsProvider).fetchNomineeStatus();
+      // Persist the in-process flag (keyed by clientId) so the banner.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_esignPrefKey(), true);
       await ref.read(profileAllDetailsProvider).fetchClientProfileAllDetails();
+      if (!mounted) return;
+      // Re-load local state from refreshed nom_stat so _hasExistingNominee and
+      // form controllers reflect the just-signed nominee.
+      await _loadNomineeStatus();
       if (mounted) {
-        setState(() {
-          _esignCompleted = true;
-          _esignPending = false;
-        });
         successMessage(context, 'Nominee e-signed successfully');
       }
     }
@@ -601,6 +878,12 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   @override
   Widget build(BuildContext context) {
     ref.watch(themeProvider);
+    // /profile can respond after /nom_stat — re-merge back-office nominees.
+    ref.listen(
+        profileAllDetailsProvider.select((p) => p.clientAllDetailsSafe),
+        (_, next) {
+      if (_nomStatLoaded && next != null) setState(_applyBackOfficeNominees);
+    });
 
     final textColor = resolveThemeColor(context,
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
@@ -656,41 +939,49 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                               color: textColor)
                               .copyWith(decoration: TextDecoration.none)),
                       const SizedBox(width: 12),
-                      // Status badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _hasExistingNominee
-                              ? successColor.withValues(alpha: 0.1)
-                              : errorColor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: _hasExistingNominee
-                                ? successColor.withValues(alpha: 0.3)
-                                : errorColor.withValues(alpha: 0.3),
+                      // profile API's Nominee_Name is non-empty (active nominee only; not a pending e-sign request).
+                      Builder(builder: (_) {
+                        final profileNomName = ref
+                                .watch(profileAllDetailsProvider)
+                                .clientAllDetailsSafe
+                                ?.clientData
+                                ?.nomineeName ?? '';
+                        final isSecured = profileNomName.isNotEmpty;
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: isSecured
+                                ? successColor.withValues(alpha: 0.1)
+                                : errorColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: isSecured
+                                  ? successColor.withValues(alpha: 0.3)
+                                  : errorColor.withValues(alpha: 0.3),
+                            ),
                           ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _hasExistingNominee
-                                  ? Icons.verified_user_outlined
-                                  : Icons.shield_outlined,
-                              color: _hasExistingNominee ? successColor : errorColor,
-                              size: 14,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _hasExistingNominee ? 'Secured' : 'Unsecured',
-                              style: MyntWebTextStyles.caption(context,
-                                  color: _hasExistingNominee ? successColor : errorColor,
-                                  fontWeight: MyntFonts.semiBold)
-                                  .copyWith(decoration: TextDecoration.none),
-                            ),
-                          ],
-                        ),
-                      ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                isSecured
+                                    ? Icons.verified_user_outlined
+                                    : Icons.shield_outlined,
+                                color: isSecured ? successColor : errorColor,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                isSecured ? 'Secured' : 'Unsecured',
+                                style: MyntWebTextStyles.caption(context,
+                                    color: isSecured ? successColor : errorColor,
+                                    fontWeight: MyntFonts.semiBold)
+                                    .copyWith(decoration: TextDecoration.none),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                     ],
                   ),
                 ),
@@ -711,18 +1002,28 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                           const SizedBox(height: 16),
                         ],
 
-                        // ── E-sign pending banner ──
-                        if (_esignPending) ...[
+                        // Esign Pending
+                        if (_esignRequestInProcess || _esignCompleted) ...[
+                          _buildEsignPendingBanner(primaryColor, errorColor,
+                              inProcess: true),
+                          const SizedBox(height: 24),
+                        ] else if (_esignPending) ...[
                           _buildEsignPendingBanner(primaryColor, errorColor),
                           const SizedBox(height: 24),
                         ],
 
                         // ── Single card for no-nominee state ──
-                        if (!_hasExistingNominee && !_esignPending && !_esignCompleted)
+                        if (!_hasExistingNominee &&
+                            !_esignPending &&
+                            !_esignCompleted &&
+                            !_esignRequestInProcess)
                           _buildNoNomineeCard(textColor, subtitleColor, cardBg, cardBorder, primaryColor, errorColor),
 
                         // ── Nominee form (only show when editing/adding with existing nominee) ──
-                        if (_hasExistingNominee && !_esignCompleted && !_esignPending) ...[
+                        if (_hasExistingNominee &&
+                            !_esignCompleted &&
+                            !_esignPending &&
+                            !_esignRequestInProcess) ...[
                           _buildChoiceSection(primaryColor, textColor, subtitleColor, cardBorder),
                           const SizedBox(height: 16),
                           if (_yesOrNo == 'yes') ...[
@@ -745,6 +1046,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
 
   Widget _buildNoNomineeCard(Color textColor, Color subtitleColor,
       Color cardBg, Color borderColor, Color primaryColor, Color errorColor) {
+    final disabledReason = _editDisabledReason();
+    final canEdit = disabledReason == null;
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -794,8 +1097,11 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
           // Action buttons
           Row(
             children: [
-              OutlinedButton.icon(
-                onPressed: () {
+              _gatedTooltip(
+                OutlinedButton.icon(
+                onPressed: !canEdit
+                    ? null
+                    : () {
                   setState(() {
                     if (_yesOrNo == 'yes') {
                       _yesOrNo = null;
@@ -829,34 +1135,46 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                       borderRadius: BorderRadius.circular(4)),
                 ),
               ),
+                disabledReason,
+              ),
               const SizedBox(width: 12),
-              OutlinedButton(
-                onPressed: () {
-                  setState(() {
-                    if (_yesOrNo == 'no') {
-                      _yesOrNo = null;
-                    } else {
-                      _yesOrNo = 'no';
-                    }
-                  });
-                },
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(
-                    color: _yesOrNo == 'no' ? primaryColor : borderColor,
-                    width: _yesOrNo == 'no' ? 1.5 : 1,
+              _gatedTooltip(
+                OutlinedButton(
+                  onPressed: !canEdit
+                      ? null
+                      : () {
+                          setState(() {
+                            if (_yesOrNo == 'no') {
+                              _yesOrNo = null;
+                            } else {
+                              _yesOrNo = 'no';
+                            }
+                          });
+                        },
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: _yesOrNo == 'no' ? primaryColor : borderColor,
+                      width: _yesOrNo == 'no' ? 1.5 : 1,
+                    ),
+                    backgroundColor: _yesOrNo == 'no'
+                        ? primaryColor.withValues(alpha: 0.08)
+                        : Colors.transparent,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4)),
                   ),
-                  backgroundColor: _yesOrNo == 'no'
-                      ? primaryColor.withValues(alpha: 0.08)
-                      : Colors.transparent,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4)),
+                  child: Text('Skip for now',
+                      style: MyntWebTextStyles.bodySmall(context,
+                              color: _yesOrNo == 'no'
+                                  ? primaryColor
+                                  : subtitleColor,
+                              fontWeight: _yesOrNo == 'no'
+                                  ? MyntFonts.semiBold
+                                  : MyntFonts.medium)
+                          .copyWith(decoration: TextDecoration.none)),
                 ),
-                child: Text('Skip for now',
-                    style: MyntWebTextStyles.bodySmall(context,
-                        color: _yesOrNo == 'no' ? primaryColor : subtitleColor,
-                        fontWeight: _yesOrNo == 'no' ? MyntFonts.semiBold : MyntFonts.medium)
-                        .copyWith(decoration: TextDecoration.none)),
+                disabledReason,
               ),
             ],
           ),
@@ -864,11 +1182,17 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
           // Opt-out continue button
           if (_yesOrNo == 'no') ...[
             const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loading ? null : _submitNominee,
+            _gatedTooltip(
+              ElevatedButton(
+              onPressed: (_loading || !canEdit) ? null : _submitNominee,
               style: ElevatedButton.styleFrom(
                 backgroundColor: resolveThemeColor(context,
             dark: MyntColors.secondary, light: MyntColors.primary),
+                disabledBackgroundColor:
+                    resolveThemeColor(context,
+                        dark: MyntColors.secondary, light: MyntColors.primary)
+                        .withValues(alpha: 0.4),
+                disabledForegroundColor: Colors.white70,
                 elevation: 0,
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 shape: RoundedRectangleBorder(
@@ -882,6 +1206,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                       style: MyntWebTextStyles.bodySmall(context,
                           color: Colors.white, fontWeight: MyntFonts.semiBold)
                           .copyWith(decoration: TextDecoration.none)),
+            ),
+              disabledReason,
             ),
           ],
 
@@ -948,7 +1274,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
               const SizedBox(width: 24),
               Expanded(child: _buildReadOnlyField('NOMINEE RELATION', _relation1 ?? '', textColor, subtitleColor, borderColor)),
               const SizedBox(width: 24),
-              Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob1 != null ? DateFormat('dd/MM/yyyy').format(_dob1!) : '-', textColor, subtitleColor, borderColor)),
+              Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob1 != null ? DateFormat('dd MMM yyyy').format(_dob1!) : '-', textColor, subtitleColor, borderColor)),
             ],
           ),
           const SizedBox(height: 16),
@@ -981,7 +1307,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                 const SizedBox(width: 24),
                 Expanded(child: _buildReadOnlyField('NOMINEE RELATION', _relation2 ?? '', textColor, subtitleColor, borderColor)),
                 const SizedBox(width: 24),
-                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob2 != null ? DateFormat('dd/MM/yyyy').format(_dob2!) : '-', textColor, subtitleColor, borderColor)),
+                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob2 != null ? DateFormat('dd MMM yyyy').format(_dob2!) : '-', textColor, subtitleColor, borderColor)),
               ],
             ),
             const SizedBox(height: 16),
@@ -1015,7 +1341,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                 const SizedBox(width: 24),
                 Expanded(child: _buildReadOnlyField('NOMINEE RELATION', _relation3 ?? '', textColor, subtitleColor, borderColor)),
                 const SizedBox(width: 24),
-                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob3 != null ? DateFormat('dd/MM/yyyy').format(_dob3!) : '-', textColor, subtitleColor, borderColor)),
+                Expanded(child: _buildReadOnlyField('NOMINEE DOB', _dob3 != null ? DateFormat('dd MMM yyyy').format(_dob3!) : '-', textColor, subtitleColor, borderColor)),
               ],
             ),
             const SizedBox(height: 16),
@@ -1037,6 +1363,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   Widget _buildReadOnlyField(
       String label, String value, Color textColor, Color subtitleColor, Color borderColor) {
     return TextFormField(
+      // initialValue is read once; key on value so a later re-merge repaints.
+      key: ValueKey('$label|$value'),
       initialValue: value,
       readOnly: true,
       style: MyntWebTextStyles.body(context, color: textColor)
@@ -1062,7 +1390,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   //  ESIGN PENDING BANNER
   // ═══════════════════════════════════════════════════════════════════
 
-  Widget _buildEsignPendingBanner(Color primaryColor, Color errorColor) {
+  Widget _buildEsignPendingBanner(Color primaryColor, Color errorColor,
+      {bool inProcess = false}) {
     final warningBg = resolveThemeColor(context,
         dark: const Color(0xFF3D2E00), light: const Color(0xFFFCEFD4));
     final warningText = resolveThemeColor(context,
@@ -1076,68 +1405,64 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         color: warningBg,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
               Icon(Icons.info_outline, color: warningIcon, size: 20),
               const SizedBox(width: 12),
-              Expanded(
+              Flexible(
                 child: Text(
-                  'Esign Pending - Click here to complete',
+                  inProcess
+                      ? 'Your Nominee Change request is in process.'
+                      : 'Esign Pending - Click here to complete',
                   style: MyntWebTextStyles.bodySmall(context,
                       color: warningText, fontWeight: MyntFonts.medium)
                       .copyWith(decoration: TextDecoration.none),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              _esignLoading
-                  ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: primaryColor))
-                  : Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: _openDigioEsign,
-                        borderRadius: BorderRadius.circular(6),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 6),
-                          child: Text('Click here E-sign',
-                              style: MyntWebTextStyles.bodySmall(context,
-                                  color: primaryColor,
-                                  fontWeight: MyntFonts.semiBold)
-                                  .copyWith(decoration: TextDecoration.none)),
+          // Action buttons only when e-sign is still pending (not after sign).
+          if (!inProcess) ...[
+                const SizedBox(width: 16),
+                _esignLoading
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: primaryColor))
+                    : Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: _openDigioEsign,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            child: Text('Click here E-sign',
+                                style: MyntWebTextStyles.bodySmall(context,
+                                    color: primaryColor,
+                                    fontWeight: MyntFonts.semiBold)
+                                    .copyWith(decoration: TextDecoration.none)),
+                          ),
                         ),
                       ),
+                const SizedBox(width: 4),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _showCancelConfirmation,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      child: Text('Cancel request',
+                          style: MyntWebTextStyles.bodySmall(context,
+                              color: errorColor,
+                              fontWeight: MyntFonts.semiBold)
+                              .copyWith(decoration: TextDecoration.none)),
                     ),
-              const SizedBox(width: 4),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _showCancelConfirmation,
-                  borderRadius: BorderRadius.circular(6),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    child: Text('Cancel request',
-                        style: MyntWebTextStyles.bodySmall(context,
-                            color: errorColor,
-                            fontWeight: MyntFonts.semiBold)
-                            .copyWith(decoration: TextDecoration.none)),
                   ),
                 ),
-              ),
-            ],
-          ),
+          ],
         ],
       ),
     );
@@ -1249,17 +1574,78 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     );
   }
 
+  /// Resets the screen to the "no nominee" initial state. Used after a
+  /// successful cancel so the cancelled-pending record no longer shows.
+  void _resetToInitialState() {
+    setState(() {
+      _hasExistingNominee = false;
+      _esignPending = false;
+      _esignCompleted = false;
+      _esignRequestInProcess = false;
+      _fileId = null;
+      _esignEmail = null;
+      _esignSession = null;
+      _yesOrNo = null;
+      _activePanel = 0;
+      _nomineeCount = 1;
+
+      for (final c in [
+        _name1, _percent1, _address1, _city1, _state1, _country1, _pincode1,
+        _mobile1, _email1, _proofValue1,
+        _name2, _percent2, _address2, _city2, _state2, _country2, _pincode2,
+        _mobile2, _email2, _proofValue2,
+        _name3, _percent3, _address3, _city3, _state3, _country3, _pincode3,
+        _mobile3, _email3, _proofValue3,
+        _guardianName1, _guardianAddress1, _guardianPincode1,
+        _guardianCity1, _guardianState1, _guardianCountry1,
+        _guardianName2, _guardianAddress2, _guardianPincode2,
+        _guardianCity2, _guardianState2, _guardianCountry2,
+        _guardianName3, _guardianAddress3, _guardianPincode3,
+        _guardianCity3, _guardianState3, _guardianCountry3,
+      ]) {
+        c.clear();
+      }
+      _percent1.text = '100';
+      _country1.text = 'India';
+      _country2.text = 'India';
+      _country3.text = 'India';
+
+      _dob1 = _dob2 = _dob3 = null;
+      _relation1 = _relation2 = _relation3 = null;
+      _proofType1 = _proofType2 = _proofType3 = null;
+      _sameAddress1 = _sameAddress2 = _sameAddress3 = false;
+      _guardianDob1 = _guardianDob2 = _guardianDob3 = null;
+      _guardianRelation1 = _guardianRelation2 = _guardianRelation3 = null;
+      _guardianDocFile1 = _guardianDocFile2 = _guardianDocFile3 = null;
+    });
+  }
+
   Future<void> _cancelRequest() async {
     try {
-      final provider = ref.read(profileAllDetailsProvider);
       final fileId = _fileId ?? '';
       final api = locator<ApiExporter>();
       final response = await api.cancelPendingStatusApi('nominee', fileId);
       if (mounted) {
         if (response == 'Cancel Success') {
-          setState(() => _esignPending = false);
+          // Drop the persisted in-process flag for this client.
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove(_esignPrefKey());
+          final hadExisting = _hasExistingNominee;
+          if (hadExisting) {
+            // Keep existing nominee data
+            setState(() {
+              _esignPending = false;
+              _esignCompleted = false;
+              _esignRequestInProcess = false;
+              _fileId = null;
+            });
+          } else {
+            // No prior nominee — reset form to the "no nominee" empty state.
+            _resetToInitialState();
+          }
           successMessage(context, 'Esign Cancellation Success');
-          provider.fetchNomineeStatus();
+          // _loadNomineeStatus() internally calls provider.fetchNomineeStatus().
+          await _loadNomineeStatus();
         } else {
           warningMessage(context, 'Esign Cancellation Failed');
         }
@@ -1278,6 +1664,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   Widget _buildChoiceSection(
       Color primaryColor, Color textColor, Color subtitleColor, Color borderColor) {
     final isEdit = _hasExistingNominee;
+    final disabledReason = _editDisabledReason();
+    final canEdit = disabledReason == null;
     final cardBg = resolveThemeColor(context,
         dark: MyntColors.cardDark, light: MyntColors.card);
     final hoverBg = resolveThemeColor(context,
@@ -1295,52 +1683,62 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         const SizedBox(height: 12),
         Row(
           children: [
-            _buildChoiceButton(
-              icon: isEdit ? Icons.edit_outlined : Icons.shield_outlined,
-              label: isEdit ? 'Edit your nominee' : 'Add Nominee',
-              subtitle: isEdit ? 'Update nominee details' : 'Secure your account now',
-              isSelected: _yesOrNo == 'yes',
-              isPrimary: true,
-              primaryColor: primaryColor,
-              textColor: textColor,
-              subtitleColor: subtitleColor,
-              borderColor: borderColor,
-              cardBg: cardBg,
-              hoverBg: hoverBg,
-              onTap: () {
-                setState(() {
-                  if (_yesOrNo == 'yes') {
-                    _yesOrNo = null;
-                  } else {
-                    _yesOrNo = 'yes';
-                    _activePanel = 0;
-                  }
-                });
-              },
-            ),
-            if (!isEdit) ...[
-              const SizedBox(width: 16),
+            _gatedTooltip(
               _buildChoiceButton(
-                icon: Icons.schedule_outlined,
-                label: 'Skip for now',
-                subtitle: 'I\'ll do it later',
-                isSelected: _yesOrNo == 'no',
-                isPrimary: false,
+                icon: isEdit ? Icons.edit_outlined : Icons.shield_outlined,
+                label: isEdit ? 'Edit your nominee' : 'Add Nominee',
+                subtitle: isEdit ? 'Update nominee details' : 'Secure your account now',
+                isSelected: _yesOrNo == 'yes',
+                isPrimary: true,
                 primaryColor: primaryColor,
                 textColor: textColor,
                 subtitleColor: subtitleColor,
                 borderColor: borderColor,
                 cardBg: cardBg,
                 hoverBg: hoverBg,
-                onTap: () {
-                  setState(() {
-                    if (_yesOrNo == 'no') {
-                      _yesOrNo = null;
-                    } else {
-                      _yesOrNo = 'no';
-                    }
-                  });
-                },
+                onTap: !canEdit
+                    ? null
+                    : () {
+                        setState(() {
+                          if (_yesOrNo == 'yes') {
+                            _yesOrNo = null;
+                          } else {
+                            _yesOrNo = 'yes';
+                            _activePanel = 0;
+                          }
+                        });
+                      },
+              ),
+              disabledReason,
+            ),
+            if (!isEdit) ...[
+              const SizedBox(width: 16),
+              _gatedTooltip(
+                _buildChoiceButton(
+                  icon: Icons.schedule_outlined,
+                  label: 'Skip for now',
+                  subtitle: 'I\'ll do it later',
+                  isSelected: _yesOrNo == 'no',
+                  isPrimary: false,
+                  primaryColor: primaryColor,
+                  textColor: textColor,
+                  subtitleColor: subtitleColor,
+                  borderColor: borderColor,
+                  cardBg: cardBg,
+                  hoverBg: hoverBg,
+                  onTap: !canEdit
+                      ? null
+                      : () {
+                          setState(() {
+                            if (_yesOrNo == 'no') {
+                              _yesOrNo = null;
+                            } else {
+                              _yesOrNo = 'no';
+                            }
+                          });
+                        },
+                ),
+                disabledReason,
               ),
             ],
           ],
@@ -1361,7 +1759,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     required Color borderColor,
     required Color cardBg,
     required Color hoverBg,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
   }) {
     final selectedBg = cardBg;
 
@@ -1432,11 +1830,13 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   //  PINCODE AUTO-FETCH
   Future<void> _fetchPincodeData(
     String pincode,
+    TextEditingController pincodeCtrl,
     TextEditingController cityCtrl,
     TextEditingController stateCtrl,
     TextEditingController countryCtrl,
   ) async {
     if (pincode.length != 6) return;
+    setState(() => _pincodeLoading.add(pincodeCtrl));
     try {
       final uri = Uri.parse('https://api.postalpincode.in/pincode/$pincode');
       final res = await http.get(uri);
@@ -1447,13 +1847,31 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
         if (postOffices.isNotEmpty) {
           final po = postOffices[0];
           setState(() {
-            cityCtrl.text = po['District']?.toString() ?? '';
+            cityCtrl.text = po['Division']?.toString() ?? '';
             stateCtrl.text = po['State']?.toString() ?? '';
             countryCtrl.text = po['Country']?.toString() ?? 'India';
           });
         }
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _pincodeLoading.remove(pincodeCtrl));
+    }
+  }
+
+  Widget? _pincodeSuffix(TextEditingController pincodeCtrl, Color subtitleColor) {
+    if (!_pincodeLoading.contains(pincodeCtrl)) return null;
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          valueColor: AlwaysStoppedAnimation<Color>(subtitleColor),
+        ),
+      ),
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1482,10 +1900,11 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
               _mobile1, _email1, _proofType1,
               (t) => setState(() => _proofType1 = t), _proofValue1,
               _guardianName1, _guardianDob1,
-              (d) => setState(() => _guardianDob1 = d),
+              _onGuardianDobChanged(1),
               _guardianRelation1,
               (r) => setState(() => _guardianRelation1 = r),
-              _guardianMobile1,
+              _guardianAddress1, _guardianPincode1, _guardianCity1,
+              _guardianState1, _guardianCountry1,
               textColor, subtitleColor, borderColor, primaryColor,
             ),
           if (_activePanel == 1 && _nomineeCount >= 2)
@@ -1497,10 +1916,11 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
               _mobile2, _email2, _proofType2,
               (t) => setState(() => _proofType2 = t), _proofValue2,
               _guardianName2, _guardianDob2,
-              (d) => setState(() => _guardianDob2 = d),
+              _onGuardianDobChanged(2),
               _guardianRelation2,
               (r) => setState(() => _guardianRelation2 = r),
-              _guardianMobile2,
+              _guardianAddress2, _guardianPincode2, _guardianCity2,
+              _guardianState2, _guardianCountry2,
               textColor, subtitleColor, borderColor, primaryColor,
             ),
           if (_activePanel == 2 && _nomineeCount >= 3)
@@ -1512,10 +1932,11 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
               _mobile3, _email3, _proofType3,
               (t) => setState(() => _proofType3 = t), _proofValue3,
               _guardianName3, _guardianDob3,
-              (d) => setState(() => _guardianDob3 = d),
+              _onGuardianDobChanged(3),
               _guardianRelation3,
               (r) => setState(() => _guardianRelation3 = r),
-              _guardianMobile3,
+              _guardianAddress3, _guardianPincode3, _guardianCity3,
+              _guardianState3, _guardianCountry3,
               textColor, subtitleColor, borderColor, primaryColor,
             ),
 
@@ -1637,7 +2058,12 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       _guardianName2.text = _guardianName3.text;
       _guardianDob2 = _guardianDob3;
       _guardianRelation2 = _guardianRelation3;
-      _guardianMobile2.text = _guardianMobile3.text;
+      _guardianAddress2.text = _guardianAddress3.text;
+      _guardianPincode2.text = _guardianPincode3.text;
+      _guardianCity2.text = _guardianCity3.text;
+      _guardianState2.text = _guardianState3.text;
+      _guardianCountry2.text = _guardianCountry3.text;
+      _guardianDocFile2 = _guardianDocFile3;
       _clearNominee3();
       _nomineeCount = 2;
     } else {
@@ -1653,6 +2079,15 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       _email2.clear();
       _proofType2 = null;
       _proofValue2.clear();
+      _guardianName2.clear();
+      _guardianDob2 = null;
+      _guardianRelation2 = null;
+      _guardianAddress2.clear();
+      _guardianPincode2.clear();
+      _guardianCity2.clear();
+      _guardianState2.clear();
+      _guardianCountry2.clear();
+      _guardianDocFile2 = null;
       _percent1.text = '100';
       _nomineeCount = 1; // ← was missing: tab stayed visible without this
     }
@@ -1671,6 +2106,15 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     _email3.clear();
     _proofType3 = null;
     _proofValue3.clear();
+    _guardianName3.clear();
+    _guardianDob3 = null;
+    _guardianRelation3 = null;
+    _guardianAddress3.clear();
+    _guardianPincode3.clear();
+    _guardianCity3.clear();
+    _guardianState3.clear();
+    _guardianCountry3.clear();
+    _guardianDocFile3 = null;
   }
 
   /// Returns true if the nominee at [index] (0, 1, 2) has all required fields filled.
@@ -1714,64 +2158,82 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
   }
 
   Widget _buildActionButtons(Color primaryColor, Color subtitleColor, Color borderColor) {
+    final disabledReason = _editDisabledReason();
+    final canEdit = disabledReason == null;
     return Wrap(
       spacing: 12,
       runSpacing: 8,
       children: [
         // + Add 2nd Nominee
         if (_nomineeCount < 2)
-          OutlinedButton(
-            onPressed: _isNomineeFilled(0)
-                ? () => setState(() {
-                      _nomineeCount = 2;
-                      _activePanel = 1;
-                      _percent1.text = '50';
-                      _percent2.text = '50';
-                    })
-                : () {
-                    error(context, 'Please fill all required fields for 1st nominee to add another');
-                  },
-            style: OutlinedButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4)),
-              side: BorderSide(color: primaryColor),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          _gatedTooltip(
+            OutlinedButton(
+              onPressed: !canEdit
+                  ? null
+                  : (_isNomineeFilled(0)
+                      ? () => setState(() {
+                            _nomineeCount = 2;
+                            _activePanel = 1;
+                            _percent1.text = '50';
+                            _percent2.text = '50';
+                          })
+                      : () {
+                          error(context, 'Please fill all required fields for 1st nominee to add another');
+                        }),
+              style: OutlinedButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4)),
+                side: BorderSide(color: primaryColor),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              ),
+              child: Text('+ Add 2nd Nominee',
+                  style: MyntWebTextStyles.bodySmall(context,
+                          color: primaryColor, fontWeight: MyntFonts.semiBold)
+                      .copyWith(decoration: TextDecoration.none)),
             ),
-            child: Text('+ Add 2nd Nominee',
-                style: MyntWebTextStyles.bodySmall(context,
-                    color: primaryColor, fontWeight: MyntFonts.semiBold)
-                    .copyWith(decoration: TextDecoration.none)),
+            disabledReason,
           ),
 
         // + Add 3rd Nominee
         if (_nomineeCount == 2)
-          OutlinedButton(
-            onPressed: _isNomineeFilled(1)
-                ? () => setState(() {
-                      _nomineeCount = 3;
-                      _activePanel = 2;
-                    })
-                : () {
-                    error(context, 'Please fill all required fields for 2nd nominee to add another');
-                  },
-            style: OutlinedButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4)),
-              side: BorderSide(color: primaryColor),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          _gatedTooltip(
+            OutlinedButton(
+              onPressed: !canEdit
+                  ? null
+                  : (_isNomineeFilled(1)
+                      ? () => setState(() {
+                            _nomineeCount = 3;
+                            _activePanel = 2;
+                          })
+                      : () {
+                          error(context, 'Please fill all required fields for 2nd nominee to add another');
+                        }),
+              style: OutlinedButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4)),
+                side: BorderSide(color: primaryColor),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              ),
+              child: Text('+ Add 3rd Nominee',
+                  style: MyntWebTextStyles.bodySmall(context,
+                          color: primaryColor, fontWeight: MyntFonts.semiBold)
+                      .copyWith(decoration: TextDecoration.none)),
             ),
-            child: Text('+ Add 3rd Nominee',
-                style: MyntWebTextStyles.bodySmall(context,
-                    color: primaryColor, fontWeight: MyntFonts.semiBold)
-                    .copyWith(decoration: TextDecoration.none)),
+            disabledReason,
           ),
 
         // Continue button
-        ElevatedButton(
-          onPressed: _loading ? null : _submitNominee,
+        _gatedTooltip(
+          ElevatedButton(
+          onPressed: (_loading || !canEdit) ? null : _submitNominee,
           style: ElevatedButton.styleFrom(
             backgroundColor: resolveThemeColor(context,
             dark: MyntColors.secondary, light: MyntColors.primary),
+            disabledBackgroundColor:
+                resolveThemeColor(context,
+                    dark: MyntColors.secondary, light: MyntColors.primary)
+                    .withValues(alpha: 0.4),
+            disabledForegroundColor: Colors.white70,
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(4)),
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
@@ -1786,6 +2248,8 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                   style: MyntWebTextStyles.bodySmall(context,
                       color: Colors.white, fontWeight: MyntFonts.semiBold)
                       .copyWith(decoration: TextDecoration.none)),
+        ),
+          disabledReason,
         ),
       ],
     );
@@ -1820,7 +2284,11 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
     ValueChanged<DateTime?> onGuardianDobChanged,
     String? guardianRelation,
     ValueChanged<String?> onGuardianRelationChanged,
-    TextEditingController guardianMobileCtrl,
+    TextEditingController guardianAddressCtrl,
+    TextEditingController guardianPincodeCtrl,
+    TextEditingController guardianCityCtrl,
+    TextEditingController guardianStateCtrl,
+    TextEditingController guardianCountryCtrl,
     Color textColor,
     Color subtitleColor,
     Color borderColor,
@@ -2044,13 +2512,14 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                       borderColor, primaryColor,
                       keyboardType: TextInputType.number,
                       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      suffixIcon: _pincodeSuffix(pincodeCtrl, subtitleColor),
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Please enter pincode';
                         if (!RegExp(r'^\d{6}$').hasMatch(v)) return 'Pincode must be exactly 6 digits';
                         return null;
                       },
                       // Auto-fetch city, state, country when 6 digits entered
-                      onChanged: (v) => _fetchPincodeData(v, cityCtrl, stateCtrl, countryCtrl))),
+                      onChanged: (v) => _fetchPincodeData(v, pincodeCtrl, cityCtrl, stateCtrl, countryCtrl))),
               const SizedBox(width: 12),
               Expanded(
                   child: _buildTextField(
@@ -2130,7 +2599,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
                 child: _buildDropdownField(
                   'Guardian relationship *',
                   guardianRelation,
-                  _relations,
+                  _guardianRelations,
                   onGuardianRelationChanged,
                   textColor,
                   subtitleColor,
@@ -2141,39 +2610,129 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
             ],
           ),
           const SizedBox(height: 12),
+          _buildTextField(
+            'Address *',
+            guardianAddressCtrl,
+            textColor,
+            subtitleColor,
+            borderColor,
+            primaryColor,
+            validator: _requiredFieldValidator('guardian address'),
+          ),
+          const SizedBox(height: 12),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: _buildTextField(
-                  'Guardian mobile *',
-                  guardianMobileCtrl,
+                  'Pincode *',
+                  guardianPincodeCtrl,
                   textColor,
                   subtitleColor,
                   borderColor,
                   primaryColor,
-                  keyboardType: TextInputType.phone,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(10),
-                  ],
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  suffixIcon: _pincodeSuffix(guardianPincodeCtrl, subtitleColor),
                   validator: (v) {
-                    if (v == null || v.isEmpty) return 'Please enter guardian mobile number';
-                    if (v.length < 10) return 'Mobile number must be 10 digits';
-                    if (!RegExp(r'^[6-9]\d{9}$').hasMatch(v)) {
-                      return 'Mobile number must start with 6, 7, 8 or 9';
-                    }
+                    if (v == null || v.trim().isEmpty) return 'Please enter pincode';
+                    if (!RegExp(r'^\d{6}$').hasMatch(v)) return 'Pincode must be exactly 6 digits';
                     return null;
                   },
+                  onChanged: (v) => _fetchPincodeData(
+                      v, guardianPincodeCtrl, guardianCityCtrl, guardianStateCtrl, guardianCountryCtrl),
                 ),
               ),
               const SizedBox(width: 12),
-              const Expanded(child: SizedBox()),
-              const SizedBox(width: 12),
-              const Expanded(child: SizedBox()),
+              Expanded(
+                child: _buildTextField('City *', guardianCityCtrl, textColor,
+                    subtitleColor, borderColor, primaryColor,
+                    validator: _requiredFieldValidator('city')),
+              ),
             ],
           ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _buildTextField('State *', guardianStateCtrl, textColor,
+                    subtitleColor, borderColor, primaryColor,
+                    validator: _requiredFieldValidator('state')),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildTextField('Country *', guardianCountryCtrl, textColor,
+                    subtitleColor, borderColor, primaryColor,
+                    validator: _requiredFieldValidator('country')),
+              ),
+            ],
+          ),
+          if (_needsGuardianDoc(dob, guardianRelation)) ...[
+            const SizedBox(height: 16),
+            _buildGuardianDocPicker(
+                index, textColor, subtitleColor, borderColor, primaryColor),
+          ],
         ],
+      ],
+    );
+  }
+
+  Widget _buildGuardianDocPicker(
+    int slot,
+    Color textColor,
+    Color subtitleColor,
+    Color borderColor,
+    Color primaryColor,
+  ) {
+    final file = _guardianDocForSlot(slot);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Guardian Document * (PDF only, max 5 MB)',
+            style: MyntWebTextStyles.bodySmall(context,
+                color: textColor, fontWeight: MyntFonts.medium)
+                .copyWith(decoration: TextDecoration.none)),
+        const SizedBox(height: 6),
+        InkWell(
+          onTap: () => _pickGuardianDoc(slot),
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              border: Border.all(color: borderColor),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.attach_file, size: 18, color: subtitleColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    file?.name ?? 'Upload guardian document (PDF)',
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.bodySmall(context,
+                            color: file == null ? subtitleColor : textColor)
+                        .copyWith(decoration: TextDecoration.none),
+                  ),
+                ),
+                if (file != null)
+                  IconButton(
+                    icon: Icon(Icons.close, size: 18, color: subtitleColor),
+                    splashRadius: 16,
+                    tooltip: 'Remove',
+                    onPressed: () => _setGuardianDocForSlot(slot, null),
+                  )
+                else
+                  Text('Browse',
+                      style: MyntWebTextStyles.bodySmall(context,
+                              color: primaryColor,
+                              fontWeight: MyntFonts.medium)
+                          .copyWith(decoration: TextDecoration.none)),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }

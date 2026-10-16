@@ -4,7 +4,6 @@ import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
-import 'package:mynt_plus/sharedWidget/custom_text_form_field.dart';
 import 'package:mynt_plus/utils/rupee_convert_format.dart';
 
 /// Shared search bar + action buttons (Chain/Add, Refresh, Clear).
@@ -40,8 +39,8 @@ Widget buildStrategySearchSection({
               placeholder: placeholder,
               leadingIcon: assets.searchIcon,
               textCapitalization: TextCapitalization.characters,
-              inputFormatters: [UpperCaseTextFormatter()],
-              onChanged: (value) => onSearchChanged(value),
+              // Shows what the user types; search still gets uppercase.
+              onChanged: (value) => onSearchChanged(value.toUpperCase()),
               onClear: onClearSearch,
             ),
           ),

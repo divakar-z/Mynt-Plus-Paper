@@ -122,6 +122,7 @@ class WebAuthProvider extends ChangeNotifier {
   /// Toggle between OTP and TOTP mode
   void toggleTotpMode() {
     _isTotp = !_isTotp;
+    _topflow = false; // Toggling exits the TOTP setup flow back to normal entry
     otpController.clear();
     _otpError = null;
     notifyListeners();
@@ -239,6 +240,46 @@ class WebAuthProvider extends ChangeNotifier {
     return false;
   }
 
+  /// URL token-based auto-login (app.mynt.in/?uid=..&token=..).
+  ///
+  /// Validates (uid, token) against the backend and commits a session ONLY on
+  /// success. Returns true if logged in (navigation to home is triggered).
+  /// Returns false for an invalid/expired token WITHOUT modifying any stored
+  /// pref — so a wrong link can never overwrite or log out the current user.
+  Future<bool> tryUrlAutoLogin(
+      BuildContext context, String uid, String token) async {
+    _setLoading(true);
+    try {
+      final result =
+          await WebAuthApi.validateSession(clientId: uid, apiSession: token);
+
+      if (result != null && result['stat'] == 'Ok') {
+        // Validated — now (and only now) replace any existing session. Start
+        // clean so a new user never inherits the previous user's prefs.
+        await pref.clearUserSession();
+        await pref.setClientId(uid);
+        await pref.setClientSession(token);
+        if (result['uname'] != null) {
+          await pref.setClientName(result['uname']);
+        }
+        await pref.setLogout(false);
+        await pref.setMobileLogin(true);
+
+        if (context.mounted) {
+          await ref.read(authProvider).initialLoadMethods(context, "");
+        }
+        return true;
+      }
+
+      // Invalid/expired link — touch nothing; existing session stays intact.
+      return false;
+    } catch (e) {
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
   /// Web Login - Submit login credentials
   Future<bool> submitWebLogin(BuildContext context) async {
     if (!validateLogin() || !validatePassword()) {
@@ -309,11 +350,20 @@ class WebAuthProvider extends ChangeNotifier {
         mobileOrClientId: loginController.text.trim().toUpperCase(),
         source: _source,
         context: context,
+        // TOTP-setup flow → tell the backend this OTP is for TOTP setup.
+        isTotp: _topflow,
       );
 
       if (result != null && (result['stat'] == 'Ok' || (result['msg'] != null && result['msg'].toString().toLowerCase().contains('otp')))) {
         if (context.mounted) {
-          ResponsiveSnackBar.showSuccess(context, 'OTP sent successfully');
+          // _topflow is true only when the user is in the "Set up TOTP" flow,
+          // where the OTP is for identity verification before revealing the
+          // TOTP secret. Use a more specific success message in that case;
+          // regular OTP login / resend keep the generic message.
+          final successMsg = _topflow
+              ? '4-digit TOTP Setup code sent successfully'
+              : 'OTP sent successfully';
+          ResponsiveSnackBar.showSuccess(context, successMsg);
         }
         _setLoading(false);
         return true;
@@ -391,26 +441,37 @@ class WebAuthProvider extends ChangeNotifier {
           }
           notifyListeners();
           return false;
-        } else if (errorMsg.contains('otp not valid') || errorMsg.contains('invalid otp') || errorMsg.contains('invalid input')) {
-          _otpError = 'Invalid $otpTypeLabel';
-          // Check context validity before showing toast
+        } else if (errorMsg.contains('invalid user')) {
+          // OAuth: the account being logged in doesn't own the app key, so the
+          // backend rejects with "Invalid User". Show that real reason as a toast,
+          // NOT a misleading "Invalid TOTP" — the emsg ("Invalid Input : Invalid
+          // User") would otherwise be swallowed by the 'invalid input' check below.
+          // Strip the "Invalid Input :" prefix and show just "Invalid User".
+          _otpError = null;
           if (context.mounted) {
-            ResponsiveSnackBar.showWarning(context, 'Invalid $otpTypeLabel. Please try again.');
+            final reason = _mobileOtp!.emsg!.split(':').last.trim();
+            ResponsiveSnackBar.showError(context, reason);
+          }
+        } else if (errorMsg.contains('otp not valid') || errorMsg.contains('invalid otp') || errorMsg.contains('invalid input')) {
+          // API error → toaster only (consistent with login flow)
+          _otpError = null;
+          if (context.mounted) {
+            ResponsiveSnackBar.showError(context, 'Invalid $otpTypeLabel, Please Try again');
           }
         } else {
-          // Show original error message for other errors
-          _otpError = _mobileOtp!.emsg;
+          // API error → toaster only (raw emsg)
+          _otpError = null;
           if (context.mounted) {
-            ResponsiveSnackBar.showWarning(context, _mobileOtp!.emsg!);
+            ResponsiveSnackBar.showError(context, _mobileOtp!.emsg!);
           }
         }
         notifyListeners();
       } else if (_mobileOtp != null) {
-        // Fallback error message
+        // Fallback — toaster only
         final otpTypeLabel = _isTotp ? 'TOTP' : 'OTP';
-        _otpError = 'Invalid $otpTypeLabel';
+        _otpError = null;
         if (context.mounted) {
-          ResponsiveSnackBar.showWarning(context, 'Verification failed. Please try again.');
+          ResponsiveSnackBar.showError(context, 'Invalid $otpTypeLabel, Please Try again');
         }
         notifyListeners();
       }
@@ -460,7 +521,7 @@ class WebAuthProvider extends ChangeNotifier {
 
     try {
       _totpData = await WebAuthApi.getOrGenerateTotp(
-        clientId: loginController.text.trim().toUpperCase(),
+        clientId: _mobileOtp?.clientid ?? loginController.text.trim().toUpperCase(),
         apiSession: _apiSession!,
         context: context,
       );
@@ -468,9 +529,39 @@ class WebAuthProvider extends ChangeNotifier {
       if (_totpData?.isValid == true) {
         _startTotpTimer();
       }
-      
+
       notifyListeners();
     } catch (e) {
+    }
+  }
+
+  /// Generate a brand-new TOTP secret key (triggered from "Generate New Key" button
+  /// shown when no existing key is set up for the user).
+  /// Returns true when a usable key came back, so the caller can report a
+  /// failure instead of leaving the user looking at an unchanged screen.
+  Future<bool> generateNewTotpKey(BuildContext context) async {
+    if (_apiSession == null) return false;
+
+    _setLoading(true);
+    try {
+      final newData = await WebAuthApi.generateTotpSecretKey(
+        clientId: _mobileOtp?.clientid ?? loginController.text.trim().toUpperCase(),
+        apiSession: _apiSession!,
+        context: context,
+      );
+
+      if (newData != null) {
+        _totpData = newData;
+        if (_totpData?.isValid == true) {
+          _startTotpTimer();
+        }
+      }
+      notifyListeners();
+      return _totpData?.isValid == true;
+    } catch (e) {
+      return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -516,7 +607,27 @@ class WebAuthProvider extends ChangeNotifier {
   void startQrLogin(BuildContext context) {
     // Stop any existing poll
     stopQrLogin();
-    
+
+    // Invalidate any previously stored UUID before generating a new one.
+    // Tells the backend to mark the old QR session as abandoned so a
+    // mobile-side confirmation of it gets rejected — closes the race
+    // where mobile holds an unconfirmed scan and the user re-enters or
+    // refreshes the QR screen on web.
+    final oldUuid = pref.pendingQrUuid;
+    if (oldUuid != null && oldUuid.isNotEmpty) {
+      // Fire-and-forget — don't block the new QR fetch.
+      WebAuthApi.invalidateQrSession(uniqueId: oldUuid);
+    }
+
+    // Fresh UUID per entry so each visit shows a newly generated QR and the
+    // poll endpoint tracks a distinct session (no stale state across re-entries).
+    _deviceUuid = uuid.v4();
+
+    // Persist the new UUID so subsequent triggers (in-app reload, browser
+    // refresh via beforeunload, crash recovery on next app boot) can find
+    // it and invalidate it server-side.
+    pref.setPendingQrUuid(_deviceUuid);
+
     // Construct QR Image URL
     // URL: {BASE_URL}/get_login_qr?unique_id={UUID}&source=WEB
     // Note: Assuming BASE_URL is https://ws.mynt.in/login based on WebAuthApi
@@ -532,6 +643,21 @@ class WebAuthProvider extends ChangeNotifier {
         }
       });
     });
+  }
+
+  /// Defensive cleanup for stale QR sessions left over from previous app
+  /// runs — e.g., browser crash, OS kill, or any path where the normal
+  /// beforeunload-based invalidate didn't fire. Called once when the
+  /// login screen mounts; safe to invoke even when no stale UUID exists.
+  void cleanupStaleQrSession() {
+    final staleUuid = pref.pendingQrUuid;
+    if (staleUuid != null && staleUuid.isNotEmpty) {
+      WebAuthApi.invalidateQrSession(uniqueId: staleUuid);
+      // Note: do NOT clear localStorage here. If user immediately enters
+      // QR again, startQrLogin will harmlessly attempt to invalidate the
+      // same UUID (idempotent on backend) and then overwrite with a new
+      // one. The clear happens only on browser refresh via beforeunload.
+    }
   }
   
   /// Stop QR Login Process
@@ -584,9 +710,39 @@ class WebAuthProvider extends ChangeNotifier {
     }
   }
 
+  /// The OAuth app key when the login is happening inside the OAuth flow — i.e.
+  /// the current URL carries a client_id. Null for normal logins.
+  String? get _oauthClientId {
+    final id = (Uri.base.queryParameters['client_id'] ?? '').trim();
+    return id.isEmpty ? null : id;
+  }
+
+  /// OAuth-flow login success: store the returned session under the OAuth-only
+  /// keys (leaving the main web session — clientId/clientSession — untouched)
+  /// and route back to the authorize screen. No full app load: we're authorising
+  /// a partner, not entering the trading app, so the main session must survive.
+  Future<void> _handleOAuthLoginSuccess(
+      BuildContext context, String token) async {
+    final clientId = _oauthClientId;
+    if (clientId == null) return;
+    await pref.setOauthSession(token);
+    if (context.mounted) {
+      context.go(
+        '${WebRoutes.oauthAuthorize}?client_id=${Uri.encodeQueryComponent(clientId)}',
+      );
+    }
+  }
+
   /// Handle successful login (direct login without OTP)
   Future<void> _handleLoginSuccess(BuildContext context) async {
     if (_mobileLogin == null) return;
+
+    // OAuth flow: keep this session out of the main web session and bounce back
+    // to the authorize screen instead of loading the trading app.
+    if (_oauthClientId != null) {
+      await _handleOAuthLoginSuccess(context, _mobileLogin!.apitoken ?? '');
+      return;
+    }
 
     await pref.setClientId(_mobileLogin!.clientid ?? '');
     await pref.setClientMob(_mobileLogin!.mobile ?? '');
@@ -606,6 +762,13 @@ class WebAuthProvider extends ChangeNotifier {
   /// Handle successful OTP verification
   Future<void> _handleOtpSuccess(BuildContext context) async {
     if (_mobileOtp == null) return;
+
+    // OAuth flow: store under the OAuth-only session keys and return to the
+    // authorize screen, leaving the main web session untouched.
+    if (_oauthClientId != null) {
+      await _handleOAuthLoginSuccess(context, _mobileOtp!.apitoken ?? '');
+      return;
+    }
 
     await pref.setClientId(_mobileOtp!.clientid ?? '');
     await pref.setClientMob(_mobileOtp!.mobile ?? '');

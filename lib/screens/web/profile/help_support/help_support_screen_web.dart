@@ -6,6 +6,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
+import '../../../../sharedWidget/common_buttons_web.dart';
+import '../../../../provider/support_ticket_provider.dart';
+import '../../../../models/support_ticket_model/support_ticket.dart';
+import 'my_tickets_view.dart';
+import 'ticket_detail_view.dart';
+import 'raise_ticket_dialog.dart';
 import '../../../../sharedWidget/common_text_fields_web.dart';
 import '../../../../sharedWidget/snack_bar.dart';
 
@@ -31,6 +37,12 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
     _phoneController = TextEditingController();
     _emailController = TextEditingController();
     _locationController = TextEditingController();
+
+    // After the first frame: `ref.read` during initState touches a provider
+    // that is still being wired up, and notifying listeners mid-build throws.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(supportTicketProvider).loadTickets();
+    });
   }
 
   @override
@@ -95,30 +107,15 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
         dark: MyntColors.primaryDark, light: MyntColors.primary);
     final iconColor = resolveThemeColor(context,
         dark: MyntColors.iconDark, light: MyntColors.icon);
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: _buildCustomerServices(context, borderColor, primaryColor, iconColor),
-                ),
-                // const SizedBox(width: 24),
-                // Expanded(
-                //   flex: 2,
-                //   child: _buildEnquireForm(context, borderColor, primaryColor, iconColor),
-                // ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    // Deliberately not a SingleChildScrollView. Inside one the height is
+    // unbounded, so nothing below can use Expanded and the tickets table would
+    // only ever be as tall as its content — Orders and Positions both fill the
+    // panel. Contact & Help scrolls on its own instead, since that tab really
+    // is a column of stacked cards.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
+      child: _buildCustomerServices(
+          context, borderColor, primaryColor, iconColor),
     );
   }
 
@@ -129,10 +126,15 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
     );
   }
 
+  /// One screen: the contact cards, then the client's tickets under them.
+  ///
+  /// No tabs. Contact details are reference material a client reads once, and
+  /// hiding the ticket list behind a tab meant the thing they came for was
+  /// never the thing on screen.
   Widget _buildCustomerServices(
       BuildContext context, Color borderColor, Color primaryColor, Color iconColor) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
           'Customer Support & Assistance',
@@ -143,7 +145,142 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
             lightColor: MyntColors.textPrimary,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
+        _buildContactRow(context, borderColor, primaryColor),
+        const SizedBox(height: 20),
+        _buildMyTicketsHeader(context, primaryColor),
+        const SizedBox(height: 12),
+        // Expanded, so the table fills whatever the cards leave rather than
+        // sizing to its rows.
+        Expanded(
+          child: _buildMyTicketsTab(context, borderColor, primaryColor),
+        ),
+      ],
+    );
+  }
+
+  /// The three contact cards, side by side.
+  ///
+  /// HQ and Address are deliberately not here. A logged-in client is not
+  /// looking up the office to visit it, and the pair took a full row the ticket
+  /// list now uses. Both are still built by [_buildHqAndAddressCard] if they
+  /// are ever wanted back.
+  ///
+  /// `IntrinsicHeight` keeps the three the same height: the e-mail card is the
+  /// tallest and the two phone cards would otherwise stop short of it.
+  Widget _buildContactRow(
+      BuildContext context, Color borderColor, Color primaryColor) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: _buildContactCard(
+              context,
+              borderColor: borderColor,
+              primaryColor: primaryColor,
+              icon: Icons.headset_mic_outlined,
+              title: 'Sales & Support',
+              timing: 'Timing 09:00 AM To 11:00 PM',
+              phone: '93 8010 8010',
+              phoneRaw: '9380108010',
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _buildContactCard(
+              context,
+              borderColor: borderColor,
+              primaryColor: primaryColor,
+              icon: Icons.support_agent,
+              title: 'Dealing Desk',
+              timing: 'Timing 9:00 AM To 11:55 PM',
+              phone: '93 8030 8030',
+              phoneRaw: '9380308030',
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _buildEmailAndSocialCard(context, borderColor, primaryColor),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Section heading for the ticket list, with the primary action opposite it.
+  Widget _buildMyTicketsHeader(BuildContext context, Color primaryColor) {
+    return Row(
+      children: [
+        Text(
+          'My Tickets',
+          style: MyntWebTextStyles.title(
+            context,
+            fontWeight: MyntFonts.semiBold,
+            darkColor: MyntColors.textPrimaryDark,
+            lightColor: MyntColors.textPrimary,
+          ),
+        ),
+        const Spacer(),
+        MyntPrimaryButton(
+          label: 'Raise a Ticket',
+          icon: Icons.add,
+          onPressed: _openRaiseTicket,
+        ),
+      ],
+    );
+  }
+
+  /// Opens one ticket in the app's sidebar.
+  ///
+  /// The fetch starts before the panel opens so the header shows the number,
+  /// subject and status immediately — taken from the row already on screen —
+  /// rather than sliding in over a spinner.
+  void _openTicket(SupportTicket ticket, Color borderColor, Color primaryColor) {
+    ref.read(supportTicketProvider).openTicket(ticket.id, preview: ticket);
+    showTicketDetailPanel(
+      ref,
+      borderColor: borderColor,
+      primaryColor: primaryColor,
+      // Cleanup only — the panel closes itself, since only a context inside
+      // the drawer can pop it.
+      //
+      // Tapping outside dismisses the drawer without running this, so the reply
+      // draft would survive. It does not matter: `openTicket` clears the draft
+      // too, so the next ticket opened starts empty either way.
+      onClose: () => ref.read(supportTicketProvider).closeTicket(),
+    );
+  }
+
+  /// The client's own tickets: filters, search and the list.
+  Widget _buildMyTicketsTab(
+      BuildContext context, Color borderColor, Color primaryColor) {
+    final provider = ref.watch(supportTicketProvider);
+
+    return MyTicketsView(
+      borderColor: borderColor,
+      primaryColor: primaryColor,
+      tickets: provider.tickets,
+      isLoading: provider.loadingTickets,
+      errorMessage: provider.ticketsError,
+      hasMore: provider.hasMoreTickets,
+      total: provider.ticketsTotal,
+      isLoadingMore: provider.loadingMore,
+      onRetry: () => provider.loadTickets(force: true),
+      onLoadMore: provider.loadMoreTickets,
+      onOpenTicket: (ticket) => _openTicket(ticket, borderColor, primaryColor),
+    );
+  }
+
+  /// Retired with the tabs. Kept because it is the only caller of
+  /// [_buildHqAndAddressCard], and both come back together if the office
+  /// details are ever wanted on this screen again.
+  // ignore: unused_element
+  Widget _buildContactAndHelpTab(
+      BuildContext context, Color borderColor, Color primaryColor) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -182,6 +319,11 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
         _buildEmailAndSocialCard(context, borderColor, primaryColor),
       ],
     );
+  }
+
+  /// Opens the raise-a-ticket form.
+  void _openRaiseTicket() {
+    showRaiseTicketDialog(context, ref: ref, screen: '/help-support');
   }
 
   Widget _buildContactCard(
@@ -345,12 +487,16 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
               children: [
                 Icon(Icons.email_outlined, size: 18, color: primaryColor),
                 const SizedBox(width: 8),
-                Text(
-                  'assist@zebuetrade.com',
-                  style: MyntWebTextStyles.body(
-                    context,
-                    fontWeight: MyntFonts.medium,
-                    color: primaryColor,
+                // Expanded, or the address is measured at its natural width and
+                // overflows the card as soon as the panel is dragged narrow.
+                Expanded(
+                  child: Text(
+                    'assist@zebuetrade.com',
+                    style: MyntWebTextStyles.body(
+                      context,
+                      fontWeight: MyntFonts.medium,
+                      color: primaryColor,
+                    ),
                   ),
                 ),
               ],
@@ -363,21 +509,31 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
               children: [
                 Icon(Icons.email_outlined, size: 18, color: primaryColor),
                 const SizedBox(width: 8),
-                Text(
-                  'Investor grievance: ',
-                  style: MyntWebTextStyles.body(
-                    context,
-                    fontWeight: MyntFonts.regular,
-                    darkColor: MyntColors.textSecondaryDark,
-                    lightColor: MyntColors.textSecondary,
-                  ),
-                ),
-                Text(
-                  'grievance@zebuetrade.com',
-                  style: MyntWebTextStyles.body(
-                    context,
-                    fontWeight: MyntFonts.medium,
-                    color: primaryColor,
+                // A Wrap, not a Row: when the two do not fit on one line the
+                // address drops whole onto the next instead of being broken
+                // across the middle of the domain.
+                Expanded(
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        'Investor grievance: ',
+                        style: MyntWebTextStyles.body(
+                          context,
+                          fontWeight: MyntFonts.regular,
+                          darkColor: MyntColors.textSecondaryDark,
+                          lightColor: MyntColors.textSecondary,
+                        ),
+                      ),
+                      Text(
+                        'grievance@zebuetrade.com',
+                        style: MyntWebTextStyles.body(
+                          context,
+                          fontWeight: MyntFonts.medium,
+                          color: primaryColor,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -394,10 +550,14 @@ class _HelpSupportScreenWebState extends ConsumerState<HelpSupportScreenWeb> {
             ),
           ),
           const SizedBox(height: 12),
-          Row(
+          // Five fixed-width icons are a hard 220px in a Row, which overflows
+          // the same narrow card the addresses above do.
+          Wrap(
+            spacing: 16,
+            runSpacing: 12,
             children: _socialMediaIcons.map((item) {
               return Padding(
-                padding: const EdgeInsets.only(right: 16),
+                padding: EdgeInsets.zero,
                 child: InkWell(
                   onTap: () => launchUrl(
                     Uri.parse(item['link']!),

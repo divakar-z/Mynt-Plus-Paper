@@ -1,12 +1,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:mynt_plus/screens/Mobile/desk_reports/bottom_sheets/pledge_list.dart';
-import 'package:mynt_plus/screens/web/profile/pledge/pledge_unpledge_screen.dart';
+import '../models/scanner_model/scan_explain.dart' show ExplainKey, ExplainScope;
 import '../screens/web/customizable_split_home_screen.dart';
+// ScannerSubPage is re-exported via the import above (no separate file).
 import '../screens/splash_screen.dart';
+import '../screens/web/chart_engine/chart_popout_screen.dart';
 import '../screens/web/authentication/login/login_web.dart';
-import '../screens/web/scalper/scalper_screen_web.dart';
+import '../screens/web/oauth/oauth_login_screen.dart';
+import '../screens/web/public/pnl_insights_screen.dart';
 import '../utils/custom_navigator.dart';
 import '../main.dart' show registerWebNavigatorKey;
 
@@ -34,15 +36,42 @@ class WebRoutes {
   static const String funds = '/funds';
   static const String optionChain = '/option-chain';
   static const String ipo = '/ipo';
+  static const String bonds = '/bonds';
   static const String mutualFunds = '/mutual-funds';
   static const String reports = '/reports';
   static const String profile = '/profile';
+  static const String myAccount = '/my-account';
   static const String portfolioAnalysis = '/portfolio-analysis';
   static const String strategyBuilder = '/strategy-builder';
+  static const String instaOptions = '/insta-options';
   static const String scalper = '/scalper';
+  static const String charts = '/charts';
   static const String tradingViewWebHook = '/tradingview-webhook';
   static const String basketDashboard = '/basket-dashboard';
   static const String pledge = '/pledge';
+  static const String caBuyback = '/corporate-actions';
+  static const String refer = '/refer';
+  static const String helpSupport = '/help-support';
+  static const String settings = '/settings';
+  static const String notification = '/notification';
+  static const String oauthAuthorize = '/OAuthlogin/authorize/oauth';
+  static const String dailyPnl = '/dailypnl';
+  /// Detached, view-only chart window opened via `window.open` from the chart
+  /// top bar. Standalone (no trading shell); reads exch/token/tsym/tf/n from
+  /// query params. See [ChartPopoutScreen].
+  static const String chartPopout = '/chart-popout';
+  static const String scanner = '/scanner';
+  static const String scannerSymbols = '/scanner/symbols';
+  static const String scannerScanners = '/scanner/scanners';
+  static const String scannerFundamentals = '/scanner/fundamentals';
+  static const String scannerCustom = '/scanner/custom';
+  /// Scan-explanation deep links. `:code` is the built-in scanner code
+  /// (`RSI14_OVERSOLD` etc.); `:cid` is the saved custom scan numeric id.
+  static const String scannerExplainBuiltin =
+      '/scanner/explain/builtin/:code/:ticker';
+  static const String scannerExplainCustom =
+      '/scanner/explain/custom/:cid/:ticker';
+  static const String orderflow = '/orderflow';
 }
 
 /// Global GoRouter instance for web
@@ -63,6 +92,19 @@ void initializeWebRouter() {
     navigatorKey: webNavigatorKey,
     initialLocation: WebRoutes.splash,
     debugLogDiagnostics: kDebugMode,
+    // Token-based auto-login entry. Links of the form
+    //   /?uid=<clientId>&token=<noren-session>
+    // must run through Splash (which validates the session via checkAutoLogin),
+    // not render the home route ('/') directly. main.dart has already persisted
+    // uid/token to prefs by the time this runs; redirecting to /splash also drops
+    // the session token from the browser address bar / history.
+    redirect: (context, state) {
+      final q = state.uri.queryParameters;
+      final hasAutoLogin = (q['uid']?.trim().isNotEmpty ?? false) &&
+          (q['token']?.trim().isNotEmpty ?? false);
+      if (hasAutoLogin) return WebRoutes.splash;
+      return null;
+    },
     routes: [
       // Splash screen - entry point
       GoRoute(
@@ -130,6 +172,14 @@ void initializeWebRouter() {
         ),
       ),
 
+      // Bonds screen
+      GoRoute(
+        path: WebRoutes.bonds,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.bond,
+        ),
+      ),
+
       // Mutual Funds screen
       GoRoute(
         path: WebRoutes.mutualFunds,
@@ -154,11 +204,27 @@ void initializeWebRouter() {
         ),
       ),
 
+      // My Account screen
+      GoRoute(
+        path: WebRoutes.myAccount,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.myAccount,
+        ),
+      ),
+
       // Strategy Builder screen - wrapped in home screen for session validation & web layout
       GoRoute(
         path: WebRoutes.strategyBuilder,
         builder: (context, state) => const CustomizableSplitHomeScreen(
           initialRightPanel: ScreenTypeParam.strategyBuilder,
+        ),
+      ),
+
+      // InstaOptions Analytics — 9 read-only OI/analytics sub-screens in one right panel
+      GoRoute(
+        path: WebRoutes.instaOptions,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.instaOptions,
         ),
       ),
 
@@ -178,14 +244,101 @@ void initializeWebRouter() {
         ),
       ),
 
-      // Scalper screen - standalone full-screen trading interface
+      // Scalper screen - embedded in home layout (full-width, watchlist hidden)
       GoRoute(
         path: WebRoutes.scalper,
-        builder: (context, state) => const ScalperScreenWeb(),
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scalper,
+        ),
       ),
+      // Chart Engine — multi-chart application (Phase 1 = single pane)
+      GoRoute(
+        path: WebRoutes.charts,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.charts,
+        ),
+      ),
+      // Pledge & Unpledge — embedded in home layout
       GoRoute(
         path: WebRoutes.pledge,
-        builder: (context, state) => const PledgenUnpledge( ddd: 'args', ),
+       builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.pledgeUnpledge,
+        ),
+      ),
+
+      // Corporate Actions (Buyback / Delisting / Takeover / OFS)
+      GoRoute(
+        path: WebRoutes.caBuyback,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.caBuyback,
+        ),
+      ),
+
+      // Refer
+      GoRoute(
+        path: WebRoutes.refer,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.refer,
+        ),
+      ),
+
+      // Help & Support
+      GoRoute(
+        path: WebRoutes.helpSupport,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.helpSupport,
+        ),
+      ),
+
+      // Settings
+      GoRoute(
+        path: WebRoutes.settings,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.settings,
+        ),
+      ),
+
+      // Notification
+      GoRoute(
+        path: WebRoutes.notification,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.notification,
+        ),
+      ),
+
+      // OAuth login screen - partner apps direct users here with ?client_id=<id>
+      GoRoute(
+        path: WebRoutes.oauthAuthorize,
+        builder: (context, state) => OAuthLoginScreen(
+          clientId: state.uri.queryParameters['client_id'],
+        ),
+      ),
+
+      // Public PnL viewer — opened by anyone with a share link.
+      // No session required; renders standalone (no trading shell).
+      GoRoute(
+        path: WebRoutes.dailyPnl,
+        builder: (context, state) => PnlInsightsScreen(
+          ucode: state.uri.queryParameters['ucode'],
+        ),
+      ),
+
+      // Detached chart popout — a second Flutter window opened from the chart
+      // top bar. Renders standalone (no trading shell); ticks come from the
+      // alternate ws.zebull.in feed so the main window keeps its go.mynt.in
+      // socket. jKey is never in the URL. See [ChartPopoutScreen].
+      GoRoute(
+        path: WebRoutes.chartPopout,
+        builder: (context, state) {
+          final q = state.uri.queryParameters;
+          return ChartPopoutScreen(
+            exch: (q['exch'] ?? '').trim(),
+            token: (q['token'] ?? '').trim(),
+            tsym: (q['tsym'] ?? '').trim(),
+            timeframeMinutes: int.tryParse((q['tf'] ?? '').trim()) ?? 5,
+            slot: int.tryParse((q['n'] ?? '').trim()) ?? 1,
+          );
+        },
       ),
 
       // Profile details screen (also handles Digilocker callback with ?code=&state=)
@@ -200,6 +353,86 @@ void initializeWebRouter() {
             digilockerState: stateParam,
           );
         },
+      ),
+
+      // Scanner shell + 4 sub-page deep links
+      GoRoute(
+        path: WebRoutes.scanner,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+        ),
+      ),
+      // Legacy scanner sub-page URLs — the underlying enum values are
+      // commented out (Symbols / Scanners / Fundamentals tabs retired), so
+      // these routes now redirect to the closest active tab so existing
+      // bookmarks continue to work.
+      GoRoute(
+        path: WebRoutes.scannerSymbols,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.scannersNew,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerScanners,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.scannersNew,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerFundamentals,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.fundamentalsNew,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerCustom,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.scanner,
+          initialScannerSubPage: ScannerSubPage.customScans,
+        ),
+      ),
+      GoRoute(
+        path: WebRoutes.scannerExplainBuiltin,
+        builder: (context, state) {
+          final code = state.pathParameters['code'] ?? '';
+          final ticker = state.pathParameters['ticker'] ?? '';
+          return CustomizableSplitHomeScreen(
+            initialRightPanel: ScreenTypeParam.scanner,
+            initialScannerSubPage: ScannerSubPage.scannersNew,
+            initialExplainArgs: ExplainKey(
+              scope: ExplainScope.builtin,
+              id: code,
+              ticker: ticker,
+            ),
+          );
+        },
+      ),
+      GoRoute(
+        path: WebRoutes.scannerExplainCustom,
+        builder: (context, state) {
+          final cid = state.pathParameters['cid'] ?? '';
+          final ticker = state.pathParameters['ticker'] ?? '';
+          return CustomizableSplitHomeScreen(
+            initialRightPanel: ScreenTypeParam.scanner,
+            initialScannerSubPage: ScannerSubPage.customScans,
+            initialExplainArgs: ExplainKey(
+              scope: ExplainScope.custom,
+              id: cid,
+              ticker: ticker,
+            ),
+          );
+        },
+      ),
+
+      // Orderflow footprint chart
+      GoRoute(
+        path: WebRoutes.orderflow,
+        builder: (context, state) => const CustomizableSplitHomeScreen(
+          initialRightPanel: ScreenTypeParam.orderflow,
+        ),
       ),
     ],
 

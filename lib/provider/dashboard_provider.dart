@@ -81,25 +81,65 @@ class DashboardProvider extends DefaultChangeNotifier {
   // Portfolio getters
   String? get portfolioError => _portfolioError;
 
+  /// Loads Portfolio Insights.
+  ///
+  /// Ends in exactly one of three states, which the screen renders separately:
+  ///   loading            - [isPortfolioLoading]
+  ///   failed             - [portfolioError] set, data null. Offer a retry.
+  ///   empty / loaded     - [portfolioError] null; data null means the server
+  ///                        said there is nothing to analyse.
+  ///
+  /// The in-flight guard matters: the screen fetches from its own initState,
+  /// so without it a second caller fired a duplicate request whose result
+  /// could overwrite the first one's.
   Future getPortfolioAnalysis() async {
+    if (_isPortfolioLoading) return;
     try {
       portfolioloader(true);
       final portfolioAnalysis = await api.fetchPortfolioAnalysis(
           "${pref.clientId}", "${pref.clientSession}");
-    if(portfolioAnalysis.message == "No data found"){
-      _portfolioAnalysis = null;
-      return;
-    }
+      if (portfolioAnalysis.message == PortfolioResponse.noDataMessage) {
+        // Genuinely nothing to show — not an error, so clear any stale one.
+        _portfolioAnalysis = null;
+        _portfolioError = null;
+        return;
+      }
       _portfolioAnalysis = portfolioAnalysis;
       _portfolioError = null;
-    } catch (e) {
-      _portfolioError = e.toString();
-      rethrow;
+    } on PortfolioAnalysisException catch (e) {
+      _portfolioAnalysis = null;
+      _portfolioError = e.message;
+    } catch (_) {
+      _portfolioAnalysis = null;
+      _portfolioError = 'Something went wrong — please try again.';
     } finally {
       portfolioloader(false);
       notifyListeners();
     }
   }
+
+  // Retired 25 Sep 2026 — kept for rollback. Left the error unread by any
+  // widget and rethrew into an unawaited call, so every failure reached the
+  // screen as a bare null and was drawn as "No Data Found".
+  // Future getPortfolioAnalysis() async {
+  //   try {
+  //     portfolioloader(true);
+  //     final portfolioAnalysis = await api.fetchPortfolioAnalysis(
+  //         "${pref.clientId}", "${pref.clientSession}");
+  //   if(portfolioAnalysis.message == "No data found"){
+  //     _portfolioAnalysis = null;
+  //     return;
+  //   }
+  //     _portfolioAnalysis = portfolioAnalysis;
+  //     _portfolioError = null;
+  //   } catch (e) {
+  //     _portfolioError = e.toString();
+  //     rethrow;
+  //   } finally {
+  //     portfolioloader(false);
+  //     notifyListeners();
+  //   }
+  // }
 
   clearPortfolioAnalysis() {
     _portfolioAnalysis = null;
@@ -1121,6 +1161,7 @@ Color getSectorAllocationColor(String sector) {
           name: fund.name,
           schemeName: scheme['schemename']?.toString() ?? fund.schemeName,
           type: fund.type,
+          oneYearCAGR: double.tryParse(scheme['1Year']?.toString() ?? '0') ?? fund.oneYearCAGR,
           fiveYearCAGR: double.tryParse(scheme['5Year']?.toString() ?? '0') ?? fund.fiveYearCAGR,
           threeYearCAGR: double.tryParse(scheme['3Year']?.toString() ?? '0') ?? fund.threeYearCAGR,
           aum: double.tryParse(scheme['AUM']?.toString() ?? '0') ?? fund.aum,
@@ -1166,6 +1207,7 @@ Color getSectorAllocationColor(String sector) {
             name: fund.name,
             schemeName: fund.schemeName,
             type: fund.type,
+            oneYearCAGR: double.tryParse(match.oneYearData ?? "0") ?? 0.0,
             fiveYearCAGR: double.tryParse(match.fIVEYEARDATA ?? "0") ?? 0.0,
             threeYearCAGR: double.tryParse(match.tHREEYEARDATA ?? "0") ?? 0.0,
             aum: fund.aum > 0 ? fund.aum : (double.tryParse(match.aUM ?? "0") ?? 0.0),
@@ -1190,6 +1232,7 @@ Color getSectorAllocationColor(String sector) {
         name: fund.name,
         schemeName: fund.schemeName,
         type: fund.type,
+        oneYearCAGR: fund.oneYearCAGR,
         fiveYearCAGR: fund.fiveYearCAGR,
         threeYearCAGR: fund.threeYearCAGR,
         aum: fund.aum,
@@ -1250,9 +1293,27 @@ Color getSectorAllocationColor(String sector) {
     }
   }
 
+  /// Returns true if the user is allowed to change [fund]'s weight in the
+  /// current strategy. When every other fund is locked, redistribution has
+  /// no target and the total would drift away from 100 — block at the call
+  /// site instead.
+  bool canChangeWeightOf(FundListModel fund) {
+    final index = _selectedFunds.indexWhere((f) => f.name == fund.name);
+    if (index == -1) return false;
+    if (_selectedFunds.length <= 1) return true;
+    for (int i = 0; i < _selectedFunds.length; i++) {
+      if (i != index && !_selectedFunds[i].isLocked) return true;
+    }
+    return false;
+  }
+
   void updateFundPercentage(FundListModel fund, double percentage) {
     final index = _selectedFunds.indexWhere((f) => f.name == fund.name);
     if (index != -1) {
+      // Safety guard: if every other fund is locked, redistribution can't
+      // bring the total back to 100. Reject silently — the UI calls
+      // [canChangeWeightOf] beforehand and surfaces a toast.
+      if (!canChangeWeightOf(fund)) return;
       final roundedPercentage = percentage.round().clamp(0, 100).toDouble();
       _selectedFunds[index].percentage = roundedPercentage;
       // Do NOT set controller.text here — _autoRedistributePercentages will

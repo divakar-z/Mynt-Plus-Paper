@@ -31,6 +31,12 @@ class FundProvider extends DefaultChangeNotifier {
   FundDetailModel? _fundDetailModel;
   FundDetailModel? get fundDetailModel => _fundDetailModel;
 
+  String get ofsBidBalance {
+    final cash = double.tryParse(_fundDetailModel?.cash ?? '0') ?? 0.0;
+    final payin = double.tryParse(_fundDetailModel?.payin ?? '0') ?? 0.0;
+    return (cash + payin).toStringAsFixed(2);
+  }
+
   final TextEditingController viewupiid = TextEditingController();
   PledgeAndUnpledgeModel? _pledgeAndUnpledgeModel;
   PledgeAndUnpledgeModel? get pledgeAndUnpledgeModel => _pledgeAndUnpledgeModel;
@@ -47,10 +53,47 @@ class FundProvider extends DefaultChangeNotifier {
   List get utlization => _utlization;
   final Ref ref;
 
-  List _listOfCredits = [];
-  List get listOfCredits => _listOfCredits;
-  List _listOfUsedMrgn = [];
-  List get listOfUsedMrgn => _listOfUsedMrgn;
+  // Derived from _fundDetailModel — no mutable list state to keep in sync.
+  // Avoids the concurrent-fetch race where two in-flight fetchFunds calls
+  // could each append to the same list and duplicate rows on screen.
+  List get listOfCredits {
+    final m = _fundDetailModel;
+    if (m == null) return const [];
+    final items = [];
+    void addIfNonZero(String? raw, String name) {
+      final v = double.tryParse(raw ?? "0.00") ?? 0;
+      if (v != 0) items.add({"value": "$v", "name": name});
+    }
+    addIfNonZero(m.cash, "Opening Balance");
+    addIfNonZero(m.payin, "Payin");
+    addIfNonZero(m.payout, "Payout");
+    addIfNonZero(m.brkcollamt, "Collateral");
+    addIfNonZero(m.unclearedcash, "Uncleared Cash");
+    addIfNonZero(m.auxDaycash, "Aux Day Cash");
+    addIfNonZero(m.auxBrkcollamt, "Aux Broker collateral");
+    addIfNonZero(m.auxUnclearedcash, "Aux Uncleared Cash");
+    addIfNonZero(m.daycash, "Day Cash");
+    addIfNonZero(m.collateral, "Collateral");
+    return items;
+  }
+
+  List get listOfUsedMrgn {
+    final m = _fundDetailModel;
+    if (m == null) return const [];
+    final items = [];
+    void addIfNonZero(String? raw, String name) {
+      final v = double.tryParse(raw ?? "0.00") ?? 0;
+      if (v != 0) items.add({"value": "$v", "name": name});
+    }
+    addIfNonZero(m.span, "Span");
+    addIfNonZero(m.expo, "Exposure");
+    addIfNonZero(m.addmrg, "Additional Margin");
+    addIfNonZero(m.premium, "Option Premium");
+    addIfNonZero(m.brokerage, "Unrealized Expenses");
+    final urmtom = double.tryParse(m.urmtom ?? "0.00") ?? 0;
+    if (urmtom > 0) items.add({"value": "$urmtom", "name": "Unrealized MTM"});
+    return items;
+  }
 
   OptionZmodel? _optionZmodel;
   OptionZmodel? get optionZmodel => _optionZmodel;
@@ -112,8 +155,6 @@ class FundProvider extends DefaultChangeNotifier {
 
   clearFunds() {
     _fundDetailModel = null;
-    _listOfCredits = [];
-    _listOfUsedMrgn = [];
     notifyListeners();
   }
 
@@ -218,14 +259,33 @@ class FundProvider extends DefaultChangeNotifier {
     await fetchOptionZ(base64Pass, context);
   }
 
-  Future<void> openOptionZInNewTab() async {
-    var enCodePass = utf8.encode(
-        'sLoginId=${pref.clientId}&sAccountId=${pref.clientId}&token=${fundHstoken!.hstk}&sBrokerId=ZEBU');
-    var base64Pass = base64Url.encode(enCodePass);
-    String url = "https://be.mynt.in/SSONew/OAuthNew?vc=instaoptions&key=$base64Pass";
-    
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  Future<void> openOptionZInNewTab() => openSsoInNewTab('instaoptions');
+
+  Future<void> openSsoInNewTab(String vc) async {
+    final String? hstk = fundHstoken?.hstk;
+    if (hstk == null || hstk.isEmpty) {
+      debugPrint("[SSO:$vc] ⛔ skipped — HS token unavailable "
+          "(fundHstoken=${fundHstoken == null ? 'null' : 'present'})");
+      return;
+    }
+    final String rawKey =
+        'sLoginId=${pref.clientId}&sAccountId=${pref.clientId}&token=$hstk&sBrokerId=ZEBU';
+    final String key = base64Url.encode(utf8.encode(rawKey));
+    final String url = "https://be.mynt.in/SSONew/OAuthNew?vc=$vc&key=$key";
+
+    // ---- Verification logs (browser console) ----
+    // debugPrint("[SSO:$vc] clientId   = ${pref.clientId}");
+    // debugPrint("[SSO:$vc] token/hstk = $hstk");
+    // debugPrint("[SSO:$vc] rawKey     = $rawKey");
+    // debugPrint("[SSO:$vc] base64 key = $key");
+    // debugPrint("[SSO:$vc] url        = $url");
+
+    final Uri uri = Uri.parse(url);
+    final bool can = await canLaunchUrl(uri);
+    if (can) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      debugPrint("[SSO:$vc] ❌ could not launch url");
     }
   }
 
@@ -269,67 +329,25 @@ class FundProvider extends DefaultChangeNotifier {
 // Fetching data from the api and stored in a variable
   Future fetchFunds(BuildContext context) async {
     try {
-      _listOfCredits = [];
-      _listOfUsedMrgn = [];
-      final Set<String> usedMrgnNames = {};
       _fundDetailModel = await api.getFunds();
 
       if (_fundDetailModel!.emsg == "Session Expired :  Invalid Session Key") {
         ref.read(authProvider).ifSessionExpired(context);
       } else {
-// Calculating funds
-
         ConstantName.sessCheck = true;
-        double cash = double.parse(_fundDetailModel!.cash ?? "0.00");
-        double payin = double.parse(_fundDetailModel!.payin ?? "0.00");
-        double payout = double.parse(_fundDetailModel!.payout ?? "0.00");
-        double brkcollamt =
-            double.parse(_fundDetailModel!.brkcollamt ?? "0.00");
-        double unclearedcash =
-            double.parse(_fundDetailModel!.unclearedcash ?? "0.00");
-        double auxDaycash =
-            double.parse(_fundDetailModel!.auxDaycash ?? "0.00");
-        double auxBrkcollamt =
-            double.parse(_fundDetailModel!.auxBrkcollamt ?? "0.00");
-        double auxUnclearedcash =
-            double.parse(_fundDetailModel!.auxUnclearedcash ?? "0.00");
-        double daycash = double.parse(_fundDetailModel!.daycash ?? "0.00");
-        double collateral =
-            double.parse(_fundDetailModel!.collateral ?? "0.00");
 
-        if (cash != 0.00) {
-          _listOfCredits.add({"value": "$cash", "name": "Opening Balance"});
-        }
-        if (payin != 0.00) {
-          _listOfCredits.add({"value": "$payin", "name": "Payin"});
-        }
-        if (payout != 0.00) {
-          _listOfCredits.add({"value": "$payout", "name": "Payout"});
-        }
-        if (brkcollamt != 0.00) {
-          _listOfCredits.add({"value": "$brkcollamt", "name": "Collateral"});
-        }
-        if (unclearedcash != 0.00) {
-          _listOfCredits
-              .add({"value": "$unclearedcash", "name": "Uncleared Cash"});
-        }
-        if (auxDaycash != 0.00) {
-          _listOfCredits.add({"value": "$auxDaycash", "name": "Aux Day Cash"});
-        }
-        if (auxBrkcollamt != 0.00) {
-          _listOfCredits.add(
-              {"value": "$auxBrkcollamt", "name": "Aux Broker collateral"});
-        }
-        if (auxUnclearedcash != 0.00) {
-          _listOfCredits.add(
-              {"value": "$auxUnclearedcash", "name": "Aux Uncleared Cash"});
-        }
-        if (daycash != 0.00) {
-          _listOfCredits.add({"value": "$daycash", "name": "Day Cash"});
-        }
-        if (collateral != 0.00) {
-          _listOfCredits.add({"value": "$collateral", "name": "Collateral"});
-        }
+        double parse(String? raw) => double.tryParse(raw ?? "0.00") ?? 0.00;
+
+        final cash = parse(_fundDetailModel!.cash);
+        final payin = parse(_fundDetailModel!.payin);
+        final payout = parse(_fundDetailModel!.payout);
+        final brkcollamt = parse(_fundDetailModel!.brkcollamt);
+        final unclearedcash = parse(_fundDetailModel!.unclearedcash);
+        final auxDaycash = parse(_fundDetailModel!.auxDaycash);
+        final auxBrkcollamt = parse(_fundDetailModel!.auxBrkcollamt);
+        final auxUnclearedcash = parse(_fundDetailModel!.auxUnclearedcash);
+        final daycash = parse(_fundDetailModel!.daycash);
+        final collateral = parse(_fundDetailModel!.collateral);
 
         fundDetailModel!.totCredit = (cash +
                 payin +
@@ -343,50 +361,15 @@ class FundProvider extends DefaultChangeNotifier {
                 daycash)
             .toStringAsFixed(2);
 
-        double utilizedMrgn = 0.00;
-        double span = double.parse(_fundDetailModel!.span ?? "0.00");
-        double expo = double.parse(_fundDetailModel!.expo ?? "0.00");
-        double addmrg = double.parse(_fundDetailModel!.addmrg ?? "0.00");
-        double urmtom = double.parse(_fundDetailModel!.urmtom ?? "0.00");
-        double premium = double.parse(_fundDetailModel!.premium ?? "0.00");
-        double brokerage = double.parse(_fundDetailModel!.brokerage ?? "0.00");
-
-        if (span != 0.00 && usedMrgnNames.add("Span")) {
-          _listOfUsedMrgn.add({"value": "$span", "name": "Span"});
-        }
-        if (expo != 0.00 && usedMrgnNames.add("Exposure")) {
-          _listOfUsedMrgn.add({"value": "$expo", "name": "Exposure"});
-        }
-        if (addmrg != 0.00 && usedMrgnNames.add("Additional Margin")) {
-          _listOfUsedMrgn
-              .add({"value": "$addmrg", "name": "Additional Margin"});
-        }
-        if (premium != 0.00 && usedMrgnNames.add("Option Premium")) {
-          _listOfUsedMrgn.add({"value": "$premium", "name": "Option Premium"});
-        }
-        if (brokerage != 0.00 && usedMrgnNames.add("Unrealized Expenses")) {
-          _listOfUsedMrgn
-              .add({"value": "$brokerage", "name": "Unrealized Expenses"});
-        }
-
-        utilizedMrgn = span + expo + addmrg;
-        if (!urmtom.isNegative &&
-            urmtom != 0.00 &&
-            usedMrgnNames.add("Unrealized MTM")) {
-          utilizedMrgn += urmtom;
-
-          _listOfUsedMrgn.add({"value": "$urmtom", "name": "Unrealized MTM"});
-        }
-
-        utilizedMrgn = double.parse(fundDetailModel!.marginused ?? "0.00");
+        final utilizedMrgn = parse(fundDetailModel!.marginused);
         fundDetailModel!.utilizedMrgn = utilizedMrgn.toStringAsFixed(2);
 
         fundDetailModel!.avlMrg =
-            (double.parse(fundDetailModel!.totCredit ?? "0.00") - utilizedMrgn)
+            (parse(fundDetailModel!.totCredit) - utilizedMrgn)
                 .toStringAsFixed(2);
-        double avlMrgnPer = ((double.parse(fundDetailModel!.avlMrg ?? "0.00") /
-                double.parse(fundDetailModel!.totCredit ?? "0.00")) *
-            100);
+        final avlMrgnPer = (parse(fundDetailModel!.avlMrg) /
+                parse(fundDetailModel!.totCredit)) *
+            100;
 
         fundDetailModel!.avlMrgPercentage =
             (avlMrgnPer.isNaN ? 0.00 : avlMrgnPer).toStringAsFixed(2);

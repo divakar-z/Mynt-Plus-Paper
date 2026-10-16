@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart'
     hide DataTable, DataColumn, DataRow, DataCell;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import '../../../provider/stocks_provider.dart';
@@ -925,7 +926,7 @@ class _TradeActionScreenWebState extends ConsumerState<TradeActionScreenWeb>
 
   Map<int, double> _calculateMinWidths(
       List<TopGainers> stocks, BuildContext context) {
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 24.0;
     const sortIconWidth = 24.0;
 

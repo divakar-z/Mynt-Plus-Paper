@@ -1,5 +1,6 @@
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/screens/web/ordersbook/basket/basket_list_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
@@ -152,7 +153,12 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
         case 4: // Basket
           await orderBook.getBasketName();
           break;
-        case 5: // Pending Alerts
+        case 5: // SIP — previous code wrongly fetched pending alerts here
+          // because the case was mislabeled. Tab 5 is the SIP screen
+          // (see _buildTabContent at the bottom of this file).
+          await orderBook.fetchSipOrderHistory(context);
+          break;
+        case 6: // Pending Alerts — Alerts is tab index 6, not 5.
           await ref.read(marketWatchProvider).fetchPendingAlert(context);
           await ref.read(notificationprovider).fetchbrokermsg(context);
           break;
@@ -544,6 +550,17 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                   controller: orderBook.orderSearchCtrl,
                   placeholder: 'Search orders',
                   leadingIcon: assets.searchIcon,
+                  // TC_476: keep the user's case — basket names are mixed case
+                  // and every tab's match is case-insensitive. `_` allowed
+                  // because basket names may contain it.
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(
+                        RegExp(r'[A-Za-z0-9&_ \-]')),
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      if (newValue.text.startsWith(' ')) return oldValue;
+                      return newValue;
+                    }),
+                  ],
                   onClear: () {
                     FocusScope.of(context).unfocus();
                     orderBook.clearOrderSearch();
@@ -618,6 +635,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                 onPressed: _isRefreshing ? null : _refreshOrders,
                 theme: theme,
                 isLoading: _isRefreshing,
+                tooltip: 'Refresh',
               ),
             ],
           );
@@ -692,6 +710,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
     required VoidCallback? onPressed,
     required ThemesProvider theme,
     bool isLoading = false,
+    String? tooltip,
   }) {
     final buttonSize = context.responsive<double>(
       mobile: 32,
@@ -704,7 +723,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
       desktop: 28,
     );
 
-    return Container(
+    final button = Container(
       width: buttonSize,
       height: buttonSize,
       decoration: BoxDecoration(
@@ -742,6 +761,9 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
         ),
       ),
     );
+    // Same pattern as the Positions page refresh button.
+    if (tooltip == null) return button;
+    return Tooltip(message: tooltip, child: button);
   }
 
   // Download button for orders (PDF & Excel)
@@ -891,7 +913,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                     shadcn.TabItem(
                       child: DefaultTextStyle(
                         style: TextStyle(
-                          fontFamily: 'Geist',
+                          fontFamily: dyslexiaFontOr('Geist'),
                           color: _mfTabIndex == 0
                               ? (theme.isDarkMode
                                   ? WebDarkColors.primary
@@ -905,7 +927,7 @@ class _OrderBookScreenWebState extends ConsumerState<OrderBookScreenWeb>
                     shadcn.TabItem(
                       child: DefaultTextStyle(
                         style: TextStyle(
-                          fontFamily: 'Geist',
+                          fontFamily: dyslexiaFontOr('Geist'),
                           color: _mfTabIndex == 1
                               ? (theme.isDarkMode
                                   ? WebDarkColors.primary

@@ -14,6 +14,7 @@ import '../../../locator/preference.dart';
 extension type _ScalperChartsBridge._(JSObject _) implements JSObject {
   external void createChart(String containerId, JSObject options);
   external void changeSymbol(String containerId, String symbol);
+  external void seedSymbolData(String symbol, String exch, String token);
   external bool hasChart(String containerId);
   external void pushTick(String containerId, JSObject tickData);
   external void resetData(String containerId);
@@ -58,6 +59,12 @@ class ScalperChartManager {
 
   // Track current theme state for each chart (needed to detect theme changes)
   final Map<String, bool> _chartThemes = {};
+
+  // Authoritative exch + token for each chart's current symbol, recorded by
+  // [_changeChart]. Replayed into the JS bridge on every (re)create — pending
+  // creation, div remount, theme recreate — so no path can reach TradingView
+  // without a token. See the seeding note in [_changeChart].
+  final Map<String, ({String exch, String token})> _scripMeta = {};
 
   // Pending chart creations (queued before library loads)
   final Map<String, Map<String, dynamic>> _pendingCreations = {};
@@ -233,6 +240,15 @@ class ScalperChartManager {
         return;
       }
 
+      // Replay the recorded exch + token for this symbol before the widget
+      // boots, so resolveSymbol never falls back to the getSymbolinfo lookup.
+      final meta = _scripMeta[chartId];
+      if (meta != null) {
+        try {
+          bridge.seedSymbolData(symbol, meta.exch, meta.token);
+        } catch (_) {}
+      }
+
       bridge.createChart(
         containerId,
         <String, dynamic>{
@@ -255,8 +271,16 @@ class ScalperChartManager {
   void _changeChart({
     required String chartId,
     required String symbol,
+    required String exch,
+    required String token,
     required bool isDarkMode,
   }) {
+    // Record before the early return — a queued creation is replayed by
+    // [createChart], which seeds from this map.
+    if (token.isNotEmpty) {
+      _scripMeta[chartId] = (exch: exch, token: token);
+    }
+
     final containerId = _containerIds[chartId];
     if (containerId == null || !_bridgeLoaded) {
       // Store for later when container/bridge is ready
@@ -268,6 +292,18 @@ class ScalperChartManager {
     try {
       final bridge = _scalperChartsBridge;
       if (bridge == null) return;
+
+      // Hand the bridge the authoritative exch + token BEFORE create/change.
+      // Without it resolveSymbol falls back to be.mynt.in/getSymbolinfo, which
+      // returns `{}` for derivatives — and the call/put panes here are always
+      // options, so both GetSecurityInfo and TPSeries went out with token:"".
+      // The seed lives in the bridge's symbol cache, so it also survives the
+      // theme-driven chart recreation below. Guarded separately so a stale
+      // cached chart_init.js without this method can't take the chart down
+      // with it — an unseeded chart is the old behaviour, not a blank pane.
+      try {
+        bridge.seedSymbolData(symbol, exch, token);
+      } catch (_) {}
 
       final chartExists = bridge.hasChart(containerId);
       final currentSymbol = _getCurrentSymbol(chartId);
@@ -332,6 +368,37 @@ class ScalperChartManager {
     }
   }
 
+  /// Fully tear down and recreate all 3 charts (index, call, put) using
+  /// each chart's currently-selected symbol and theme. Use this for the
+  /// manual Refresh button — guarantees a clean datafeed, fresh history,
+  /// fresh subscription record, and fresh lastBar.
+  ///
+  /// Trade-off: discards user's per-chart timeframe / indicators / drawings.
+  /// That's acceptable for an explicit refresh; not acceptable for an
+  /// automatic tab-return.
+  void recreateAllCharts() {
+    for (final chartId in const ['index', 'call', 'put']) {
+      final containerId = _containerIds[chartId];
+      if (containerId == null || !_bridgeLoaded) continue;
+
+      final symbol = _getCurrentSymbol(chartId);
+      if (symbol == null) continue;
+
+      final isDark = _chartThemes[chartId] ?? false;
+
+      try {
+        final bridge = _scalperChartsBridge;
+        if (bridge == null) continue;
+
+        if (bridge.hasChart(containerId)) {
+          bridge.removeChart(containerId);
+        }
+        createChart(chartId: chartId, symbol: symbol, isDarkMode: isDark);
+      } catch (_) {
+      }
+    }
+  }
+
   /// Change index chart symbol
   void changeSymbol({
     required String exch,
@@ -339,7 +406,12 @@ class ScalperChartManager {
     required String tsym,
     required bool isDarkMode,
   }) {
-    _changeChart(chartId: 'index', symbol: tsym, isDarkMode: isDarkMode);
+    _changeChart(
+        chartId: 'index',
+        symbol: tsym,
+        exch: exch,
+        token: token,
+        isDarkMode: isDarkMode);
   }
 
   /// Change call option chart symbol
@@ -349,7 +421,12 @@ class ScalperChartManager {
     required String tsym,
     required bool isDarkMode,
   }) {
-    _changeChart(chartId: 'call', symbol: tsym, isDarkMode: isDarkMode);
+    _changeChart(
+        chartId: 'call',
+        symbol: tsym,
+        exch: exch,
+        token: token,
+        isDarkMode: isDarkMode);
   }
 
   /// Change put option chart symbol
@@ -359,7 +436,12 @@ class ScalperChartManager {
     required String tsym,
     required bool isDarkMode,
   }) {
-    _changeChart(chartId: 'put', symbol: tsym, isDarkMode: isDarkMode);
+    _changeChart(
+        chartId: 'put',
+        symbol: tsym,
+        exch: exch,
+        token: token,
+        isDarkMode: isDarkMode);
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────
@@ -407,6 +489,7 @@ class ScalperChartManager {
     _containerIds.clear();
     _pendingCreations.clear();
     _chartThemes.clear(); // Clear theme tracking
+    _scripMeta.clear();
     _indexSymbol = null;
     _callSymbol = null;
     _putSymbol = null;

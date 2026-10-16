@@ -59,6 +59,15 @@ abstract class DefaultChangeNotifier extends ChangeNotifier {
   }
 
   @override
+  void notifyListeners() {
+    // Guard against notifying after dispose. Async work (intraday polls,
+    // in-flight fetches) can complete after an autoDispose provider is torn
+    // down, which would otherwise throw "A ... was used after being disposed".
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
+  @override
   void dispose() {
     _disposed = true;
     super.dispose();

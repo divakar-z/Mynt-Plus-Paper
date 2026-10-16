@@ -1,0 +1,358 @@
+import 'package:flutter/material.dart';
+import 'package:mynt_plus/models/insta_options/contribution/index_contribution.dart';
+import 'package:mynt_plus/models/insta_options/dashboard/dashboard_enums.dart';
+import 'package:mynt_plus/models/insta_options/option_chain/oi_wall.dart';
+import 'package:mynt_plus/res/mynt_web_color_styles.dart';
+import 'package:mynt_plus/res/mynt_web_text_styles.dart';
+import 'package:mynt_plus/screens/web/insta_options/insta_options_format.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/dashboard_kit.dart';
+import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+
+/// Index Contribution header: the index level + signed point-change/percent,
+/// then a chip strip carrying PCR (band-coloured), max-pain, futures basis +
+/// OI-buildup, rollover %, and the support/resistance OI walls. Everything here
+/// comes from the index's own data, so it renders even when the constituent
+/// weightage feed is unavailable.
+class ContributionHeader extends StatelessWidget {
+  final IndexContribution data;
+
+  const ContributionHeader({super.key, required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final border = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final bg = resolveThemeColor(context,
+        dark: MyntColors.cardDark, light: MyntColors.card);
+    final walls = _wallChips(context);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border.all(color: border, width: 0.5),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final left = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _levelRow(context),
+              const SizedBox(height: 14),
+              Wrap(spacing: 8, runSpacing: 8, children: _primaryChips(context)),
+            ],
+          );
+
+          if (walls.isEmpty) return left;
+
+          // Wide enough to seat both walls beside the left content: pin them
+          // top-right. Otherwise they break onto their own row below and wrap
+          // (Resistance, then Support) so they never overflow.
+          final wide = constraints.maxWidth >= 720;
+          if (wide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: left),
+                for (final w in walls) ...[
+                  const SizedBox(width: 8),
+                  w,
+                ],
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              left,
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: walls),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _levelRow(BuildContext context) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+    final primary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final pc = data.pointChange;
+    final moveColor = dashChangeColor(context, pc);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(data.index,
+                style: MyntWebTextStyles.caption(context, color: muted)
+                    .copyWith(letterSpacing: 0.5)),
+            const SizedBox(height: 2),
+            Text(
+              data.level == null
+                  ? '—'
+                  : InstaOptionsFormat.price(data.level),
+              style: MyntWebTextStyles.title(context,
+                      darkColor: MyntColors.textPrimaryDark,
+                      lightColor: MyntColors.textPrimary,
+                      fontWeight: MyntFonts.bold)
+                  .copyWith(fontSize: 26, height: 1.05),
+            ),
+          ],
+        ),
+        const SizedBox(width: 14),
+        if (pc != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  pc >= 0 ? Icons.arrow_drop_up : Icons.arrow_drop_down,
+                  size: 22,
+                  color: moveColor,
+                ),
+                Text(
+                  '${InstaOptionsFormat.price(pc.abs())} pts',
+                  style: MyntWebTextStyles.body(context,
+                      color: moveColor, fontWeight: MyntFonts.semiBold),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '(${InstaOptionsFormat.changePct(data.changePct)})',
+                  style:
+                      MyntWebTextStyles.bodySmall(context, color: moveColor),
+                ),
+              ],
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text('—',
+                style: MyntWebTextStyles.body(context, color: primary)),
+          ),
+      ],
+    );
+  }
+
+  /// Line 1 — PCR, rollover (next to PCR), the futures OI-buildup chip, then
+  /// max-pain and basis.
+  List<Widget> _primaryChips(BuildContext context) {
+    final out = <Widget>[];
+    final opt = data.options;
+    final oi = data.indexOi;
+
+    if (opt != null) {
+      out.add(_chip(context,
+          label: 'PCR',
+          value: InstaOptionsFormat.pcr(opt.pcr),
+          valueColor: _pcrColor(context, opt.pcr),
+          accent: _pcrColor(context, opt.pcr)));
+    }
+    if (oi != null && oi.rolloverPct != null) {
+      // Neutral: rollover isn't good/bad on its own → no sentiment bar.
+      out.add(_chip(context,
+          label: 'Rollover',
+          value: InstaOptionsFormat.changePct(oi.rolloverPct)
+              .replaceAll('+', '')));
+    }
+    if (oi != null && oi.buildup != null) {
+      final cat = BuildupCategory.fromWire(oi.buildup);
+      // Same sticky-note frame as the others: black text, but the accent bar
+      // carries the buildup category's own colour.
+      out.add(_chip(context,
+          label: dashCategoryChipLabel(cat),
+          value: '',
+          accent: dashCategoryColor(context, cat)));
+    }
+    if (opt != null && opt.maxPain != null) {
+      // Neutral: a price level has no direction → no sentiment bar.
+      out.add(_chip(context,
+          label: 'Max pain', value: InstaOptionsFormat.price(opt.maxPain)));
+    }
+    if (oi != null && oi.basis != null) {
+      final pctPart = oi.basisPct == null
+          ? ''
+          : ' (${InstaOptionsFormat.changePct(oi.basisPct)})';
+      out.add(_chip(context,
+          label: 'Basis',
+          value: '${_signed(oi.basis)}$pctPart',
+          valueColor: dashChangeColor(context, oi.basis),
+          accent: dashChangeColor(context, oi.basis)));
+    }
+    return out;
+  }
+
+  /// Line 2 — the OI-wall resistance / support strikes.
+  List<Widget> _wallChips(BuildContext context) {
+    final out = <Widget>[];
+    final opt = data.options;
+    if (opt == null) return out;
+    final loss = resolveThemeColor(context,
+        dark: MyntColors.lossDark, light: MyntColors.loss);
+    final profit = resolveThemeColor(context,
+        dark: MyntColors.profitDark, light: MyntColors.profit);
+    final r = _wallStrikeList(opt.resistance);
+    final s = _wallStrikeList(opt.support);
+    if (r.isNotEmpty) {
+      out.add(_wallChip(context,
+          label: 'Resistance', strikes: r, color: loss));
+    }
+    if (s.isNotEmpty) {
+      out.add(
+          _wallChip(context, label: 'Support', strikes: s, color: profit));
+    }
+    return out;
+  }
+
+  List<String> _wallStrikeList(List<OiWall> walls) =>
+      walls.take(3).map((w) => w.strike.toStringAsFixed(0)).toList();
+
+  /// Wall chip (Resistance / Support): the label sits on **top**, with the
+  /// strike levels stacked one per line beneath it.
+  Widget _wallChip(BuildContext context,
+      {required String label,
+      required List<String> strikes,
+      required Color color}) {
+    final card = resolveThemeColor(context,
+        dark: MyntColors.cardDark, light: MyntColors.card);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final fg = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+
+    return SizedBox(
+      width: _chipWidth,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: card,
+          border: Border.all(color: shadcn.Theme.of(context).colorScheme.border, width: 1),
+          borderRadius: BorderRadius.zero,
+        ),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(width: 6, color: color),
+              Expanded(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label,
+                          style: MyntWebTextStyles.body(context, color: muted)),
+                      const SizedBox(height: 8),
+                      for (var i = 0; i < strikes.length; i++) ...[
+                        if (i > 0) const SizedBox(height: 6),
+                        Text(strikes[i],
+                            style: MyntWebTextStyles.body(context,
+                                color: fg, fontWeight: MyntFonts.semiBold)),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _signed(double? v) {
+    if (v == null) return '—';
+    final s = InstaOptionsFormat.price(v.abs());
+    return v >= 0 ? '+$s' : '-$s';
+  }
+
+  Color _pcrColor(BuildContext context, double? pcr) {
+    if (pcr == null) {
+      return resolveThemeColor(context,
+          dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    }
+    if (pcr <= 0.7) {
+      return resolveThemeColor(context,
+          dark: MyntColors.lossDark, light: MyntColors.loss);
+    }
+    if (pcr > 1.3) {
+      return resolveThemeColor(context,
+          dark: MyntColors.profitDark, light: MyntColors.profit);
+    }
+    return kDashOrange;
+  }
+
+  /// Every header chip is the same fixed "sticky-note" width — wide enough to
+  /// fit the longest single-line content (the Basis premium/discount).
+  static const double _chipWidth = 220;
+
+  Widget _chip(BuildContext context,
+      {required String label,
+      required String value,
+      Color? valueColor,
+      Color? accent}) {
+    final neutralBar = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+    final card = resolveThemeColor(context,
+        dark: MyntColors.cardDark, light: MyntColors.card);
+    final fg = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final grey = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    // Left accent bar carries the sentiment where the field is directional;
+    // neutral fields (no accent) fall back to a subtle grey bar.
+    final bar = accent ?? neutralBar;
+
+    return SizedBox(
+      width: _chipWidth,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: card,
+          border: Border.all(color: shadcn.Theme.of(context).colorScheme.border, width: 1),
+          borderRadius: BorderRadius.zero,
+        ),
+        child: IntrinsicHeight(
+          child: Row(
+            children: [
+              Container(width: 10, color: bar),
+              Expanded(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(label,
+                          style: MyntWebTextStyles.body(context, color: grey, )),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(value,
+                            textAlign: TextAlign.right,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: MyntWebTextStyles.body(context,
+                                color: valueColor ?? fg,
+                                fontWeight: MyntFonts.semiBold)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

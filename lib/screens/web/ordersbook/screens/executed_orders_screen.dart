@@ -446,10 +446,12 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
                                         columnIndex: 7,
                                         alignRight: true,
                                         onTap: () => actionHandler.openOrderDetail(order),
+                                        // Tooltip only when the API gives a real
+                                        // reason — a blank/whitespace rejreason
+                                        // rendered an empty tooltip box, and the
+                                        // status fallback just repeated the badge.
                                         child: Tooltip(
-                                          message: (order.rejreason != null && order.rejreason!.isNotEmpty)
-                                              ? order.rejreason!
-                                              : _getStatusText(order),
+                                          message: order.rejreason?.trim() ?? '',
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                             decoration: BoxDecoration(
@@ -1009,7 +1011,17 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
 
       switch (_sortColumnIndex!) {
         case 0: // Time
-          comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
+          // Parse to a real DateTime — the raw "HH:mm:ss dd-MM-yyyy" string
+          // compares by clock only and mis-orders across dates (AMO orders).
+          final aDate = _tryParseOrderTime(a.norentm);
+          final bDate = _tryParseOrderTime(b.norentm);
+          if (aDate != null && bDate != null) {
+            comparison = aDate.compareTo(bDate);
+          } else if (aDate == null && bDate == null) {
+            comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
+          } else {
+            comparison = aDate == null ? 1 : -1;
+          }
           break;
         case 1: // Type (BUY/SELL)
           comparison = (a.trantype ?? '').compareTo(b.trantype ?? '');
@@ -1046,6 +1058,9 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
   }
 
   String _formatInstrumentText(OrderBookModel order) {
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = order.masterName;
+    if (master != null && master.isNotEmpty) return master;
     if (order.tsym != null && order.tsym!.isNotEmpty) {
       // Remove "-EQ" suffix and don't include exchange
       return order.tsym!.replaceAll("-EQ", "").trim();
@@ -1086,7 +1101,8 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
     if (order.status == null) return 'N/A';
 
     final status = order.status!.toUpperCase();
-    if (status == 'COMPLETE') return 'Executed';
+    // if (status == 'COMPLETE') return 'Executed';
+    if (status == 'COMPLETE') return 'Complete'; // show API status as-is, same as detail panel + mobile
     if (status == 'REJECTED') return 'Rejected';
     if (status == 'CANCELED' || status == 'CANCELLED') return 'Cancelled';
     if (status == 'OPEN') return 'Open';
@@ -1094,6 +1110,18 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
     if (status == 'TRIGGER_PENDING') return 'Trigger Pending';
 
     return order.status!;
+  }
+
+  // Parses the API's "HH:mm:ss dd-MM-yyyy" order timestamp into a DateTime.
+  // Returns null for empty/unexpected values so callers can fall back safely.
+  DateTime? _tryParseOrderTime(String? value) {
+    if (value == null || value.isEmpty) return null;
+    final parts = value.split(' ');
+    if (parts.length != 2) return null;
+    final dateParts = parts[1].split('-');
+    if (dateParts.length != 3) return null;
+    return DateTime.tryParse(
+        '${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[0]}');
   }
 
   // Format time with seconds (e.g., "11:18:07")
@@ -1213,8 +1241,11 @@ class _OrderBookLTPCellState extends ConsumerState<_OrderBookLTPCell> {
           final newLtp = data[widget.token]['lp']?.toString();
           if (newLtp != null &&
               newLtp != ltp &&
-              newLtp != '0.00' &&
-              newLtp != 'null') {
+              newLtp != 'null' &&
+              newLtp != '' &&
+              newLtp != '0' &&
+              newLtp != '0.0' &&
+              newLtp != '0.00') {
             setState(() => ltp = newLtp);
           }
         });

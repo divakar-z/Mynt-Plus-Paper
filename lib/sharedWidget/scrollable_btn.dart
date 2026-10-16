@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 
 class ScrollableBtn extends StatefulWidget {
   final List<String> btnName;
@@ -50,7 +50,7 @@ class _ScrollableBtnState extends State<ScrollableBtn> {
                 padding: const EdgeInsets.symmetric(vertical: 5.0),
                 child: Text(
                   widget.btnName[index],
-                  style: GoogleFonts.inter(
+                  style: dysInter(
                       textStyle: textStyle(
                           widget.btnActive[index]
                               ? const Color(0xff000000)

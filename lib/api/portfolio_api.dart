@@ -30,14 +30,14 @@ mixin PortfolioAPI on ApiCore {
     }
   }
 
-  Future<Map<String, dynamic>> getHolding() async {
+  Future<Map<String, dynamic>> getHolding({String prd = "C"}) async {
     String stat = "";
     try {
       final uri = Uri.parse(apiLinks.getHoldings);
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","actid":"${prefs.clientId}","prd":"C"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","actid":"${prefs.clientId}","prd":"$prd"}&jKey=${prefs.clientSession}''');
       //  log("Holdings res=>${res.body} ");
       final List<HoldingsModel> data = [];
       if (res.statusCode == 200) {
@@ -293,7 +293,8 @@ mixin PortfolioAPI on ApiCore {
               "prevprd":"${positionConvertionInput.prevprd}",
               "trantype":"${positionConvertionInput.trantype}",
               "postype":"${positionConvertionInput.postype}",
-              "ordersource":"MOB"}&jKey=${prefs.clientSession}''');
+              "ordersource":"WEB"}&jKey=${prefs.clientSession}''');
+      // "ordersource":"MOB"}&jKey=${prefs.clientSession}''');
 
       // log("Position Convertion => ${res.body}");
       final json = jsonDecode(res.body);
@@ -325,6 +326,30 @@ mixin PortfolioAPI on ApiCore {
     }
   }
 
+  /// Turns a group-endpoint response into a [CreateGroupName].
+  ///
+  /// These endpoints answer `{"status": "..."}` when the call works and
+  /// FastAPI's `{"detail": "..."}` when it does not - a duplicate group name
+  /// comes back that way. A 5xx can also arrive as an HTML error page, which
+  /// used to throw inside `jsonDecode` and be swallowed by the provider, so
+  /// the body is decoded defensively and the HTTP code is kept as the message
+  /// of last resort. Anything is better than the old "Unknown error".
+  CreateGroupName _groupResult(int statusCode, String body) {
+    try {
+      final json = jsonDecode(body);
+      if (json is Map<String, dynamic>) {
+        final result = CreateGroupName.fromJson(json);
+        if (result.status == null && result.detail == null) {
+          result.detail = 'Request failed (HTTP $statusCode)';
+        }
+        return result;
+      }
+    } catch (_) {
+      // Body was not JSON - an HTML error page, or an empty 500.
+    }
+    return CreateGroupName(detail: 'Request failed (HTTP $statusCode)');
+  }
+
   // Create custom group Name for position
 
   Future<CreateGroupName> createGroupName(String name) async {
@@ -335,9 +360,7 @@ mixin PortfolioAPI on ApiCore {
           body: jsonEncode({"clientid": "${prefs.clientId}", "posname": name}));
 
       // log("Position Group Name => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }
@@ -357,9 +380,7 @@ mixin PortfolioAPI on ApiCore {
           }));
 
       // log("Add symbol Group Name => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }
@@ -374,9 +395,7 @@ mixin PortfolioAPI on ApiCore {
       final res = await apiClient.get(uri, headers: defaultHeaders);
 
       // log("Delete vPosition Group  Name => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }
@@ -384,8 +403,14 @@ mixin PortfolioAPI on ApiCore {
 
 // Delete position group name
 
+  // The same contract can be held under two products (MIS and NRML), which
+  // are two separate rows in a group but share one tsym. Without the product
+  // the backend matched on tsym alone and removed both rows, so the product
+  // is sent to target the one the user actually removed. It goes as
+  // `s_prdt_ali` (MIS / NRML), the same field and the same values the add
+  // call stored on the row, not the raw `prd` code.
   Future<CreateGroupName> deletePositionGrpSym(
-      String grpName, String tsym) async {
+      String grpName, String tsym, String prdAli) async {
     try {
       final uri = Uri.parse(apiLinks.delpositiongrpSym);
       final res = await apiClient.post(uri,
@@ -393,13 +418,12 @@ mixin PortfolioAPI on ApiCore {
           body: jsonEncode({
             "clientid": "${prefs.clientId}",
             "posname": grpName,
-            "tsym": UrlUtils.encodeParameter(tsym)
+            "tsym": UrlUtils.encodeParameter(tsym),
+            "s_prdt_ali": prdAli
           }));
 
       // log("Delete Position Group Symbol => ${res.body}");
-      final json = jsonDecode(res.body);
-
-      return CreateGroupName.fromJson(json as Map<String, dynamic>);
+      return _groupResult(res.statusCode, res.body);
     } catch (e) {
       rethrow;
     }

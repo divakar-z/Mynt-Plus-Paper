@@ -1,11 +1,14 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/svg.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 
 import '../../../../models/portfolio_model/position_book_model.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/market_watch_provider.dart';
+import '../../../../res/assets.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../sharedWidget/snack_bar.dart';
@@ -32,6 +35,7 @@ class PositionGroupTable extends ConsumerStatefulWidget {
 class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
   // Use ValueNotifier for hover to prevent full rebuilds
   final ValueNotifier<int?> _hoveredRowIndex = ValueNotifier<int?>(null);
+  final Assets _assets = Assets();
 
   @override
   void dispose() {
@@ -198,6 +202,63 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
     );
   }
 
+  // Remove a single position from a custom group.
+  // Works off the group's own saved data, so a position that is no longer in
+  // the position book (exited earlier, book not uploaded yet) can still be
+  // removed — the Add Symbol dialog only lists live positions and cannot
+  // reach those rows.
+  Future<void> _removeFromGroup(Map<String, dynamic> groupItem) async {
+    final tsym = groupItem['tsym']?.toString() ?? '';
+    if (tsym.isEmpty) {
+      showResponsiveWarningMessage(context, "Unable to remove this position");
+      return;
+    }
+    // Product goes with it — the same contract can sit in the group twice
+    // under two products, and tsym alone would remove both rows. Same field
+    // the Product column reads, so the value matches what was stored.
+    final prdAli = groupItem['s_prdt_ali']?.toString() ?? '';
+    await ref
+        .read(portfolioProvider)
+        .fetchDeleteGroupSymbol(widget.groupSymbol, context, tsym, prdAli);
+  }
+
+  // Remove button revealed on row hover, styled like the Positions screen
+  // hover actions (25x25, rounded 5).
+  Widget _buildRemoveButton(Map<String, dynamic> groupItem) {
+    final iconColor = resolveThemeColor(context,
+        dark: MyntColors.errorDark, light: MyntColors.error);
+    return Tooltip(
+      message: 'Remove from group',
+      child: SizedBox(
+        width: 25,
+        height: 25,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(5),
+            splashColor: iconColor.withValues(alpha: 0.15),
+            highlightColor: iconColor.withValues(alpha: 0.08),
+            onTap: () => _removeFromGroup(groupItem),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Center(
+                child: SvgPicture.asset(
+                  _assets.trash,
+                  width: 14,
+                  height: 14,
+                  colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   // Show position detail sheet (same logic as GroupSymbolListItem)
   void _showPositionDetail(Map<String, dynamic> groupItem) async {
     final marketWatch = ref.read(marketWatchProvider);
@@ -293,6 +354,8 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
   @override
   Widget build(BuildContext context) {
     final positions = ref.watch(portfolioProvider);
+    // Privacy Mode: qty, avg and P&L are masked; LTP stays visible.
+    final privacy = ref.watch(privacyProvider);
 
     if (widget.groupList.isEmpty) {
       return const SizedBox.shrink();
@@ -301,6 +364,11 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
     // Define column headers
     // Columns: Product | Instrument | Qty | Avg | LTP | P&L
     final headers = ['Product', 'Instrument', 'Qty', 'Avg', 'LTP', 'P&L'];
+
+    // Remove action is shown on hover inside the Instrument cell, and only for
+    // custom groups — default groups are derived from the position book, so
+    // there is no saved entry to remove.
+    final showRemove = widget.isCustomGrp;
 
     // Use LayoutBuilder to get available width and distribute columns
     return LayoutBuilder(
@@ -365,22 +433,22 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
           final rawQty = int.tryParse(groupItem['qty']?.toString() ?? '0') ?? 0;
           final lotSize = double.tryParse(groupItem['ls']?.toString() ?? '1') ?? 1.0;
           final qty = exchange == 'MCX' ? (rawQty / lotSize).toInt() : rawQty;
-          final qtyStr = qty > 0 ? '+$qty' : '$qty';
+          final qtyStr = privacy.mask(qty > 0 ? '+$qty' : '$qty');
 
           // Get average price based on day/net mode
-          final avgPrice = positions.isDay
+          final avgPrice = privacy.mask(positions.isDay
               ? groupItem['avgPrc']?.toString() ?? '0.00'
               : positions.isNetPnl
                   ? (groupItem['netupldprc'] ?? groupItem['avgPrc'])?.toString() ?? '0.00'
-                  : (groupItem['netavgprc'] ?? groupItem['avgPrc'])?.toString() ?? '0.00';
+                  : (groupItem['netavgprc'] ?? groupItem['avgPrc'])?.toString() ?? '0.00');
 
           final ltp = groupItem['lp']?.toString() ?? '0.00';
 
           // Get P&L based on net/mtm mode
-          final pnlStr = positions.isNetPnl
+          final pnlStr = privacy.mask(positions.isNetPnl
               ? (groupItem['profitNloss'] ?? groupItem['rpnl'])?.toString() ?? '0.00'
-              : groupItem['mTm']?.toString() ?? '0.00';
-          final pnlValue = double.tryParse(pnlStr) ?? 0.0;
+              : groupItem['mTm']?.toString() ?? '0.00');
+          final pnlValue = privacy.isPrivate ? 0.0 : (double.tryParse(pnlStr) ?? 0.0);
 
           // Text color for closed positions
           final textColor = isClosed
@@ -420,6 +488,34 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    // Remove action - appears on row hover, same pattern as the
+                    // Positions screen action buttons.
+                    if (showRemove)
+                      ValueListenableBuilder<int?>(
+                        valueListenable: _hoveredRowIndex,
+                        builder: (context, hoveredIndex, _) {
+                          final rowIsHovered = hoveredIndex == rowIndex;
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 140),
+                            width: rowIsHovered ? null : 0,
+                            curve: Curves.easeInOut,
+                            child: IgnorePointer(
+                              ignoring: !rowIsHovered,
+                              child: AnimatedOpacity(
+                                opacity: rowIsHovered ? 1 : 0,
+                                duration: const Duration(milliseconds: 140),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const SizedBox(width: 8),
+                                    _buildRemoveButton(groupItem),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     // if (exchange.isNotEmpty) ...[
                     //   const SizedBox(width: 4),
                     //   Text(
@@ -448,7 +544,10 @@ class _PositionGroupTableState extends ConsumerState<PositionGroupTable> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: _getTextStyle(context,
-                        color: isClosed ? textColor : _getQtyColor(qty, context)),
+                        color: isClosed
+                            ? textColor
+                            : _getQtyColor(
+                                privacy.isPrivate ? 0 : qty, context)),
                   ),
                 ),
               ),

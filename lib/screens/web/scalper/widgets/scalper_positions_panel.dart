@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
@@ -535,7 +536,9 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
     switch (status) {
       case 'OPEN':
         return 'OPEN';
+      // case 'COMPLETE':
       case 'COMPLETE':
+        return 'COMPLETE';
       case 'EXECUTED':
         return 'EXECUTED';
       case 'REJECTED':
@@ -778,7 +781,7 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
 
   // Calculate minimum column widths based on actual content (matches position_table.dart pattern)
   Map<int, double> _calculateMinWidths(List<PositionBookModel> positions) {
-    const textStyle = TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 16.0;
 
     // Headers for each column index (0=Product,1=Instrument,2=Qty,3=ActAvg,4=LTP,5=SL,6=Target,7=P&L,8=Actions)
@@ -802,15 +805,16 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
         switch (col) {
           case 0: cellText = position.sPrdtAli ?? 'N/A'; break;
           case 1:
-            final sym = (position.dname != null && position.dname!.isNotEmpty)
-                ? position.dname!.replaceAll('-EQ', '').trim()
-                : (position.tsym ?? '').replaceAll('-EQ', '').trim();
+            final sym = position.masterName ??
+                ((position.dname != null && position.dname!.isNotEmpty)
+                    ? position.dname!.replaceAll('-EQ', '').trim()
+                    : (position.tsym ?? '').replaceAll('-EQ', '').trim());
             final exch = (position.exch != null && position.exch!.isNotEmpty &&
                 (position.expDate == null || position.expDate!.isEmpty))
                 ? ' ${position.exch}' : '';
             final symWidth = _measureTextWidth(sym, textStyle);
             final exchWidth = exch.isNotEmpty
-                ? _measureTextWidth(exch, const TextStyle(fontSize: 12, fontFamily: 'Geist'))
+                ? _measureTextWidth(exch, TextStyle(fontSize: 12, fontFamily: dyslexiaFontOr('Geist')))
                 : 0.0;
             final total = symWidth + exchWidth + (exch.isNotEmpty ? 4.0 : 0.0) + 8.0;
             if (total > maxWidth) maxWidth = total;
@@ -1053,7 +1057,7 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
 
   // Calculate minimum column widths for orders table from actual content
   Map<int, double> _calculateOrderMinWidths(List<OrderBookModel> orders) {
-    const textStyle = TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 16.0;
     // cols: 0=Time,1=Type,2=Instrument,3=Product,4=Qty,5=LTP,6=Price,7=Status,8=cancel
     final headers = ['Time', 'Type', 'Instrument', 'Product', 'Qty', 'LTP', 'Price', 'Status', ''];
@@ -1078,13 +1082,14 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
             break;
           case 1: cellText = order.trantype == 'B' ? 'BUY' : 'SELL'; break;
           case 2:
-            final sym = (order.dname != null && order.dname!.isNotEmpty)
-                ? order.dname!.replaceAll('-EQ', '').trim()
-                : (order.tsym ?? '').replaceAll('-EQ', '').trim();
+            final sym = order.masterName ??
+                ((order.dname != null && order.dname!.isNotEmpty)
+                    ? order.dname!.replaceAll('-EQ', '').trim()
+                    : (order.tsym ?? '').replaceAll('-EQ', '').trim());
             final exch = order.exch ?? '';
             final symW = _measureOrderTextWidth(sym, textStyle);
             final exchW = exch.isNotEmpty
-                ? _measureOrderTextWidth(' $exch', const TextStyle(fontSize: 12, fontFamily: 'Geist'))
+                ? _measureOrderTextWidth(' $exch', TextStyle(fontSize: 12, fontFamily: dyslexiaFontOr('Geist')))
                 : 0.0;
             final total = symW + exchW + 8.0;
             if (total > maxWidth) maxWidth = total;
@@ -1106,7 +1111,9 @@ class _ScalperPositionsPanelState extends ConsumerState<ScalperPositionsPanel> {
             break;
           case 7:
             final s = (order.status ?? '').toUpperCase();
-            cellText = s == 'COMPLETE' || s == 'EXECUTED' ? 'EXECUTED'
+            // cellText = s == 'COMPLETE' || s == 'EXECUTED' ? 'EXECUTED'
+            cellText = s == 'COMPLETE' ? 'COMPLETE'
+                : s == 'EXECUTED' ? 'EXECUTED'
                 : s == 'CANCELLED' || s == 'CANCELED' ? 'CANCELLED'
                 : s == 'TRIGGER_PENDING' ? 'TRIGGER PENDING'
                 : s == 'AFTER_MARKET_ORDER_REQ_RECEIVED' ? 'AMO'
@@ -1690,9 +1697,10 @@ class _ScalperPositionTableRowState
       color: textColor,
     );
 
-    final instrumentText = (position.dname != null && position.dname!.isNotEmpty)
-        ? position.dname!.replaceAll("-EQ", "").trim()
-        : (position.tsym ?? '').replaceAll("-EQ", "").trim();
+    final instrumentText = position.masterName ??
+        ((position.dname != null && position.dname!.isNotEmpty)
+            ? position.dname!.replaceAll("-EQ", "").trim()
+            : (position.tsym ?? '').replaceAll("-EQ", "").trim());
 
     final showExchange = position.exch != null &&
         position.exch!.isNotEmpty &&
@@ -2529,7 +2537,9 @@ class _ScalperOrderTableRowState extends State<_ScalperOrderTableRow> {
     switch (status) {
       case 'OPEN':
         return 'OPEN';
+      // case 'COMPLETE':
       case 'COMPLETE':
+        return 'COMPLETE';
       case 'EXECUTED':
         return 'EXECUTED';
       case 'REJECTED':
@@ -2616,9 +2626,10 @@ class _ScalperOrderTableRowState extends State<_ScalperOrderTableRow> {
     );
 
     // Instrument display - use dname if available, otherwise tsym
-    final instrumentText = (order.dname != null && order.dname!.isNotEmpty)
-        ? order.dname!.replaceAll('-EQ', '').trim()
-        : (order.tsym ?? '').replaceAll('-EQ', '').trim();
+    final instrumentText = order.masterName ??
+        ((order.dname != null && order.dname!.isNotEmpty)
+            ? order.dname!.replaceAll('-EQ', '').trim()
+            : (order.tsym ?? '').replaceAll('-EQ', '').trim());
 
     // Check if order is open (cancellable)
     final isOpen = statusText == 'OPEN' ||
@@ -3096,8 +3107,9 @@ class _ScalperGttDialogState extends ConsumerState<_ScalperGttDialog> {
   @override
   Widget build(BuildContext context) {
     final position = widget.position;
-    final instrumentName = (position.dname ?? position.tsym ?? '')
-        .replaceAll('-EQ', '')
+    final instrumentName = position.masterName ??
+        (position.dname ?? position.tsym ?? '')
+            .replaceAll('-EQ', '')
         .trim();
     final netqty = int.tryParse(position.netqty?.toString() ?? '0') ?? 0;
     final absQty = netqty.abs();
@@ -3401,6 +3413,41 @@ class _ScalperGttDialogState extends ConsumerState<_ScalperGttDialog> {
                           color: secondaryColor.withValues(alpha: 0.8),
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      // GTT note
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: accentColor.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: accentColor.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: RichText(
+                          text: TextSpan(
+                            style: MyntWebTextStyles.caption(
+                              context,
+                              color: secondaryColor,
+                            ),
+                            children: [
+                              TextSpan(
+                                text: 'Note: ',
+                                style: MyntWebTextStyles.caption(
+                                  context,
+                                  fontWeight: MyntFonts.semiBold,
+                                  color: textColor,
+                                ),
+                              ),
+                              TextSpan(
+                                text: _isStoploss
+                                    ? 'Stoploss is placed as a GTT order. Remember to cancel it if you exit the position manually.'
+                                    : 'Trigger is placed as a GTT order. Remember to cancel it if you exit the position manually.',
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 20),
                       // Submit button
                       SizedBox(
@@ -3491,9 +3538,10 @@ class _ScalperExitPositionDialogState
     final count = widget.positions.length;
     final isSingle = count == 1 && !widget.isExitAll;
     final instrumentName = isSingle
-        ? (widget.positions.first.dname ?? widget.positions.first.tsym ?? '')
-            .replaceAll('-EQ', '')
-            .trim()
+        ? (widget.positions.first.masterName ??
+            (widget.positions.first.dname ?? widget.positions.first.tsym ?? '')
+                .replaceAll('-EQ', '')
+                .trim())
         : '';
 
     // Check if any position has active GTT orders
@@ -3675,9 +3723,10 @@ class _ScalperCancelOrdersDialogState
     final count = widget.orders.length;
     final isSingle = count == 1 && !widget.isCancelAll;
     final instrumentName = isSingle
-        ? (widget.orders.first.dname ?? widget.orders.first.tsym ?? '')
-            .replaceAll('-EQ', '')
-            .trim()
+        ? (widget.orders.first.masterName ??
+            (widget.orders.first.dname ?? widget.orders.first.tsym ?? '')
+                .replaceAll('-EQ', '')
+                .trim())
         : '';
 
     return PointerInterceptor(

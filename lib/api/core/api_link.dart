@@ -1,5 +1,40 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+/// Point the trade-journal notes API at a local `journal_notes.py` dev server
+/// instead of live:
+///
+///   flutter run -d chrome --web-port 8080 \
+///       --dart-define=JOURNAL_NOTES_LOCAL=true
+///
+/// Read from the environment rather than hardcoded so a dev pointer cannot be
+/// committed by accident — the default is always live.
+///
+/// Note the dev server is cross-origin from the Flutter web app, so the browser
+/// preflights every call. `journal_notes.py` must answer `OPTIONS` with
+/// `Access-Control-Allow-Headers: Authorization, clientid, Content-Type` or the
+/// requests fail before reaching Flask. `curl` will not reveal this — it does
+/// not preflight.
+const bool kJournalNotesUseLocalDev =
+    bool.fromEnvironment('JOURNAL_NOTES_LOCAL');
+
+/// Point the client support API at a different osTicket host — a staging
+/// instance, say.
+///
+/// Empty by default, which falls back to the live `ticket.mynt.in`. Read from
+/// the environment so a dev pointer cannot be committed by accident.
+const String kSupportApiBaseOverride =
+    String.fromEnvironment('SUPPORT_API_BASE');
+
+// The app used to carry an HMAC signing key here and mint its own JWT. It no
+// longer does, and must not again: `POST /auth/session` takes the trading
+// session token the app already holds, and osTicket proves the client code
+// against the trading backend's own `validate_session` before issuing anything.
+// Nothing secret ships, so there is nothing in the bundle left to extract.
+//
+// Removed 2026-08-27 with the backend's SUPPORT_AUTH_CHANGE note. The old key
+// stays in this file's git history — treat it as burnt and rotate it
+// server-side rather than assuming its removal here retired it.
+
 class ApiLinks {
 // UAT----
 
@@ -16,6 +51,11 @@ class ApiLinks {
   String get goMyntURL => "https://go.mynt.in/NorenWClientWeb";
   static String wsURL = 'wss://go.mynt.in/NorenWSWeb/';
   String get bemynt => "https://be.mynt.in/";
+  String get oauthBase => "https://ws.mynt.in/login/";
+
+  /// OAuth partner-app authorization endpoints (used by OAuthLoginScreen).
+  String get myntValidate => '${oauthBase}api/mynt-validate';
+  String get myntAuth => '${oauthBase}api/mynt-auth';
 
   String get newsurl => "$bemynt/news";
   String get weblog => "$bemynt/weblog/addlogversion";
@@ -48,7 +88,6 @@ class ApiLinks {
   String get watchList => '$goMyntURL/MWList';
   String get tpseries => '$goMyntURL/TPSeries';
   String get preDefinedMWList => '$goMyntURL/PreDefinedMWList';
-  // String get preDefinedMarketWatchScrip => '$goMyntURL/PreDefinedMW';
   String get marketWatchScrip => '$goMyntURL/MarketWatch';
   String get securityInfo => '$goMyntURL/GetSecurityInfo';
   String get getQuotes => '$goMyntURL/GetQuotes';
@@ -56,9 +95,11 @@ class ApiLinks {
   String get optionChain => '$goMyntURL/GetOptionChain';
   String get deleteMWScrips => '$goMyntURL/DeleteMultiMWScrips';
   String get addMWScrips => '$goMyntURL/AddMultiScripsToMW';
+  String get reorderMWScrips => '$goMyntURL/ReorderMWScrips';
   String get searchScrip => '$goMyntURL/SearchScrip';
   // String get searchScripNew => '${bemynt}global/SearchScrip';
 String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
+  String get derivativeMaster => 'https://ws.mynt.in/search/DerivativeMaster';
   String get searchOptScript => '${bemynt}global/SearchOptScript';
   String get technicalData => '$goMyntURL/GetTechnicals';
   String get watchListrename => '$goMyntURL/RenameMW';
@@ -114,6 +155,14 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get selectSymbols => '$optionStrategyBaseURL/select-symbols';
   String get strategies => '$optionStrategyBaseURL/strategies';
 
+// RupeeCase curated-strategies marketplace (dashboard "Curated Strategies" cards)
+  String get rupeeCaseBaseURL => 'https://agg.zebuetrade.com/rupeecase/api/v1';
+  String get rupeeCaseStrategies => '$rupeeCaseBaseURL/strategies';
+
+  /// Algo (automated) strategy baskets — powers the "Algo" tab in the dashboard
+  /// Strategies section.
+  String get rupeeCaseAlgoStrategies => '$rupeeCaseBaseURL/algo-strategies';
+
 // Order
 
   String get orderMargin => '$goMyntURL/GetOrderMargin';
@@ -152,24 +201,24 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
 
   String get loginOtp => '$mainBaseURL/otp_send_Tv';
   String get loginOtpVerify => 'https://ws.mynt.in/login/otp_verify';
-  String get deviceLogin => '$mainBaseURL/device_login';
-  String get validateSession => '$mainBaseURL/validate_session';
+  String get deviceLogin => '$mainBaseURLnew/device_login';
+  String get validateSession => '$mainBaseURLnew/validate_session';
 
-  String get forgetPassword => '$mainBaseURL/ForgetPassword';
+  String get forgetPassword => '$mainBaseURLnew/ForgetPassword';
 
   String get myntchangePassword => 'https://go.mynt.in/NorenWClientWeb/Changepwd';
 
   String get placeSipOrder => '$goMyntURL/PlaceSipOrder';
 
-  String get preDefdMWatchScrip => 'https://copy.mynt.in/PreDefinedMW';
-  String get getAllIndx => '$mainBaseURL/GetIndexList';
+  String get preDefdMWatchScrip => 'https://go.mynt.in/NorenWClientWeb/PreDefinedMW';
+  String get getAllIndx => 'https://go.mynt.in/NorenWClientWeb/GetIndexList';
 
   // Position Group
-  String get positionGrp => 'https://copy.mynt.in/Getpositiongrp';
-  String get creatGrpName => 'https://copy.mynt.in/Createpositiongrp';
-  String get addSymbolGrp => 'https://copy.mynt.in/addsymbolpositiongrp';
-  String get delpositiongrpName => 'https://copy.mynt.in/Deletepositiongrp';
-  String get delpositiongrpSym => 'https://copy.mynt.in/removesymbolpositiongrp';
+  String get positionGrp => 'https://ws.mynt.in/login/Getpositiongrp';
+  String get creatGrpName => 'https://ws.mynt.in/login/Createpositiongrp';
+  String get addSymbolGrp => 'https://ws.mynt.in/login/addsymbolpositiongrp';
+  String get delpositiongrpName => 'https://ws.mynt.in/login/Deletepositiongrp';
+  String get delpositiongrpSym => 'https://ws.mynt.in/login/removesymbolpositiongrp';
 
   // Scrip Overview
 
@@ -177,7 +226,6 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
 
   // String get fundamental => '$scripOverviewUrl/stockFundamentalDetails';
   // String get stockHoldings => '$scripOverviewUrl/stockHoldings';
-  // String get preDefWLscrip => '$scripOverviewUrl/PreDefinedMW';
 
   String get scripOverviewUrl1 => 'http://192.168.5.209:5005';
 
@@ -270,7 +318,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get withdrawstatus => 'https://fundapi.mynt.in/withdraw/status';
   String get upiIdUpdate => 'https://fundapi.mynt.in/withdraw/upi_id_update';
 
-  String fundvalidatetoken = "https://rekycbe.mynt.in/autho/validate_session";
+  String fundvalidatetoken = "https://ws.mynt.in/login/validate_session";
 
   /////
   String get upimainfund => 'https://fundapi.mynt.in';
@@ -282,7 +330,13 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get indentUpiRequest => '$wrapperUrl/IndentUPIRequest';
   String get upiCollectRequest => '$wrapperUrl/UPICollectRequest';
   String get wrapperCheckStatus => '$wrapperUrl/check_status';
-  String get qrCodeUrl => 'https://copy.mynt.in/get_qr1';
+  String get qrCodeUrl => 'https://sess.mynt.in/get_qr1';
+
+  // Atom gateway
+  String get atomUrl => 'https://fundapi.mynt.in/atom';
+  String get atomNetBankingRedirect => '$atomUrl/atomredirect';
+  String get atomUpiRedirect => '$atomUrl/atomupiredirect';
+  String get atomCallback => '$atomUrl/fromatom';
 
   //hdfc mainurl//
   String get hdfcmainurl => 'https://fundapi.mynt.in/hdfc/upi';
@@ -293,7 +347,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   //fund urlss///
   String get viewupiid => 'https://fundapi.mynt.in/withdraw/view_upi_id';
 // Bonds
-  String get bondBaseURL => "$dashBoardURL/ipo"; // 'https://besim.zebull.in';
+  String get bondBaseURL => "$dashBoardURL/ipo"; // 'https://besim.mynt.in';
   String get getSGB => "$bondBaseURL/getcurrentSGBdetails";
   String get getGSec => "$bondBaseURL/getcurrentNCB_Gsecdetails";
   String get getTBill => "$bondBaseURL/getcurrentNCB_TBilldetails";
@@ -310,6 +364,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
       '$profileDetailsURL/add_mob_email_stat';
   String get profileAllDetailsURL => '$profileDetailsURL/profile';
   String get rekycpendingstatusURL => '$profileDetailsURL/rekyc_pending_details';
+  String get checkRekycURL => 'https://ekycbe.mynt.in/zebu/checkrekyc';
   String get cancelPendingesignURL => '${profileDetailsURL}manual_cancel_request';
   String get fetctfileidURL => '$profileDetailsURL/add_mob_email_stat';
   String get fetctfileidURLnominee => '$profileDetailsURL/nom_stat';
@@ -377,14 +432,52 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get reportspledge => 'https://rekycbe.mynt.in/pledge/';
   String get fundforprofile => 'https://fundapi.mynt.in/api/';
   String get caevents => 'https://v3.mynt.in/equity/';
-  String get position => 'https://be.zebull.in/api/';
+  String get position => 'https://a1.zebuetrade.com/position/';
   String get cmrdownload => 'https://rekycbe.mynt.in/report/cmr';
+
+  /// Trade-journal notes (`journal_notes.py`).
+  ///
+  /// Composed off [reportsapi] because the `/report` prefix is applied by the
+  /// reverse proxy on live, not by Flask — no blueprint declares it. The local
+  /// dev server exposes the same routes with no prefix at all, so both the host
+  /// and the prefix difference are absorbed here and switching is one flag.
+  ///
+  /// No trailing slash: paths carry their own leading slash, following
+  /// [stockScannerApi]. (The rest of the report family appends `/getLedger` to
+  /// a base that already ends in `/`, producing a tolerated `//`.)
+  ///
+  /// Unlike its report-family siblings this service returns real HTTP status
+  /// codes — see `JournalNotesApi`.
+  String get journalNotesApi => kJournalNotesUseLocalDev
+      ? 'http://localhost:9003/journal'
+      : '${reportsapi}journal';
+
+  /// osTicket's client-facing support API.
+  ///
+  /// Reached through the dispatcher script itself — there is no rewrite rule in
+  /// front of it, exactly like the staff API is reached through `scp/api.php`.
+  /// Dropping `/api/client.php` and calling `/tickets` directly gets osTicket's
+  /// `400 URL not supported`, not a 404.
+  ///
+  /// The app talks to this host directly. That is safe here in a way the staff
+  /// API is not: the credential is a short-lived per-client token obtained from
+  /// [supportMintApi] and exchanged at `/auth/exchange`, never a shared service
+  /// account. CORS is open on this entry point for exactly that reason.
+  ///
+  /// No trailing slash: paths carry their own leading slash, following
+  /// [journalNotesApi].
+  String get supportClientApi => kSupportApiBaseOverride.isNotEmpty
+      ? '$kSupportApiBaseOverride/api/client.php'
+      : 'https://ticket.mynt.in/api/client.php';
+
+
 
 //mf new3
   String get newvenketmfurl => "https://v3.mynt.in/mfapi";
   
   String get mfholdingsnewapi => "$newvenketmfurl/order/holdings";
   String get mfAllHoldingsApi => "$newvenketmfurl/order/All_holdings";
+  String get mfDematHoldingsApi => "$newvenketmfurl/order/demat_holdings";
   String get mfnewbestMf => "$newvenketmfurl/dashboard/getMfBaskets";
   String get mfnfoMF => "$newvenketmfurl/dashboard/NFO_datas";
   String get newmfallcatnewendpoit =>
@@ -412,5 +505,13 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
 
   String get mfbasketanalysis => "$dashBoardURL/mfbasket/collections/portfolio_store";
   String get mfbaskbacktest => "$dashBoardURL/mfbasket/collections/portfolio_analysis";
+
+  // ===========================================================================
+  // StockScanner (read-only stock research backend — FastAPI)
+  // TODO: Swap to prod URL when StockScanner backend is hosted publicly.
+  //       Assumes PUBLIC_READ_MODE=true on the backend (no API key required).
+  // ===========================================================================
+  String get stockScannerBaseURL => 'https://agg.zebuetrade.com/scanner';
+  String get stockScannerApi => '$stockScannerBaseURL/api/v1';
 
 }

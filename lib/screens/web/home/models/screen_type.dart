@@ -13,6 +13,7 @@ enum ScreenType {
   optionChain,
   pledgeUnpledge,
   corporateActions,
+  caBuyback,
   reports,
   ledger,
   contractNote,
@@ -47,4 +48,7 @@ enum ScreenType {
   nomineeDetails,
   formDownload,
   closureDetails,
+  scanner,
+  orderflow,
+  charts,
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import '../../../utils/rupee_convert_format.dart';
 import 'package:flutter/material.dart'
     show
@@ -53,7 +54,8 @@ import 'package:flutter/material.dart'
         RawScrollbar,
         Radius,
         Builder,
-        ListView;
+        ListView,
+        NeverScrollableScrollPhysics;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:mynt_plus/res/res.dart';
@@ -64,6 +66,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import '../../../models/portfolio_model/position_book_model.dart';
 import '../../../res/res.dart';
 import '../../../provider/portfolio_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../res/mynt_web_text_styles.dart';
@@ -81,13 +84,32 @@ class PositionTable extends ConsumerStatefulWidget {
   final String? searchQuery;
   final String filterType;
 
-  const PositionTable({super.key, this.searchQuery, this.filterType = 'All'});
+  /// Sort to start with, and where to report a change to.
+  ///
+  /// The sort used to live only in this widget's State, so a Refresh — which
+  /// swaps the whole table for a loader — destroyed it while the search box
+  /// and the filter chip, both owned by the screen, survived. The screen now
+  /// owns all three, so Refresh keeps the user's view intact.
+  final int? initialSortColumnIndex;
+  final bool initialSortAscending;
+  final void Function(int? columnIndex, bool ascending)? onSortChanged;
+
+  const PositionTable({
+    super.key,
+    this.searchQuery,
+    this.filterType = 'All',
+    this.initialSortColumnIndex,
+    this.initialSortAscending = true,
+    this.onSortChanged,
+  });
 
   @override
   ConsumerState<PositionTable> createState() => _PositionTableState();
 }
 
 class _PositionTableState extends ConsumerState<PositionTable> {
+  // Seeded from the screen in initState so a Refresh, which rebuilds this
+  // widget from scratch, comes back with the same sort still applied.
   int? _sortColumnIndex;
   bool _sortAscending = true;
   // PERFORMANCE FIX: Use ValueNotifier for hover instead of setState
@@ -116,6 +138,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
   @override
   void initState() {
     super.initState();
+    _sortColumnIndex = widget.initialSortColumnIndex;
+    _sortAscending = widget.initialSortAscending;
     _verticalScrollController = ScrollController();
     _horizontalScrollController = ScrollController();
 
@@ -217,6 +241,10 @@ class _PositionTableState extends ConsumerState<PositionTable> {
 
   // Helper method to format instrument display text (without exchange - exchange shown separately)
   String _formatInstrumentText(PositionBookModel position) {
+    // Priority 0: backend display name from the DerivativeMaster (derivatives).
+    final master = position.masterName;
+    if (master != null && master.isNotEmpty) return master;
+
     // Priority 1: Use dname (display name) if available
     if (position.dname != null && position.dname!.isNotEmpty) {
       return position.dname!.replaceAll("-EQ", "").trim();
@@ -252,6 +280,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
     bool alignRight = false,
     bool isClosed = false,
     dynamic position, // Pass position data for automatic row tap handling
+    VoidCallback? onCellTap, // Tap for cells that do not open the detail screen
   }) {
     final isFirstColumn = columnIndex == 0; // Select checkbox column
     final isInstrumentColumn = columnIndex == 2; // Instrument column (now index 2)
@@ -340,6 +369,15 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                   _hoveredRowIndex.value = null;
                   _showPositionDetail(position);
                 },
+                behavior: HitTestBehavior.opaque,
+                child: container,
+              );
+            }
+            // Cells with their own action — the Select column, where the tap
+            // toggles the row instead of opening the detail screen.
+            if (onCellTap != null) {
+              return GestureDetector(
+                onTap: onCellTap,
                 behavior: HitTestBehavior.opaque,
                 child: container,
               );
@@ -451,6 +489,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
         _sortAscending = true;
       }
     });
+    // Hand the new sort to the screen, which outlives a Refresh.
+    widget.onSortChanged?.call(_sortColumnIndex, _sortAscending);
   }
 
   // Get column index for header
@@ -493,8 +533,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
 
   // Check if position is closed
   bool _isPositionClosed(PositionBookModel position) {
-    final qty = int.tryParse(position.qty ?? '0') ?? 0;
-    return qty == 0;
+    final netqty = int.tryParse(position.netqty ?? '0') ?? 0;
+    return netqty == 0;
   }
 
   // Get position text color
@@ -522,9 +562,20 @@ class _PositionTableState extends ConsumerState<PositionTable> {
     final searchQuery = widget.searchQuery?.toLowerCase().trim() ?? '';
     if (searchQuery.isNotEmpty) {
       filtered = filtered.where((position) {
-        final symbol = position.symbol?.toLowerCase() ?? '';
-        final exch = position.exch?.toLowerCase() ?? '';
-        return symbol.contains(searchQuery) || exch.contains(searchQuery);
+        // Match the displayed contract name (master/dname/tsym) and its
+        // parsed parts so expiry ("JUL", "24 JUL 26") and strike/option
+        // ("270 CE") searches work, not just the underlying symbol.
+        final searchable = [
+          position.masterName,
+          position.dname,
+          position.tsym,
+          position.symbol,
+          position.expDate,
+          position.option,
+          position.exch,
+        ];
+        return searchable.any(
+            (field) => (field ?? '').toLowerCase().contains(searchQuery));
       }).toList();
     }
 
@@ -544,8 +595,10 @@ class _PositionTableState extends ConsumerState<PositionTable> {
             comparison = (a.sPrdtAli ?? '').compareTo(b.sPrdtAli ?? '');
             break;
           case 2: // Instrument
-            comparison = '${a.symbol ?? ''} ${a.exch ?? ''}'
-                .compareTo('${b.symbol ?? ''} ${b.exch ?? ''}');
+            // Compare the displayed contract name (master/dname/tsym) — the
+            // parsed symbol alone ties for every contract of one underlying.
+            comparison = _formatInstrumentText(a)
+                .compareTo(_formatInstrumentText(b));
             break;
           case 3: // Qty
             comparison = (int.tryParse(a.qty ?? '0') ?? 0)
@@ -611,7 +664,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
   Map<int, double> _calculateMinWidths(
       List<PositionBookModel> positions, BuildContext context) {
     // Use fixed font size for measurement (table text is not responsive, only buttons are)
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 16.0; // Reduced from 24.0 for tighter layout
     const sortIconWidth = 24.0;
 
@@ -666,7 +719,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
 
             // Measure exchange with smaller font (fixed 12px, matches rendering)
             final exchangeStyle =
-                const TextStyle(fontSize: 12, fontFamily: 'Geist');
+                TextStyle(fontSize: 12, fontFamily: dyslexiaFontOr('Geist'));
             final exchangeWidth = exchangeText.isNotEmpty
                 ? _measureTextWidth(exchangeText, exchangeStyle)
                 : 0.0;
@@ -742,6 +795,7 @@ class _PositionTableState extends ConsumerState<PositionTable> {
     final positions = portfolioData.allPostionList.isNotEmpty
         ? portfolioData.allPostionList
         : portfolioData.openPosition ?? [];
+
 
     final theme = ref.read(themeProvider);
     final positionBook = ref.read(portfolioProvider);
@@ -972,6 +1026,12 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                                     isClosed: isClosed,
                                     // Pass position for clickable cells (not Select column)
                                     position: isClickable ? position : null,
+                                    // Select column: the whole cell toggles the
+                                    // row, so the target is not just the box.
+                                    onCellTap: (header == 'Select' && !isClosed)
+                                        ? () => _toggleSelect(
+                                            position, positionBook)
+                                        : null,
                                     child: _buildCellContent(
                                       context,
                                       header,
@@ -997,33 +1057,35 @@ class _PositionTableState extends ConsumerState<PositionTable> {
             );
           }
 
-          // Wrap in horizontal scroll if needed
-          if (needsHorizontalScroll) {
-            return RawScrollbar(
-              controller: _horizontalScrollController,
-              thumbVisibility: true,
-              trackVisibility: true,
-              trackColor: resolveThemeColor(context,
-                  dark: Colors.grey.withOpacity(0.1),
-                  light: Colors.grey.withOpacity(0.1)),
-              thumbColor: resolveThemeColor(context,
-                  dark: Colors.grey.withOpacity(0.3),
-                  light: Colors.grey.withOpacity(0.3)),
-              thickness: 6,
-              radius: const Radius.circular(3),
-              interactive: true,
-              child: SingleChildScrollView(
-                controller: _horizontalScrollController,
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: totalRequiredWidth,
-                  child: buildTableContent(),
-                ),
+          // Always use the same widget tree structure to prevent
+          // "ScrollController attached to more than one ScrollPosition"
+          // errors caused by LayoutBuilder toggling between different trees.
+          // When horizontal scroll isn't needed, just disable the physics.
+          return RawScrollbar(
+            controller: needsHorizontalScroll ? _horizontalScrollController : null,
+            thumbVisibility: needsHorizontalScroll,
+            trackVisibility: needsHorizontalScroll,
+            trackColor: resolveThemeColor(context,
+                dark: Colors.grey.withOpacity(0.1),
+                light: Colors.grey.withOpacity(0.1)),
+            thumbColor: resolveThemeColor(context,
+                dark: Colors.grey.withOpacity(0.3),
+                light: Colors.grey.withOpacity(0.3)),
+            thickness: needsHorizontalScroll ? 6 : 0,
+            radius: const Radius.circular(3),
+            interactive: needsHorizontalScroll,
+            child: SingleChildScrollView(
+              controller: needsHorizontalScroll ? _horizontalScrollController : null,
+              scrollDirection: Axis.horizontal,
+              physics: needsHorizontalScroll
+                  ? null
+                  : const NeverScrollableScrollPhysics(),
+              child: SizedBox(
+                width: needsHorizontalScroll ? totalRequiredWidth : availableWidth,
+                child: buildTableContent(),
               ),
-            );
-          } else {
-            return buildTableContent();
-          }
+            ),
+          );
         },
       ),
     );
@@ -1111,7 +1173,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
             context, position, theme, isClosed, isRowHovered, positionBook,
             rowIndex: rowIndex);
       case 'Qty':
-        final formattedQty = _formatPositionQty(position);
+        // Privacy Mode: qty (with its long/short sign and colour) is hidden.
+        final privacy = ref.watch(privacyProvider);
+        final formattedQty = privacy.mask(_formatPositionQty(position));
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1123,12 +1187,15 @@ class _PositionTableState extends ConsumerState<PositionTable> {
               style: _getTextStyle(context,
                   color: isClosed
                       ? textColor
-                      : _getQtyColor(formattedQty, context)),
+                      : (privacy.isPrivate
+                          ? _getCellColor(0.0, context)
+                          : _getQtyColor(formattedQty, context))),
             ),
           ),
         );
       case 'Act Avg':
-        final avgValue = position.avgPrc ?? '0.00';
+        final avgValue =
+            ref.watch(privacyProvider).mask(position.avgPrc ?? '0.00');
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1158,8 +1225,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
         );
       case 'P&L':
         // Just display provider value - positionCal() already calculates correctly
+        final pnlPrivacy = ref.watch(privacyProvider);
         final pnlValue = position.profitNloss ?? '0.00';
-        final displayPnl = pnlValue.toIndianFormat();
+        final displayPnl = pnlPrivacy.mask(pnlValue.toIndianFormat());
         return Align(
           alignment: alignment,
           child: Tooltip(
@@ -1169,7 +1237,11 @@ class _PositionTableState extends ConsumerState<PositionTable> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: _getTextStyle(context,
-                  color: _getCellColor(double.tryParse(pnlValue) ?? 0.0, context)),
+                  color: _getCellColor(
+                      pnlPrivacy.isPrivate
+                          ? 0.0
+                          : (double.tryParse(pnlValue) ?? 0.0),
+                      context)),
             ),
           ),
         );
@@ -1286,7 +1358,8 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                 );
               } else if (isLastColumn) {
                 // Show total P&L value
-                final displayTotal = totalPnl.toIndianFormat();
+                final privacy = ref.watch(privacyProvider);
+                final displayTotal = privacy.mask(totalPnl.toIndianFormat());
                 cellContent = Align(
                   alignment: Alignment.centerRight,
                   child: Tooltip(
@@ -1296,7 +1369,9 @@ class _PositionTableState extends ConsumerState<PositionTable> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: _getTextStyle(context,
-                          color: _getCellColor(totalPnl, context)).copyWith(
+                          color: _getCellColor(
+                              privacy.isPrivate ? 0.0 : totalPnl,
+                              context)).copyWith(
                         fontWeight: MyntFonts.semiBold,
                       ),
                     ),
@@ -1328,6 +1403,22 @@ class _PositionTableState extends ConsumerState<PositionTable> {
         ],
       ),
     );
+  }
+
+  // Toggle a row's exit selection from anywhere in the Select column, not just
+  // the 18px box. Matched by token AND product, the same way the checkbox cell
+  // does, so MIS and NRML rows of one symbol stay independent. Closed rows are
+  // never wired up — their checkbox is disabled, so the cell stays dead.
+  void _toggleSelect(
+    PositionBookModel position,
+    PortfolioProvider positionBook,
+  ) {
+    final openPositions = positionBook.openPosition ?? [];
+    final index = openPositions.indexWhere(
+        (p) => p.token == position.token && p.sPrdtAli == position.sPrdtAli);
+    if (index >= 0) {
+      positionBook.selectExitPosition(index);
+    }
   }
 
   // Build checkbox cell

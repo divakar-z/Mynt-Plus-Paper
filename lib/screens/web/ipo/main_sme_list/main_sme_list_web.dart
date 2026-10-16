@@ -11,6 +11,7 @@ import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../../models/ipo_model/ipo_mainstream_model.dart';
+import '../../../../models/ipo_model/ipo_pre_close_model.dart';
 import '../../../../models/ipo_model/ipo_sme_model.dart';
 import '../../../../provider/iop_provider.dart';
 import '../../../../provider/stocks_provider.dart';
@@ -19,7 +20,6 @@ import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../sharedWidget/functions.dart';
 import '../../../../sharedWidget/no_data_found.dart';
-import '../../../Mobile/ipo/preclose_ipo/preclose_ipo_screen.dart';
 import '../IPO_order_screen/ipo_order_screen_web.dart';
 import '../ipo_details_sheet_web.dart';
 
@@ -106,13 +106,19 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
           "Pre-open";
     }).toList();
 
-    // Combine all IPOs for table display
+    final preCloseMsg = ipos.ipoPreClose?.msg;
+    final List<Msg> closedIpos =
+        preCloseMsg != null ? List<Msg>.from(preCloseMsg) : <Msg>[];
+    if (closedIpos.isNotEmpty) {
+      ipos.sortpreCloseIPOListByDate(closedIpos);
+    }
+
+    // Combine all IPOs for table display (open + pre-open, sortable;
+    // closed appended at the end and not sorted by column headers).
     List<dynamic> allIpos = [...openIpos, ...preOpenIpos];
 
-    final preCloseMsg = ipos.ipoPreClose?.msg;
-    final hasAnyData = openIpos.isNotEmpty ||
-        preOpenIpos.isNotEmpty ||
-        (preCloseMsg != null && preCloseMsg.isNotEmpty);
+    final hasAnyData =
+        openIpos.isNotEmpty || preOpenIpos.isNotEmpty || closedIpos.isNotEmpty;
 
     // Show loader while data is being fetched
     if (ipos.loading) {
@@ -134,8 +140,11 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
       );
     }
 
-    // Apply sorting
-    final sortedIpos = _getSortedIPOs(allIpos);
+    // Apply sorting to open/pre-open, then append closed rows at the end.
+    final List<dynamic> sortedIpos = [
+      ..._getSortedIPOs(allIpos),
+      ...closedIpos,
+    ];
 
     return SizedBox.expand(
       child: Container(
@@ -144,19 +153,8 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
         color: resolveThemeColor(context,
             dark: MyntColors.backgroundColorDark,
             light: MyntColors.backgroundColor),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (_hasPreCloseData(ipos)) ...[
-              const ClosedIPOScreen(),
-              const SizedBox(height: 16),
-            ],
-            Expanded(
-              child: _buildIPOTable(
-                  sortedIpos, theme, ipos, ref.read(transcationProvider)),
-            ),
-          ],
-        ),
+        child: _buildIPOTable(
+            sortedIpos, theme, ipos, ref.read(transcationProvider)),
       ),
     );
   }
@@ -170,12 +168,7 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
     return mainstreamipo.mainsme;
   }
 
-  bool _hasPreCloseData(IPOProvider ipos) {
-    final preCloseMsg = ipos.ipoPreClose?.msg;
-    return preCloseMsg != null && preCloseMsg.isNotEmpty;
-  }
-
-  List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
+List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     if (_sortColumnIndex == null) return ipos;
 
     final sorted = List<dynamic>.from(ipos);
@@ -345,6 +338,9 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
 
   shadcn.TableRow _buildShadcnRow(dynamic ipo, int index, ThemesProvider theme,
       IPOProvider ipoProvider, TranctionProvider upiProvider) {
+    if (ipo is Msg) {
+      return _buildClosedShadcnRow(ipo, index, theme, ipoProvider);
+    }
     final uniqueId = '${ipo.id ?? ""}$index';
     final isPreOpen =
         ipostartdate(ipo.biddingStartDate, ipo.biddingEndDate) == "Pre-open";
@@ -447,6 +443,313 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
         ),
       ],
     );
+  }
+
+  shadcn.TableRow _buildClosedShadcnRow(
+      Msg ipo, int index, ThemesProvider theme, IPOProvider ipoProvider) {
+    final uniqueId = 'closed_${ipo.id ?? ""}_$index';
+    final rowIsHovered = _hoveredRowId == uniqueId;
+    void onTap() => _onClosedIPOTap(context, ipo, ipoProvider);
+
+    return shadcn.TableRow(
+      cells: [
+        _buildClosedNameCell(ipo, uniqueId, rowIsHovered, theme, onTap),
+        _buildShadcnCell(
+          uniqueId: uniqueId,
+          rowIsHovered: rowIsHovered,
+          theme: theme,
+          onTap: onTap,
+          child: Text(
+            _formatClosedIPODate(ipo),
+            style: MyntWebTextStyles.bodyMedium(
+              context,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textPrimaryDark,
+                  light: MyntColors.textPrimary),
+              fontWeight: MyntFonts.medium,
+            ),
+            overflow: TextOverflow.visible,
+            softWrap: false,
+          ),
+        ),
+        _buildShadcnCell(
+          uniqueId: uniqueId,
+          rowIsHovered: rowIsHovered,
+          theme: theme,
+          alignRight: true,
+          onTap: onTap,
+          child: Text(
+            _formatClosedPriceRange(ipo),
+            style: MyntWebTextStyles.bodyMedium(
+              context,
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textPrimaryDark,
+                  light: MyntColors.textPrimary),
+              fontWeight: MyntFonts.medium,
+            ),
+          ),
+        ),
+        _buildShadcnCell(
+          uniqueId: uniqueId,
+          rowIsHovered: rowIsHovered,
+          theme: theme,
+          alignRight: true,
+          padding: const EdgeInsets.only(
+              left: 8.0, right: 24.0, top: 8.0, bottom: 8.0),
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _formatClosedMinAmount(ipo),
+                style: MyntWebTextStyles.bodyMedium(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary),
+                  fontWeight: MyntFonts.medium,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (ipo.minBidQu != null && ipo.minBidQu! > 0) ...[
+                const SizedBox(height: 1),
+                Text(
+                  "${ipo.minBidQu} Qty",
+                  style: MyntWebTextStyles.bodySmall(
+                    context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary),
+                    fontWeight: MyntFonts.medium,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  shadcn.TableCell _buildClosedNameCell(Msg ipo, String uniqueId,
+      bool rowIsHovered, ThemesProvider theme, VoidCallback onTap) {
+    return shadcn.TableCell(
+      theme: const shadcn.TableCellTheme(
+        border: shadcn.WidgetStatePropertyAll(
+          shadcn.Border(
+            top: shadcn.BorderSide.none,
+            bottom: shadcn.BorderSide.none,
+            left: shadcn.BorderSide.none,
+            right: shadcn.BorderSide.none,
+          ),
+        ),
+      ),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hoveredRowId = uniqueId),
+        onExit: (_) => setState(() => _hoveredRowId = null),
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            color: rowIsHovered
+                ? resolveThemeColor(context,
+                        dark: MyntColors.primaryDark,
+                        light: MyntColors.primary)
+                    .withOpacity(theme.isDarkMode ? 0.06 : 0.10)
+                : Colors.transparent,
+            padding: const EdgeInsets.only(
+                left: 15.0, right: 8.0, top: 8.0, bottom: 8.0),
+            width: double.infinity,
+            height: double.infinity,
+            alignment: Alignment.centerLeft,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _toTitleCase(ipo.companyName ?? ipo.name ?? ""),
+                  style: MyntWebTextStyles.bodyMedium(
+                    context,
+                    fontWeight: MyntFonts.medium,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      ipo.ipoType ?? "IPO",
+                      style: MyntWebTextStyles.bodySmall(
+                        context,
+                        color: resolveThemeColor(context,
+                            dark: MyntColors.textSecondaryDark,
+                            light: MyntColors.textSecondary),
+                        fontWeight: MyntFonts.medium,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    _buildClosedBadge(),
+                    if (ipo.totalsub != null && ipo.totalsub!.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        "${ipo.totalsub}x sub",
+                        style: MyntWebTextStyles.bodySmall(
+                          context,
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.textSecondaryDark,
+                              light: MyntColors.textSecondary),
+                          fontWeight: MyntFonts.medium,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatClosedIPODate(Msg ipo) {
+    try {
+      final startStr = ipo.iPOStartDate;
+      final endStr = ipo.iPOEndDate;
+
+      if (startStr == null ||
+          startStr.isEmpty ||
+          endStr == null ||
+          endStr.isEmpty) {
+        return "-";
+      }
+
+      DateTime? startDate;
+      DateTime? endDate;
+
+      startDate = _tryParseClosedDate(startStr);
+      endDate = _tryParseClosedDate(endStr);
+
+      if (startDate == null || endDate == null) return "-";
+
+      final startDayStr = _getOrdinalSuffix(startDate.day);
+      final endDayStr = _getOrdinalSuffix(endDate.day);
+      final startMonthYear = DateFormat('MMM yyyy').format(startDate);
+      final endMonthYear = DateFormat('MMM yyyy').format(endDate);
+
+      final isSameDay = startDate.year == endDate.year &&
+          startDate.month == endDate.month &&
+          startDate.day == endDate.day;
+
+      if (isSameDay) {
+        return "$startDayStr $startMonthYear";
+      } else if (startMonthYear == endMonthYear) {
+        return "$startDayStr - $endDayStr $endMonthYear";
+      } else {
+        return "$startDayStr $startMonthYear - $endDayStr $endMonthYear";
+      }
+    } catch (_) {
+      return "-";
+    }
+  }
+
+  Widget _buildClosedBadge() {
+    final color = resolveThemeColor(context,
+        dark: MyntColors.lossDark, light: MyntColors.loss);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        "Closed",
+        style: MyntWebTextStyles.bodySmall(
+          context,
+          color: color,
+          fontWeight: MyntFonts.semiBold,
+        ),
+      ),
+    );
+  }
+
+  DateTime? _tryParseClosedDate(String s) {
+    const formats = [
+      "MMM dd, yyyy",
+      "dd-MMM-yyyy",
+      "dd-MM-yyyy",
+      "EEE, dd MMM yyyy HH:mm:ss",
+    ];
+    for (final f in formats) {
+      try {
+        return DateFormat(f).parse(s);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  String _formatClosedPriceRange(Msg ipo) {
+    final range = ipo.priceRange;
+    if (range == null || range.isEmpty) return "-";
+    final parts = range.split('-').map((s) => s.trim()).toList();
+    if (parts.length == 2) {
+      return "₹${parts[0]} - ₹${parts[1]}";
+    }
+    return "₹$range";
+  }
+
+  String _formatClosedMinAmount(Msg ipo) {
+    final minPrice = ipo.minPrice;
+    final minQty = ipo.minBidQu;
+    if (minPrice == null || minQty == null || minPrice <= 0 || minQty <= 0) {
+      return "-";
+    }
+    final amount = minPrice * minQty;
+    return "₹${convertCurrencyINRStandard(amount)}";
+  }
+
+  Future<void> _onClosedIPOTap(
+      BuildContext context, Msg ipo, IPOProvider ipoProvider) async {
+    if (_isNavigating) return;
+    _isNavigating = true;
+    try {
+      await ipoProvider.getIpoSinglePage(ipoName: "${ipo.companyName}");
+
+      if (!context.mounted) return;
+
+      shadcn.openSheet(
+        context: context,
+        position: shadcn.OverlayPosition.end,
+        barrierColor: Colors.transparent,
+        builder: (sheetContext) {
+          return Container(
+            width: 480,
+            decoration: BoxDecoration(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.backgroundColorDark,
+                  light: MyntColors.backgroundColor),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 10,
+                ),
+              ],
+            ),
+            child: IpoDetailsSheetWeb(ipo: ipo, parentContext: context),
+          );
+        },
+      );
+    } finally {
+      _isNavigating = false;
+    }
   }
 
   shadcn.TableCell _buildShadcnCell({

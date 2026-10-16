@@ -1,3 +1,4 @@
+import 'package:mynt_plus/api/journal_notes_api.dart';
 import 'package:mynt_plus/api/ledger_api.dart';
 import '../api_key_generate_api.dart';
 import '../auth_api.dart';
@@ -14,9 +15,12 @@ import '../notification_api.dart';
 import '../order_api.dart';
 import '../portfolio_api.dart';
 import '../profile_all_details_api.dart';
+import '../rupeecase_api.dart';
+import '../stock_scanner_api.dart';
 import '../stocks_api.dart';
 import '../transcation_api.dart';
 import '../user_profile_api.dart';
+import '../support_client_api.dart';
 import '../version_api.dart';
 import 'api_core.dart';
 
@@ -42,4 +46,8 @@ class ApiExporter
         MockApiResponse,
         LedgerApi,
         ProfileAllDetailsApi,
-        VersionApi {}
+        VersionApi,
+        StockScannerApi,
+        RupeeCaseApi,
+        JournalNotesApi,
+        SupportClientApi {}

@@ -26,6 +26,10 @@ class NavigationDrawerWeb extends StatelessWidget {
   final VoidCallback? onOptionFlashTap;
   final VoidCallback? onScalperTap;
   final VoidCallback? onStrategyBuilderTap;
+  final VoidCallback? onInstaOptionsTap;
+  final VoidCallback? onScannerTap;
+  final VoidCallback? onOrderflowTap;
+  final VoidCallback? onChartsTap;
   final VoidCallback? onClose;
 
   // Control which items to show - if null, show all items
@@ -41,6 +45,10 @@ class NavigationDrawerWeb extends StatelessWidget {
   final bool? showOptionFlash;
   final bool? showScalper;
   final bool? showStrategyBuilder;
+  final bool? showInstaOptions;
+  final bool? showScanner;
+  final bool? showOrderflow;
+  final bool? showCharts;
 
   const NavigationDrawerWeb({
     super.key,
@@ -62,6 +70,10 @@ class NavigationDrawerWeb extends StatelessWidget {
     this.onOptionFlashTap,
     this.onScalperTap,
     this.onStrategyBuilderTap,
+    this.onInstaOptionsTap,
+    this.onScannerTap,
+    this.onOrderflowTap,
+    this.onChartsTap,
     this.onClose,
     this.showHome,
     this.showPositions,
@@ -75,6 +87,10 @@ class NavigationDrawerWeb extends StatelessWidget {
     this.showOptionFlash,
     this.showScalper,
     this.showStrategyBuilder,
+    this.showInstaOptions,
+    this.showScanner,
+    this.showOrderflow,
+    this.showCharts,
   });
 
   /// Display name: use userName if available, fallback to clientId
@@ -155,7 +171,7 @@ class NavigationDrawerWeb extends StatelessWidget {
                     ),
 
                   // TRADE section - show if any TRADE item is visible
-                  if ((showPositions ?? true) || (showHoldings ?? true) || (showOrders ?? true) || (showFunds ?? true) || (showOptionZ ?? (onOptionZTap != null)) || (showOptionFlash ?? (onOptionFlashTap != null)) || (showScalper ?? (onScalperTap != null)) || (showStrategyBuilder ?? (onStrategyBuilderTap != null)))
+                  if ((showPositions ?? true) || (showHoldings ?? true) || (showOrders ?? true) || (showFunds ?? true) || (showOptionZ ?? (onOptionZTap != null)) || (showOptionFlash ?? (onOptionFlashTap != null)) || (showScalper ?? (onScalperTap != null)) || (showStrategyBuilder ?? (onStrategyBuilderTap != null)) || (showScanner ?? (onScannerTap != null)) || (showOrderflow ?? (onOrderflowTap != null)) || (showCharts ?? (onChartsTap != null)))
                     _buildSectionHeader(context, 'TRADE'),
                   if (showPositions ?? true)
                     _buildDrawerItem(
@@ -206,22 +222,53 @@ class NavigationDrawerWeb extends StatelessWidget {
                       onTap: onOptionFlashTap!,
                     ),
                   if ((showScalper ?? (onScalperTap != null)) && onScalperTap != null)
-                    _buildDrawerItemWithBadge(
+                    _buildDrawerItem(
                       context: context,
                       title: 'Scalper',
                       icon: Icons.speed,
                       screenName: 'scalper',
-                      badge: 'Beta',
                       onTap: onScalperTap!,
                     ),
                   if ((showStrategyBuilder ?? (onStrategyBuilderTap != null)) && onStrategyBuilderTap != null)
-                    _buildDrawerItemWithBadge(
+                    _buildDrawerItem(
                       context: context,
                       title: 'Strategy Builder',
                       icon: Icons.show_chart,
                       screenName: 'strategyBuilder',
-                      badge: 'NEW',
                       onTap: onStrategyBuilderTap!,
+                    ),
+                  if ((showInstaOptions ?? (onInstaOptionsTap != null)) && onInstaOptionsTap != null)
+                    _buildDrawerItem(
+                      context: context,
+                      title: 'Option Analysis',
+                      icon: shadcn.LucideIcons.activity,
+                      screenName: 'instaOptions',
+                      badge: 'NEW',
+                      onTap: onInstaOptionsTap!,
+                    ),
+                  if ((showScanner ?? (onScannerTap != null)) && onScannerTap != null)
+                    _buildDrawerItem(
+                      context: context,
+                      title: 'Scanner',
+                      icon: shadcn.LucideIcons.radar,
+                      screenName: 'scanner',
+                      onTap: onScannerTap!,
+                    ),
+                  if ((showOrderflow ?? (onOrderflowTap != null)) && onOrderflowTap != null)
+                    _buildDrawerItem(
+                      context: context,
+                      title: 'Orderflow',
+                      icon: shadcn.LucideIcons.activity,
+                      screenName: 'orderflow',
+                      onTap: onOrderflowTap!,
+                    ),
+                  if ((showCharts ?? (onChartsTap != null)) && onChartsTap != null)
+                    _buildDrawerItem(
+                      context: context,
+                      title: 'Charts',
+                      icon: shadcn.LucideIcons.chartLine,
+                      screenName: 'charts',
+                      onTap: onChartsTap!,
                     ),
 
                   // INVEST section - show if any INVEST item is visible
@@ -337,6 +384,7 @@ class NavigationDrawerWeb extends StatelessWidget {
     required IconData icon,
     required String screenName,
     required VoidCallback onTap,
+    String? badge,
   }) {
     final isActive = isScreenActive?.call(screenName) ?? false;
 
@@ -372,6 +420,20 @@ class NavigationDrawerWeb extends StatelessWidget {
                     fontWeight: isActive ? MyntFonts.bold : MyntFonts.medium,
                   ),
                 ),
+                if (badge != null) ...[
+                  const SizedBox(width: 4),
+                  Transform.translate(
+                    offset: const Offset(0, -6),
+                    child: Text(
+                      badge,
+                      style: MyntWebTextStyles.caption(
+                        context,
+                        color: Colors.red,
+                        fontWeight: MyntFonts.semiBold,
+                      ).copyWith(fontSize: 10),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -380,65 +442,4 @@ class NavigationDrawerWeb extends StatelessWidget {
     );
   }
 
-  Widget _buildDrawerItemWithBadge({
-    required BuildContext context,
-    required String title,
-    required IconData icon,
-    required String screenName,
-    required String badge,
-    required VoidCallback onTap,
-  }) {
-    final isActive = isScreenActive?.call(screenName) ?? false;
-
-    final activeColor = resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final textColor = resolveThemeColor(context,
-        dark: MyntColors.textPrimaryDark,
-        light: MyntColors.textPrimary);
-    final hoverColor = resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withValues(alpha: 0.08);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      child: Material(
-        color: isActive ? hoverColor : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  color: isActive ? activeColor : textColor,
-                  size: 20,
-                ),
-                const SizedBox(width: 14),
-                Text(
-                  title,
-                  style: MyntWebTextStyles.body(
-                    context,
-                    color: isActive ? activeColor : textColor,
-                    fontWeight: isActive ? MyntFonts.bold : MyntFonts.medium,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Transform.translate(
-                  offset: const Offset(0, -6),
-                  child: Text(
-                    badge,
-                    style: MyntWebTextStyles.caption(
-                      context,
-                      color: Colors.red,
-                      fontWeight: MyntFonts.semiBold,
-                    ).copyWith(fontSize: 10),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

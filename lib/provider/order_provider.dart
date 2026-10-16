@@ -53,6 +53,11 @@ class OrderProvider extends DefaultChangeNotifier {
 
   int frezQtyOrderSliceMaxLimit = 40;
 
+  /// Most orders (rows) one web basket may hold. Separate from the slice
+  /// limit above: GetBasketMargin rejects more than 20 rows, and the vendor
+  /// basket caps at 20 too. Normal Place Order still slices up to 40.
+  int basketMaxOrders = 20;
+
   final FToast _fToast = FToast();
   FToast get fToast => _fToast;
   final Ref ref;
@@ -161,6 +166,15 @@ class OrderProvider extends DefaultChangeNotifier {
 
   int _selectedTab = 0;
   int get selectedTab => _selectedTab;
+
+
+  void setSelectedTabSilent(int index) {
+    if (_selectedTab == index) return;
+    _selectedTab = index;
+    tabCtrl?.animateTo(index);
+    _updateTabNamesSilent();
+    notifyListeners();
+  }
 
   List<Tab> _orderTabName = [];
   List<Tab> get orderTabName => _orderTabName;
@@ -380,6 +394,13 @@ class OrderProvider extends DefaultChangeNotifier {
     // --- Batch state changes: set internal state directly, single notifyListeners at the end ---
     // Update tab names without notifying (batched)
     _updateTabNamesSilent();
+
+    // Lazily sort the tab being opened: the fetch only sorts the visible
+    // tab's list (performance), so Open/Executed need their sort applied on
+    // switch or they render in raw API order.
+    if ((index == 0 || index == 1) && _lastOrderSortMethod.isNotEmpty) {
+      _applySortingSilent(_lastOrderSortMethod);
+    }
 
     // Reset search states without triggering notifyListeners
     _showSearchOrder = false;
@@ -650,6 +671,22 @@ class OrderProvider extends DefaultChangeNotifier {
     // Load order tracking data for the selected basket
     await _restoreOrderTrackingData();
 
+    // CO - BO is not allowed in a web basket any more: drop rows saved
+    // earlier as Cover (H) / Bracket (B). Runs after the restore so
+    // removeBsktScrips re-saves the other rows' statuses at their new index.
+    if (kIsWeb) {
+      final coboRows = [
+        for (int i = 0; i < _bsktScripList.length; i++)
+          if (_bsktScripList[i]['prd'] == 'H' ||
+              _bsktScripList[i]['prd'] == 'B')
+            i
+      ];
+      if (coboRows.isNotEmpty) {
+        await removeBsktScrips(coboRows, val);
+        await fetchBasketMargin();
+      }
+    }
+
     // Only update basket order status if we have order book data available
     if (_orderBookModel != null && _orderBookModel!.isNotEmpty) {
       updateBasketOrderStatus();
@@ -777,22 +814,52 @@ class OrderProvider extends DefaultChangeNotifier {
   /// Re-runs search filter on current tab's data without calling notifyListeners
   void _reapplySearchSilent(String value) {
     if (value.isEmpty) return;
-    final upperValue = value.toUpperCase();
     if (_selectedTab == 0 && _openOrder != null && _openOrder!.isNotEmpty) {
       _orderSearchItem = _openOrder!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.dname,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     } else if (_selectedTab == 1 && _executedOrder != null && _executedOrder!.isNotEmpty) {
       _orderSearchItem = _executedOrder!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.dname,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     } else if (_selectedTab == 2 && _tradeBook != null && _tradeBook!.isNotEmpty) {
       _tradeBooksearch = _tradeBook!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.dname,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     } else if (_selectedTab == 3 && _gttOrderBookModel != null && _gttOrderBookModel!.isNotEmpty) {
       _gttOrderBookSearch = _gttOrderBookModel!
-          .where((e) => e.tsym!.toUpperCase().contains(upperValue))
+          .where((e) => contractMatches(value, [
+                e.masterName,
+                e.tsym,
+                e.symbol,
+                e.expDate,
+                e.option,
+                e.exch,
+              ]))
           .toList();
     }
   }
@@ -978,6 +1045,17 @@ class OrderProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// True when [query] appears in any of the contract's name forms (master
+  /// display name, dname, raw tsym, parsed symbol/expiry/option, exchange) so
+  /// search matches whatever the Instrument column displays. Used by
+  /// [searchOrders], [_reapplySearchSilent], and the GTT screen's triggered
+  /// list — keep the field lists in sync, and in sync with the positions
+  /// search in position_table.dart.
+  bool contractMatches(String query, List<String?> fields) {
+    final q = query.toLowerCase();
+    return fields.any((field) => (field ?? '').toLowerCase().contains(q));
+  }
+
   // A single search function to handle search for all order tabs
   searchOrders(String value, BuildContext context) {
 
@@ -995,8 +1073,15 @@ class OrderProvider extends DefaultChangeNotifier {
         case 0: // Open Orders
           if (_openOrder != null && _openOrder!.isNotEmpty) {
             _orderSearchItem = _openOrder!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.dname,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _orderSearchItem = [];
@@ -1005,8 +1090,15 @@ class OrderProvider extends DefaultChangeNotifier {
         case 1: // Executed Orders
           if (_executedOrder != null && _executedOrder!.isNotEmpty) {
             _orderSearchItem = _executedOrder!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.dname,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _orderSearchItem = [];
@@ -1015,8 +1107,15 @@ class OrderProvider extends DefaultChangeNotifier {
         case 2: // Trade Book
           if (_tradeBook != null && _tradeBook!.isNotEmpty) {
             _tradeBooksearch = _tradeBook!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.dname,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _tradeBooksearch = [];
@@ -1025,8 +1124,14 @@ class OrderProvider extends DefaultChangeNotifier {
         case 3: // GTT Orders
           if (_gttOrderBookModel != null && _gttOrderBookModel!.isNotEmpty) {
             _gttOrderBookSearch = _gttOrderBookModel!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      element.masterName,
+                      element.tsym,
+                      element.symbol,
+                      element.expDate,
+                      element.option,
+                      element.exch,
+                    ]))
                 .toList();
           } else {
             _gttOrderBookSearch = [];
@@ -1051,8 +1156,11 @@ class OrderProvider extends DefaultChangeNotifier {
           if (alertProvider.alertPendingModel != null &&
               alertProvider.alertPendingModel!.isNotEmpty) {
             final searchResult = alertProvider.alertPendingModel!
-                .where((element) =>
-                    element.tsym!.toUpperCase().contains(value.toUpperCase()))
+                .where((element) => contractMatches(value, [
+                      DerivativeMaster.nameFor(element.exch, element.token),
+                      element.tsym,
+                      element.exch,
+                    ]))
                 .toList();
             alertProvider.setAlertPendingSearch(searchResult);
           } else {
@@ -1074,9 +1182,12 @@ class OrderProvider extends DefaultChangeNotifier {
 
             // Then apply search filter
             final searchResult = alertRelatedMessages
-                .where((msg) =>
-                    msg.dmsg != null &&
-                    msg.dmsg!.toUpperCase().contains(value.toUpperCase()))
+                .where((msg) => contractMatches(value, [
+                      DerivativeMaster.nameFor(msg.exch, msg.token),
+                      msg.tsym,
+                      msg.dmsg,
+                      msg.exch,
+                    ]))
                 .toList();
             notificationProvider.setTriggeredAlertSearch(searchResult);
           } else {
@@ -1369,7 +1480,8 @@ class OrderProvider extends DefaultChangeNotifier {
       BuildContext context,
       List<PlaceOrderInput> placeOrderInputs,
       int quantity,
-      int reminder) async {
+      int reminder,
+      {VoidCallback? onWebParentClose}) async {
     try {
       _sliceOrderResults.clear();
       List<Future<PlaceOrderModel?>> orderFutures = [];
@@ -1418,6 +1530,9 @@ class OrderProvider extends DefaultChangeNotifier {
         if (kIsWeb) {
           // On web, slice order uses Overlay, so close it using the static method
           SliceOrderSheetWeb.closeOverlay();
+          // Also close the parent Place Order window (caller passes a
+          // sticky-gated callback; mobile closes it via the double pop below).
+          onWebParentClose?.call();
         } else {
           Navigator.pop(context);
           Navigator.pop(context);
@@ -1506,6 +1621,69 @@ class OrderProvider extends DefaultChangeNotifier {
     }
   }
 
+  /// Places a set of pre-sliced child orders for INSTANT mode (no confirmation
+  /// UI). Each input already carries a freeze-qty-bounded quantity. Fires them
+  /// in parallel (same as [slicePlaceOrderWithConfirmation]), refreshes the
+  /// order book, and shows a single summary toast. Unlike the confirmation
+  /// variant, this opens/closes no overlay and performs no navigation — it is
+  /// the headless slicing path the chart's instant orders use.
+  Future<void> placeInstantSlices(
+      BuildContext context, List<PlaceOrderInput> inputs) async {
+    if (inputs.isEmpty) return;
+    try {
+      _sliceOrderResults.clear();
+      final results = await Future.wait(
+          inputs.map((inp) => _placeSliceOrderInternal(inp)));
+      int ok = 0;
+      int fail = 0;
+      bool sessionExpired = false;
+      for (final r in results) {
+        if (r == null) {
+          fail++;
+          continue;
+        }
+        if (r.emsg == "Session Expired :  Invalid Session Key") {
+          sessionExpired = true;
+          break;
+        }
+        if (r.stat == "Ok") {
+          ok++;
+          _sliceOrderResults.add(r);
+        } else {
+          fail++;
+        }
+      }
+      if (sessionExpired) {
+        if (context.mounted) ref.read(authProvider).ifSessionExpired(context);
+        return;
+      }
+      if (ok > 0) fetchOrderBook(context, true);
+      if (context.mounted) {
+        if (fail == 0) {
+          ResponsiveSnackBar.showSuccess(
+              context, "Placed $ok slice order${ok == 1 ? '' : 's'}.");
+        } else if (ok > 0) {
+          ResponsiveSnackBar.showWarning(context,
+              "Placed $ok of ${inputs.length} slices; $fail failed.");
+        } else {
+          ResponsiveSnackBar.showWarning(
+              context, "Failed to place sliced order. Please try again.");
+        }
+      }
+    } catch (e) {
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Instant Slice Order", "Error": "$e"});
+      if (context.mounted) {
+        ResponsiveSnackBar.showWarning(
+            context, "Error placing sliced order: ${e.toString()}");
+      }
+    } finally {
+      notifyListeners();
+    }
+  }
+
   Future fetchOrderBook(context, bool websocCon) async {
     try {
       final freshOrders = List<OrderBookModel>.from(await _fetchPortfolioData('ob'));
@@ -1548,7 +1726,8 @@ class OrderProvider extends DefaultChangeNotifier {
               if (element.exch == "BFO" && element.dname != null) {
                 List<String> splitVal = element.dname!.split(" ");
                 element.symbol = splitVal[0];
-                element.expDate = "${splitVal[1]} ${splitVal[2]}";
+                // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+                element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
                 element.option = splitVal.length > 4
                     ? "${splitVal[3]} ${splitVal[4]}"
                     : splitVal[3];
@@ -1581,7 +1760,9 @@ class OrderProvider extends DefaultChangeNotifier {
           _openOrder = tempOpen;
           _allOrder = tempAll;
 
-          // Reapply the last sort method without notifying (batched)
+          // Reapply the last sort method without notifying (batched).
+          // Performance: only the visible tab's list is sorted here; the
+          // other tabs are sorted lazily on switch (see changeTabIndex).
           if (_lastOrderSortMethod.isNotEmpty) {
             _applySortingSilent(_lastOrderSortMethod);
           }
@@ -1650,7 +1831,8 @@ class OrderProvider extends DefaultChangeNotifier {
               List<String> splitVal = element.dname!.split(" ");
 
               element.symbol = splitVal[0];
-              element.expDate = "${splitVal[1]} ${splitVal[2]}";
+              // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+              element.expDate = bfoExpiryWithYear(splitVal, element.tsym);
               element.option = splitVal.length > 4
                   ? "${splitVal[3]} ${splitVal[4]}"
                   : splitVal[3];
@@ -1747,10 +1929,29 @@ class OrderProvider extends DefaultChangeNotifier {
   /// Toggle between pending and triggered GTT orders
   void toggleTriggeredGtt(bool show, BuildContext context) {
     _showTriggeredGtt = show;
-    if (show && (_triggeredGttOrders == null || _triggeredGttOrders!.isEmpty)) {
+    // Always refetch the tab's own list so switching tabs shows fresh data
+    // if (show && (_triggeredGttOrders == null || _triggeredGttOrders!.isEmpty)) {
+    //   fetchTriggeredGTTOrders(context);
+    // }
+    if (show) {
       fetchTriggeredGTTOrders(context);
+    } else {
+      fetchGTTOrderBook(context, "");
     }
     notifyListeners();
+  }
+
+  /// Sortable ISO key from norentm — accepts "HH:mm:ss dd-MM-yyyy" or ISO,
+  /// returns "" instead of throwing so unparseable rows sink to the bottom.
+  String _triggeredGttSortKey(String? norentm) {
+    final value = norentm?.trim() ?? '';
+    if (value.isEmpty) return '';
+    if (value.contains('T')) return value;
+    try {
+      return convertToISOFormat(value);
+    } catch (_) {
+      return '';
+    }
   }
 
   /// Fetch triggered GTT orders from API
@@ -1778,7 +1979,9 @@ class OrderProvider extends DefaultChangeNotifier {
             element.symbol = "${spilitSymbol["symbol"]}";
             element.expDate = "${spilitSymbol["expDate"]}";
             element.option = "${spilitSymbol["option"]}";
-            element.ordDate = convertToISOFormat("${element.norentm}");
+            // element.ordDate = convertToISOFormat("${element.norentm}");
+            // Guarded parse: one odd norentm must not throw and skip the sort
+            element.ordDate = _triggeredGttSortKey(element.norentm);
             // For triggered orders, use 'stat' as the display status
             if (element.stat != null && element.stat!.isNotEmpty) {
               element.gttOrderCurrentStatus = element.stat;
@@ -2335,27 +2538,38 @@ class OrderProvider extends DefaultChangeNotifier {
         });
         break;
       case "TIMEASC":
-        listToSort.sort((a, b) {
-          final aDate = DateTime.tryParse(formatToDateTime(a.norentm ?? '')) ??
-              DateTime(1970);
-          final bDate = DateTime.tryParse(formatToDateTime(b.norentm ?? '')) ??
-              DateTime(1970);
-          return aDate.compareTo(bDate);
-        });
-        break;
       case "TIMEDSC":
-        listToSort.sort((a, b) {
-          final aDate = DateTime.tryParse(formatToDateTime(a.norentm ?? '')) ??
-              DateTime(1970);
-          final bDate = DateTime.tryParse(formatToDateTime(b.norentm ?? '')) ??
-              DateTime(1970);
-          return bDate.compareTo(aDate);
-        });
+        // Parse each timestamp ONCE (N parses) instead of inside the
+        // comparator (2 × N·logN parses) — keeps tab switches snappy on
+        // large order books.
+        final bool descending = sorting == "TIMEDSC";
+        final keyed = listToSort
+            .map((o) => MapEntry(_orderTimeSortKey(o.norentm), o))
+            .toList();
+        keyed.sort((a, b) => descending
+            ? b.key.compareTo(a.key)
+            : a.key.compareTo(b.key));
+        for (int i = 0; i < keyed.length; i++) {
+          listToSort[i] = keyed[i].value;
+        }
         break;
       default:
         // No sorting
         break;
     }
+  }
+
+  /// Converts the API's "HH:mm:ss dd-MM-yyyy" order timestamp into a
+  /// sortable DateTime; malformed/empty values sort to the very end.
+  DateTime _orderTimeSortKey(String? value) {
+    if (value == null || value.isEmpty) return DateTime(1970);
+    final parts = value.split(' ');
+    if (parts.length != 2) return DateTime(1970);
+    final dateParts = parts[1].split('-');
+    if (dateParts.length != 3) return DateTime(1970);
+    return DateTime.tryParse(
+            '${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[0]}') ??
+        DateTime(1970);
   }
 
   void _sortTradeBook(String sorting) {
@@ -2530,7 +2744,13 @@ class OrderProvider extends DefaultChangeNotifier {
 
       if (_placeGttOrderModel!.stat == "OI created") {
         ConstantName.sessCheck = true;
-        ref.read(ordInputProvider).clearTextField();
+        // Deliberately NOT clearing the form here. With the sticky order
+        // window on the dialog stays open, and clearing left the user staring
+        // at three empty boxes. Delivery and Intraday keep their values in the
+        // same situation, so GTT now behaves the same way. Stale values cannot
+        // leak into a new dialog: place_order_screen_web clears GTT state when
+        // the dialog opens.
+        // ref.read(ordInputProvider).clearTextField();
         await fetchGTTOrderBook(context, "");
 
         if (kIsWeb) {
@@ -2550,6 +2770,15 @@ class OrderProvider extends DefaultChangeNotifier {
                 "Session Expired :  Invalid Session Key" &&
             _placeGttOrderModel!.stat == "Not_Ok") {
           ref.read(authProvider).ifSessionExpired(context);
+        } else {
+          final errorMsg = _placeGttOrderModel!.emsg ??
+              _placeGttOrderModel!.stat ??
+              "Failed to place GTT order";
+          if (kIsWeb) {
+            ResponsiveSnackBar.showWarning(context, errorMsg);
+          } else {
+            warningMessage(context, errorMsg);
+          }
         }
       }
       notifyListeners();
@@ -2563,6 +2792,7 @@ class OrderProvider extends DefaultChangeNotifier {
   }
 
   modifyGTTOrder(PlaceGTTOrderInput input, BuildContext context) async {
+    toggleLoadingOn(true);
     try {
       _modifyGttOrderModel = await api.modifyGTTOrderAPI(input);
 
@@ -2592,18 +2822,23 @@ class OrderProvider extends DefaultChangeNotifier {
           ref.read(authProvider).ifSessionExpired(context);
         }
       }
-      notifyListeners();
     } catch (e) {
       ref
           .read(indexListProvider)
           .logError
           .add({"type": "API Modify GTT Order ", "Error": "$e"});
+    } finally {
+      toggleLoadingOn(false);
       notifyListeners();
     }
   }
 
-  cancelGttOrder(String canId, BuildContext context) async {
+  /// [isOco] only picks the wording. The cancel API takes just an alert id,
+  /// so it cannot tell a single GTT from an OCO - the caller knows and says.
+  cancelGttOrder(String canId, BuildContext context,
+      {bool isOco = false}) async {
     toggleLoadingOn(true);
+    final String label = isOco ? "OCO" : "GTT";
     try {
       _placeGttOrderModel = await api.cancelGTTOrderAPI(canId);
 
@@ -2613,9 +2848,9 @@ class OrderProvider extends DefaultChangeNotifier {
         // Show success message - ResponsiveSnackBar for web, ScaffoldMessenger for mobile
         if (kIsWeb) {
           ResponsiveSnackBar.showSuccess(
-              context, "GTT Order Cancelled Successfully");
+              context, "$label Order Cancelled Successfully");
         } else {
-          showResponsiveSuccess(context, "GTT Order Cancelled Successfully");
+          showResponsiveSuccess(context, "$label Order Cancelled Successfully");
           Navigator.pop(context);
         }
       } else {
@@ -2630,18 +2865,18 @@ class OrderProvider extends DefaultChangeNotifier {
         // Show warning message - ResponsiveSnackBar for web, ScaffoldMessenger for mobile
         if (kIsWeb) {
           ResponsiveSnackBar.showWarning(
-              context, "Provided GTT Order is not found");
+              context, "Provided $label Order is not found");
         } else {
           showResponsiveWarningMessage(
-              context, "Provided GTT Order is not found");
+              context, "Provided $label Order is not found");
           Navigator.pop(context);
         }
 
         if (kIsWeb) {
           ResponsiveSnackBar.showWarning(
-              context, "Provided GTT Order is not found");
+              context, "Provided $label Order is not found");
         } else {
-          warningMessage(context, "Provided GTT Order is not found");
+          warningMessage(context, "Provided $label Order is not found");
         }
         Navigator.pop(context);
       }
@@ -2663,7 +2898,13 @@ class OrderProvider extends DefaultChangeNotifier {
 
       if (_placeGttOrderModel!.stat == "OI created") {
         ConstantName.sessCheck = true;
-        ref.read(ordInputProvider).clearTextField();
+        // Deliberately NOT clearing the form here. With the sticky order
+        // window on the dialog stays open, and clearing left the user staring
+        // at three empty boxes. Delivery and Intraday keep their values in the
+        // same situation, so GTT now behaves the same way. Stale values cannot
+        // leak into a new dialog: place_order_screen_web clears GTT state when
+        // the dialog opens.
+        // ref.read(ordInputProvider).clearTextField();
         await fetchGTTOrderBook(context, "");
 
         if (kIsWeb) {
@@ -2682,6 +2923,15 @@ class OrderProvider extends DefaultChangeNotifier {
                 "Session Expired :  Invalid Session Key" &&
             _placeGttOrderModel!.stat == "Not_Ok") {
           ref.read(authProvider).ifSessionExpired(context);
+        } else {
+          final errorMsg = _placeGttOrderModel!.emsg ??
+              _placeGttOrderModel!.stat ??
+              "Failed to place OCO order";
+          if (kIsWeb) {
+            ResponsiveSnackBar.showWarning(context, errorMsg);
+          } else {
+            warningMessage(context, errorMsg);
+          }
         }
       }
     } catch (e) {
@@ -2695,6 +2945,7 @@ class OrderProvider extends DefaultChangeNotifier {
   }
 
   modifyOCOOrder(PlaceOcoOrderInput input, BuildContext context) async {
+    toggleLoadingOn(true);
     try {
       _modifyGttOrderModel = await api.modifyOCOOrderAPI(input);
 
@@ -2724,12 +2975,13 @@ class OrderProvider extends DefaultChangeNotifier {
           ref.read(authProvider).ifSessionExpired(context);
         }
       }
-      notifyListeners();
     } catch (e) {
       ref
           .read(indexListProvider)
           .logError
           .add({"type": "API Modify OCO Order ", "Error": "$e"});
+    } finally {
+      toggleLoadingOn(false);
       notifyListeners();
     }
   }
@@ -2759,7 +3011,7 @@ class OrderProvider extends DefaultChangeNotifier {
     _bsktList.add({
       "bsketName": trimmedName,
       "createdDate": curDate,
-      "max": frezQtyOrderSliceMaxLimit.toString(),
+      "max": basketMaxOrders.toString(),
       "curLength": '0'
     });
     final userId = pref.clientId;
@@ -2783,14 +3035,19 @@ class OrderProvider extends DefaultChangeNotifier {
     final trimmedNewName = newName.trim();
     final lowerCaseNewName = trimmedNewName.toLowerCase();
 
-    if (oldName.toLowerCase() == lowerCaseNewName) {
+    // Nothing to do only when the name is exactly the same. A case-only
+    // change ("abc" -> "ABC") used to be dropped here.
+    if (oldName == trimmedNewName) {
       Navigator.pop(context);
       return;
     }
 
-    // Check for duplicate basket names
+    // Check for duplicate basket names (the basket being renamed is not a
+    // duplicate of itself, so a case-only rename passes)
     for (var basket in _bsktList) {
-      if (basket['bsketName'].toString().toLowerCase() == lowerCaseNewName) {
+      final existing = basket['bsketName'].toString().toLowerCase();
+      if (existing == oldName.toLowerCase()) continue;
+      if (existing == lowerCaseNewName) {
         if (kIsWeb) {
           ResponsiveSnackBar.showWarning(
               context, "Basket name '$trimmedNewName' already exists");
@@ -3013,6 +3270,12 @@ class OrderProvider extends DefaultChangeNotifier {
     _bsktScrips = allScripts;
     // 5. **Reset all order‑tracking for that basket**
     resetBasketOrderTracking(removedBasketName);
+    // TC_487: if the deleted basket was the open one, drop the selection so
+    // the option chain sidebar stops showing it and scrips can't be added to it.
+    if (_selectedBsktName == removedBasketName) {
+      _selectedBsktName = "";
+      _bsktScripList = [];
+    }
     // 6. Refresh any dependent state (recomputing curLength etc.)
     tabSize();
     notifyListeners();
@@ -3534,6 +3797,186 @@ class OrderProvider extends DefaultChangeNotifier {
     } finally {}
   }
 
+  /// Places one basket row. Returns 'ok', 'failed' or 'session' (expired).
+  /// Shared by placeBasketOrder (whole basket) and placeBasketItems (TC_324.2).
+  Future<String> _placeBasketElement(BuildContext context, Map element,
+      String basketName, String itemKey) async {
+
+    // Set channel - use empty string like mobile, or set to WEB for web platform
+    String channelValue = '';
+    if (kIsWeb) {
+      channelValue = 'WEB';
+    } else {
+      channelValue = defaultTargetPlatform == TargetPlatform.android
+          ? '${ref.read(authProvider).deviceInfo["brand"]}'
+          : "${ref.read(authProvider).deviceInfo["model"]}";
+    }
+
+    // Set default validity (ret) if not provided - same logic as mobile/web place order screens
+    String retValue = element['ret']?.toString().trim() ?? '';
+    if (retValue.isEmpty) {
+      // Default validity based on exchange: EOS for BSE/BFO, DAY for others
+      String exchange = element['exch']?.toString() ?? '';
+      if (exchange == "BSE" || exchange == "BFO") {
+        retValue = "EOS";
+      } else {
+        retValue = "DAY";
+      }
+    }
+
+    // Convert prd to correct code format (same as mobile)
+    // API expects: "C" (Delivery/CNC), "I" (Intraday/MIS), "F" (MTF), "B" (Bracket), "H" (Cover), "M" (Carry Forward/NRML)
+    String prdValue = element['prd']?.toString().trim() ?? '';
+    String ordTypeValue = element['ordType']?.toString().trim() ?? '';
+    String prdCode = prdValue;
+
+    // If prd is stored as name, convert to code
+    if (prdValue.isNotEmpty) {
+      // Check if it's already a code (single character)
+      if (prdValue.length == 1 &&
+          ['C', 'I', 'F', 'B', 'H', 'M'].contains(prdValue.toUpperCase())) {
+        prdCode = prdValue.toUpperCase();
+      } else {
+        // Convert name to code
+        // For "CO - BO", check ordType to determine if it's Cover (H) or Bracket (B)
+        if (prdValue == 'CO - BO' || prdValue == 'CO-BO') {
+          if (ordTypeValue == 'CO') {
+            prdCode = 'H'; // Cover Order
+          } else if (ordTypeValue == 'BO') {
+            prdCode = 'B'; // Bracket Order
+          } else {
+            // Default to Bracket if ordType is not available
+            prdCode = 'B';
+          }
+        } else {
+          Map<String, String> nameToCode = {
+            'Delivery': 'C',
+            'Intraday': 'I',
+            'MTF': 'F',
+            'MIS': 'I',
+            'CNC': 'C',
+            'NRML': 'M',
+            'CO': 'H',
+            'BO': 'B',
+          };
+          prdCode =
+              nameToCode[prdValue] ?? 'C'; // Default to 'C' if not found
+        }
+      }
+
+      // Final validation: For NSE/BSE equity orders, "M" (Carry Forward) is not valid
+      // Convert "M" to "C" (Delivery) for equity orders to prevent rejection
+      String exchange = element['exch']?.toString().trim() ?? '';
+      String tsym = element['tsym']?.toString().trim() ?? '';
+      bool isEquity = (exchange == "NSE" || exchange == "BSE") &&
+          (tsym.endsWith("-EQ") || tsym.contains("EQ"));
+
+      if (prdCode == 'M' && isEquity) {
+        prdCode =
+            'C'; // Convert Carry Forward to Delivery for equity orders
+      }
+    } else {
+      // Default to 'C' (Delivery) if prd is empty
+      prdCode = 'C';
+    }
+
+      // Qty is already stored as actual quantity (lots × lotSize) for MCX in web basket
+      final int finalQty =
+    int.tryParse(element['qty']?.toString() ?? '0') ?? 0;
+
+    PlaceOrderInput placeOrderInput = PlaceOrderInput(
+        amo: element['amo'],
+        blprc: element['blprc'],
+        bpprc: element['bpprc'],
+        dscqty: element['dscqty'],
+        exch: element['exch'],
+        prc: element['mktProt'].toString().isNotEmpty
+            ? element['lp']
+            : element['prc'],
+        prctype: element['prctype'],
+        prd: prdCode, // Use converted code
+        qty: finalQty.toString(),
+        ret: retValue,
+        trailprc: '',
+        trantype: element['trantype'],
+        trgprc: element['trgprc'],
+        tsym: element['tsym'],
+        mktProt: element['mktProt'],
+        channel: channelValue);
+
+    // Print the PlaceOrderInput payload that will be sent to API
+
+    // Print as JSON for easy copy-paste
+    Map<String, dynamic> payloadMap = {
+      "exch": placeOrderInput.exch,
+      "tsym": placeOrderInput.tsym,
+      "qty": placeOrderInput.qty,
+      "prc": (placeOrderInput.prctype == 'MKT' ||
+              placeOrderInput.prctype == 'SL-MKT')
+          ? '0'
+          : placeOrderInput.prc,
+      "prd": placeOrderInput.prd,
+      "trantype": placeOrderInput.trantype,
+      "prctyp": placeOrderInput.prctype,
+      "ret": placeOrderInput.ret.toUpperCase(),
+      "channel": placeOrderInput.channel,
+      "amo": placeOrderInput.amo,
+      "blprc": placeOrderInput.blprc,
+      "bpprc": placeOrderInput.bpprc,
+      "dscqty": placeOrderInput.dscqty,
+      "trgprc": placeOrderInput.trgprc,
+      "trailprc": placeOrderInput.trailprc,
+      "mkt_protection": placeOrderInput.mktProt,
+    };
+
+    _placeOrderModel = await api.getPlaceOrder(placeOrderInput, _ip);
+
+    if (_placeOrderModel != null) {
+
+      // Print full response as JSON
+    }
+
+    if (_placeOrderModel!.emsg ==
+            "Session Expired :  Invalid Session Key" &&
+        _placeOrderModel!.stat == "Not_Ok") {
+      ref.read(authProvider).ifSessionExpired(context);
+      return 'session';
+    } else if (_placeOrderModel!.stat == "Ok" &&
+        _placeOrderModel!.norenordno != null) {
+      // Store successful order details
+      String orderId = _placeOrderModel!.norenordno!;
+
+      _basketOrderIds[basketName]!.add(orderId);
+      _basketOrderStatuses[basketName]![itemKey] = 'placed';
+
+      // Add order tracking to basket item
+      element['orderIds'] = element['orderIds'] ?? [];
+      element['orderIds'].add(orderId);
+      element['orderStatus'] = 'placed';
+
+      ConstantName.sessCheck = true;
+      return 'ok';
+    } else {
+      // Handle failed order
+
+      _basketOrderStatuses[basketName]![itemKey] = 'failed';
+      element['orderStatus'] = 'failed';
+      element['orderError'] = _placeOrderModel!.emsg ?? 'Unknown error';
+      // TC_324.1: shown as the tooltip on the FAILED badge in the basket.
+      element['rejectionReason'] = _placeOrderModel!.emsg ?? 'Unknown error';
+
+      // IMPORTANT: Even failed orders should be tracked if they have an order number
+      // Some APIs return order numbers even for failed orders
+      if (_placeOrderModel!.norenordno != null) {
+        String failedOrderId = _placeOrderModel!.norenordno!;
+        _basketOrderIds[basketName]!.add(failedOrderId);
+        element['orderIds'] = element['orderIds'] ?? [];
+        element['orderIds'].add(failedOrderId);
+      }
+      return 'failed';
+    }
+  }
+
   placeBasketOrder(BuildContext context,
       {bool navigateToOrderBook = true}) async {
     try {
@@ -3565,177 +4008,13 @@ class OrderProvider extends DefaultChangeNotifier {
         var element = sortedBsktScripList[index];
         String itemKey = "${element['tsym']}_${element['token']}_$index";
 
-
-        // Set channel - use empty string like mobile, or set to WEB for web platform
-        String channelValue = '';
-        if (kIsWeb) {
-          channelValue = 'WEB';
+        final result =
+            await _placeBasketElement(context, element, basketName, itemKey);
+        if (result == 'session') break;
+        if (result == 'ok') {
+          successfulOrders.add((element['orderIds'] as List).last.toString());
         } else {
-          channelValue = defaultTargetPlatform == TargetPlatform.android
-              ? '${ref.read(authProvider).deviceInfo["brand"]}'
-              : "${ref.read(authProvider).deviceInfo["model"]}";
-        }
-
-        // Set default validity (ret) if not provided - same logic as mobile/web place order screens
-        String retValue = element['ret']?.toString().trim() ?? '';
-        if (retValue.isEmpty) {
-          // Default validity based on exchange: EOS for BSE/BFO, DAY for others
-          String exchange = element['exch']?.toString() ?? '';
-          if (exchange == "BSE" || exchange == "BFO") {
-            retValue = "EOS";
-          } else {
-            retValue = "DAY";
-          }
-        }
-
-        // Convert prd to correct code format (same as mobile)
-        // API expects: "C" (Delivery/CNC), "I" (Intraday/MIS), "F" (MTF), "B" (Bracket), "H" (Cover), "M" (Carry Forward/NRML)
-        String prdValue = element['prd']?.toString().trim() ?? '';
-        String ordTypeValue = element['ordType']?.toString().trim() ?? '';
-        String prdCode = prdValue;
-
-        // If prd is stored as name, convert to code
-        if (prdValue.isNotEmpty) {
-          // Check if it's already a code (single character)
-          if (prdValue.length == 1 &&
-              ['C', 'I', 'F', 'B', 'H', 'M'].contains(prdValue.toUpperCase())) {
-            prdCode = prdValue.toUpperCase();
-          } else {
-            // Convert name to code
-            // For "CO - BO", check ordType to determine if it's Cover (H) or Bracket (B)
-            if (prdValue == 'CO - BO' || prdValue == 'CO-BO') {
-              if (ordTypeValue == 'CO') {
-                prdCode = 'H'; // Cover Order
-              } else if (ordTypeValue == 'BO') {
-                prdCode = 'B'; // Bracket Order
-              } else {
-                // Default to Bracket if ordType is not available
-                prdCode = 'B';
-              }
-            } else {
-              Map<String, String> nameToCode = {
-                'Delivery': 'C',
-                'Intraday': 'I',
-                'MTF': 'F',
-                'MIS': 'I',
-                'CNC': 'C',
-                'NRML': 'M',
-                'CO': 'H',
-                'BO': 'B',
-              };
-              prdCode =
-                  nameToCode[prdValue] ?? 'C'; // Default to 'C' if not found
-            }
-          }
-
-          // Final validation: For NSE/BSE equity orders, "M" (Carry Forward) is not valid
-          // Convert "M" to "C" (Delivery) for equity orders to prevent rejection
-          String exchange = element['exch']?.toString().trim() ?? '';
-          String tsym = element['tsym']?.toString().trim() ?? '';
-          bool isEquity = (exchange == "NSE" || exchange == "BSE") &&
-              (tsym.endsWith("-EQ") || tsym.contains("EQ"));
-
-          if (prdCode == 'M' && isEquity) {
-            prdCode =
-                'C'; // Convert Carry Forward to Delivery for equity orders
-          }
-        } else {
-          // Default to 'C' (Delivery) if prd is empty
-          prdCode = 'C';
-        }
-
-          // Qty is already stored as actual quantity (lots × lotSize) for MCX in web basket
-          final int finalQty =
-        int.tryParse(element['qty']?.toString() ?? '0') ?? 0;
-
-        PlaceOrderInput placeOrderInput = PlaceOrderInput(
-            amo: element['amo'],
-            blprc: element['blprc'],
-            bpprc: element['bpprc'],
-            dscqty: element['dscqty'],
-            exch: element['exch'],
-            prc: element['mktProt'].toString().isNotEmpty
-                ? element['lp']
-                : element['prc'],
-            prctype: element['prctype'],
-            prd: prdCode, // Use converted code
-            qty: finalQty.toString(),
-            ret: retValue,
-            trailprc: '',
-            trantype: element['trantype'],
-            trgprc: element['trgprc'],
-            tsym: element['tsym'],
-            mktProt: element['mktProt'],
-            channel: channelValue);
-
-        // Print the PlaceOrderInput payload that will be sent to API
-
-        // Print as JSON for easy copy-paste
-        Map<String, dynamic> payloadMap = {
-          "exch": placeOrderInput.exch,
-          "tsym": placeOrderInput.tsym,
-          "qty": placeOrderInput.qty,
-          "prc": (placeOrderInput.prctype == 'MKT' ||
-                  placeOrderInput.prctype == 'SL-MKT')
-              ? '0'
-              : placeOrderInput.prc,
-          "prd": placeOrderInput.prd,
-          "trantype": placeOrderInput.trantype,
-          "prctyp": placeOrderInput.prctype,
-          "ret": placeOrderInput.ret.toUpperCase(),
-          "channel": placeOrderInput.channel,
-          "amo": placeOrderInput.amo,
-          "blprc": placeOrderInput.blprc,
-          "bpprc": placeOrderInput.bpprc,
-          "dscqty": placeOrderInput.dscqty,
-          "trgprc": placeOrderInput.trgprc,
-          "trailprc": placeOrderInput.trailprc,
-          "mkt_protection": placeOrderInput.mktProt,
-        };
-
-        _placeOrderModel = await api.getPlaceOrder(placeOrderInput, _ip);
-
-        if (_placeOrderModel != null) {
-
-          // Print full response as JSON
-        }
-
-        if (_placeOrderModel!.emsg ==
-                "Session Expired :  Invalid Session Key" &&
-            _placeOrderModel!.stat == "Not_Ok") {
-          ref.read(authProvider).ifSessionExpired(context);
-          break;
-        } else if (_placeOrderModel!.stat == "Ok" &&
-            _placeOrderModel!.norenordno != null) {
-          // Store successful order details
-          String orderId = _placeOrderModel!.norenordno!;
-
-          _basketOrderIds[basketName]!.add(orderId);
-          _basketOrderStatuses[basketName]![itemKey] = 'placed';
-
-          // Add order tracking to basket item
-          element['orderIds'] = element['orderIds'] ?? [];
-          element['orderIds'].add(orderId);
-          element['orderStatus'] = 'placed';
-
-          successfulOrders.add(orderId);
-          ConstantName.sessCheck = true;
-        } else {
-          // Handle failed order
-
-          _basketOrderStatuses[basketName]![itemKey] = 'failed';
-          element['orderStatus'] = 'failed';
-          element['orderError'] = _placeOrderModel!.emsg ?? 'Unknown error';
           failedOrders.add(element['tsym']);
-
-          // IMPORTANT: Even failed orders should be tracked if they have an order number
-          // Some APIs return order numbers even for failed orders
-          if (_placeOrderModel!.norenordno != null) {
-            String failedOrderId = _placeOrderModel!.norenordno!;
-            _basketOrderIds[basketName]!.add(failedOrderId);
-            element['orderIds'] = element['orderIds'] ?? [];
-            element['orderIds'].add(failedOrderId);
-          }
         }
       }
 
@@ -3794,6 +4073,107 @@ class OrderProvider extends DefaultChangeNotifier {
           .add({"type": "API Place Slice  Order", "Error": "$e"});
       notifyListeners();
     }
+  }
+
+  /// TC_324.2 (Kite style): place only the given rows of the selected basket.
+  /// A row that already has a status (sent before, even if FAILED) is never
+  /// sent again. Earlier order tracking is kept; new order ids are appended.
+  Future<void> placeBasketItems(BuildContext context, List<int> indices) async {
+    final basketName = _selectedBsktName;
+    if (basketName.isEmpty) return;
+    final previousStatus = _basketOverallStatus[basketName];
+    try {
+      final rows = <int>[
+        for (final i in indices.toSet())
+          if (i >= 0 &&
+              i < _bsktScripList.length &&
+              _bsktScripList[i]['orderStatus'] == null)
+            i
+      ]..sort();
+      if (rows.isEmpty) return;
+
+      // BUY rows before SELL rows, same as placeBasketOrder.
+      final ordered = [
+        ...rows.where((i) => _bsktScripList[i]['trantype'] != 'S'),
+        ...rows.where((i) => _bsktScripList[i]['trantype'] == 'S'),
+      ];
+
+      _basketOrderIds.putIfAbsent(basketName, () => []);
+      _basketOrderStatuses.putIfAbsent(basketName, () => {});
+      _basketOverallStatus[basketName] = 'placing';
+      notifyListeners();
+
+      int ok = 0;
+      int failed = 0;
+      for (final i in ordered) {
+        final element = _bsktScripList[i];
+        final itemKey = "${element['tsym']}_${element['token']}_$i";
+        final result =
+            await _placeBasketElement(context, element, basketName, itemKey);
+        if (result == 'session') break;
+        if (result == 'ok') {
+          ok++;
+        } else {
+          failed++;
+        }
+      }
+
+      if (ok == 0 && failed == 0) {
+        // Session expired before anything was sent.
+        if (previousStatus != null) {
+          _basketOverallStatus[basketName] = previousStatus;
+        } else {
+          _basketOverallStatus.remove(basketName);
+        }
+        notifyListeners();
+        return;
+      }
+
+      // Refined by the next order-book refresh (_updateBasketOrderStatusSilent).
+      _basketOverallStatus[basketName] = failed == 0
+          ? 'placed'
+          : ok == 0
+              ? 'failed'
+              : 'partially_placed';
+
+      await _saveOrderTrackingData();
+
+      if (failed == 0) {
+        ResponsiveSnackBar.showSuccess(
+            context, "Basket Order Successfully Placed ($ok orders)");
+      } else if (ok == 0) {
+        ResponsiveSnackBar.showError(
+            context, "Basket Order Failed - No orders placed");
+      } else {
+        ResponsiveSnackBar.showSuccess(context,
+            "Basket Order Partially Placed - $ok success, $failed failed");
+      }
+      notifyListeners();
+    } catch (e) {
+      if (previousStatus != null) {
+        _basketOverallStatus[basketName] = previousStatus;
+      } else {
+        _basketOverallStatus.remove(basketName);
+      }
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API Place Basket Items", "Error": "$e"});
+      notifyListeners();
+    }
+  }
+
+  /// TC_324.2 (Kite "Delete (N)"): remove several rows from a basket.
+  /// Removing a sent row only drops it from the basket — the order itself
+  /// stays in the order book.
+  Future<void> removeBsktScrips(List<int> indices, String bsktName) async {
+    final sorted = indices.toSet().toList()..sort((a, b) => b.compareTo(a));
+    for (final i in sorted) {
+      await removeBsktScrip(i, bsktName);
+    }
+    // Saved row statuses are matched by position — re-save after the shift.
+    await _saveOrderTrackingData();
+    notifyListeners();
   }
 
   // Method to update basket order statuses from order book data
@@ -3953,6 +4333,14 @@ class OrderProvider extends DefaultChangeNotifier {
           element['orderDetails'] = null;
         } else if (itemStatuses.contains('REJECTED')) {
           element['orderStatus'] = 'REJECTED';
+          // TC_324.1: keep the exchange/RMS reason for the badge tooltip.
+          for (String orderId in itemOrderIds) {
+            final reason = orderIdToModel[orderId]?.rejreason?.trim() ?? '';
+            if (orderIdToStatus[orderId] == 'REJECTED' && reason.isNotEmpty) {
+              element['rejectionReason'] = reason;
+              break;
+            }
+          }
         } else if (itemStatuses.contains('CANCELED')) {
           element['orderStatus'] = 'CANCELED';
         } else if (itemStatuses.contains('COMPLETE')) {
@@ -3968,6 +4356,9 @@ class OrderProvider extends DefaultChangeNotifier {
           element['orderDetails'] = itemOrderDetails;
         }
 
+      } else if (element['orderStatus'] == 'failed') {
+        // TC_324.1: refused by the API (no order number) — keep FAILED and its
+        // reason until the user resets the basket.
       } else {
         // No order IDs means the item was never placed, reset any existing status
         element['orderStatus'] = null;
@@ -4082,23 +4473,67 @@ class OrderProvider extends DefaultChangeNotifier {
     _basketOrderStatuses.remove(basketName);
     _basketOverallStatus.remove(basketName);
 
-    // Clear order tracking from basket items
-    for (var element in _bsktScripList) {
-      element.remove('orderIds');
-      element.remove('orderStatus');
-      element.remove('orderError');
-      element.remove('avgPrice');
-      element.remove('filledQty');
-      element.remove('rejectionReason');
+    // _bsktScripList is the open basket's rows, so only clear it when that
+    // is the basket being reset (the option-chain picker can reset another).
+    if (basketName == _selectedBsktName) {
+      for (var element in _bsktScripList) {
+        _clearRowOrderFields(element);
+      }
     }
 
     // Also clear from persistent storage immediately
     _clearBasketFromPersistentStorage(basketName);
+    // TC_293: the saved basket rows carry orderIds too (written back when the
+    // basket is reopened). Left there, the next reload from storage - adding
+    // a scrip, reopening, F5 - brought the old statuses back after a reset.
+    _clearBasketRowsOrderFieldsInStorage(basketName);
 
     // Save the reset state to preferences
     _saveOrderTrackingData();
 
     notifyListeners();
+  }
+
+  void _clearRowOrderFields(Map element) {
+    element.remove('orderIds');
+    element.remove('orderStatus');
+    element.remove('orderError');
+    element.remove('avgPrice');
+    element.remove('filledQty');
+    element.remove('rejectionReason');
+  }
+
+  // Strips the sent-order fields from one basket's saved rows, using the same
+  // storage the basket scrips are read from (per-user, else general).
+  Future<void> _clearBasketRowsOrderFieldsInStorage(String basketName) async {
+    try {
+      final userId = pref.clientId;
+      final bool perUser = userId != null && userId.isNotEmpty;
+      final String raw = (perUser
+              ? pref.getBasketScripsForUser(userId)
+              : pref.bsktScrips) ??
+          "";
+      if (raw.isEmpty) return;
+
+      final Map<String, dynamic> data = jsonDecode(raw);
+      final List? rows = data[basketName];
+      if (rows == null || rows.isEmpty) return;
+      for (final row in rows) {
+        if (row is Map) _clearRowOrderFields(row);
+      }
+
+      final String jsonData = jsonEncode(data);
+      if (perUser) {
+        await pref.setBasketScripForUser(userId, jsonData);
+      } else {
+        await pref.setBasketScrip(jsonData);
+      }
+      if (_bsktScrips.containsKey(basketName)) {
+        _bsktScrips[basketName] =
+            basketName == _selectedBsktName ? _bsktScripList : rows;
+      }
+    } catch (e) {
+    }
   }
 
   // Helper method to clear specific basket from persistent storage
@@ -4447,6 +4882,15 @@ class OrderProvider extends DefaultChangeNotifier {
                 "Session Expired :  Invalid Session Key" &&
             _placeGttOrderModel!.stat == "Not_Ok") {
           ref.read(authProvider).ifSessionExpired(context);
+        } else {
+          final errorMsg = _placeGttOrderModel!.emsg ??
+              _placeGttOrderModel!.stat ??
+              "Failed to place GTT order";
+          if (kIsWeb) {
+            ResponsiveSnackBar.showWarning(context, errorMsg);
+          } else {
+            warningMessage(context, errorMsg);
+          }
         }
       }
       notifyListeners();

@@ -16,10 +16,15 @@ import 'package:mynt_plus/models/order_book_model/place_order_model.dart';
 import 'package:mynt_plus/models/order_book_model/order_margin_model.dart';
 import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/core/default_change_notifier.dart';
+import 'package:mynt_plus/provider/order_provider.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
 import 'package:mynt_plus/models/portfolio_model/position_book_model.dart';
 import 'package:mynt_plus/models/strategy_builder_model/select_symbols_model.dart';
+import 'package:mynt_plus/models/span_calc_model.dart';
 import 'package:mynt_plus/utils/responsive_snackbar.dart';
+
+/// Market protection (%) on MKT legs; same default as the mobile strategy basket.
+const String _kMarketProtection = '5';
 
 final strategyBuilderProvider =
     ChangeNotifierProvider((ref) => StrategyBuilderProvider(ref));
@@ -38,6 +43,8 @@ class StrategyBasketItem {
   double ltp;
   bool checkbox;
   int lotSize;
+  // Market entry: entryPrice follows the live LTP; the payoff API gets 0.
+  bool isMarket;
 
   // API leg definition — the source of truth for this leg's parameters
   // (exchange, symbol, option_type, expiry type/offset, strike type/offset)
@@ -63,6 +70,7 @@ class StrategyBasketItem {
     required this.ltp,
     this.checkbox = true,
     this.lotSize = 1,
+    this.isMarket = false,
     this.apiLeg,
     this.iv,
     this.delta,
@@ -84,6 +92,7 @@ class StrategyBasketItem {
     double? ltp,
     bool? checkbox,
     int? lotSize,
+    bool? isMarket,
     SelectSymbolsLegRequest? apiLeg,
     double? iv,
     double? delta,
@@ -104,6 +113,7 @@ class StrategyBasketItem {
       ltp: ltp ?? this.ltp,
       checkbox: checkbox ?? this.checkbox,
       lotSize: lotSize ?? this.lotSize,
+      isMarket: isMarket ?? this.isMarket,
       apiLeg: apiLeg ?? this.apiLeg,
       iv: iv ?? this.iv,
       delta: delta ?? this.delta,
@@ -112,6 +122,29 @@ class StrategyBasketItem {
       vega: vega ?? this.vega,
     );
   }
+}
+
+/// One leg's SPAN margin (span + expo) in the margin-benefit breakdown.
+class StrategyMarginLeg {
+  final String name;
+  final double margin;
+  StrategyMarginLeg(this.name, this.margin);
+}
+
+/// Result of the SpanCalc margin-benefit calculation shown in the Margin Info
+/// dialog: each leg's own margin, their sum, the combined margin, and the
+/// benefit (sum - combined). (Zerodha-style)
+class StrategyMarginBenefit {
+  final List<StrategyMarginLeg> legs;
+  final double sumIndividual;
+  final double combined;
+  final double benefit;
+  StrategyMarginBenefit({
+    required this.legs,
+    required this.sumIndividual,
+    required this.combined,
+    required this.benefit,
+  });
 }
 
 /// Predefined strategy model
@@ -385,6 +418,206 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  // ── SpanCalc margin-benefit (shown in the Margin Info dialog) ──────────────
+  // Phase 1: call SpanCalc once per leg (its individual margin) + once for all
+  // legs together (combined), then benefit = sum(individual) - combined. Same
+  // method the mobile SPAN calculator and Zerodha use. The full combined
+  // response is logged so we can later check whether a single combined call is
+  // enough (Phase 2).
+  bool _isCalcMarginBenefit = false;
+  bool get isCalcMarginBenefit => _isCalcMarginBenefit;
+  StrategyMarginBenefit? _marginBenefitResult;
+  StrategyMarginBenefit? get marginBenefitResult => _marginBenefitResult;
+  String? _marginBenefitError;
+  String? get marginBenefitError => _marginBenefitError;
+
+  /// Funds required for [items] treated as one basket, from the SAME API that
+  /// feeds the MARGIN figure in the header (basketMargin, i.e. marginused
+  /// minus marginusedprev).
+  ///
+  /// This popup used to call the SPAN calculator instead, which reports only
+  /// SPAN plus exposure. A bought leg has neither — you pay premium — so it
+  /// came back as zero while the header showed that leg's premium, and the
+  /// popup never added up to the number it is supposed to explain. Reading
+  /// both from one API keeps every line reconciled.
+  Future<double?> _basketMarginFor(List<StrategyBasketItem> items) async {
+    if (items.isEmpty) return null;
+
+    // First leg is the main order, the rest ride along as the basket.
+    final basketList = <Map<String, dynamic>>[];
+    for (int i = 1; i < items.length; i++) {
+      final item = items[i];
+      final qty = item.ordlot * item.lotSize * _lotMultiplier;
+      basketList.add({
+        "exch": item.exch,
+        "tsym": item.tsym,
+        "qty": qty.toString(),
+        "prc": item.entryPrice.toString(),
+        "prd": "M", // NRML - matches order placement
+        "trantype": item.buySell == 'BUY' ? 'B' : 'S',
+        "prctyp": "MKT",
+        "trgprc": "0",
+      });
+    }
+
+    final first = items.first;
+    final firstQty = first.ordlot * first.lotSize * _lotMultiplier;
+    final input = OrderMarginInput(
+      exch: first.exch,
+      tsym: first.tsym,
+      qty: firstQty.toString(),
+      prc: first.entryPrice.toString(),
+      prd: 'M', // NRML - matches order placement
+      trantype: first.buySell == 'BUY' ? 'B' : 'S',
+      prctyp: 'MKT',
+      blprc: '',
+      bpprc: '',
+      trgprc: '0',
+      rorgqty: '',
+      rorgprc: '',
+    );
+
+    final response = await api.getBasketMargin(input, basketList);
+    if (response.stat != 'Ok') return null;
+    return response.basketMargin;
+  }
+
+  Future<void> calculateMarginBenefit() async {
+    final selectedItems = _basket.where((item) => item.checkbox).toList();
+    if (selectedItems.isEmpty) {
+      _isCalcMarginBenefit = false;
+      _marginBenefitResult = null;
+      _marginBenefitError = 'Add at least one leg to see the margin benefit.';
+      notifyListeners();
+      return;
+    }
+
+    _isCalcMarginBenefit = true;
+    _marginBenefitResult = null;
+    _marginBenefitError = null;
+    notifyListeners();
+
+    try {
+      final legs = <StrategyMarginLeg>[];
+      final symbol = _extractUnderlyingSymbol();
+      double sumIndividual = 0;
+
+      // Each leg on its own.
+      for (final item in selectedItems) {
+        final legMargin = await _basketMarginFor([item]);
+        if (legMargin == null) {
+          _marginBenefitError = 'Could not calculate margin. Please try again.';
+          return;
+        }
+        sumIndividual += legMargin;
+
+        final strike =
+            double.tryParse(item.strprc)?.toStringAsFixed(0) ?? item.strprc;
+        legs.add(
+            StrategyMarginLeg('$symbol $strike ${item.optt}'.trim(), legMargin));
+      }
+
+      // All legs together — this is the header's own figure, so the popup's
+      // "As a single strategy" line and the header always agree.
+      final combined = await _basketMarginFor(selectedItems);
+      if (combined == null) {
+        _marginBenefitError = 'Could not calculate margin. Please try again.';
+        return;
+      }
+
+      final benefit = sumIndividual - combined;
+
+      _marginBenefitResult = StrategyMarginBenefit(
+        legs: legs,
+        sumIndividual: sumIndividual,
+        combined: combined,
+        benefit: benefit > 0 ? benefit : 0,
+      );
+    } catch (e) {
+      _marginBenefitError = 'Could not calculate margin. Please try again.';
+      log('[MarginBenefit] error: $e');
+    } finally {
+      _isCalcMarginBenefit = false;
+      notifyListeners();
+    }
+  }
+
+  // Retired 2026-09-22 — SPAN-calculator version. Kept for rollback: it is
+  // correct for sold legs but reports zero for bought legs, so it could not
+  // reconcile with the MARGIN figure in the header.
+  // Future<void> calculateMarginBenefit() async {
+  //   final selectedItems = _basket.where((item) => item.checkbox).toList();
+  //   if (selectedItems.isEmpty) {
+  //     _isCalcMarginBenefit = false;
+  //     _marginBenefitResult = null;
+  //     _marginBenefitError = 'Add at least one leg to see the margin benefit.';
+  //     notifyListeners();
+  //     return;
+  //   }
+  //
+  //   _isCalcMarginBenefit = true;
+  //   _marginBenefitResult = null;
+  //   _marginBenefitError = null;
+  //   notifyListeners();
+  //
+  //   try {
+  //     final positions = <SpanCalcPositionItem>[];
+  //     final legs = <StrategyMarginLeg>[];
+  //     double sumIndividual = 0;
+  //
+  //     for (final item in selectedItems) {
+  //       // SpanCalc needs symname/instname (not stored on the basket item), so
+  //       // fetch a quick quote per leg — same as the mobile calculator.
+  //       final quote = await api.getScripQuote(item.token, item.exch);
+  //       final qty = item.ordlot * item.lotSize * _lotMultiplier;
+  //       final signedQty = (item.buySell == 'SELL' ? -qty : qty).toString();
+  //
+  //       final pos = SpanCalcPositionItem(
+  //         prd: 'M',
+  //         exch: item.exch,
+  //         tsym: item.tsym,
+  //         symname: quote.symname ?? '',
+  //         instname: quote.instname ?? '',
+  //         exd: quote.exd ?? item.expdate,
+  //         netqty: signedQty,
+  //         optt: quote.optt ?? item.optt,
+  //         strprc: quote.strprc ?? item.strprc,
+  //       );
+  //       positions.add(pos);
+  //
+  //       // Individual margin for this leg alone = span + expo.
+  //       final indResp = await api.spanCalc(actid: 'DEMOIT', positions: [pos]);
+  //       final indMargin = indResp.spanValue + indResp.expoValue;
+  //       sumIndividual += indMargin;
+  //
+  //       final strike =
+  //           double.tryParse(item.strprc)?.toStringAsFixed(0) ?? item.strprc;
+  //       final legName =
+  //           '${(quote.symname ?? '').trim()} $strike ${item.optt}'.trim();
+  //       legs.add(StrategyMarginLeg(legName, indMargin));
+  //     }
+  //
+  //     // Combined margin for all legs together = span + expo.
+  //     final combinedResp =
+  //         await api.spanCalc(actid: 'DEMOIT', positions: positions);
+  //     final combined = combinedResp.spanValue + combinedResp.expoValue;
+  //     final benefit = sumIndividual - combined;
+  //
+  //     _marginBenefitResult = StrategyMarginBenefit(
+  //       legs: legs,
+  //       sumIndividual: sumIndividual,
+  //       combined: combined,
+  //       benefit: benefit > 0 ? benefit : 0,
+  //     );
+  //   } catch (e) {
+  //     _marginBenefitError = 'Could not calculate margin. Please try again.';
+  //     log('[MarginBenefit] error: $e');
+  //   } finally {
+  //     _isCalcMarginBenefit = false;
+  //     notifyListeners();
+  //   }
+  // }
+
   // Custom strategies (API-based leg builder)
   final List<PredefinedStrategy> _customStrategies = [];
   List<PredefinedStrategy> get customStrategies => _customStrategies;
@@ -473,6 +706,15 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
           StrategyLeg(action: 'SELL', optionType: 'PE', strikeType: 'OTM', strikeOffset: -1),
         ],
       ),
+      PredefinedStrategy(
+        title: 'Long Synthetic Future',
+        type: 'Bullish',
+        image: 'predefined_strategies/bullish/Long_Synthetic_Future.svg',
+        legs: [
+          StrategyLeg(action: 'BUY', optionType: 'CE', strikeType: 'ATM', strikeOffset: 0),
+          StrategyLeg(action: 'SELL', optionType: 'PE', strikeType: 'ATM', strikeOffset: 0),
+        ],
+      ),
       // Bearish strategies
       PredefinedStrategy(
         title: 'Long Put',
@@ -506,6 +748,24 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
         legs: [
           StrategyLeg(action: 'BUY', optionType: 'PE', strikeType: 'ATM', strikeOffset: 0),
           StrategyLeg(action: 'SELL', optionType: 'PE', strikeType: 'OTM', strikeOffset: -1),
+        ],
+      ),
+      PredefinedStrategy(
+        title: 'Short Synthetic Future',
+        type: 'Bearish',
+        image: 'predefined_strategies/bearish/Short_Synthetic_Future.svg',
+        legs: [
+          StrategyLeg(action: 'SELL', optionType: 'CE', strikeType: 'ATM', strikeOffset: 0),
+          StrategyLeg(action: 'BUY', optionType: 'PE', strikeType: 'ATM', strikeOffset: 0),
+        ],
+      ),
+      PredefinedStrategy(
+        title: 'Short Combo (Risk Reversal)',
+        type: 'Bearish',
+        image: 'predefined_strategies/bearish/Risk_Reversal.svg',
+        legs: [
+          StrategyLeg(action: 'BUY', optionType: 'PE', strikeType: 'OTM', strikeOffset: -1),
+          StrategyLeg(action: 'SELL', optionType: 'CE', strikeType: 'OTM', strikeOffset: 1),
         ],
       ),
       // Neutral strategies
@@ -565,6 +825,28 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
           StrategyLeg(action: 'SELL', optionType: 'PE', strikeType: 'ATM', strikeOffset: 0),
           StrategyLeg(action: 'SELL', optionType: 'CE', strikeType: 'ATM', strikeOffset: 0),
           StrategyLeg(action: 'BUY', optionType: 'CE', strikeType: 'OTM', strikeOffset: 1),
+        ],
+      ),
+      PredefinedStrategy(
+        title: 'Long Iron Condor',
+        type: 'Neutral',
+        image: 'predefined_strategies/others/Long_Iron_Condor.svg',
+        legs: [
+          StrategyLeg(action: 'SELL', optionType: 'PE', strikeType: 'OTM', strikeOffset: -2),
+          StrategyLeg(action: 'BUY', optionType: 'PE', strikeType: 'OTM', strikeOffset: -1),
+          StrategyLeg(action: 'BUY', optionType: 'CE', strikeType: 'OTM', strikeOffset: 1),
+          StrategyLeg(action: 'SELL', optionType: 'CE', strikeType: 'OTM', strikeOffset: 2),
+        ],
+      ),
+      PredefinedStrategy(
+        title: 'Long Iron Butterfly',
+        type: 'Neutral',
+        image: 'predefined_strategies/others/Long_Iron_Butterfly.svg',
+        legs: [
+          StrategyLeg(action: 'SELL', optionType: 'PE', strikeType: 'OTM', strikeOffset: -1),
+          StrategyLeg(action: 'BUY', optionType: 'PE', strikeType: 'ATM', strikeOffset: 0),
+          StrategyLeg(action: 'BUY', optionType: 'CE', strikeType: 'ATM', strikeOffset: 0),
+          StrategyLeg(action: 'SELL', optionType: 'CE', strikeType: 'OTM', strikeOffset: 1),
         ],
       ),
     ];
@@ -976,8 +1258,9 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     }
   }
 
-  /// Select stock from search
-  Future<void> selectStock(Map<String, dynamic> stock, BuildContext context) async {
+  /// Select stock from search. [showChain] false loads the symbol without
+  /// opening the option chain dialog (e.g. before applying a predefined strategy).
+  Future<void> selectStock(Map<String, dynamic> stock, BuildContext context, {bool showChain = true}) async {
     _selectedSymbol = stock['displayName'] ?? stock['tsym'];
     _selectedToken = stock['token'];
     _selectedExch = stock['exch'];
@@ -997,7 +1280,7 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     // Set loading state BEFORE showing dialog so it displays loader immediately
     _isLoading = true;
     // Set flag to show option chain dialog
-    _shouldShowOptionChain = true;
+    _shouldShowOptionChain = showChain;
     notifyListeners();
 
     // Load new data (dialog shows loader, will update when data is ready)
@@ -1072,6 +1355,8 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
       }
 
       await loadStrategyFromApiLegs(strategy.savedApiLegs!, context);
+      // Keep the saved card's picture identical to what was just loaded.
+      if (_payoffData.isNotEmpty) _savedPreviews[_savedPreviewKey(strategy)] = List.of(_payoffData);
       _activePredefinedStrategy = strategy.title;
       notifyListeners();
       return;
@@ -1567,13 +1852,16 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
   /// Check if all selected
   bool get isAllSelected => _basket.isNotEmpty && _basket.every((item) => item.checkbox);
 
-  /// Clear basket
-  void clearBasket() {
+  /// Clear basket. [keepDrafts] leaves the Custom builder rows (and the saved
+  /// strategy they are being edited for) untouched.
+  void clearBasket({bool keepDrafts = false}) {
     _basket.clear();
-    _draftLegs.clear();
+    if (!keepDrafts) {
+      _draftLegs.clear();
+      _editingCustomBuilderName = null;
+    }
     _lotMultiplier = 1;
     _activePredefinedStrategy = null;
-    _editingCustomBuilderName = null;
     _payoffDebounceTimer?.cancel();
     _payoffData = [];
     _targetPayoffData = [];
@@ -1626,10 +1914,16 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
         orElse: () => responses.first,
       );
 
-      if (firstValid.undSym != null) {
+      // Only adopt the underlying from a resolved leg, and never overwrite the
+      // current token/exch with empty strings (an errored leg can return them).
+      if (!firstValid.hasError && firstValid.undSym != null) {
         _selectedSymbol = firstValid.undSym!;
-        _selectedToken = firstValid.undTok ?? _selectedToken;
-        _selectedExch = firstValid.undExch ?? _selectedExch;
+        if (firstValid.undTok?.isNotEmpty ?? false) {
+          _selectedToken = firstValid.undTok!;
+        }
+        if (firstValid.undExch?.isNotEmpty ?? false) {
+          _selectedExch = firstValid.undExch!;
+        }
       }
 
       if (firstValid.underlyingPrice != null &&
@@ -1674,8 +1968,21 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
         _basket.add(item);
       }
 
+      // Every leg failed to resolve: say why instead of showing an empty table.
+      if (_basket.isEmpty) {
+        final reason = responses.map((r) => r.error).firstWhere((e) => e != null && e.isNotEmpty, orElse: () => null);
+        log('[StrategyBuilder] No saved legs could be resolved: $reason');
+        if (context.mounted) {
+          ResponsiveSnackBar.showError(context, 'Could not load this strategy${reason != null ? ': $reason' : '.'}');
+        }
+      } else if (_basket.length < responses.length && context.mounted) {
+        ResponsiveSnackBar.showError(context, '${responses.length - _basket.length} leg(s) could not be loaded.');
+      }
+
       // Load expiry dates and option chain
-      await _loadExpiryDates(context);
+      if (_selectedToken.isNotEmpty && _selectedExch.isNotEmpty) {
+        await _loadExpiryDates(context);
+      }
 
       if (_basket.isNotEmpty) {
         _selectedExpiry = _basket.first.expdate;
@@ -1753,8 +2060,11 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
 
   /// Apply custom strategy — resolve draft legs via /select-symbols API
   Future<void> applyCustomStrategy(BuildContext context) async {
-    if (_draftLegs.isEmpty) {
-      ResponsiveSnackBar.showError(context, 'Add at least one leg.');
+    // Rows switched off (checkbox = false) are disabled and skipped.
+    final drafts = _draftLegs.where((d) => d.checkbox).toList();
+    if (drafts.isEmpty) {
+      ResponsiveSnackBar.showError(
+          context, _draftLegs.isEmpty ? 'Add at least one leg.' : 'All rows are disabled. Enable at least one row.');
       return;
     }
 
@@ -1762,7 +2072,7 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     final exchange = _getOptionsExchange();
     final expiryType = _hasWeeklyExpiry() ? 'W' : 'M';
 
-    final savedLegs = _draftLegs.map((draft) {
+    final savedLegs = drafts.map((draft) {
       final apiLeg = SelectSymbolsLegRequest(
         exchange: exchange,
         symbol: symbol,
@@ -1802,8 +2112,11 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
 
   /// Save custom strategy from draft legs
   Future<void> saveCustomStrategy(String name, BuildContext context) async {
-    if (_draftLegs.isEmpty) {
-      ResponsiveSnackBar.showError(context, 'Add at least one leg before saving.');
+    // Disabled rows (checkbox = false) are not saved.
+    final drafts = _draftLegs.where((d) => d.checkbox).toList();
+    if (drafts.isEmpty) {
+      ResponsiveSnackBar.showError(context,
+          _draftLegs.isEmpty ? 'Add at least one leg before saving.' : 'All rows are disabled. Enable at least one row.');
       return;
     }
 
@@ -1820,7 +2133,7 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
     final apiLegs = <Map<String, dynamic>>[];
     final legs = <StrategyLeg>[];
 
-    for (final draft in _draftLegs) {
+    for (final draft in drafts) {
       final apiLeg = SelectSymbolsLegRequest(
         exchange: exchange,
         symbol: symbol,
@@ -2094,6 +2407,124 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
   // ============ API-based Payoff and Greeks Calculation ============
 
   /// Fetch payoff data from API
+  /// One leg of the payoff API payload.
+  Map<String, dynamic> _payoffLegJson(
+      StrategyBasketItem item, String symbol, List<String> expiries, int multiplier, DateTime today) {
+    final legDaysToExpiry = _parseExpiryDate(item.expdate).difference(today).inDays.clamp(0, 9999);
+    return {
+      "exch": item.exch,
+      "token": item.token,
+      "tsym": item.tsym,
+      "optt": item.optt,
+      "pp": "2",
+      "ls": item.lotSize.toString(),
+      "ti": "0.05",
+      "strprc": item.strprc,
+      "instname": "OPTIDX",
+      "cname": "$symbol ${item.expdate} ${item.strprc} ${item.optt} ",
+      "dname": "$symbol ${item.expdate} ${item.strprc} ${item.optt} ",
+      "bar": item.optt == 'CE' ? "#FF1717" : "#17FF17",
+      "p": "",
+      "ltp": item.ltp,
+      "ask": item.ltp,
+      "bid": item.ltp.toString(),
+      "ch": "0",
+      "chp": "0",
+      "coi": 0,
+      "oi": "0",
+      "oich": "0",
+      "vol": "0",
+      "buySell": item.buySell,
+      "expdate": expiries,
+      "ordvai": "MKT",
+      "ordlot": (item.ordlot * multiplier).toString(),
+      // Market legs send 0 so the chart doesn't need a refetch on every tick.
+      "ordprc": item.isMarket ? "0" : item.entryPrice.toString(),
+      "checkbox": item.checkbox,
+      "ser": item.expdate,
+      "daysToExpiry": legDaysToExpiry,
+      "tsyms": symbol,
+      "inx": DateTime.now().millisecondsSinceEpoch.toDouble(),
+      "exp": "${item.strprc} ${item.optt}",
+    };
+  }
+
+  // ============ Saved strategy card previews ============
+
+  /// Expiry payoff of each saved strategy, as the builder shows it when the
+  /// strategy is opened. Keyed by the saved legs, so an edited strategy reloads.
+  final Map<String, List<PayoffDataPoint>> _savedPreviews = {};
+  final Set<String> _savedPreviewPending = {};
+
+  String _savedPreviewKey(PredefinedStrategy s) => jsonEncode(s.savedApiLegs ?? const []);
+
+  /// Null while not loaded yet; empty when it could not be computed.
+  List<PayoffDataPoint>? savedPreview(PredefinedStrategy s) => _savedPreviews[_savedPreviewKey(s)];
+
+  /// Resolves the saved legs and asks the payoff API for their curve — the
+  /// same calls loadStrategyFromApiLegs makes — without touching the builder.
+  Future<void> loadSavedPreview(PredefinedStrategy s) async {
+    final saved = s.savedApiLegs;
+    final key = _savedPreviewKey(s);
+    if (saved == null || saved.isEmpty || _savedPreviews.containsKey(key) || !_savedPreviewPending.add(key)) return;
+    var points = <PayoffDataPoint>[];
+    try {
+      final responses = await api.selectSymbols(
+        saved.map((e) => SelectSymbolsLegRequest.fromJson(e['leg'] as Map<String, dynamic>)).toList(),
+      );
+      final items = <StrategyBasketItem>[];
+      String symbol = '';
+      double spot = 0;
+      for (int i = 0; i < responses.length && i < saved.length; i++) {
+        final resp = responses[i];
+        if (resp.hasError) continue;
+        if (symbol.isEmpty) symbol = resp.undSym ?? '';
+        if (spot <= 0) spot = resp.underlyingPrice ?? 0;
+        items.add(StrategyBasketItem(
+          tsym: resp.selectedSymbol ?? '',
+          token: resp.token ?? '',
+          exch: resp.exch ?? 'NFO',
+          strprc: normalizeStrike(resp.strike ?? '0'),
+          optt: resp.optionType ?? 'CE',
+          expdate: _normalizeExpiryFromApi(resp.expiry ?? ''),
+          buySell: saved[i]['action'] as String? ?? 'BUY',
+          ordlot: saved[i]['ordlot'] as int? ?? 1,
+          entryPrice: resp.optionPrice ?? 0.0,
+          ltp: resp.optionPrice ?? 0.0,
+          lotSize: int.tryParse(resp.lotSize ?? '1') ?? 1,
+          checkbox: true,
+        ));
+      }
+      if (items.isNotEmpty && spot > 0) {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final expiries = items.map((e) => e.expdate).toSet().toList();
+        final minDays = items
+            .map((e) => _parseExpiryDate(e.expdate).difference(today).inDays.clamp(0, 9999))
+            .reduce(math.min);
+        final response = await api.getPayoffCalculation(
+          strategy: "custom",
+          isPosition: false,
+          spotPrice: spot.toStringAsFixed(2),
+          daysToExpiry: minDays,
+          legs: items.map((e) => _payoffLegJson(e, symbol, expiries, 1, today)).toList(),
+        );
+        final data = response['payoffData'] ?? response;
+        final xs = (data['stockPrices'] as List?)?.cast<num>() ?? [];
+        final ys = (data['payoffs_expiry'] as List?)?.cast<num>() ?? [];
+        points = [
+          for (int i = 0; i < xs.length && i < ys.length; i++) PayoffDataPoint(xs[i].toDouble(), ys[i].toDouble()),
+        ];
+      }
+    } catch (e) {
+      log('[StrategyBuilder] loadSavedPreview "${s.title}" error: $e');
+    } finally {
+      _savedPreviewPending.remove(key);
+      _savedPreviews[key] = points;
+      notifyListeners();
+    }
+  }
+
   Future<void> _fetchPayoffFromAPI() async {
     if (_basket.isEmpty || _spotPrice == 0) {
       _payoffData = [];
@@ -2121,46 +2552,9 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
       final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
       // Build legs array for API — each leg gets its own daysToExpiry
-      final legs = selectedItems.map((item) {
-        final legExpiryDate = _parseExpiryDate(item.expdate);
-        final legDaysToExpiry = legExpiryDate.difference(today).inDays.clamp(0, 9999);
-
-        return {
-          "exch": item.exch,
-          "token": item.token,
-          "tsym": item.tsym,
-          "optt": item.optt,
-          "pp": "2",
-          "ls": item.lotSize.toString(),
-          "ti": "0.05",
-          "strprc": item.strprc,
-          "instname": "OPTIDX",
-          "cname": "${_selectedSymbol} ${item.expdate} ${item.strprc} ${item.optt} ",
-          "dname": "${_selectedSymbol} ${item.expdate} ${item.strprc} ${item.optt} ",
-          "bar": item.optt == 'CE' ? "#FF1717" : "#17FF17",
-          "p": "",
-          "ltp": item.ltp,
-          "ask": item.ltp,
-          "bid": item.ltp.toString(),
-          "ch": "0",
-          "chp": "0",
-          "coi": 0,
-          "oi": "0",
-          "oich": "0",
-          "vol": "0",
-          "buySell": item.buySell,
-          "expdate": _expiryDates,
-          "ordvai": "MKT",
-          "ordlot": (item.ordlot * _lotMultiplier).toString(),
-          "ordprc": item.entryPrice.toString(),
-          "checkbox": item.checkbox,
-          "ser": item.expdate,
-          "daysToExpiry": legDaysToExpiry,
-          "tsyms": _selectedSymbol,
-          "inx": DateTime.now().millisecondsSinceEpoch.toDouble(),
-          "exp": "${item.strprc} ${item.optt}",
-        };
-      }).toList();
+      final legs = selectedItems
+          .map((item) => _payoffLegJson(item, _selectedSymbol, _expiryDates, _lotMultiplier, today))
+          .toList();
 
       // Use the nearest expiry (minimum daysToExpiry) from selected basket legs
       final minDaysToExpiry = selectedItems.map((item) {
@@ -2401,22 +2795,35 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
   }
 
   /// Place order
+  /// One order per included leg: Market legs go as MKT with market protection
+  /// (as the mobile basket does), typed-price legs as LMT at their entry price.
   Future<void> placeOrder(BuildContext context) async {
     if (_basket.isEmpty) {
       ResponsiveSnackBar.showError(context, 'Basket is empty');
       return;
     }
 
-    final selectedItems = _basket.where((item) => item.checkbox).toList();
-    if (selectedItems.isEmpty) {
+    final included = _basket.where((item) => item.checkbox).toList();
+    if (included.isEmpty) {
       ResponsiveSnackBar.showError(context, 'No items selected');
       return;
     }
+    // BUY legs first: the hedge is in place before the SELL legs, so they get the
+    // spread margin benefit instead of being rejected for full naked margin.
+    final selectedItems = [
+      ...included.where((item) => item.buySell == 'BUY'),
+      ...included.where((item) => item.buySell != 'BUY'),
+    ];
 
     _isOrderLoading = true;
     notifyListeners();
 
     try {
+      // Client IP, as every other order screen sends it (fetched once if not set yet).
+      final orderProv = ref.read(orderProvider);
+      if (orderProv.ip.isEmpty) await orderProv.setOrderIp();
+      final ip = orderProv.ip;
+
       int successCount = 0;
       int failCount = 0;
 
@@ -2427,10 +2834,10 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
           exch: item.exch,
           tsym: item.tsym,
           qty: qty.toString(),
-          prc: item.entryPrice.toString(),
+          prc: item.isMarket ? '0' : item.entryPrice.toString(),
           prd: 'M', // NRML
           trantype: item.buySell == 'BUY' ? 'B' : 'S',
-          prctype: 'LMT',
+          prctype: item.isMarket ? 'MKT' : 'LMT',
           ret: 'DAY',
           amo: '',
           trgprc: '',
@@ -2438,12 +2845,12 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
           blprc: '',
           bpprc: '',
           dscqty: '',
-          mktProt: '',
+          mktProt: item.isMarket ? _kMarketProtection : '',
           channel: 'WEB',
           token: item.token,
         );
 
-        final result = await api.getPlaceOrder(orderPayload, '');
+        final result = await api.getPlaceOrder(orderPayload, ip);
         if (result.stat == 'Ok') {
           successCount++;
         } else {
@@ -2630,7 +3037,7 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
       if (data != null && data['lp'] != null) {
         final newLtp = double.tryParse(data['lp'].toString()) ?? 0;
         if (newLtp != item.ltp) {
-          _basket[i] = item.copyWith(ltp: newLtp);
+          _basket[i] = item.copyWith(ltp: newLtp, entryPrice: item.isMarket ? newLtp : null);
           hasUpdates = true;
         }
       }
@@ -2647,6 +3054,12 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
       final data = socketData[tokenKey] ?? socketData[exchTokenKey];
 
       if (data != null && data['lp'] != null) {
+        final newLp = data['lp'].toString();
+        final newPc = data['pc']?.toString() ?? option.perChange;
+        final newOi = data['oi']?.toString() ?? option.oi;
+        // Only a real change counts; otherwise every 3 s tick would rebuild the
+        // whole panel even when no chain value moved.
+        if (newLp == option.lp && newPc == option.perChange && newOi == option.oi) continue;
         _optionChain[i] = OptionValues(
           exch: option.exch,
           token: option.token,
@@ -2655,10 +3068,10 @@ class StrategyBuilderProvider extends DefaultChangeNotifier {
           pp: option.pp,
           ls: option.ls,
           ti: option.ti,
-          lp: data['lp'].toString(),
-          perChange: data['pc']?.toString() ?? option.perChange,
+          lp: newLp,
+          perChange: newPc,
           close: option.close,
-          oi: data['oi']?.toString() ?? option.oi,
+          oi: newOi,
           poi: option.poi,
           strprc: option.strprc,
         );

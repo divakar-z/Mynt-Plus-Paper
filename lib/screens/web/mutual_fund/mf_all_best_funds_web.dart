@@ -547,6 +547,10 @@ class _SaveTaxesScreenWebState extends ConsumerState<SaveTaxesScreenWeb>
           }
           return _sortAscending ? compareResult : -compareResult;
         });
+      } else {
+        // Default order: highest 3Y return first
+        sortedList.sort((a, b) => (double.tryParse(b.s3Year ?? '0') ?? 0)
+            .compareTo(double.tryParse(a.s3Year ?? '0') ?? 0));
       }
     }
 

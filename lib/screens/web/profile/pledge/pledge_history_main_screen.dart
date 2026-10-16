@@ -31,6 +31,20 @@ class _PledgeMainScreen extends State<PledgeHistoryMainScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    // TC_344 — the search field's X button empties the controller without
+    // firing onChanged/onClear, so the filter kept the old query. Reset it
+    // whenever the field becomes empty (same approach as Positions).
+    _searchController.addListener(() {
+      if (!mounted) return;
+      if (_searchController.text.isEmpty && _searchQuery.isNotEmpty) {
+        _onSearchChanged('');
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();

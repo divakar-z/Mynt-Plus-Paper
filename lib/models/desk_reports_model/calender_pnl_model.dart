@@ -306,7 +306,7 @@ class TradeData {
     
     // P&L and positions
     realisedpnl = json['PL_AMT']?.toString();
-    unrealisedpnl = '0';  // Always 0 in commodity response
+    unrealisedpnl = json['trade_unrealized_pnl']?.toString() ?? '0';
     nETAMT = json['NETAMT']?.toString();
     nETQTY = json['NETQTY']?.toString();
     updatedNETQTY = json['NETQTY']?.toString(); // Map for UI display
@@ -413,6 +413,7 @@ class TradeData {
   double get safeSellRate => double.tryParse(sRATE ?? '0') ?? 0.0;
   int get safeNetQty => double.tryParse(updatedNETQTY ?? '0')?.toInt() ?? 0;
   double get safeRealisedPnl => double.tryParse(realisedpnl ?? '0') ?? 0.0;
+  double get safeUnrealisedPnl => double.tryParse(unrealisedpnl ?? '0') ?? 0.0;
 }
 
 class Journal {

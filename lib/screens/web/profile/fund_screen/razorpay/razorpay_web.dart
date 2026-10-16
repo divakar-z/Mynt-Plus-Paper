@@ -1,6 +1,10 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:async';
+import 'dart:html' as html;
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
+
+const String _razorpayScriptSrc = 'https://checkout.razorpay.com/v1/checkout.js';
 
 @JS('Razorpay')
 extension type RazorpayJS._(JSObject _) implements JSObject {
@@ -11,11 +15,64 @@ extension type RazorpayJS._(JSObject _) implements JSObject {
 typedef RazorpayWebCallback = void Function(String? paymentId, String? orderId, String? signature);
 typedef RazorpayWebErrorCallback = void Function(String? code, String? description, String? paymentId);
 
-void openRazorpayWeb({
+Future<void>? _razorpayLoader;
+
+Future<void> _ensureRazorpayLoaded() {
+  if (globalContext.hasProperty('Razorpay'.toJS).toDart) {
+    return Future.value();
+  }
+  return _razorpayLoader ??= _injectScript();
+}
+
+Future<void> _injectScript() async {
+  final existing = html.document.querySelector('script[src="$_razorpayScriptSrc"]');
+  final script = existing is html.ScriptElement
+      ? existing
+      : (html.ScriptElement()
+        ..src = _razorpayScriptSrc
+        ..async = true
+        ..type = 'application/javascript');
+
+  final loadCompleter = Completer<void>();
+  script.onLoad.first.then((_) {
+    if (!loadCompleter.isCompleted) loadCompleter.complete();
+  }).catchError((_) {});
+  script.onError.first.then((_) {
+    if (!loadCompleter.isCompleted) {
+      loadCompleter.completeError(StateError('Failed to load Razorpay checkout script'));
+    }
+  }).catchError((_) {});
+
+  if (existing == null) {
+    html.document.head!.append(script);
+  }
+
+  try {
+    await loadCompleter.future.timeout(const Duration(seconds: 20));
+  } catch (e) {
+    _razorpayLoader = null;
+    rethrow;
+  }
+
+  // checkout.js is a chunk loader — wait for window.Razorpay to actually be defined.
+  const pollInterval = Duration(milliseconds: 50);
+  const maxWait = Duration(seconds: 10);
+  final deadline = DateTime.now().add(maxWait);
+  while (!globalContext.hasProperty('Razorpay'.toJS).toDart) {
+    if (DateTime.now().isAfter(deadline)) {
+      _razorpayLoader = null;
+      throw StateError('Razorpay global was not defined after script load');
+    }
+    await Future.delayed(pollInterval);
+  }
+}
+
+Future<void> openRazorpayWeb({
   required Map<String, dynamic> options,
   required RazorpayWebCallback onSuccess,
   required RazorpayWebErrorCallback onError,
-}) {
+}) async {
+  await _ensureRazorpayLoaded();
   final jsOptions = _mapToJSObject(options);
 
   // Set handler for success

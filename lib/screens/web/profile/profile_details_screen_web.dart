@@ -7,7 +7,10 @@ import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/locator/locator.dart';
+import 'package:mynt_plus/locator/preference.dart';
 import 'package:mynt_plus/models/client_profile_all_details/profile_all_details_model.dart';
 import 'package:mynt_plus/provider/profile_all_details_provider.dart';
 import 'package:mynt_plus/provider/user_profile_provider.dart';
@@ -16,7 +19,6 @@ import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import 'package:mynt_plus/res/res.dart';
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
-import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:mynt_plus/sharedWidget/custom_back_btn.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/snack_bar.dart';
@@ -57,6 +59,7 @@ class _ProfileDetailsScreenWebState
       ref.read(profileAllDetailsProvider).fetchClientProfileAllDetails();
       ref.read(profileAllDetailsProvider).fetchPendingstatus();
       ref.read(profileAllDetailsProvider).fetchMobEmailStatus();
+      ref.read(profileAllDetailsProvider).fetchRekycStatus();
 
       // Auto-trigger Digilocker address change if callback params present
       _checkDigilockerCallback();
@@ -76,17 +79,12 @@ class _ProfileDetailsScreenWebState
     }
   }
 
-  /// Navigate same window to Digilocker OAuth (like Vue: window.location.href = url)
-  void _launchDigilockerFlow() {
-    launchDigilockerAuth();
-  }
-
   Future<void> _handleDigilockerAddressChange(String code, String state) async {
     final provider = ref.read(profileAllDetailsProvider);
 
     // Step 1: KRA image check
     final kraResult = await provider.kraImageCheck();
-    if (kraResult != 'image found') {
+    if (!kraResult) {
       if (!mounted) return;
       setState(() => _kraProcessLoading = false);
       final selfieBytes = await showDialog<List<int>>(
@@ -479,7 +477,7 @@ class _ProfileDetailsScreenWebState
       // Step 1: Check KRA image
       final kraResult = await profileProvider.kraImageCheck();
 
-      if (kraResult == 'image found') {
+      if (kraResult) {
         // Step 2a: Image exists → proceed with file write
         await _proceedFileWrite(type, profileProvider, clientData!);
       } else {
@@ -547,8 +545,66 @@ class _ProfileDetailsScreenWebState
     }
   }
 
+  // ─── Personal-info edit-gate (email / mobile / address)
+  // Returns null when edit is
+  // allowed, otherwise an _EditBlock describing the disabled state.
+  // `checkRekyc` adds the mid-Re-KYC block which only applies to email &
+  // mobile per the spec. The Re-KYC case is intentionally a "silent disable":
+  // button visible & disabled, no tooltip
+  _EditBlock? _personalInfoEditBlock({
+    required bool checkRekyc,
+    bool checkActive = true,
+  }) {
+    final provider = ref.read(profileAllDetailsProvider);
+    final clientData = provider.clientAllDetails.clientData;
+    final mobStatus = provider.mobEmailStatus;
+    if (clientData == null || mobStatus == null) return null;
+
+    if (clientData.isClientClosed) {
+      const closedTooltip = 'Your trading account is closed.';
+      // Spec: when closed, individual users without an active Re-KYC keep a
+      // clickable EDIT button (showing the closed tooltip); the click is
+      // effectively a no-op because the dialog handler re-checks and toasts.
+      if (!clientData.isIndividual) {
+        return const _EditBlock(tooltip: closedTooltip);
+      }
+      if (checkRekyc && provider.rekycStatus.toLowerCase() == 'yes') {
+        return const _EditBlock(tooltip: closedTooltip);
+      }
+      return const _EditBlock(tooltip: closedTooltip, clickable: true);
+    }
+    if (!clientData.isIndividual) {
+      return const _EditBlock(
+          tooltip: "Non-individual accounts can't modify data here. "
+              "Please contact support at (+91) 93 8010 8010 for help.");
+    }
+    if (checkActive &&
+        (mobStatus.accSgtAtveSts ?? '').toLowerCase() != 'active') {
+      return const _EditBlock(
+          tooltip: 'Modification not allowed for inactive client codes. '
+              'Please reactivate the account.');
+    }
+    if (mobStatus.last7DaysCheck != true) {
+      return const _EditBlock(
+          tooltip:
+              'Modification request not allowed within 7 days of activation');
+    }
+    // Re-KYC gate: source of truth is /checkrekyc (provider.rekycStatus),
+    // The rekyc_status field returned by /add_mob_email_stat is intentionally ignored here.
+    if (checkRekyc && provider.rekycStatus.toLowerCase() == 'yes') {
+      return const _EditBlock(tooltip: null);
+    }
+    return null;
+  }
+
   // ─── Email Change Dialog ───
   void _showEmailChangeDialog() {
+    final block =
+        _personalInfoEditBlock(checkRekyc: true, checkActive: false);
+    if (block != null) {
+      if (block.tooltip != null) warningMessage(context, block.tooltip!);
+      return;
+    }
     final profileProvider = ref.read(profileAllDetailsProvider);
     final clientData = profileProvider.clientAllDetails.clientData;
     profileProvider.newEmailController.clear();
@@ -572,6 +628,12 @@ class _ProfileDetailsScreenWebState
 
   // ─── Mobile Change Dialog ───
   void _showMobileChangeDialog() {
+    final block =
+        _personalInfoEditBlock(checkRekyc: true, checkActive: false);
+    if (block != null) {
+      if (block.tooltip != null) warningMessage(context, block.tooltip!);
+      return;
+    }
     final profileProvider = ref.read(profileAllDetailsProvider);
     final clientData = profileProvider.clientAllDetails.clientData;
     profileProvider.newMobController.clear();
@@ -593,38 +655,74 @@ class _ProfileDetailsScreenWebState
     );
   }
 
-  // ─── Address Change Dialog ───
+  // ─── Address Change ───
+  // Address modification is handled by the profile portal. The portal
+  // auto-logs-in from the uid + session token passed on the query string.
   void _showAddressChangeDialog() {
-    final profileProvider = ref.read(profileAllDetailsProvider);
-    final clientData = profileProvider.clientAllDetails.clientData;
-    final themeVal = ref.watch(themeProvider);
+    final block = _personalInfoEditBlock(checkRekyc: false);
+    if (block != null) {
+      if (block.tooltip != null) warningMessage(context, block.tooltip!);
+      return;
+    }
+    final pref = locator<Preferences>();
+    final clientData = ref.read(profileAllDetailsProvider).clientAllDetails.clientData;
+    final uid = (clientData?.cLIENTID ?? pref.clientId ?? '').trim();
+    final token = (pref.clientSession ?? '').trim();
+    if (uid.isEmpty || token.isEmpty) {
+      warningMessage(context, 'Session expired, please login again');
+      return;
+    }
+    // page=app tells the portal the request originated from app.mynt.in.
+    final url = Uri.https('profile.mynt.in', '/',
+        {'uid': uid, 'token': token, 'page': 'app'}).toString();
+    html.window.open(url, '_blank');
+  }
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return _AddressChangeDialog(
-          profileProvider: profileProvider,
-          clientData: clientData!,
-          isDarkMode: themeVal.isDarkMode,
-          onDone: () {
-            Navigator.of(ctx).pop();
-            // Refresh to get esign details then show esign pending dialog
-            profileProvider.fetchMobEmailStatus().then((_) {
-              _showEsignPendingDialog('address');
-            });
-          },
-          onAadhaarTap: () {
-            // Dialog is already popped in the button handler
-            _launchDigilockerFlow();
-          },
-        );
-      },
-    );
+  // ─── Annual Income edit-gate
+  //   !atve_sts        → "Modification not allowed for inactive client code…"
+  //   !CATEGORY=='I'   → "Non-individual accounts can't modify data here…"
+  // Income modification is exempt from the 7-day post-activation block, so
+  // last7days is deliberately not checked here.
+  // Returns null when edit is allowed, otherwise a user-facing reason string.
+  // The yearlyIncomeDisable gate (e-sign pending/completed) is handled at the call site via incomeStatus
+  _EditBlock? _annualIncomeEditBlock() {
+    final provider = ref.read(profileAllDetailsProvider);
+    final clientData = provider.clientAllDetails.clientData;
+    final mobStatus = provider.mobEmailStatus;
+    if (clientData == null || mobStatus == null) return null;
+
+    // client_close: takes precedence over atve_sts/CATEGORY. Individual users
+    // keep a clickable EDIT button (the dialog handler re-checks and toasts);
+    // non-individuals are fully disabled. Both show the closed tooltip.
+    if (clientData.isClientClosed) {
+      const closedTooltip = 'Your trading account is closed.';
+      if (!clientData.isIndividual) {
+        return const _EditBlock(tooltip: closedTooltip);
+      }
+      return const _EditBlock(tooltip: closedTooltip, clickable: true);
+    }
+    // atve_sts (Annual Income: precedence flipped — checked before CATEGORY)
+    if ((mobStatus.accSgtAtveSts ?? '').toLowerCase() != 'active') {
+      return const _EditBlock(
+          tooltip: 'Modification not allowed for inactive client code. '
+              'Please reactivate the account');
+    }
+    // CATEGORY == 'I'
+    if (!clientData.isIndividual) {
+      return const _EditBlock(
+          tooltip: "Non-individual accounts can't modify data here. "
+              "Please contact support at (+91) 93 8010 8010 for help.");
+    }
+    return null;
   }
 
   // ─── Income Change Dialog ───
   void _showIncomeChangeDialog() {
+    final block = _annualIncomeEditBlock();
+    if (block != null) {
+      if (block.tooltip != null) warningMessage(context, block.tooltip!);
+      return;
+    }
     final profileProvider = ref.read(profileAllDetailsProvider);
     final clientData = profileProvider.clientAllDetails.clientData;
     final themeVal = ref.watch(themeProvider);
@@ -853,10 +951,11 @@ class _ProfileDetailsScreenWebState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.info_outline, color: warningIcon, size: 20),
               const SizedBox(width: 12),
-              Expanded(
+              Flexible(
                 child: Text(
                   'Esign Pending - Click here to complete',
                   style: MyntWebTextStyles.bodySmall(context,
@@ -864,12 +963,7 @@ class _ProfileDetailsScreenWebState
                       .copyWith(decoration: TextDecoration.none),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
+              const SizedBox(width: 16),
               Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -1038,11 +1132,9 @@ class _ProfileDetailsScreenWebState
           color: warningBg,
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
                 Icon(Icons.info_outline, color: warningIcon, size: 20),
                 const SizedBox(width: 12),
                 Flexible(
@@ -1053,12 +1145,7 @@ class _ProfileDetailsScreenWebState
                         .copyWith(decoration: TextDecoration.none),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
+                const SizedBox(width: 16),
                 esignLoading
                     ? SizedBox(
                         width: 20,
@@ -1131,8 +1218,6 @@ class _ProfileDetailsScreenWebState
                           ),
                         ),
                       ),
-              ],
-            ),
           ],
         ),
       ),
@@ -1177,6 +1262,7 @@ class _ProfileDetailsScreenWebState
       Color textColor,
       Color subtitleColor) {
     final mobStatus = profileProvider.mobEmailStatus;
+    final statusLoading = profileProvider.mobEmailStatusLoading;
     final mobileStatus = mobStatus?.mobileStatus ?? '';
     final emailStatus = mobStatus?.emailStatus ?? '';
     final addressStatus = mobStatus?.addressStatus ?? '';
@@ -1187,6 +1273,17 @@ class _ProfileDetailsScreenWebState
         emailStatus == 'e-signed pending' || emailStatus == 'e-signed completed';
     final addressPendingOrDone =
         addressStatus == 'e-signed pending' || addressStatus == 'e-signed completed';
+    // Account-level gates (closed / non-individual / inactive / within 7
+    // days / mid Re-KYC). Re-KYC only blocks email & mobile per spec.
+    final emailMobileBlock =
+        _personalInfoEditBlock(checkRekyc: true, checkActive: false);
+    final addressBlock = _personalInfoEditBlock(checkRekyc: false);
+    // yearlyIncomeDisable equivalent: while an income e-sign is pending or
+    // completed, the EDIT button is hidden entirely (no tooltip rendered), v-else-if="!yearlyIncomeDisable" gate.
+    final incomePendingOrDone = incomeStatus == 'e-signed pending' ||
+        incomeStatus == 'e-signed completed';
+    final incomeBlock =
+        incomePendingOrDone ? null : _annualIncomeEditBlock();
 
     final dividerColor = resolveThemeColor(context,
         dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
@@ -1212,25 +1309,59 @@ class _ProfileDetailsScreenWebState
       _FlatFieldData(
         label: "Email",
         value: clientData.cLIENTIDMAIL ?? "N/A",
-        onEdit: emailPendingOrDone ? null : _showEmailChangeDialog,
+        onEdit: emailPendingOrDone
+            ? null
+            : (emailMobileBlock == null || emailMobileBlock.clickable)
+                ? _showEmailChangeDialog
+                : null,
+        disabledEditTooltip:
+            emailPendingOrDone ? null : emailMobileBlock?.tooltip,
+        showDisabledEditNoTooltip: !emailPendingOrDone &&
+            emailMobileBlock != null &&
+            !emailMobileBlock.clickable &&
+            emailMobileBlock.tooltip == null,
+        loading: statusLoading,
       ),
       _FlatFieldData(
         label: "Mobile",
         value: clientData.mOBILENO ?? "N/A",
-        onEdit: mobilePendingOrDone ? null : _showMobileChangeDialog,
+        onEdit: mobilePendingOrDone
+            ? null
+            : (emailMobileBlock == null || emailMobileBlock.clickable)
+                ? _showMobileChangeDialog
+                : null,
+        disabledEditTooltip:
+            mobilePendingOrDone ? null : emailMobileBlock?.tooltip,
+        showDisabledEditNoTooltip: !mobilePendingOrDone &&
+            emailMobileBlock != null &&
+            !emailMobileBlock.clickable &&
+            emailMobileBlock.tooltip == null,
+        loading: statusLoading,
       ),
       _FlatFieldData(
         label: "Address",
         value: "${clientData.cLRESIADD1 ?? ''}  ${clientData.cLRESIADD2 ?? ''}  ${clientData.cLRESIADD3 ?? ''}"
             .toUpperCase(),
-        onEdit: addressPendingOrDone ? null : _showAddressChangeDialog,
+        onEdit: addressPendingOrDone
+            ? null
+            : (addressBlock == null || addressBlock.clickable)
+                ? _showAddressChangeDialog
+                : null,
+        disabledEditTooltip:
+            addressPendingOrDone ? null : addressBlock?.tooltip,
+        loading: statusLoading,
       ),
       _FlatFieldData(
         label: "Annual Income",
         value: clientData.aNNUALINCOME ?? "N/A",
-        onEdit: (incomeStatus == 'e-signed completed' || incomeStatus == 'e-signed pending')
+        onEdit: incomePendingOrDone
             ? null
-            : _showIncomeChangeDialog,
+            : (incomeBlock == null || incomeBlock.clickable)
+                ? _showIncomeChangeDialog
+                : null,
+        disabledEditTooltip:
+            incomePendingOrDone ? null : incomeBlock?.tooltip,
+        loading: statusLoading,
         statusBanner: incomeStatus == 'e-signed completed'
             ? Builder(builder: (context) {
                 final successBg = resolveThemeColor(context,
@@ -1410,19 +1541,70 @@ class _ProfileDetailsScreenWebState
                 ).copyWith(decoration: TextDecoration.none),
               ),
             ),
-            if (field.onEdit != null) ...[
+            if (field.loading) ...[
               const SizedBox(width: 8),
-              InkWell(
-                onTap: field.onEdit,
-                borderRadius: BorderRadius.circular(16),
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(Icons.edit_outlined, size: 16,
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
                     color: resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: MyntColors.primary)),
+                        dark: MyntColors.primaryDark,
+                        light: MyntColors.primary),
+                  ),
                 ),
               ),
+            ] else if (field.onEdit != null ||
+                (field.disabledEditTooltip != null &&
+                    field.disabledEditTooltip!.isNotEmpty) ||
+                field.showDisabledEditNoTooltip) ...[
+              const SizedBox(width: 8),
+              Builder(builder: (context) {
+                final bool disabled = field.onEdit == null;
+                final editButton = InkWell(
+                  onTap: field.onEdit,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Opacity(
+                    opacity: disabled ? 0.4 : 1.0,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.edit_outlined,
+                              size: 16,
+                              color: resolveThemeColor(context,
+                                  dark: MyntColors.primaryDark,
+                                  light: MyntColors.primary)),
+                          const SizedBox(width: 4),
+                          Text(
+                            "EDIT",
+                            style: MyntWebTextStyles.caption(context,
+                              darkColor: MyntColors.primaryDark,
+                              lightColor: MyntColors.primary,
+                              fontWeight: MyntFonts.semiBold,
+                            ).copyWith(
+                              letterSpacing: 0.5,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+                if (field.disabledEditTooltip != null &&
+                    field.disabledEditTooltip!.isNotEmpty) {
+                  return Tooltip(
+                    message: field.disabledEditTooltip!,
+                    child: editButton,
+                  );
+                }
+                return editButton;
+              }),
             ],
           ],
         ),
@@ -1447,13 +1629,49 @@ class _FlatFieldData {
   final String value;
   final VoidCallback? onEdit;
   final Widget? statusBanner;
+  final String? disabledEditTooltip;
+  // Render a disabled EDIT button with NO tooltip
+  final bool showDisabledEditNoTooltip;
+  // While true, render a small spinner where the EDIT button would otherwise appear
+  final bool loading;
 
   const _FlatFieldData({
     required this.label,
     required this.value,
     this.onEdit,
     this.statusBanner,
+    this.disabledEditTooltip,
+    this.showDisabledEditNoTooltip = false,
+    this.loading = false,
   });
+}
+
+/// Result of the personal-info edit gate.
+/// `tooltip == null` means "blocked but render with no tooltip" (Re-KYC case).
+/// `clickable == true` means the button stays clickable (with tooltip) and
+/// the dialog handler will show the same warning on click — the
+/// "clickable but ineffective" closed-account case.
+class _EditBlock {
+  final String? tooltip;
+  final bool clickable;
+  const _EditBlock({this.tooltip, this.clickable = false});
+}
+
+/// True when an OTP-send response says the OTP actually went out.
+///
+/// Both the email and mobile endpoints answer with a free-text `msg` for
+/// success and failure alike, so this matches on the "sent" token instead of an
+/// exact string. Rejections such as "This mail already linked to another
+/// account" fall through to false and get shown to the user, rather than
+/// silently advancing the dialog to the OTP field.
+bool _otpSendSucceeded(String? msg) {
+  if (msg == null || msg.trim().isEmpty) return false;
+  final m = msg.toLowerCase();
+  const failureHints = [
+    'not sent', 'not send', 'fail', 'error', 'invalid', 'already',
+  ];
+  if (failureHints.any(m.contains)) return false;
+  return m.contains('sent') || m.contains('send');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1489,6 +1707,42 @@ class _EmailChangeDialogState extends State<_EmailChangeDialog> {
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final dividerColor = resolveThemeColor(context,
         dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final inputFillColor = resolveThemeColor(context,
+        dark: const Color(0xFF1C2333), light: const Color(0xFFF6F7F9));
+    final borderColor = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+
+    InputDecoration emailInputDecoration(String hint) => InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(fontSize: 14, color: subtitleColor),
+          filled: true,
+          fillColor: inputFillColor,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: borderColor),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: borderColor),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary)),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: resolveThemeColor(context,
+                dark: MyntColors.errorDark, light: MyntColors.error)),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: resolveThemeColor(context,
+                dark: MyntColors.errorDark, light: MyntColors.error)),
+          ),
+        );
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -1549,10 +1803,19 @@ class _EmailChangeDialogState extends State<_EmailChangeDialog> {
                               color: textColor,
                               fontWeight: MyntFonts.medium)),
                       const SizedBox(height: 6),
-                      MyntFormTextField(
+                      TextFormField(
                         controller: widget.profileProvider.newEmailController,
-                        placeholder: 'Enter new email',
                         keyboardType: TextInputType.emailAddress,
+                        autovalidateMode: AutovalidateMode.onUserInteraction,
+                        style: TextStyle(fontSize: 14, color: textColor),
+                        decoration: emailInputDecoration('Enter new email'),
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'E-mail is required';
+                          if (v.startsWith(' ')) return 'E-mail cannot start with spaces';
+                          if (v.contains(' ')) return 'Email cannot contain spaces';
+                          if (!RegExp(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$').hasMatch(v)) return 'E-mail must be valid';
+                          return null;
+                        },
                       ),
                       if (_otpSent) ...[
                         const SizedBox(height: 16),
@@ -1561,10 +1824,20 @@ class _EmailChangeDialogState extends State<_EmailChangeDialog> {
                                 color: textColor,
                                 fontWeight: MyntFonts.medium)),
                         const SizedBox(height: 6),
-                        MyntFormTextField(
+                        TextFormField(
                           controller: widget.profileProvider.newEmailOTPController,
-                          placeholder: 'Enter 4-digit OTP',
                           keyboardType: TextInputType.number,
+                          autovalidateMode: AutovalidateMode.onUserInteraction,
+                          maxLength: 4,
+                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                          style: TextStyle(fontSize: 14, color: textColor),
+                          decoration: emailInputDecoration('Enter 4-digit OTP')
+                              .copyWith(counterText: ''),
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'OTP Required';
+                            if (!RegExp(r'^\d{4}$').hasMatch(v)) return 'Must be exactly 4 digits';
+                            return null;
+                          },
                         ),
                       ],
                       const SizedBox(height: 24),
@@ -1577,16 +1850,21 @@ class _EmailChangeDialogState extends State<_EmailChangeDialog> {
                           onPressed: () async {
                             if (!_formKey.currentState!.validate()) return;
                             setState(() => _isLoading = true);
-                            await widget.profileProvider.emaileotpfun(
+                            final msg = await widget.profileProvider
+                                .emaileotpfun(
                               widget.profileProvider.newEmailController.text,
                               widget.clientData.cLIENTIDMAIL ?? "",
                               widget.clientData.cLIENTNAME ?? "",
                               widget.clientData.cLIENTDPCODE ?? "",
                             );
-                            setState(() {
-                              _otpSent = true;
-                              _isLoading = false;
-                            });
+                            setState(() => _isLoading = false);
+                            if (!mounted) return;
+                            if (_otpSendSucceeded(msg)) {
+                              setState(() => _otpSent = true);
+                            } else {
+                              error(context,
+                                  msg ?? 'Failed to send OTP. Please try again.');
+                            }
                           },
                         ),
                       if (_otpSent)
@@ -1596,6 +1874,7 @@ class _EmailChangeDialogState extends State<_EmailChangeDialog> {
                           isFullWidth: true,
                           isLoading: _isLoading,
                           onPressed: () async {
+                            if (!_formKey.currentState!.validate()) return;
                             setState(() => _isLoading = true);
                             final result = await widget.profileProvider
                                 .emailOtpVerifyWeb(
@@ -1657,6 +1936,42 @@ class _MobileChangeDialogState extends State<_MobileChangeDialog> {
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final dividerColor = resolveThemeColor(context,
         dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final inputFillColor = resolveThemeColor(context,
+        dark: const Color(0xFF1C2333), light: const Color(0xFFF6F7F9));
+    final borderColor = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+
+    InputDecoration mobileInputDecoration(String hint) => InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(fontSize: 14, color: subtitleColor),
+          filled: true,
+          fillColor: inputFillColor,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: borderColor),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: borderColor),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary)),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: resolveThemeColor(context,
+                dark: MyntColors.errorDark, light: MyntColors.error)),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: BorderSide(color: resolveThemeColor(context,
+                dark: MyntColors.errorDark, light: MyntColors.error)),
+          ),
+        );
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -1717,10 +2032,20 @@ class _MobileChangeDialogState extends State<_MobileChangeDialog> {
                               color: textColor,
                               fontWeight: MyntFonts.medium)),
                       const SizedBox(height: 6),
-                      MyntFormTextField(
+                      TextFormField(
                         controller: widget.profileProvider.newMobController,
-                        placeholder: 'Enter new mobile number',
                         keyboardType: TextInputType.phone,
+                        autovalidateMode: AutovalidateMode.onUserInteraction,
+                        maxLength: 10,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        style: TextStyle(fontSize: 14, color: textColor),
+                        decoration: mobileInputDecoration('Enter new mobile number')
+                            .copyWith(counterText: ''),
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Mobile is required';
+                          if (!RegExp(r'^[6-9]\d{9}$').hasMatch(v)) return 'Enter a valid mobile number';
+                          return null;
+                        },
                       ),
                       if (_otpSent) ...[
                         const SizedBox(height: 16),
@@ -1729,10 +2054,20 @@ class _MobileChangeDialogState extends State<_MobileChangeDialog> {
                                 color: textColor,
                                 fontWeight: MyntFonts.medium)),
                         const SizedBox(height: 6),
-                        MyntFormTextField(
+                        TextFormField(
                           controller: widget.profileProvider.newMobOTPController,
-                          placeholder: 'Enter OTP',
                           keyboardType: TextInputType.number,
+                          autovalidateMode: AutovalidateMode.onUserInteraction,
+                          maxLength: 4,
+                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                          style: TextStyle(fontSize: 14, color: textColor),
+                          decoration: mobileInputDecoration('Enter OTP')
+                              .copyWith(counterText: ''),
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'OTP Required';
+                            if (!RegExp(r'^\d{4}$').hasMatch(v)) return 'Must be exactly 4 digits';
+                            return null;
+                          },
                         ),
                       ],
                       const SizedBox(height: 24),
@@ -1753,7 +2088,7 @@ class _MobileChangeDialogState extends State<_MobileChangeDialog> {
                             );
                             setState(() => _isLoading = false);
                             if (!mounted) return;
-                            if (msg != null && (msg.toLowerCase().contains('otp') || msg.toLowerCase().contains('sent'))) {
+                            if (_otpSendSucceeded(msg)) {
                               setState(() => _otpSent = true);
                             } else {
                               error(context, msg ?? 'Failed to send OTP. Please try again.');
@@ -1767,6 +2102,7 @@ class _MobileChangeDialogState extends State<_MobileChangeDialog> {
                           isFullWidth: true,
                           isLoading: _isLoading,
                           onPressed: () async {
+                            if (!_formKey.currentState!.validate()) return;
                             setState(() => _isLoading = true);
                             final result = await widget.profileProvider
                                 .mobileOtpVerifyWeb(
@@ -1817,6 +2153,7 @@ class _IncomeChangeDialog extends StatefulWidget {
 }
 
 class _IncomeChangeDialogState extends State<_IncomeChangeDialog> {
+  final _otpFormKey = GlobalKey<FormState>();
   String? _selectedRange;
   bool _otpSent = false;
   bool _isLoading = false;
@@ -1961,11 +2298,8 @@ class _IncomeChangeDialogState extends State<_IncomeChangeDialog> {
   }
 
   Future<void> _onVerifyOtp() async {
+    if (!(_otpFormKey.currentState?.validate() ?? false)) return;
     final otp = widget.profileProvider.newIncomeOTPController.text.trim();
-    if (otp.isEmpty || otp.length < 4) {
-      error(context, "Please enter a valid 4-digit OTP");
-      return;
-    }
 
     setState(() => _isLoading = true);
     final result = await widget.profileProvider.incomeotpverpro(
@@ -1989,6 +2323,7 @@ class _IncomeChangeDialogState extends State<_IncomeChangeDialog> {
   }
 
   InputDecoration _themedInputDecoration({String? hintText, String? counterText}) {
+    final errorColor = _isDark ? MyntColors.errorDark : MyntColors.error;
     return InputDecoration(
       hintText: hintText,
       counterText: counterText,
@@ -2005,7 +2340,16 @@ class _IncomeChangeDialogState extends State<_IncomeChangeDialog> {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: MyntColors.primary),
+        borderSide: BorderSide(color: resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary)),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: errorColor),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: errorColor),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     );
@@ -2237,7 +2581,7 @@ class _IncomeChangeDialogState extends State<_IncomeChangeDialog> {
                 children: [
                   Text("Upload your Bank Proof",
                       style: TextStyle(
-                          color: MyntColors.primary,
+                          color: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
                           fontSize: 14,
                           fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
@@ -2306,42 +2650,45 @@ class _IncomeChangeDialogState extends State<_IncomeChangeDialog> {
   }
 
   Widget _buildOtpView() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text("Mobile number",
-            style: TextStyle(color: _textSecondary, fontSize: 13)),
-        const SizedBox(height: 6),
-        TextFormField(
-          initialValue: widget.clientData.mOBILENO ?? "",
-          readOnly: true,
-          decoration: _themedInputDecoration(),
-          style: TextStyle(color: _textPrimary, fontSize: 14),
-        ),
-        const SizedBox(height: 20),
-        RichText(
-          text: TextSpan(
-            style: TextStyle(color: _textPrimary, fontSize: 13),
-            children: [
-              const TextSpan(text: 'Enter 4 digit OTP sent to mobile no. '),
-              TextSpan(
-                text: '*',
-                style: TextStyle(color: Colors.red.shade400),
-              ),
-            ],
+    return Form(
+      key: _otpFormKey,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Mobile number",
+              style: TextStyle(color: _textSecondary, fontSize: 13)),
+          const SizedBox(height: 6),
+          TextFormField(
+            initialValue: widget.clientData.mOBILENO ?? "",
+            readOnly: true,
+            decoration: _themedInputDecoration(),
+            style: TextStyle(color: _textPrimary, fontSize: 14),
           ),
-        ),
-        const SizedBox(height: 6),
-        TextFormField(
-          controller: widget.profileProvider.newIncomeOTPController,
-          keyboardType: TextInputType.number,
-          maxLength: 4,
-          decoration: _themedInputDecoration(
-              hintText: '00-00', counterText: ''),
-          style: TextStyle(color: _textPrimary, fontSize: 14),
-        ),
-      ],
+          const SizedBox(height: 16),
+          Text("Enter OTP *",
+              style: MyntWebTextStyles.bodySmall(context,
+                  color: _textPrimary, fontWeight: MyntFonts.medium)),
+          const SizedBox(height: 6),
+          TextFormField(
+            controller: widget.profileProvider.newIncomeOTPController,
+            keyboardType: TextInputType.number,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
+            maxLength: 4,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: _themedInputDecoration(
+                hintText: 'Enter 4-digit OTP', counterText: ''),
+            style: TextStyle(color: _textPrimary, fontSize: 14),
+            validator: (v) {
+              if (v == null || v.isEmpty) return 'OTP Required';
+              if (!RegExp(r'^\d{4}$').hasMatch(v)) {
+                return 'Must be exactly 4 digits';
+              }
+              return null;
+            },
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2354,7 +2701,6 @@ class _AddressChangeDialog extends StatefulWidget {
   final ClientData clientData;
   final bool isDarkMode;
   final VoidCallback onDone;
-  final VoidCallback? onAadhaarTap;
   final bool startWithManual;
 
   const _AddressChangeDialog({
@@ -2362,7 +2708,6 @@ class _AddressChangeDialog extends StatefulWidget {
     required this.clientData,
     required this.isDarkMode,
     required this.onDone,
-    this.onAadhaarTap,
     this.startWithManual = false,
   });
 
@@ -2483,7 +2828,7 @@ class _AddressChangeDialogState extends State<_AddressChangeDialog> {
 
     // Step 1: KRA image check before address change
     final kraResult = await widget.profileProvider.kraImageCheck();
-    if (kraResult != 'image found') {
+    if (!kraResult) {
       // Show selfie capture dialog
       if (!mounted) return;
       final selfieBytes = await showDialog<List<int>>(
@@ -2638,7 +2983,7 @@ class _AddressChangeDialogState extends State<_AddressChangeDialog> {
                   child: ElevatedButton(
                     onPressed: () {
                       Navigator.pop(context);
-                      widget.onAadhaarTap?.call();
+                      launchDigilockerAuth();
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: resolveThemeColor(context,
@@ -2717,10 +3062,14 @@ class _AddressChangeDialogState extends State<_AddressChangeDialog> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _addressCtrl,
+                  autovalidateMode: AutovalidateMode.onUserInteraction,
                   style: TextStyle(fontSize: 14, color: _textPrimary),
                   decoration: _themedInputDecoration('New Address'),
-                  validator: (v) =>
-                      (v == null || v.isEmpty) ? 'Required' : null,
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'Address is required';
+                    if (v.startsWith(' ')) return 'Address cannot start with spaces';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
 
@@ -2736,6 +3085,7 @@ class _AddressChangeDialogState extends State<_AddressChangeDialog> {
                           TextFormField(
                             controller: _pincodeCtrl,
                             keyboardType: TextInputType.number,
+                            autovalidateMode: AutovalidateMode.onUserInteraction,
                             style:
                                 TextStyle(fontSize: 14, color: _textPrimary),
                             decoration: _themedInputDecoration('Pincode')
@@ -2753,10 +3103,11 @@ class _AddressChangeDialogState extends State<_AddressChangeDialog> {
                                   : null,
                             ),
                             onChanged: _onPincodeChanged,
-                            validator: (v) =>
-                                (v == null || v.length < 6)
-                                    ? 'Enter valid pincode'
-                                    : null,
+                            validator: (v) {
+                              if (v == null || v.isEmpty) return 'Pincode is required';
+                              if (!RegExp(r'^\d{6}$').hasMatch(v)) return 'Enter a valid 6-digit pincode';
+                              return null;
+                            },
                           ),
                         ],
                       ),

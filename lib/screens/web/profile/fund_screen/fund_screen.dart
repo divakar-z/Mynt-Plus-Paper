@@ -1,5 +1,6 @@
 // ignore_for_file: library_private_types_in_public_api, use_build_context_synchronously
 import 'dart:async';
+import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +23,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 // import 'package:remove_emoji_input_formatter/remove_emoji_input_formatter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/transcation_provider.dart';
 // import '../../../../sharedWidget/custom_back_btn.dart';
@@ -57,6 +59,7 @@ class _FundScreenState extends ConsumerState<FundScreen> {
   bool _isInitialized = false;
   bool _isUpiIdExpanded = false;
   int _selectedPaymentMethod = -1; // -1 = none, 0 = Scan QR, 1 = UPI ID, 2 = Net Banking
+  String _selectedGateway = 'RAZORPAY'; // 'RAZORPAY' or 'ATOM'
 
   @override
   void initState() {
@@ -622,7 +625,7 @@ class _FundScreenState extends ConsumerState<FundScreen> {
 
     if (fund.razorpayOptions != null && mounted) {
       try {
-        openRazorpayWeb(
+        await openRazorpayWeb(
           options: fund.razorpayOptions!,
           onSuccess: (paymentId, orderId, signature) {
             if (mounted && paymentId != null && paymentId.isNotEmpty) {
@@ -635,10 +638,49 @@ class _FundScreenState extends ConsumerState<FundScreen> {
             }
           },
         );
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint('Razorpay open failed: $e\n$st');
         if (mounted) {
           warningMessage(context, "Failed to open payment gateway");
         }
+      }
+    }
+  }
+
+  Future<void> _handleAtomPayment(
+      BuildContext context, TranctionProvider fund) async {
+    fund.resetBottomSheetState();
+
+    final clientData =
+        fund.decryptclientcheck!.clientCheck!.dATA![fund.indexss];
+    final clientCode = clientData[0];
+    final clientName = clientData[2];
+    final clientEmail = clientData[4];
+    final clientMobile = clientData[5];
+    final amt = '${fund.amount.text}.00';
+    final ifsc4 = fund.ifsc.length >= 4 ? fund.ifsc.substring(0, 4) : fund.ifsc;
+
+    final url = 'https://fundapi.mynt.in/atom/atomredirect'
+        '?seg=${Uri.encodeComponent(fund.textValue)}'
+        '&code=${Uri.encodeComponent(clientCode)}'
+        '&amt=${Uri.encodeComponent(amt)}'
+        '&custacc=${Uri.encodeComponent(fund.accno)}'
+        '&bankifsc=${Uri.encodeComponent(ifsc4)}'
+        '&name=${Uri.encodeComponent(clientName)}'
+        '&mobile=${Uri.encodeComponent(clientMobile)}'
+        '&email=${Uri.encodeComponent(clientEmail)}'
+        '&bankname=${Uri.encodeComponent(fund.bankname)}'
+        '&ru=${Uri.encodeComponent('https://fundapi.mynt.in/atom/fromatom')}';
+
+    try {
+      html.window.open(
+        url,
+        'AtomPayment',
+        'width=800,height=700,scrollbars=yes,resizable=yes,left=200,top=100',
+      );
+    } catch (e) {
+      if (mounted) {
+        warningMessage(context, "Failed to open Atom payment gateway");
       }
     }
   }
@@ -845,7 +887,11 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    "₹ ${formatIndianCurrency(funds.fundDetailModel?.avlMrg ?? '0.00')}",
+                                    ref.watch(privacyProvider).mask(
+                                        formatIndianCurrency(
+                                            funds.fundDetailModel?.avlMrg ??
+                                                '0.00'),
+                                        prefix: "₹ "),
                                     style: MyntWebTextStyles.head(
                                       context,
                                       color: resolveThemeColor(
@@ -942,33 +988,48 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                     const SizedBox(height: 12),
 
                                     // Amount input
-                                    MyntTextField(
-                                      focusNode: fund.focusNode,
-                                      controller: fund.amount,
-                                      placeholder: "0.00",
-                                      keyboardType: TextInputType.number,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                      ],
-                                      leadingWidget: Center(
-                                        widthFactor: 1,
-                                        child: Padding(
-                                          padding: const EdgeInsets.only(left: 12),
-                                          child: Text(
-                                            "₹",
-                                            style: MyntWebTextStyles.body(
-                                              context,
-                                              fontWeight: MyntFonts.medium,
-                                              darkColor: MyntColors.textSecondaryDark,
-                                              lightColor: MyntColors.textSecondary,
+                                    IgnorePointer(
+                                      ignoring: !fund.hasActiveSegments,
+                                      child: Opacity(
+                                        opacity:
+                                            fund.hasActiveSegments ? 1.0 : 0.5,
+                                        child: MyntTextField(
+                                          focusNode: fund.focusNode,
+                                          controller: fund.amount,
+                                          placeholder: "0.00",
+                                          keyboardType: TextInputType.number,
+                                          inputFormatters: [
+                                            FilteringTextInputFormatter
+                                                .digitsOnly,
+                                          ],
+                                          leadingWidget: Center(
+                                            widthFactor: 1,
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(
+                                                  left: 12),
+                                              child: Text(
+                                                "₹",
+                                                style: MyntWebTextStyles.body(
+                                                  context,
+                                                  fontWeight: MyntFonts.medium,
+                                                  darkColor: MyntColors
+                                                      .textSecondaryDark,
+                                                  lightColor:
+                                                      MyntColors.textSecondary,
+                                                ),
+                                              ),
                                             ),
                                           ),
+                                          onChanged: (value) {
+                                            fund.textFiledonChange(value);
+                                          },
                                         ),
                                       ),
-                                      onChanged: (value) {
-                                        fund.textFiledonChange(value);
-                                      },
                                     ),
+                                    if (!fund.hasActiveSegments) ...[
+                                      const SizedBox(height: 12),
+                                      _buildSegmentInactiveBanner(context),
+                                    ],
 
                                     // Quick amount chips
                                     const SizedBox(height: 12),
@@ -983,10 +1044,11 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                                 "₹${NumberFormat('#,##,###').format(amt)}",
                                               ),
                                               selected: isSelected,
-                                              onSelected: (_) {
+                                              onSelected:  fund.hasActiveSegments
+                                                  ?  (_) {
                                                 fund.amount.text = amt.toString();
                                                 fund.textFiledonChange(amt.toString());
-                                              },
+                                              } : null,
                                               labelStyle: MyntWebTextStyles.bodySmall(
                                                 context,
                                                 color: isSelected
@@ -1069,6 +1131,21 @@ class _FundScreenState extends ConsumerState<FundScreen> {
 
                                     const SizedBox(height: 20),
 
+                                    // Segment selection
+                                     if (fund.hasActiveSegments) ...[
+                                    Text(
+                                      "Segment",
+                                      style: MyntWebTextStyles.bodySmall(
+                                        context,
+                                        fontWeight: MyntFonts.medium,
+                                        darkColor: MyntColors.textSecondaryDark,
+                                        lightColor: MyntColors.textSecondary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    _buildSegmentSelector(fund, context),
+                                    const SizedBox(height: 20),
+                                     ],
                                     // Bank account
                                     Text(
                                       "Bank account",
@@ -1212,12 +1289,19 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                       title: "Scan QR",
                                       maxLimit: "₹1,00,000",
                                       badges: ["free", "recommended"],
-                                      isDisabled: fund.intValue > 100000,
+                                      isDisabled: !_hasTradableSegments(fund) ||
+                                          fund.intValue > 100000,
                                     ),
                                     const SizedBox(height: 10),
 
                                     // Enter UPI ID (with inline form inside card)
-                                    _buildUpiIdCard(fund, theme, context),
+                                    IgnorePointer(
+                                      ignoring: !_hasTradableSegments(fund),
+                                      child: Opacity(
+                                        opacity: _hasTradableSegments(fund) ? 1.0 : 0.5,
+                                        child: _buildUpiIdCard(fund, theme, context),
+                                      ),
+                                    ),
                                     const SizedBox(height: 10),
 
                                     // Net Banking
@@ -1237,8 +1321,14 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                       title: "Net Banking",
                                       maxLimit: "₹50,00,000",
                                       badges: ["free"],
-                                      isDisabled: false,
+                                      isDisabled: !_hasTradableSegments(fund),
                                     ),
+
+                                    // Gateway selector (visible when Net Banking is selected)
+                                    if (_selectedPaymentMethod == 2) ...[
+                                      const SizedBox(height: 10),
+                                      _buildGatewaySelector(context),
+                                    ],
 
                                     const SizedBox(height: 20),
 
@@ -1343,6 +1433,280 @@ class _FundScreenState extends ConsumerState<FundScreen> {
     }
   }
 
+  static const _segmentGroups = [
+  {'label': 'Equity',    'codes': ['NSE_CASH', 'BSE_CASH']},
+  {'label': 'F&O',       'codes': ['NSE_FNO', 'BSE_FNO']},
+  {'label': 'Currency',  'codes': ['CD_NSE', 'CD_BSE']},
+  {'label': 'Commodity', 'codes': ['MCX', 'NSE_COM', 'BSE_COM']},
+];
+
+  Widget _buildSegmentInactiveBanner(BuildContext context) {
+    final borderColor = resolveThemeColor(
+      context,
+      dark: const Color(0xFFFFB74D),
+      light: const Color(0xFFFFA726),
+    );
+    final textColor = resolveThemeColor(
+      context,
+      dark: MyntColors.textPrimaryDark,
+      light: MyntColors.textPrimary,
+    );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFA726).withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, size: 18, color: borderColor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: MyntWebTextStyles.bodySmall(
+                  context,
+                  color: textColor,
+                ),
+                children: [
+                  const TextSpan(text: "Activate the "),
+                  TextSpan(
+                    text: "Segments",
+                    style: MyntWebTextStyles.bodySmall(
+                      context,
+                      color: borderColor,
+                      fontWeight: MyntFonts.semiBold,
+                    ),
+                  ),
+                  const TextSpan(
+                     text: " on this account to add funds.",)
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Map<String, String>> _availableSegments(TranctionProvider fund) {
+    final codes = fund.companycodes;
+    final available = <Map<String, String>>[];
+    for (final group in _segmentGroups) {
+      final groupCodes = group['codes'] as List<String>;
+      final match = groupCodes.firstWhere(
+        (c) => codes.contains(c),
+        orElse: () => '',
+      );
+      if (match.isNotEmpty) {
+        available.add({'label': group['label'] as String, 'code': match});
+      }
+    }
+    return available;
+  }
+
+  bool _hasTradableSegments(TranctionProvider fund) =>
+      fund.hasActiveSegments && _availableSegments(fund).isNotEmpty;
+
+  Widget _buildSegmentSelector(TranctionProvider fund, BuildContext context) {
+    final available = _availableSegments(fund);
+
+    if (available.isEmpty) {
+      return Text(
+        "You have no active segments.",
+        style: MyntWebTextStyles.bodySmall(
+          context,
+          color: resolveThemeColor(
+            context,
+            dark: MyntColors.textSecondaryDark,
+            light: MyntColors.textSecondary,
+          ),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: available.map((seg) {
+        final isSelected = fund.textValue == seg['code'];
+        return ChoiceChip(
+          label: Text(seg['label']!),
+          selected: isSelected,
+          onSelected: (_) => _selectSegment(seg['code']!, fund),
+          labelStyle: MyntWebTextStyles.bodySmall(
+            context,
+            color: isSelected
+                ? resolveThemeColor(context,
+                    dark: MyntColors.primaryDark,
+                    light: MyntColors.primary)
+                : resolveThemeColor(context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.textSecondary),
+            fontWeight: MyntFonts.medium,
+          ),
+          selectedColor: resolveThemeColor(
+            context,
+            dark: MyntColors.primaryDark.withValues(alpha: 0.1),
+            light: MyntColors.primary.withValues(alpha: 0.1),
+          ),
+          backgroundColor: resolveThemeColor(
+            context,
+            dark: MyntColors.cardDark,
+            light: MyntColors.inputBg,
+          ),
+          side: BorderSide(
+            color: isSelected
+                ? resolveThemeColor(context,
+                    dark: MyntColors.primaryDark,
+                    light: MyntColors.primary)
+                : resolveThemeColor(context,
+                    dark: MyntColors.cardBorderDark,
+                    light: MyntColors.cardBorder),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(4),
+          ),
+          showCheckmark: false,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildGatewaySelector(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: PopupMenuButton<String>(tooltip: "",
+        onSelected: (value) {
+          setState(() {
+            _selectedGateway = value;
+          });
+        },
+        offset: const Offset(0, 36),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        color: resolveThemeColor(context,
+            dark: MyntColors.cardDark, light: MyntColors.card),
+        itemBuilder: (context) => [
+          _buildGatewayMenuItem(
+            context,
+            value: 'RAZORPAY',
+            label: 'Razorpay',
+            logoUrl: 'https://upload.wikimedia.org/wikipedia/commons/8/89/Razorpay_logo.svg',
+            isSelected: _selectedGateway == 'RAZORPAY',
+          ),
+          // _buildGatewayMenuItem(
+          //   context,
+          //   value: 'ATOM',
+          //   label: 'Atom',
+          //   logoUrl: null,
+          //   isSelected: _selectedGateway == 'ATOM',
+          // ),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.cardBorderDark,
+                  light: MyntColors.cardBorder),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "Gateway : ",
+                style: MyntWebTextStyles.bodySmall(
+                  context,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary),
+                ),
+              ),
+              Text(
+                _selectedGateway == 'RAZORPAY' ? 'Razorpay' : 'Atom',
+                style: MyntWebTextStyles.bodySmall(
+                  context,
+                  fontWeight: MyntFonts.semiBold,
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.primaryDark,
+                      light: MyntColors.primary),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: resolveThemeColor(context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  PopupMenuEntry<String> _buildGatewayMenuItem(
+    BuildContext context, {
+    required String value,
+    required String label,
+    required bool isSelected,
+    String? logoUrl,
+  }) {
+    return PopupMenuItem<String>(
+      value: value,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? resolveThemeColor(context,
+                      dark: MyntColors.transparent,
+                      light: MyntColors.transparent)
+                  
+              : null,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: MyntWebTextStyles.body(
+                  context,
+                  fontWeight:
+                      isSelected ? MyntFonts.semiBold : MyntFonts.semiBold,
+                 color: isSelected ? resolveThemeColor(context,
+                       dark: MyntColors.primaryDark,
+                    light: MyntColors.primary) : resolveThemeColor(context,
+                      dark: MyntColors.textSecondaryDark,
+                      light: MyntColors.textSecondary),
+                ),
+              ),
+            ),
+            if (isSelected)
+              Icon(
+                Icons.check_rounded,
+                size: 18,
+                color: resolveThemeColor(context,
+                    dark: MyntColors.primaryDark,
+                    light: MyntColors.primary),
+              ),
+            const SizedBox(width: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildPaymentMethodCard({
     required TranctionProvider fund,
     required dynamic theme,
@@ -1362,6 +1726,10 @@ class _FundScreenState extends ConsumerState<FundScreen> {
             : () {
                 setState(() {
                   _selectedPaymentMethod = isSelected ? -1 : index;
+                  // Reset gateway to default when switching away from Net Banking
+                  if (_selectedPaymentMethod != 2) {
+                    _selectedGateway = 'RAZORPAY';
+                  }
                 });
               },
         borderRadius: BorderRadius.circular(10),
@@ -1497,6 +1865,20 @@ class _FundScreenState extends ConsumerState<FundScreen> {
   }
 
   void _onPayPressed(BuildContext context, TranctionProvider fund) {
+    if (!fund.hasActiveSegments) {
+      warningMessage(context,
+          "Activate the Segments on my account for fund adding.");
+      return;
+    }
+    if (fund.textValue.isEmpty) {
+      warningMessage(context, "Please select a segment to add money.");
+      return;
+    }
+    if (fund.textValue == "MF_NSE" || fund.textValue == "MF_BSE") {
+      warningMessage(context,
+          "Fund addition is not supported for Mutual Fund segments.");
+      return;
+    }
     if (fund.amount.text.isEmpty || fund.intValue < 50) {
       warningMessage(context, "Min amount ₹50");
       return;
@@ -1528,7 +1910,11 @@ class _FundScreenState extends ConsumerState<FundScreen> {
           warningMessage(context, "Max amount ₹50,00,000");
           return;
         }
-        _handleRazorpayPayment(context, fund);
+        if (_selectedGateway == 'ATOM') {
+          _handleAtomPayment(context, fund);
+        } else {
+          _handleRazorpayPayment(context, fund);
+        }
         break;
     }
   }

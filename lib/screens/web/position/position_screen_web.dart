@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:mynt_plus/locator/locator.dart';
@@ -15,6 +16,7 @@ import 'package:mynt_plus/screens/web/position/group/create_group_web.dart';
 
 import '../../../../models/portfolio_model/position_book_model.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/res.dart';
@@ -30,6 +32,7 @@ import '../../../../sharedWidget/snack_bar.dart';
 import '../../../../models/marketwatch_model/get_quotes.dart';
 import '../../../../models/order_book_model/order_book_model.dart';
 import '../../../../utils/responsive_navigation.dart';
+import '../../../../utils/responsive_snackbar.dart';
 import '../../../../utils/rupee_convert_format.dart';
 import '../../../../utils/pip_service.dart';
 import '../../../../provider/strategy_builder_provider.dart';
@@ -46,6 +49,7 @@ class PositionScreenWeb extends ConsumerStatefulWidget {
 class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
   int _selectedTabIndex = 0;
   bool _showGroupsView = false; // Toggle between positions and groups view
+  bool _analyzing = false; // Strategy builder shown in place of the positions (Analyze)
   // ✅ Use ValueNotifier for search query to avoid rebuilding entire widget
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
   // TextEditingController to control the TextField value
@@ -54,6 +58,16 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
       ValueNotifier<String>('All'); // Filter options: All, MIS, NRML, CNC
   int? _sortColumnIndex;
   bool _sortAscending = true;
+
+  // Active sort for the positions table, held here rather than inside it.
+  //
+  // Refresh replaces the table with a loader, so anything the table owned was
+  // destroyed and rebuilt — which is why the sort used to clear while the
+  // search box and filter chip, both owned by this screen, survived. Kept
+  // separate from the two fields above, which belong to the retired
+  // DataTable2 path.
+  int? _positionsSortColumnIndex;
+  bool _positionsSortAscending = true;
   // ✅ Use ValueNotifier instead of setState to avoid rebuilding entire widget
   final ValueNotifier<String?> _hoveredRowToken = ValueNotifier<String?>(null);
   final ValueNotifier<int?> _hoveredColumnIndex = ValueNotifier<int?>(null);
@@ -71,8 +85,32 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
         _searchQuery.value = _searchController.text;
       }
     });
+    // TC_389 — exit selections are held against the FULL open position list,
+    // never the filtered one, and exitPosition() squares off everything still
+    // ticked. So a row that was ticked and is now hidden by the product filter
+    // or the search box would still be exited, with the button and the confirm
+    // dialog both showing the stale count. Clear the selection whenever the
+    // visible list changes. Listening on the notifiers rather than on the
+    // widgets catches every path that can change them, including any added
+    // later.
+    _searchQuery.addListener(_clearExitSelectionOnListChange);
+    _selectedFilter.addListener(_clearExitSelectionOnListChange);
     // Set up WebSocket subscription for live position updates (like mobile)
     _setupSocketSubscription();
+  }
+
+  /// Drops any pending exit selection when the visible position list changes.
+  /// Kept cheap: does nothing unless something is actually selected, so it
+  /// will not fire a provider notify on every keystroke.
+  void _clearExitSelectionOnListChange() {
+    if (!mounted) return;
+    final positionBook = ref.read(portfolioProvider);
+    if (!positionBook.hasExitSelection &&
+        positionBook.exitPositionQty == 0 &&
+        !positionBook.isExitAllPosition) {
+      return;
+    }
+    positionBook.resetExitPositionSelection();
   }
 
   void _setupSocketSubscription() {
@@ -87,16 +125,22 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           if (socketDatas.containsKey(position.token)) {
             final socketData = socketDatas[position.token];
 
-            // Update LTP if valid
+            // Strict guard — defense in depth, independent of central sanitiser.
+            // Rejects null, "null", "", "0", "0.0", "0.00" so broker zero
+            // defaults can never write into position.lp and produce phantom
+            // P&L. Same pattern applied to pc.
             final lp = socketData['lp']?.toString();
-            if (lp != null && lp != "null" && lp != position.lp) {
+            if (lp != null && lp != "null" && lp != "" &&
+                lp != "0" && lp != "0.0" && lp != "0.00" &&
+                lp != position.lp) {
               position.lp = lp;
               needsUpdate = true;
             }
 
-            // Update percent change if available
             final pc = socketData['pc']?.toString();
-            if (pc != null && pc != "null" && pc != position.perChange) {
+            if (pc != null && pc != "null" && pc != "" &&
+                pc != "0" && pc != "0.0" && pc != "0.00" &&
+                pc != position.perChange) {
               position.perChange = pc;
               needsUpdate = true;
             }
@@ -118,6 +162,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     _verticalScrollController.dispose();
     _hoveredRowToken.dispose();
     _hoveredColumnIndex.dispose();
+    _searchQuery.removeListener(_clearExitSelectionOnListChange);
+    _selectedFilter.removeListener(_clearExitSelectionOnListChange);
     _searchQuery.dispose(); // ✅ Dispose search query ValueNotifier
     _searchController.dispose(); // Dispose TextEditingController
     _selectedFilter.dispose();
@@ -125,10 +171,18 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     super.dispose();
   }
 
-  // Manual refresh method for button click
+  // Manual refresh method for button click. Only surface an error toaster
+  // when the fetch actually fails (API error or exception). Successful
+  // refreshes are silent — the table updating is the feedback.
   Future<void> _handleManualRefresh() async {
     final positionBook = ref.read(portfolioProvider);
-    await positionBook.fetchPositionBook(context, positionBook.isDay, isRefresh: true);
+    await positionBook.fetchPositionBook(context, positionBook.isDay,
+        isRefresh: true);
+    if (!mounted) return;
+    if (!positionBook.lastRefreshSucceeded) {
+      ResponsiveSnackBar.showError(
+          context, 'Refresh failed. Please try again.');
+    }
   }
 
   @override
@@ -136,6 +190,23 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     // Watch posloader to rebuild when loading state changes
     final positionBook = ref.watch(portfolioProvider);
     final theme = ref.read(themeProvider);
+
+    // Product filters are built from the positions actually held. If the
+    // selected product is no longer present (last CO/BO position squared off,
+    // fresh position book), fall back to All so the table never stays empty
+    // behind a filter that is no longer in the menu.
+    ref.listen(portfolioProvider, (previous, next) {
+      final selected = _selectedFilter.value;
+      if (selected == 'All') return;
+      if (!_availableProductFilters(next).contains(selected)) {
+        _selectedFilter.value = 'All';
+      }
+    });
+
+    // Analyze: the strategy builder fills this page; its back arrow returns here.
+    if (_analyzing) {
+      return StrategyBuilderPanelWeb(onBack: () => setState(() => _analyzing = false));
+    }
 
     // Show full screen loader only on initial load (when no positions exist yet)
     if (positionBook.posloader ) {
@@ -252,6 +323,18 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     required Color valueColor,
     required ThemesProvider theme,
   }) {
+    // Privacy Mode: hide the amount (and its sign/colour); the (%) shell
+    // stays so the layout doesn't shift.
+    final privacy = ref.watch(privacyProvider);
+    if (privacy.isPrivate) {
+      value = value.contains('₹') ? '₹$kPrivacyMask' : kPrivacyMask;
+      percentage = percentage == null ? null : kPrivacyMask;
+      valueColor = resolveThemeColor(
+        context,
+        dark: MyntColors.textPrimaryDark,
+        light: MyntColors.textPrimary,
+      );
+    }
     final horizontalPadding = context.responsive<double>(
       mobile: 8.0,
       tablet: 10.0,
@@ -475,6 +558,13 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 controller: _searchController,
                 placeholder: context.isMobile ? 'Search' : 'Search positions',
                 leadingIcon: assets.searchIcon,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9& \-]')),
+                  TextInputFormatter.withFunction((oldValue, newValue) {
+                    if (newValue.text.startsWith(' ')) return oldValue;
+                    return newValue;
+                  }),
+                ],
                 onClear: () => _searchController.clear(),
               ),
             ),
@@ -482,7 +572,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             // Filter dropdown button
             SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             _buildFilterButton(theme),
-
+            SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             // Exit All Button - only show if there are open positions
             // Use Consumer to watch exitPositionQty which changes when selections change
             Consumer(
@@ -555,6 +645,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
               builder: (context, ref, _) {
                 final selectedFnO = ref.watch(portfolioProvider.select((p) => p.selectedFnOPositions));
                 if (selectedFnO.isEmpty) return const SizedBox.shrink();
+                // A strategy has one underlying (one spot axis); same key as loadFromPositions.
+                final mixed = selectedFnO.map((p) => p.symbol ?? p.dname ?? p.tsym).toSet().length > 1;
 
                 final buttonHeight = context.responsive<double>(
                   mobile: 30,
@@ -569,10 +661,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
 
                 return Padding(
                   padding: EdgeInsets.only(left: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
-                  child: SizedBox(
+                  child: Tooltip(
+                    message: mixed ? 'Select positions of one symbol to analyze' : '',
+                    child: SizedBox(
                     height: buttonHeight,
                     child: ElevatedButton.icon(
-                      onPressed: () => _showAnalyzeDialog(selectedFnO),
+                      onPressed: mixed ? null : () => _openAnalyze(selectedFnO),
                       icon: const Icon(Icons.analytics_outlined, size: 16),
                       label: Text(
                         'Analyze (${selectedFnO.length})',
@@ -595,6 +689,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                           light: MyntColors.primary,
                         ),
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor: resolveThemeColor(
+                          context,
+                          dark: MyntColors.secondary,
+                          light: MyntColors.primary,
+                        ).withValues(alpha: .4),
+                        disabledForegroundColor: Colors.white70,
                         padding: EdgeInsets.symmetric(horizontal: buttonPadding, vertical: 0),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
@@ -602,6 +702,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                         elevation: 0,
                       ),
                     ),
+                  ),
                   ),
                 );
               },
@@ -617,6 +718,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
                 _handleManualRefresh();
               },
               theme: theme,
+              tooltip: 'Refresh',
             ),
             SizedBox(width: context.responsive<double>(mobile: 4, tablet: 6, desktop: 8)),
             // Groups toggle icon - show posgrp icon to navigate to groups
@@ -624,6 +726,8 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           ],
           // Show Create Group button and close icon when Position Groups view is shown
           if (_showGroupsView) ...[
+            _buildGroupFilterButton(theme, positionBook),
+            SizedBox(width: context.responsive<double>(mobile: 6, tablet: 8, desktop: 12)),
             MyntIconTextButton(
               label: 'New Group',
               // iconAsset: assets.addCircleIcon,
@@ -690,6 +794,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     required IconData icon,
     required VoidCallback onPressed,
     required ThemesProvider theme,
+    String? tooltip,
   }) {
     final buttonSize = context.responsive<double>(
       mobile: 32,
@@ -702,7 +807,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
       desktop: 28,
     );
 
-    return Container(
+    final button = Container(
       width: buttonSize,
       height: buttonSize,
       decoration: BoxDecoration(
@@ -727,6 +832,9 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
         ),
       ),
     );
+
+    if (tooltip == null) return button;
+    return Tooltip(message: tooltip, child: button);
   }
 
   /// PiP toggle icon — reflects active state via pipVisibilityNotifier.
@@ -753,6 +861,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             );
           },
           theme: theme,
+          tooltip: 'Picture in Picture',
         );
       },
     );
@@ -780,7 +889,10 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             ? positionBook.allPostionList
             : positionBook.openPosition ?? [];
 
-        final filteredPositions = _getFilteredPositionsFromList(positions);
+        // Download is the full list, same as Holdings and Orders —
+        // search, product filter and sort are not applied.
+        // final filteredPositions = _getFilteredPositionsFromList(positions);
+        final filteredPositions = positions.toList();
 
         if (filteredPositions.isEmpty) {
           warningMessage(context, 'No positions to download');
@@ -874,29 +986,231 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
 
     return Builder(
       builder: (buttonContext) {
-        return MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => _showFilterPopup(buttonContext, theme),
-            child: Container(
-              width: buttonSize,
-              height: buttonSize,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(
-                child: SvgPicture.asset(
-                  assets.searchFilter,
-                  width: iconSize,
-                  colorFilter: ColorFilter.mode(
-                    resolveThemeColor(
-                      context,
-                      dark: MyntColors.iconDark,
-                      light: MyntColors.icon,
+        // The icon used to look identical whether or not a product filter was
+        // on, so a filtered list was indistinguishable from a short one. Tint
+        // the icon and fill the button while a filter is active, and name the
+        // filter in the tooltip — same idea as the group filter button below.
+        return ValueListenableBuilder<String>(
+          valueListenable: _selectedFilter,
+          builder: (context, currentFilter, child) {
+            final isFiltered = currentFilter != 'All';
+            final activeColor = resolveThemeColor(
+              context,
+              dark: MyntColors.secondary,
+              light: MyntColors.primary,
+            );
+            return Tooltip(
+              message: isFiltered ? 'Filter: $currentFilter' : 'Filter',
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () => _showFilterPopup(buttonContext, theme),
+                  child: Container(
+                    width: buttonSize,
+                    height: buttonSize,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    BlendMode.srcIn,
+                    child: Center(
+                      // Clip.none so the dot can sit just outside the icon's
+                      // top-right corner. It stays well inside the button box,
+                      // so nothing is cut off.
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          SvgPicture.asset(
+                            assets.searchFilter,
+                            width: iconSize,
+                            colorFilter: ColorFilter.mode(
+                              isFiltered
+                                  ? activeColor
+                                  : resolveThemeColor(
+                                      context,
+                                      dark: MyntColors.iconDark,
+                                      light: MyntColors.icon,
+                                    ),
+                              BlendMode.srcIn,
+                            ),
+                          ),
+                          if (isFiltered)
+                            Positioned(
+                              top: -5,
+                              right: -3,
+                              child: Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: activeColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Filter dropdown for position groups: underlying vs underlying + expiry
+  Widget _buildGroupFilterButton(
+      ThemesProvider theme, PortfolioProvider positionBook) {
+    final buttonSize = context.responsive<double>(
+      mobile: 32,
+      tablet: 36,
+      desktop: 40,
+    );
+    final iconSize = context.responsive<double>(
+      mobile: 16,
+      tablet: 18,
+      desktop: 20,
+    );
+
+    return Builder(
+      builder: (buttonContext) {
+        return Tooltip(
+          message: positionBook.positionGroupFilter == 'underlying_expiry'
+              ? 'Group: Underlying + Expiry'
+              : 'Group: Underlying',
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => _showGroupFilterPopup(buttonContext, theme),
+              child: Container(
+                width: buttonSize,
+                height: buttonSize,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: SvgPicture.asset(
+                    assets.searchFilter,
+                    width: iconSize,
+                    colorFilter: ColorFilter.mode(
+                      resolveThemeColor(
+                        context,
+                        dark: MyntColors.iconDark,
+                        light: MyntColors.icon,
+                      ),
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showGroupFilterPopup(BuildContext context, ThemesProvider theme) {
+    shadcn.showPopover(
+      context: context,
+      alignment: Alignment.topCenter,
+      offset: const Offset(0, 8),
+      overlayBarrier: shadcn.OverlayBarrier(
+        borderRadius: shadcn.Theme.of(context).borderRadiusLg,
+      ),
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: shadcn.Theme.of(context).borderRadiusLg,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 12,
+                spreadRadius: 2,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: shadcn.ModalContainer(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              width: 200,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildGroupFilterMenuItem('Underlying', 'underlying', theme),
+                  _buildGroupFilterMenuItem(
+                      'Underlying + Expiry', 'underlying_expiry', theme),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGroupFilterMenuItem(
+      String label, String value, ThemesProvider theme) {
+    return Consumer(
+      builder: (context, ref, _) {
+        final currentFilter = ref
+            .watch(portfolioProvider.select((p) => p.positionGroupFilter));
+        final isSelected = currentFilter == value;
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              ref.read(portfolioProvider).setPositionGroupFilter(value);
+              shadcn.closeOverlay(context);
+            },
+            splashColor: resolveThemeColor(
+              context,
+              dark: MyntColors.rippleDark,
+              light: MyntColors.rippleLight,
+            ),
+            highlightColor: resolveThemeColor(
+              context,
+              dark: MyntColors.highlightDark,
+              light: MyntColors.highlightLight,
+            ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(4),
+                color: isSelected
+                    ? resolveThemeColor(
+                        context,
+                        dark: MyntColors.primaryDark.withOpacity(0.12),
+                        light: const Color(0xFFE8F0FE),
+                      )
+                    : Colors.transparent,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: MyntWebTextStyles.body(
+                        context,
+                        fontWeight:
+                            isSelected ? MyntFonts.semiBold : MyntFonts.medium,
+                        color: isSelected
+                            ? resolveThemeColor(
+                                context,
+                                dark: MyntColors.primaryDark,
+                                light: MyntColors.primary,
+                              )
+                            : resolveThemeColor(
+                                context,
+                                dark: MyntColors.textPrimaryDark,
+                                light: MyntColors.textPrimary,
+                              ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1009,6 +1323,36 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     );
   }
 
+  // Product filters actually present in the current position book, in a fixed
+  // display order. CO and BO were missing from the old hardcoded menu, so a
+  // cover/bracket position could be seen but not filtered. Built from the data
+  // so the menu never shows a product the client does not hold.
+  static const List<String> _productFilterOrder = [
+    'MIS',
+    'NRML',
+    'CNC',
+    'CO',
+    'BO',
+  ];
+
+  List<String> _availableProductFilters(PortfolioProvider positionBook) {
+    // Same source the table renders from (see position_table.dart).
+    final positions = positionBook.allPostionList.isNotEmpty
+        ? positionBook.allPostionList
+        : positionBook.openPosition ?? [];
+
+    final present = <String>{};
+    for (final position in positions) {
+      final product = position.sPrdtAli?.toString().trim() ?? '';
+      if (product.isNotEmpty) present.add(product);
+    }
+
+    return [
+      'All',
+      ..._productFilterOrder.where(present.contains),
+    ];
+  }
+
   void _showFilterPopup(BuildContext context, ThemesProvider theme) {
     shadcn.showPopover(
       context: context,
@@ -1034,15 +1378,20 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             padding: const EdgeInsets.all(8),
             child: SizedBox(
               width: 160,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildFilterMenuItem('All', theme),
-                  _buildFilterMenuItem('MIS', theme),
-                  _buildFilterMenuItem('NRML', theme),
-                  _buildFilterMenuItem('CNC', theme),
-                ],
+              // Consumer so the menu picks up a newly added product while it
+              // is still open (new position placed, or one squared off).
+              child: Consumer(
+                builder: (context, ref, child) {
+                  final positionBook = ref.watch(portfolioProvider);
+                  final options = _availableProductFilters(positionBook);
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: options
+                        .map((option) => _buildFilterMenuItem(option, theme))
+                        .toList(),
+                  );
+                },
               ),
             ),
           ),
@@ -1364,6 +1713,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
             return PositionTable(
               searchQuery: searchQuery,
               filterType: filterType,
+              initialSortColumnIndex: _positionsSortColumnIndex,
+              initialSortAscending: _positionsSortAscending,
+              onSortChanged: (columnIndex, ascending) {
+                _positionsSortColumnIndex = columnIndex;
+                _positionsSortAscending = ascending;
+              },
             );
           },
         );
@@ -1377,13 +1732,24 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     List<PositionBookModel> filtered = positions.toList();
 
     // Apply search filter - use ValueNotifier value
-    final searchQuery = _searchQuery.value;
+    final searchQuery = _searchQuery.value.toLowerCase().trim();
     if (searchQuery.isNotEmpty) {
       filtered = filtered.where((position) {
-        final symbol = position.symbol?.toLowerCase() ?? '';
-        final exch = position.exch?.toLowerCase() ?? '';
-        final searchLower = searchQuery.toLowerCase();
-        return symbol.contains(searchLower) || exch.contains(searchLower);
+        // Match the displayed contract name (master/dname/tsym) and its
+        // parsed parts so expiry ("JUL", "24 JUL 26") and strike/option
+        // ("270 CE") searches work, not just the underlying symbol.
+        // Keep in sync with the table filter in position_table.dart.
+        final searchable = [
+          position.masterName,
+          position.dname,
+          position.tsym,
+          position.symbol,
+          position.expDate,
+          position.option,
+          position.exch,
+        ];
+        return searchable.any(
+            (field) => (field ?? '').toLowerCase().contains(searchQuery));
       }).toList();
     }
 
@@ -1944,7 +2310,7 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     PortfolioProvider positionBook,
     String uniqueId,
   ) {
-    final displayText =
+    final displayText = position.masterName ??
         '${position.symbol ?? ''} ${position.exch ?? ''} ${position.expDate ?? ''} ${position.option ?? ''}';
 
     // ✅ Use ValueListenableBuilder to avoid rebuilding entire table on hover
@@ -2457,106 +2823,12 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
     }
   }
 
-  void _showAnalyzeDialog(List<PositionBookModel> positions) {
-    final strategyProvider = ref.read(strategyBuilderProvider);
-
-    // Load positions into strategy builder
-    strategyProvider.loadFromPositions(positions, context);
-
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierColor: resolveThemeColor(
-        context,
-        dark: MyntColors.modalBarrierDark,
-        light: MyntColors.modalBarrierLight,
-      ),
-      builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(24),
-          child: Container(
-            width: MediaQuery.of(context).size.width * 0.85,
-            height: MediaQuery.of(context).size.height * 0.85,
-            decoration: BoxDecoration(
-              color: resolveThemeColor(
-                context,
-                dark: MyntColors.dialogDark,
-                light: MyntColors.dialog,
-              ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              children: [
-                // Header bar
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(
-                        color: resolveThemeColor(
-                          context,
-                          dark: const Color(0xFF333333),
-                          light: const Color(0xFFE0E0E0),
-                        ),
-                      ),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.analytics_outlined,
-                        size: 20,
-                        color: resolveThemeColor(
-                          context,
-                          dark: Colors.white,
-                          light: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Analyze Positions',
-                        style: MyntWebTextStyles.body(
-                          context,
-                          fontWeight: MyntFonts.semiBold,
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: () {
-                          Navigator.of(dialogContext).pop();
-                          strategyProvider.exitAnalyzeMode();
-                        },
-                        icon: Icon(
-                          Icons.close,
-                          size: 20,
-                          color: resolveThemeColor(
-                            context,
-                            dark: Colors.white70,
-                            light: Colors.black54,
-                          ),
-                        ),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                      ),
-                    ],
-                  ),
-                ),
-                // Strategy Builder panel
-                const Expanded(
-                  child: StrategyBuilderPanelWeb(),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    ).then((_) {
-      // Ensure analyze mode is exited when dialog is dismissed
-      if (strategyProvider.isAnalyzeMode) {
-        strategyProvider.exitAnalyzeMode();
-      }
-    });
+  /// Shows the strategy builder inside this page in analyze mode. Its back
+  /// arrow returns to the positions; the builder going away ends analyze mode.
+  void _openAnalyze(List<PositionBookModel> positions) {
+    // Sets analyze mode synchronously, so the builder skips its own initialize.
+    ref.read(strategyBuilderProvider).loadFromPositions(positions, context);
+    setState(() => _analyzing = true);
   }
 
   void _onSortTable(int columnIndex) {

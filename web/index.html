@@ -111,9 +111,8 @@
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
-  </style> 
-  <!-- Razorpay checkout for web payments -->
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  </style>
+  <!-- Razorpay checkout is lazy-loaded from Dart when the user opens payment flow -->
   <!-- flutter_inappwebview web support (web plugin path) -->
   <script type="application/javascript" src="/assets/packages/flutter_inappwebview_web/assets/web/web_support.js"></script>
   <script>
@@ -205,11 +204,15 @@
       });
     })();
 
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function() {
-        navigator.serviceWorker.register('firebase-messaging-sw.js');
-      });
-    }
+    // Removed: this manual registration is redundant (the Firebase JS SDK
+    // auto-registers firebase-messaging-sw.js at its own dedicated scope on
+    // getToken) and it was landing on the ROOT scope, evicting Flutter's
+    // caching service worker — the root cause of stale-build/cache issues.
+    // if ('serviceWorker' in navigator) {
+    //   window.addEventListener('load', function() {
+    //     navigator.serviceWorker.register('firebase-messaging-sw.js');
+    //   });
+    // }
     // Hide splash once Flutter paints the first frame
     window.addEventListener('flutter-first-frame', function () {
       var splash = document.getElementById('flutter-splash');
@@ -222,8 +225,10 @@
       }
     });
   </script>
-  <!-- Digio eSign SDK -->
-  <script src="https://app.digio.in/sdk/v11/digio.js"></script>
+  <!-- Digio eSign SDK is lazy-loaded on demand by lib/utils/digio_esign_web.dart
+       (only when the user actually starts an eSign flow). Loading it eagerly here
+       blocked the initial render on a third-party origin, so it is intentionally
+       NOT included on the critical path. -->
 </head>
 <body>
   <!-- MYNT splash shown during initialization -->

@@ -12,6 +12,7 @@ import '../../../../provider/auth_provider.dart';
 import '../../../../provider/market_watch_provider.dart';
 import '../../../../provider/order_provider.dart';
 import '../../../../provider/portfolio_provider.dart';
+import '../../../../provider/privacy_provider.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/assets.dart';
 import '../../../../res/mynt_web_text_styles.dart';
@@ -488,7 +489,11 @@ class GroupTileHeader extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final value = isNetPnl ? totPnl : totMtm;
+    // Privacy Mode: the aggregated group P&L is masked and its colour
+    // neutralized ("0.00" is passed so _getPnlColor lands on the grey branch).
+    final privacy = ref.watch(privacyProvider);
+    final rawValue = isNetPnl ? totPnl : totMtm;
+    final value = privacy.mask(rawValue);
 
     return Expanded(
       child: Row(
@@ -507,6 +512,28 @@ class GroupTileHeader extends ConsumerWidget {
                   lightColor: MyntColors.textPrimary,
                   fontWeight: MyntFonts.medium,
                 ),
+              ),
+              // Position count pill — same treatment as the category count in
+              // the basket builder (collection_basket_builder.dart).
+              const SizedBox(width: 8),
+              Builder(
+                builder: (context) {
+                  final countColor = resolveThemeColor(context,
+                      dark: MyntColors.primaryDark, light: MyntColors.primary);
+                  return Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: countColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: Text(
+                      '$itemCount',
+                      style: MyntWebTextStyles.para(context,
+                          fontWeight: MyntFonts.semiBold, color: countColor),
+                    ),
+                  );
+                },
               ),
               // Action buttons - only show when expanded, right next to group name
               if (isExpanded) ...[
@@ -555,7 +582,8 @@ class GroupTileHeader extends ConsumerWidget {
             value,
             style: MyntWebTextStyles.title(
               context,
-              color: _getPnlColor(value, context),
+              color: _getPnlColor(
+                  privacy.isPrivate ? "0.00" : rawValue, context),
               fontWeight: MyntFonts.medium,
             ),
           ),
@@ -866,11 +894,17 @@ class _HeaderExitButton extends ConsumerWidget {
             );
 
             final orderProv = ref.read(orderProvider);
-            final placeOrderModel = await positionBook.api.getPlaceOrder(
-                placeOrderInput, orderProv.ip);
+            // Slice to the freeze qty, same rule as Exit All
+            // (fetchExitPosition): floor(frzqty / ls) * ls per leg. Sending
+            // the full qty in one order was rejected by the exchange (MCX).
+            for (final legQty in _exitLegs(element)) {
+              placeOrderInput.qty = legQty.toString();
+              final placeOrderModel = await positionBook.api.getPlaceOrder(
+                  placeOrderInput, orderProv.ip);
 
-            if (placeOrderModel.stat?.toLowerCase() != "ok") {
-              // Continue with remaining positions instead of stopping
+              if (placeOrderModel.stat?.toLowerCase() != "ok") {
+                // Continue with remaining positions instead of stopping
+              }
             }
           }
         }
@@ -955,7 +989,8 @@ class GroupAnalyseButton extends ConsumerWidget {
                 if (position.exch == "BFO" && position.dname != null && position.dname != "null") {
                   List<String> splitVal = position.dname!.split(" ");
                   symbol = splitVal[0];
-                  expDate = "${splitVal[1]} ${splitVal[2]}";
+                  // BFO: keep dname's day+month, append the year from the tsym. (TC_440)
+                  expDate = bfoExpiryWithYear(splitVal, position.tsym);
                 } else {
                   Map spilitSymbol = spilitTsym(value: "${position.tsym}");
                   symbol = "${spilitSymbol["symbol"]}";
@@ -2178,7 +2213,7 @@ class GroupExitAllButton extends ConsumerWidget {
           // Validate product type (same as exitPosition function)
           if (((element.sPrdtAli == "MIS" || element.sPrdtAli == "CNC") ||
               element.sPrdtAli == "NRML")) {
-            // Create PlaceOrderInput for exit (same as Exit All - NO frzqty)
+            // Create PlaceOrderInput for exit (sliced below by _exitLegs)
             PlaceOrderInput placeOrderInput = PlaceOrderInput(
               amo: "",
               blprc: '',
@@ -2204,11 +2239,17 @@ class GroupExitAllButton extends ConsumerWidget {
 
             // Execute exit directly (same as Exit All - direct API call)
             final orderProv = ref.read(orderProvider);
-            final placeOrderModel = await positionBook.api.getPlaceOrder(
-                placeOrderInput, orderProv.ip);
+            // Slice to the freeze qty, same rule as Exit All
+            // (fetchExitPosition): floor(frzqty / ls) * ls per leg. Sending
+            // the full qty in one order was rejected by the exchange (MCX).
+            for (final legQty in _exitLegs(element)) {
+              placeOrderInput.qty = legQty.toString();
+              final placeOrderModel = await positionBook.api.getPlaceOrder(
+                  placeOrderInput, orderProv.ip);
 
-            if (placeOrderModel.stat?.toLowerCase() != "ok") {
-              // Continue with remaining positions instead of stopping
+              if (placeOrderModel.stat?.toLowerCase() != "ok") {
+                // Continue with remaining positions instead of stopping
+              }
             }
           }
         }
@@ -2217,6 +2258,23 @@ class GroupExitAllButton extends ConsumerWidget {
       // Stop on error (same as Exit All behavior)
     }
   }
+}
+
+/// Splits a group-exit position's qty into freeze-qty legs, matching
+/// Exit All (fetchExitPosition). Freeze per leg = floor(frzqty / ls) * ls so
+/// every leg stays a lot multiple. No freeze qty (0 / missing) -> one leg.
+List<int> _exitLegs(dynamic element) {
+  final int totalQty =
+      int.tryParse(element.qty.toString().replaceAll("-", "")) ?? 0;
+  final int ls = int.tryParse(element.ls?.toString() ?? "1") ?? 1;
+  final int frz = int.tryParse(element.frzqty?.toString() ?? "0") ?? 0;
+  final int legSize = ls > 0 ? (frz ~/ ls) * ls : frz;
+
+  if (legSize <= 0 || totalQty <= legSize) return [totalQty];
+
+  final legs = List<int>.filled(totalQty ~/ legSize, legSize, growable: true);
+  if (totalQty % legSize > 0) legs.add(totalQty % legSize);
+  return legs;
 }
 
 /// Confirmation dialog for exiting all positions in a group - Web style (matches ExitAllPositionsDialogWeb)

@@ -5,20 +5,36 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../models/desk_reports_model/calender_pnl_model.dart';
+import '../../../../models/journal_notes_model/journal_note.dart';
+import '../../../../models/journal_notes_model/journal_tag.dart';
+import '../../../../models/journal_notes_model/segment_group.dart';
+import '../../../../models/journal_notes_model/tag_pnl_analytics.dart';
+import '../../../../locator/locator.dart';
+import '../../../../locator/preference.dart';
+import '../../../../provider/journal_notes/journal_notes_provider.dart';
 import '../../../../provider/ledger_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
+import '../../../../sharedWidget/common_buttons_web.dart';
 import '../../../../sharedWidget/custom_back_btn.dart';
 import '../../../../sharedWidget/mynt_loader.dart';
 import '../../../../sharedWidget/no_data_found.dart';
+import '../../../../sharedWidget/no_data_found_web.dart';
 import '../../../../sharedWidget/scroll_to_load_mixin.dart';
 import '../../../../sharedWidget/snack_bar.dart';
 import 'charges_dialog_web.dart';
+import 'note_editor_sheet_web.dart';
 import 'pnl_stats_summary_web.dart';
+import 'pnl_summary_download_helper.dart';
+
+/// The table view under the heat map. "Journal" is conditional — it only
+/// exists once the client has journalled at least once (see [hasAnyNotesProvider]).
+enum _ReportView { dateWise, scriptWise, journal }
 
 class CalenderpnlScreen extends ConsumerStatefulWidget {
   final VoidCallback? onBack;
@@ -33,12 +49,55 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     with ScrollToLoadMixin {
   final ScrollController _tableScrollController = ScrollController();
 
+  /// First-visit coach mark for the trading journal (dim + centred card).
+  /// Shown once, and only while the client has no notes — once a note
+  /// exists the feature has introduced itself. Any dismissal counts as seen.
+  ///
+  /// The seen-flag is scoped PER CLIENT ID: two accounts sharing a browser
+  /// are introduced independently (the browser flag is the only local state;
+  /// the has-notes check is already per-account on the server).
+  static const _kJournalCoachSeenBase = 'journal_coach_mark_seen';
+  String get _journalCoachKey =>
+      '${_kJournalCoachSeenBase}_${locator<Preferences>().clientId ?? ''}';
+  bool _journalCoachSeen = true; // safe default until the prefs read lands
+  bool _journalCoachShowing = false;
+
   @override
   ScrollController get tableScrollController => _tableScrollController;
 
   bool _isInitialized = false;
   int _selectedSegmentIndex = 0;
-  bool _isDateWiseView = true;
+  _ReportView _reportView = _ReportView.dateWise;
+
+  /// Tag ids selected as filters in the Journal tab. Empty = show every note.
+  /// Multi-select is match-any: a note is shown if it carries ANY selected tag.
+  final Set<int> _journalTagFilter = {};
+
+  /// The "Untagged" pseudo-filter: when on, notes with no tags match too.
+  bool _journalUntagged = false;
+
+  /// Scanner-style floating tag filter: the panel follows the trigger via an
+  /// OverlayPortal and floats over the content instead of expanding inline
+  /// and pushing the notes list down.
+  // bool _journalFilterOpen = false; // retired with the inline panel
+  final LayerLink _journalFilterLink = LayerLink();
+
+  /// Identifies the trigger box so the floating panel can measure the room
+  /// left below it (and above it) before choosing a height and a direction.
+  final GlobalKey _journalFilterTriggerKey = GlobalKey();
+  final OverlayPortalController _journalFilterPortal =
+      OverlayPortalController();
+
+  /// Search text inside the filter dropdown — the reason the filter scales past
+  /// 20+ tags: you type to narrow instead of scrolling a wall of rows.
+  final TextEditingController _journalTagSearch = TextEditingController();
+
+  /// Retired: the ranking shows every tag tile at once now (tiles wrap), so
+  /// the Show all/less toggle went away with it.
+  // bool _journalRankingOpen = false;
+
+  /// Which Journal sub-tab is active: 0 = Notes, 1 = What costs you most.
+  int _journalSubTab = 0;
 
   // Expandable date rows
   final Set<DateTime> _expandedDates = {};
@@ -60,6 +119,14 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
   void initState() {
     super.initState();
     initScrollToLoad();
+    // First-visit coach mark for the trading journal: read whether this
+    // client has already been shown it. Defaults to "seen" until the prefs
+    // read lands, so it can never flash while loading.
+    SharedPreferences.getInstance().then((prefs) {
+      if (!mounted) return;
+      setState(
+          () => _journalCoachSeen = prefs.getBool(_journalCoachKey) ?? false);
+    });
     // Initialize dates from provider
     final lp = ref.read(ledgerProvider);
     final now = DateTime.now();
@@ -76,21 +143,31 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
   void _initializeData() {
     if (!_isInitialized) {
       final ledgerprovider = ref.read(ledgerProvider);
+
+      // Re-initialize FY if the provider was cleared (e.g. on account switch)
+      if (ledgerprovider.formattedStartDate.isEmpty) {
+        ledgerprovider.setFinancialYear('');
+        _startDate = ledgerprovider.startTaxDate;
+      }
+
+      final startFormatted = DateFormat('dd/MM/yyyy').format(_startDate);
       final todayFormatted = DateFormat('dd/MM/yyyy').format(_endDate);
 
-      // Set end date to today in provider
+      // Sync provider dates with the screen's local state
+      ledgerprovider.startTaxDate = _startDate;
       ledgerprovider.endTaxDate = _endDate;
+      ledgerprovider.formattedStartDate = startFormatted;
       ledgerprovider.formattedendDate = todayFormatted;
 
       if (!ledgerprovider.hasDataForAllSegments) {
         ledgerprovider.fetchDataForAllSegmentsIfEmpty(
           context,
-          ledgerprovider.formattedStartDate,
+          startFormatted,
           todayFormatted,
         );
       }
       ledgerprovider.fetchsharingdata(
-        ledgerprovider.formattedStartDate,
+        startFormatted,
         todayFormatted,
         ledgerprovider.selectedSegment,
         context,
@@ -104,13 +181,21 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     }
   }
 
-
   @override
   void dispose() {
     disposeScrollToLoad();
     _tableScrollController.dispose();
     _hoveredRowKey.dispose();
+    _journalTagSearch.dispose();
     super.dispose();
+  }
+
+  bool get _rangeCoversToday {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final start = DateTime(_startDate.year, _startDate.month, _startDate.day);
+    final end = DateTime(_endDate.year, _endDate.month, _endDate.day);
+    return !today.isBefore(start) && !today.isAfter(end);
   }
 
   DateTime _getFinancialYearStart(DateTime date) {
@@ -166,6 +251,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     setState(() {
       _startDate = DateTime(startYear, 4, 1);
       _endDate = DateTime(startYear + 1, 3, 31);
+      _leftMonth = DateTime(startYear, 4);
+      _rightMonth = DateTime(startYear + 1, 3);
       _showDatePickerPopup = false;
       _expandedDates.clear();
     });
@@ -220,23 +307,24 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     final isLoading = ledgerprovider
             .isCalendarPnlLoadingForSegment(ledgerprovider.selectedSegment) ||
         (ledgerprovider.calenderpnlAllData == null &&
-            !ledgerprovider
-                .hasDataForSegment(ledgerprovider.selectedSegment));
+            !ledgerprovider.hasDataForSegment(ledgerprovider.selectedSegment));
 
     return Scaffold(
       body: SafeArea(
         child: Column(
           children: [
             _buildHeader(context, theme, ledgerprovider),
+            _buildSegmentTabs(context, ledgerprovider),
+            const SizedBox(height: 12),
             Expanded(
               child: Stack(
                 children: [
                   isLoading
-                      ? Center(child: MyntLoader.simple())
+                      ? Center(child: MyntLoader.branded())
                       : ledgerprovider.calenderpnlAllData == null
                           ? const Center(
-                            child: NoDataFound(secondaryEnabled: false))
-                        : _buildBody(context, theme, ledgerprovider),
+                              child: NoDataFound(secondaryEnabled: false))
+                          : _buildBody(context, theme, ledgerprovider),
                   // Date picker overlay
                   if (_showDatePickerPopup) ...[
                     Positioned.fill(
@@ -278,8 +366,15 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                   fontWeight: MyntFonts.semiBold),
             ),
           ),
+           // Download button
+          if (ledgerprovider.calenderpnlAllData != null) ...[
+            const SizedBox(width: 8),
+            _buildDownloadMenu(context, ledgerprovider),
+          ],
+           const SizedBox(width: 8),
           // P&L Stats button
-          if (ledgerprovider.calenderpnlAllData != null && ledgerprovider.selectedSegment != "Equity")
+          if (ledgerprovider.calenderpnlAllData != null &&
+              ledgerprovider.selectedSegment != "Equity")
             MouseRegion(
               cursor: SystemMouseCursors.click,
               child: InkWell(
@@ -291,8 +386,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
                   // margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
@@ -323,14 +418,13 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+          const SizedBox(width: 8),
           // Date range button
           InkWell(
             onTap: _toggleDatePicker,
             borderRadius: BorderRadius.circular(8),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
@@ -390,16 +484,73 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
         ..sort((a, b) => b.compareTo(a));
     }
 
-    final double netValue = (data?.realized ?? 0.0) - (data?.totalCharges ?? 0.0);
+    final double netValue =
+        (data?.realized ?? 0.0) - (data?.totalCharges ?? 0.0);
+
+    // --- Trade journal notes ---
+    // One list call decorates the whole heat map; never one fetch per cell.
+    // Reading the nullable `value` means a slow or failed notes call never
+    // blocks the P&L view — markers simply appear once they land.
+    final noteGroup = SegmentGroup.fromTabLabel(ledgerprovider.selectedSegment);
+    final notesRangeKey = _notesRangeKey(ledgerprovider);
+    final notesAsync = notesRangeKey == null
+        ? null
+        : ref.watch(notesForRangeProvider(notesRangeKey));
+    final notesByDate = notesAsync?.value ?? const <String, JournalNote>{};
+    // Until the notes list has resolved at least once, a noted day looks
+    // un-noted (its marker hasn't loaded). Offering "add" in that window let a
+    // tap open the editor in add-mode over a note that already exists — the
+    // reported "says add but the note is there" bug. Withhold the add
+    // affordance until notes are ready so the marker and the tap always agree.
+    final notesReady = notesAsync?.hasValue ?? false;
+    final snapshotsByDate = noteGroup == null
+        ? const <String, NotePnlSnapshot>{}
+        : _snapshotsByDate(ledgerprovider, noteGroup);
+
+    // The Journal tab is offered only once the client has journalled at least
+    // once. Gated on the whole financial year and across all segments — not the
+    // visible sub-range or the active tab — so the tab does not blink in and out
+    // as the user moves the dates or switches asset class. The list and
+    // analytics *inside* it are still scoped to the visible range and segment.
+    final fyStart = _getFinancialYearStart(ledgerprovider.startTaxDate);
+    final fyEnd = _getFinancialYearEnd(ledgerprovider.startTaxDate);
+    final hasAnyNotesAsync = ref.watch(hasAnyNotesProvider(
+        NotesRangeKey(from: _isoDate(fyStart), to: _isoDate(fyEnd))));
+    final hasAnyNotes = hasAnyNotesAsync.value ?? false;
+    // The heat map the active tab renders — computed here so the coach-mark
+    // gate below can read it too.
+    final heatmapForTab = isCommodity
+        ? _buildHeatmapForCommodity(ledgerprovider)
+        : ledgerprovider.heatmapData;
+    // First-visit coach mark: the Journal tab cannot advertise itself (it is
+    // hidden until a note exists), so the feature is introduced once, over
+    // this screen, to a client with no notes yet. Shown even when the
+    // calendar has no traded days — it is an announcement, not a tutorial —
+    // but only after BOTH the notes check and the P&L load have settled, so
+    // the one-time flag can never be burnt over a loading screen.
+    if (hasAnyNotesAsync.hasValue &&
+        !hasAnyNotes &&
+        !_journalCoachSeen &&
+        !_journalCoachShowing &&
+        !ledgerprovider.calendarpnlloading &&
+        noteGroup != null) {
+      _journalCoachShowing = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showJournalCoachMark();
+      });
+    }
+    // If the tab vanishes (e.g. the last note was deleted) while it is
+    // selected, fall back rather than render an orphaned view.
+    final showJournal = hasAnyNotes && noteGroup != null;
+    final effectiveView = (_reportView == _ReportView.journal && !showJournal)
+        ? _ReportView.dateWise
+        : _reportView;
 
     return SingleChildScrollView(
       controller: _tableScrollController,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Segment tabs
-          _buildSegmentTabs(context, ledgerprovider),
-          const SizedBox(height: 12),
           // Summary cards + share card
           _buildSummaryCards(context, data, netValue, ledgerprovider),
           const SizedBox(height: 16),
@@ -407,9 +558,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: _WebCalendarTabs(
-              heatmapData: isCommodity
-                  ? _buildHeatmapForCommodity(ledgerprovider)
-                  : ledgerprovider.heatmapData,
+              heatmapData: heatmapForTab,
               monthlyPnL: isCommodity
                   ? _buildMonthlyPnLForCommodity(ledgerprovider)
                   : ledgerprovider.monthlyPnL,
@@ -422,25 +571,56 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 ledgerprovider.setSelectedMonth(month);
                 ledgerprovider.setTab(false);
               },
-              onMonthChanged: (month) =>
-                  ledgerprovider.setSelectedMonth(month),
+              notedDates: notesByDate.keys.toSet(),
+              notableDates:
+                  notesReady ? snapshotsByDate.keys.toSet() : const <String>{},
+              onNoteTap: (notesRangeKey == null || noteGroup == null)
+                  ? null
+                  : (date) {
+                      final iso = _isoDate(date);
+                      openNoteEditorSheet(
+                        context,
+                        ref: ref,
+                        noteDate: iso,
+                        group: noteGroup,
+                        existing: notesByDate[iso],
+                        snapshot: snapshotsByDate[iso],
+                        rangeKey: notesRangeKey,
+                        trades: _tradesForDate(ledgerprovider, iso),
+                      );
+                    },
+              onMonthChanged: (month) => ledgerprovider.setSelectedMonth(month),
             ),
           ),
           const SizedBox(height: 16),
-          // Date Wise / Script Wise tabs
+          // Date Wise / Script Wise / Journal tabs, with the Journal's tag
+          // filter at the right end of the row while that tab is active.
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _buildViewTabs(context),
+            child: _buildViewTabs(
+              context,
+              showJournal: showJournal,
+              // The tag filter narrows the NOTES list, so it hides on the
+              // insights sub-tab.
+              trailing: (effectiveView == _ReportView.journal &&
+                      _journalSubTab == 0 &&
+                      noteGroup != null)
+                  ? _buildJournalTabsFilter(context, ledgerprovider, noteGroup)
+                  : null,
+            ),
           ),
           const SizedBox(height: 16),
           // Table content based on selected tab
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _isDateWiseView
-                ? _buildDateWiseSection(
-                    context, sortedDates, ledgerprovider, isCommodity)
-                : _buildScriptWiseSection(
-                    context, sortedDates, ledgerprovider, isCommodity),
+            child: switch (effectiveView) {
+              _ReportView.dateWise => _buildDateWiseSection(
+                  context, sortedDates, ledgerprovider, isCommodity),
+              _ReportView.scriptWise => _buildScriptWiseSection(
+                  context, sortedDates, ledgerprovider, isCommodity),
+              _ReportView.journal =>
+                _buildJournalSection(context, ledgerprovider, noteGroup!),
+            },
           ),
           const SizedBox(height: 24),
         ],
@@ -495,24 +675,36 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
   }
 
   // --- Summary Cards ---
-  Widget _buildSummaryCards(
-      BuildContext context, CalenderpnlModel? data, double netValue, LDProvider ledgerprovider) {
+  Widget _buildSummaryCards(BuildContext context, CalenderpnlModel? data,
+      double netValue, LDProvider ledgerprovider) {
     final realized = data?.realized ?? 0.0;
     final unrealized = data?.unrealized ?? 0.0;
     final charges = data?.totalCharges ?? 0.0;
     final hasData = data?.data != null;
+    final showUnrealized = _rangeCoversToday;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
-          // 5 columns for wide (>=1000), 3 for medium (>=600), 2 for narrow
+
+          final cards = <Widget>[
+            _buildSummaryCard(context, 'Realised P&L', realized),
+            if (showUnrealized)
+              _buildSummaryCard(context, 'Unrealised P&L', unrealized),
+            _buildSummaryCard(context, 'Charges & Taxes', charges,
+                isNeutral: true,
+                onTap: () => showChargesDialog(context, ref: ref)),
+            _buildSummaryCard(context, 'Net Realised P&L', netValue),
+            if (hasData) _buildShareCard(context, ledgerprovider),
+          ];
+
           final int columns;
-          if (hasData && w >= 1000) {
-            columns = 5;
+          if (w >= 1000) {
+            columns = cards.length;
           } else if (w >= 600) {
-            columns = hasData ? 3 : 4;
+            columns = cards.length > 4 ? 3 : cards.length;
           } else {
             columns = 2;
           }
@@ -524,28 +716,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
             spacing: spacing,
             runSpacing: spacing,
             children: [
-              SizedBox(
-                width: cardWidth, height: 115,
-                child: _buildSummaryCard(context, 'Realised P&L', realized),
-              ),
-              SizedBox(
-                width: cardWidth, height: 115,
-                child: _buildSummaryCard(context, 'Unrealised P&L', unrealized),
-              ),
-              SizedBox(
-                width: cardWidth, height: 115,
-                child: _buildSummaryCard(context, 'Charges & Taxes', charges,
-                    isNeutral: true, onTap: () => showChargesDialog(context, ref: ref)),
-              ),
-              SizedBox(
-                width: cardWidth, height: 115,
-                child: _buildSummaryCard(context, 'Net Realised P&L', netValue),
-              ),
-              if (hasData)
-                SizedBox(
-                  width: cardWidth, height: 115,
-                  child: _buildShareCard(context, ledgerprovider),
-                ),
+              for (final card in cards)
+                SizedBox(width: cardWidth, height: 115, child: card),
             ],
           );
         },
@@ -553,8 +725,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
-  Widget _buildSummaryCard(
-      BuildContext context, String label, double value,
+  Widget _buildSummaryCard(BuildContext context, String label, double value,
       {bool isNeutral = false, VoidCallback? onTap}) {
     final valueColor = isNeutral || value == 0
         ? resolveThemeColor(context,
@@ -564,9 +735,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     return shadcn.Theme(
       data: shadcn.Theme.of(context).copyWith(radius: () => 0.3),
       child: MouseRegion(
-        cursor: onTap != null
-            ? SystemMouseCursors.click
-            : SystemMouseCursors.basic,
+        cursor:
+            onTap != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
         child: GestureDetector(
           onTap: onTap,
           child: shadcn.Card(
@@ -672,9 +842,10 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                     onTap: () {
                       final value = !ledgerprovider.notsharing;
                       ledgerprovider.sharingornotsharing(value);
-                      if (value == false && ledgerprovider.ucode == '') {
+                      if (value == false) {
+                        // Turning ON — always send fresh response + segment
                         ledgerprovider.sendsharing(
-                          "",
+                          ledgerprovider.ucode,
                           ledgerprovider.formattedStartDate,
                           ledgerprovider.formattedendDate,
                           ledgerprovider.calenderpnlAllData!.fullresponse!,
@@ -683,6 +854,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                           context,
                         );
                       } else {
+                        // Turning OFF — ucode only
                         ledgerprovider.sendsharing(
                           ledgerprovider.ucode,
                           "",
@@ -754,7 +926,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
   }
 
   void _showSharingDialog(BuildContext context, LDProvider ledgerprovider) {
-    const sharingUrl = 'https://profile.mynt.in/dailypnl?ucode=';
+    const sharingUrl = 'https://app.mynt.in/dailypnl?ucode=';
     final secondaryColor = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     final textColor = resolveThemeColor(context,
@@ -768,8 +940,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
         return Dialog(
           backgroundColor: resolveThemeColor(context,
               dark: MyntColors.cardDark, light: MyntColors.card),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           child: Container(
             width: 480,
             padding: const EdgeInsets.all(0),
@@ -778,8 +949,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
               children: [
                 // Header
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 20),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Row(
                     children: [
                       Expanded(
@@ -792,8 +963,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                                     lightColor: MyntColors.textPrimary,
                                     fontWeight: FontWeight.w600)),
                             const SizedBox(height: 2),
-                            Text(
-                                'Click to share your triumphant journey.',
+                            Text('Click to share your triumphant journey.',
                                 style: MyntWebTextStyles.caption(context,
                                     color: secondaryColor)),
                           ],
@@ -814,8 +984,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 Divider(height: 1, color: borderColor),
                 // Content
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 20),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -840,8 +1010,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                               child: Text(
                                 '$sharingUrl${ledgerprovider.ucode}',
                                 overflow: TextOverflow.ellipsis,
-                                style: MyntWebTextStyles.bodySmall(
-                                    context,
+                                style: MyntWebTextStyles.bodySmall(context,
                                     color: textColor),
                               ),
                             ),
@@ -850,10 +1019,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                           InkWell(
                             onTap: () async {
                               await Clipboard.setData(ClipboardData(
-                                  text:
-                                      '$sharingUrl${ledgerprovider.ucode}'));
-                              successMessage(
-                                  dialogContext, 'Text copied');
+                                  text: '$sharingUrl${ledgerprovider.ucode}'));
+                              successMessage(dialogContext, 'Text copied');
                               Navigator.pop(dialogContext);
                             },
                             borderRadius: BorderRadius.circular(8),
@@ -873,11 +1040,9 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                             onTap: () async {
                               final twitterUrl =
                                   "https://twitter.com/intent/tweet?text=Excited about my recent trading triumph using Zebu—profits surging! Skillful moves on the Zebu app have significantly boosted my success !&url=$sharingUrl${ledgerprovider.ucode}&hashtags=Traders #Traders via @zebuetrade ";
-                              if (await canLaunchUrl(
-                                  Uri.parse(twitterUrl))) {
+                              if (await canLaunchUrl(Uri.parse(twitterUrl))) {
                                 await launchUrl(Uri.parse(twitterUrl),
-                                    mode:
-                                        LaunchMode.externalApplication);
+                                    mode: LaunchMode.externalApplication);
                                 Navigator.pop(dialogContext);
                               }
                             },
@@ -911,24 +1076,52 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
-  // --- Date Wise / Script Wise Tabs ---
-  Widget _buildViewTabs(BuildContext context) {
+  // --- Date Wise / Script Wise / Journal Tabs ---
+  Widget _buildViewTabs(BuildContext context,
+      {required bool showJournal, Widget? trailing}) {
     return Row(
       children: [
-        _buildViewTab('Date Wise', _isDateWiseView),
+        _buildViewTab('Date Wise', _ReportView.dateWise),
         const SizedBox(width: 24),
-        _buildViewTab('Script Wise', !_isDateWiseView),
+        _buildViewTab('Script Wise', _ReportView.scriptWise),
+        if (showJournal) ...[
+          const SizedBox(width: 24),
+          _buildViewTab('Journal', _ReportView.journal),
+        ],
+        // Right-aligned extras (the Journal's tag filter sits here, opposite
+        // the tabs).
+        if (trailing != null) ...[
+          const Spacer(),
+          trailing,
+        ],
       ],
     );
   }
 
-  Widget _buildViewTab(String label, bool isActive) {
+  /// The Journal's tag-filter trigger for the tabs row. Watches the same
+  /// analytics the Journal section uses (same provider key — cached, no
+  /// second fetch); hidden until the analytics have loaded.
+  Widget _buildJournalTabsFilter(
+      BuildContext context, LDProvider lp, SegmentGroup group) {
+    final a = ref
+        .watch(tagPnlProvider(TagPnlKey(
+          from: _isoDate(lp.startTaxDate),
+          to: _isoDate(lp.endTaxDate),
+          group: group,
+        )))
+        .value;
+    if (a == null) return const SizedBox.shrink();
+    return _buildJournalFilterBar(context, a);
+  }
+
+  Widget _buildViewTab(String label, _ReportView view) {
+    final isActive = _reportView == view;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () {
           setState(() {
-            _isDateWiseView = label == 'Date Wise';
+            _reportView = view;
             displayedItemCount = ScrollToLoadMixin.itemsPerPage;
           });
         },
@@ -939,8 +1132,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
               bottom: BorderSide(
                 color: isActive
                     ? resolveThemeColor(context,
-                        dark: MyntColors.primaryDark,
-                        light: MyntColors.primary)
+                        dark: MyntColors.primaryDark, light: MyntColors.primary)
                     : Colors.transparent,
                 width: 2,
               ),
@@ -954,8 +1146,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
             ).copyWith(
               color: isActive
                   ? resolveThemeColor(context,
-                      dark: MyntColors.primaryDark,
-                      light: MyntColors.primary)
+                      dark: MyntColors.primaryDark, light: MyntColors.primary)
                   : resolveThemeColor(context,
                       dark: MyntColors.textSecondaryDark,
                       light: MyntColors.textSecondary),
@@ -966,32 +1157,1506 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
+  // --- Insights (tag → P&L) Section ---
+  //
+  // The whole point of this tab is honest comparison, so the baseline rows
+  // ("All days", "Untagged days") are never hidden: users tag losses far more
+  // than wins, so a tag's own average overstates its effect until you see it
+  // next to the baseline. Tags below the sample threshold show their day count
+  // and total but not an average — three unlucky days are not a pattern.
+  // --- Journal (notes list + costly-behaviour tag ranking) -----------------
+  //
+  // One surface for the notes: a scannable list you can filter by tag, with a
+  // "what costs me money" ranking on top. The ranking leans on TOTAL P&L (always
+  // known) rather than averages — a per-day average stays hidden below 5 days,
+  // but a tag's total is meaningful from the first day. Every tag row is a
+  // multi-select filter over the list below (match-any).
+  Widget _buildJournalSection(
+      BuildContext context, LDProvider lp, SegmentGroup group) {
+    final rangeKey = _notesRangeKey(lp);
+    final pnlAsync = ref.watch(tagPnlProvider(TagPnlKey(
+      from: _isoDate(lp.startTaxDate),
+      to: _isoDate(lp.endTaxDate),
+      group: group,
+    )));
+    final notesByDate = rangeKey == null
+        ? const <String, JournalNote>{}
+        : (ref.watch(notesForRangeProvider(rangeKey)).value ??
+            const <String, JournalNote>{});
+    // Most recent first — noteDate is ISO, so a lexical sort is a date sort.
+    final notes = notesByDate.values.toList()
+      ..sort((a, b) => b.noteDate.compareTo(a.noteDate));
+
+    return pnlAsync.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.only(top: 48),
+        child: Center(
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      error: (e, _) => _buildJournalMessage(
+          context, 'Could not load your journal. Please try again.'),
+      data: (analytics) {
+        if (notes.isEmpty && analytics.isEmpty) {
+          // The app-wide empty state (as on Holdings) with a journal glyph;
+          // no Explore button. The plain-text _buildJournalMessage remains
+          // for the error case only.
+          // The SAME widget Date Wise uses for its empty state (NoDataFound,
+          // bull icon, 16px title) — not the web variant, whose larger type
+          // read as oversized next to the sibling tabs.
+          return const Center(
+            child: NoDataFound(
+              title: 'No notes yet',
+              subtitle: 'Add a note to a traded day on the heat map and it '
+                  'will show up here.',
+              secondaryEnabled: false,
+            ),
+          );
+        }
+        return _buildJournalContent(
+            context, analytics, notes, group, lp, rangeKey);
+      },
+    );
+  }
+
+  Widget _buildJournalMessage(BuildContext context, String message) {
+    return shadcn.OutlinedContainer(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: Center(
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: MyntWebTextStyles.bodySmall(context,
+                darkColor: MyntColors.textSecondaryDark,
+                lightColor: MyntColors.textSecondary),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A note passes the filter if no filter is set, or it carries any selected
+  /// tag, or the untagged filter is on and it has no tags. Pure display filter
+  /// — the per-tag numbers stay backend-computed.
+  bool _journalMatches(JournalNote n) {
+    if (_journalTagFilter.isEmpty && !_journalUntagged) return true;
+    if (_journalUntagged && n.tags.isEmpty) return true;
+    return n.tags.any((t) => _journalTagFilter.contains(t.tagId));
+  }
+
+  Widget _buildJournalContent(
+    BuildContext context,
+    TagPnlAnalytics a,
+    List<JournalNote> notes,
+    SegmentGroup group,
+    LDProvider lp,
+    NotesRangeKey? rangeKey,
+  ) {
+    final visible = notes.where(_journalMatches).toList();
+    // Split into two sub-tabs (management request): Notes first, the tag
+    // insights second — the Daily/Monthly pill-toggle recipe, so it reads
+    // as a level below the underline tabs above.
+    return Column(
+      // Stretch: the cards must fill the tab's width — with start alignment
+      // the notes container shrank to its content (the tiny filtered-empty
+      // box).
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            _journalSubTabButton(context, 'Notes', 0,
+                badge: visible.isEmpty ? null : '${visible.length}'),
+            const SizedBox(width: 8),
+            _journalSubTabButton(context, 'Tags info', 1),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (_journalSubTab == 0)
+          shadcn.OutlinedContainer(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildNotesList(context, visible, group, lp, rangeKey),
+                _buildJournalProvisionalNote(context, a),
+              ],
+            ),
+          )
+        else if (a.tags.isEmpty)
+          shadcn.OutlinedContainer(
+            child: const Center(
+              child: NoDataFound(
+                title: 'No tag insights yet',
+                subtitle: 'Tag your notes and each tag\'s P&L will be '
+                    'ranked here.',
+                secondaryEnabled: false,
+              ),
+            ),
+          )
+        else
+          // The tab is "Tags info"; the section keeps its own titled header
+          // strip, as before the split.
+          _journalSectionCard(
+            context,
+            title: 'What costs you most',
+            bodyPadding: const EdgeInsets.only(bottom: 10),
+            child: _buildJournalRanking(context, a),
+          ),
+      ],
+    );
+  }
+
+  /// One pill of the Journal's sub-tab toggle — the calendar's
+  /// Daily/Monthly button recipe, with the order book's superscript count
+  /// riding beside the label.
+  Widget _journalSubTabButton(BuildContext context, String label, int index,
+      {String? badge}) {
+    final isActive = _journalSubTab == index;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => setState(() => _journalSubTab = index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            color: isActive
+                ? (isDarkMode(context)
+                    ? Colors.white.withValues(alpha: 0.1)
+                    : Colors.black.withValues(alpha: 0.05))
+                : Colors.transparent,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: MyntWebTextStyles.body(
+                  context,
+                  fontWeight: isActive ? MyntFonts.semiBold : MyntFonts.medium,
+                ).copyWith(
+                  color: isActive
+                      ? shadcn.Theme.of(context).colorScheme.foreground
+                      : shadcn.Theme.of(context).colorScheme.mutedForeground,
+                ),
+              ),
+              if (badge != null) ...[
+                const SizedBox(width: 4),
+                Transform.translate(
+                  offset: const Offset(0, -6),
+                  child: Text(
+                    badge,
+                    style: MyntWebTextStyles.bodySmall(
+                      context,
+                      fontWeight:
+                          isActive ? MyntFonts.semiBold : MyntFonts.medium,
+                    ).copyWith(
+                      fontSize: 13,
+                      color: isActive
+                          ? shadcn.Theme.of(context).colorScheme.foreground
+                          : shadcn.Theme.of(context)
+                              .colorScheme
+                              .mutedForeground,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Titled section wrapper in the insta-options dashboard style: a bold
+  /// title strip with a bottom hairline, an optional trailing widget, then
+  /// the padded body. Local mirror of that module's DashSectionCard — the
+  /// widget itself lives on another branch.
+  Widget _journalSectionCard(
+    BuildContext context, {
+    required String title,
+    required Widget child,
+    Widget? trailing,
+    EdgeInsets bodyPadding = const EdgeInsets.fromLTRB(16, 0, 16, 16),
+  }) {
+    return shadcn.Card(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.cardBorderDark,
+                      light: MyntColors.cardBorder),
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    title,
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.title(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.bold),
+                  ),
+                ),
+                const Spacer(),
+                if (trailing != null) trailing,
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Padding(padding: bodyPadding, child: child),
+        ],
+      ),
+    );
+  }
+
+  // --- Tag ranking (what costs money) + filters -----------------------------
+
+  /// The filter trigger, styled like the scanner's index filter: an input-
+  /// looking box whose text IS the current value ("All tags", "abc",
+  /// "abc +2"), semibold once something is selected, with a chevron that
+  /// flips while the floating panel is open. The panel itself is anchored
+  /// through an [OverlayPortal] and floats over the content.
+  Widget _buildJournalFilterBar(BuildContext context, TagPnlAnalytics a) {
+    final anyFilter = _journalTagFilter.isNotEmpty || _journalUntagged;
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final textPrimary = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    // Same input fill the scanner trigger uses, so it reads as a field.
+    final inputFill = resolveThemeColor(context,
+        dark: const Color(0xffB5C0CF).withValues(alpha: 0.15),
+        light: const Color(0xFFF1F3F8));
+    final byId = {for (final t in a.tags) t.tagId: t};
+
+    // Value-as-label: the first selection plus how many more.
+    final names = <String>[
+      for (final id in _journalTagFilter)
+        if (byId[id] != null) byId[id]!.name ?? 'tag',
+      if (_journalUntagged) 'Untagged',
+    ];
+    final String label = names.isEmpty
+        ? 'All tags'
+        : names.length == 1
+            ? names.first
+            : '${names.first} +${names.length - 1}';
+
+    return CompositedTransformTarget(
+      link: _journalFilterLink,
+      child: OverlayPortal(
+        controller: _journalFilterPortal,
+        overlayChildBuilder: (ctx) => _buildJournalFilterOverlay(ctx, a),
+        child: Semantics(
+          label: 'Filter by tag',
+          button: true,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () {
+                // setState: the chevron's AnimatedRotation reads
+                // isShowing, and toggling the portal alone does not
+                // rebuild this trigger.
+                setState(() {
+                  // Fresh search on every reopen, like the scanner.
+                  if (!_journalFilterPortal.isShowing) {
+                    _journalTagSearch.clear();
+                  }
+                  _journalFilterPortal.toggle();
+                });
+              },
+              child: Container(
+                // Keyed so the overlay can measure where this trigger sits
+                // and size the panel to the space actually left on screen.
+                key: _journalFilterTriggerKey,
+                width: 220,
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: inputFill,
+                  border: Border.all(
+                      color: resolveThemeColor(context,
+                          dark: MyntColors.borderMutedDark,
+                          light: MyntColors.borderMuted)),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        label,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: MyntWebTextStyles.body(context,
+                            color: anyFilter ? textPrimary : secondary,
+                            fontWeight: anyFilter
+                                ? MyntFonts.semiBold
+                                : MyntFonts.regular),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    AnimatedRotation(
+                      turns: _journalFilterPortal.isShowing ? 0.5 : 0.0,
+                      duration: const Duration(milliseconds: 150),
+                      child: Icon(Icons.keyboard_arrow_down_rounded,
+                          size: 20, color: secondary),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The floating layer: an invisible full-screen tap-catcher that closes
+  /// the panel, plus the panel itself anchored to the trigger. The trigger
+  /// sits at the LEFT edge of the section, so the panel grows rightward
+  /// (the scanner's grows leftward from its right-edge trigger).
+  Widget _buildJournalFilterOverlay(BuildContext ctx, TagPnlAnalytics a) {
+    // The panel used to be a fixed 480 tall and always dropped downward, so
+    // on a short window (or with the tabs row scrolled low) its lower rows
+    // fell past the bottom edge — unreachable, since an overlay does not
+    // scroll with the page. Measure the trigger instead: fit the panel to the
+    // room actually below it, and flip it above when that room is too tight.
+    const gap = 6.0; // trigger-to-panel gap
+    const margin = 12.0; // never touch the window edge
+    const minHeight = 200.0; // below this, dropping down is not worth it
+    const maxHeight = 480.0;
+
+    final screen = MediaQuery.sizeOf(ctx);
+    final box =
+        _journalFilterTriggerKey.currentContext?.findRenderObject() as RenderBox?;
+
+    var openUpward = false;
+    var panelHeight = maxHeight;
+    if (box != null && box.hasSize) {
+      final top = box.localToGlobal(Offset.zero).dy;
+      final below = screen.height - (top + box.size.height) - gap - margin;
+      final above = top - gap - margin;
+      openUpward = below < minHeight && above > below;
+      panelHeight =
+          (openUpward ? above : below).clamp(minHeight, maxHeight).toDouble();
+    }
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            // setState so the trigger's chevron un-rotates on outside-click
+            // close, not only on trigger clicks.
+            onTap: () => setState(_journalFilterPortal.hide),
+          ),
+        ),
+        CompositedTransformFollower(
+          link: _journalFilterLink,
+          // The trigger sits at the RIGHT end of the tabs row, so the panel
+          // grows leftward from it — same as the scanner. Vertically it hangs
+          // below the trigger, or sits on top of it when space runs out.
+          targetAnchor:
+              openUpward ? Alignment.topRight : Alignment.bottomRight,
+          followerAnchor:
+              openUpward ? Alignment.bottomRight : Alignment.topRight,
+          offset: Offset(0, openUpward ? -gap : gap),
+          child: Material(
+            color: Colors.transparent,
+            child: _buildJournalFilterPanel(ctx, a, maxHeight: panelHeight),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // RETIRED with the scanner-style filter: the trigger's value-as-label
+  // replaced the removable chips row (selection is edited in the panel).
+  // Widget _buildJournalActiveChip(BuildContext context,
+  //     {required String name,
+  //     required Color color,
+  //     required VoidCallback onRemove}) {
+  //   return Container(
+  //     padding: const EdgeInsets.fromLTRB(8, 4, 4, 4),
+  //     decoration: BoxDecoration(
+  //       color: color.withValues(alpha: 0.12),
+  //       borderRadius: BorderRadius.circular(999),
+  //       border: Border.all(color: color.withValues(alpha: 0.35)),
+  //     ),
+  //     child: Row(
+  //       mainAxisSize: MainAxisSize.min,
+  //       children: [
+  //         Container(
+  //             width: 8,
+  //             height: 8,
+  //             decoration:
+  //                 BoxDecoration(color: color, shape: BoxShape.circle)),
+  //         const SizedBox(width: 6),
+  //         Text(name,
+  //             style: MyntWebTextStyles.caption(context,
+  //                 darkColor: MyntColors.textPrimaryDark,
+  //                 lightColor: MyntColors.textPrimary,
+  //                 fontWeight: MyntFonts.medium)),
+  //         const SizedBox(width: 2),
+  //         Semantics(
+  //           label: 'Remove filter $name',
+  //           button: true,
+  //           child: InkWell(
+  //             onTap: onRemove,
+  //             borderRadius: BorderRadius.circular(999),
+  //             child: Padding(
+  //               padding: const EdgeInsets.all(2),
+  //               child: Icon(Icons.close_rounded,
+  //                   size: 13,
+  //                   color: resolveThemeColor(context,
+  //                       dark: MyntColors.textSecondaryDark,
+  //                       light: MyntColors.textSecondary)),
+  //             ),
+  //           ),
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  // }
+
+  /// The searchable tag checklist, floated scanner-style: search on top, the
+  /// tag list (worst P&L first) in the middle, the Untagged pseudo-filter
+  /// pinned below the scroll, and a Clear-all footer. Each row shows the
+  /// tag's total and day count so choosing a filter also tells you what it
+  /// cost.
+  Widget _buildJournalFilterPanel(BuildContext context, TagPnlAnalytics a,
+      {double maxHeight = 480}) {
+    final q = _journalTagSearch.text.trim().toLowerCase();
+    final tags = [...a.tags]..sort((x, y) => x.totalPnl.compareTo(y.totalPnl));
+    final shown = [
+      for (final t in tags)
+        if (q.isEmpty || (t.name ?? '').toLowerCase().contains(q)) t,
+    ];
+    final showUntagged =
+        a.untagged.dayCount > 0 && (q.isEmpty || 'untagged'.contains(q));
+    final border = shadcn.Theme.of(context).colorScheme.border;
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final anyFilter = _journalTagFilter.isNotEmpty || _journalUntagged;
+
+    return Container(
+      width: 360,
+      // Sized by the caller to the room left on screen, so the list always
+      // ends above the window edge and scrolls inside itself instead.
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border),
+        color: resolveThemeColor(context,
+            dark: MyntColors.cardDark, light: MyntColors.card),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.10),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+            child: Material(
+              type: MaterialType.transparency,
+              child: TextField(
+                controller: _journalTagSearch,
+                onChanged: (_) => setState(() {}),
+                style: MyntWebTextStyles.bodySmall(context,
+                    darkColor: MyntColors.textPrimaryDark,
+                    lightColor: MyntColors.textPrimary),
+                decoration: InputDecoration(
+                  isDense: true,
+                  prefixIcon:
+                      Icon(Icons.search_rounded, size: 18, color: secondary),
+                  prefixIconConstraints:
+                      const BoxConstraints(minWidth: 34, minHeight: 34),
+                  hintText: 'Search tags',
+                  hintStyle: MyntWebTextStyles.bodySmall(context,
+                      darkColor: MyntColors.textTertiaryDark,
+                      lightColor: MyntColors.textTertiary),
+                  contentPadding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                  filled: true,
+                  fillColor: resolveThemeColor(context,
+                      dark: MyntColors.inputBgDark, light: MyntColors.inputBg),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: border)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: border)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: resolveThemeColor(context,
+                              dark: MyntColors.primaryDark,
+                              light: MyntColors.primary))),
+                ),
+              ),
+            ),
+          ),
+          Divider(height: 1, color: border),
+          // Only the scrollable list is Flexible. The empty states render at
+          // natural height — inside a Flexible, the empty widget's internal
+          // Center stretched to the panel's full height budget and pushed it
+          // off-screen.
+          if (shown.isEmpty && !showUntagged)
+            // True no-data gets the app-wide empty widget (compact — this
+            // is a popover); a search query with no match stays a
+            // one-liner, it's a transient state.
+            (q.isEmpty
+                ? NoDataFoundWeb(
+                    title: 'No tags yet',
+                    subtitle: "Create tags from the note editor's tag field.",
+                    secondaryEnabled: false,
+                    compact: true,
+                    iconWidget: Icon(shadcn.LucideIcons.tag,
+                        size: 36, color: secondary),
+                  )
+                : Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text('No tags match “$q”.',
+                        style: MyntWebTextStyles.caption(context,
+                            color: secondary)),
+                  ))
+          else
+            Flexible(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                shrinkWrap: true,
+                children: [
+                  for (final t in shown)
+                    _filterPanelRow(
+                      context,
+                      name: t.name ?? 'tag',
+                      color: hexToColor(t.color, fallback: secondary),
+                      total: t.totalPnl,
+                      dayCount: t.dayCount,
+                      selected: _journalTagFilter.contains(t.tagId),
+                      onTap: t.tagId == null
+                          ? null
+                          : () => setState(() {
+                                final id = t.tagId!;
+                                if (!_journalTagFilter.remove(id)) {
+                                  _journalTagFilter.add(id);
+                                }
+                              }),
+                    ),
+                ],
+              ),
+            ),
+          // Untagged is pinned below the scroll so it is always reachable,
+          // however long the tag list grows.
+          if (showUntagged) ...[
+            Divider(height: 1, color: border),
+            _filterPanelRow(
+              context,
+              name: 'Untagged',
+              color: resolveThemeColor(context,
+                  dark: MyntColors.textTertiaryDark,
+                  light: MyntColors.textTertiary),
+              total: a.untagged.totalPnl,
+              dayCount: a.untagged.dayCount,
+              selected: _journalUntagged,
+              onTap: () => setState(() => _journalUntagged = !_journalUntagged),
+            ),
+          ],
+          Divider(height: 1, color: border),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+            child: Row(
+              children: [
+                const Spacer(),
+                MyntIconTextButton(
+                  label: 'Clear all',
+                  size: MyntButtonSize.small,
+                  // Greys out when there is nothing to clear, like the
+                  // scanner's footer.
+                  textColor: anyFilter
+                      ? null
+                      : resolveThemeColor(context,
+                          dark: MyntColors.textTertiaryDark,
+                          light: MyntColors.textTertiary),
+                  onPressed: anyFilter
+                      ? () => setState(() {
+                            _journalTagFilter.clear();
+                            _journalUntagged = false;
+                          })
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterPanelRow(BuildContext context,
+      {required String name,
+      required Color color,
+      required double total,
+      required int dayCount,
+      required bool selected,
+      required VoidCallback? onTap}) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return Semantics(
+      label: '${selected ? 'Remove filter' : 'Filter by'} $name',
+      button: true,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          child: Row(
+            children: [
+              // The scanner's custom compact checkbox — filled primary with
+              // a white check when selected.
+              Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: selected ? accent : Colors.transparent,
+                  border: Border.all(
+                      color:
+                          selected ? accent : secondary.withValues(alpha: 0.4)),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: selected
+                    ? const Icon(Icons.check, size: 12, color: Colors.white)
+                    : null,
+              ),
+              const SizedBox(width: 10),
+              // Tag glyph in the tag's colour, matching the chips app-wide.
+              Icon(shadcn.LucideIcons.tag, size: 13, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(name,
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.bodySmall(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight:
+                            selected ? MyntFonts.semiBold : MyntFonts.regular)),
+              ),
+              const SizedBox(width: 8),
+              Text(_formatAmount(total),
+                  style: MyntWebTextStyles.caption(context,
+                      color: _getPnlColor(context, total))),
+              const SizedBox(width: 8),
+              Text('$dayCount ${dayCount == 1 ? 'day' : 'days'}',
+                  style: MyntWebTextStyles.caption(context, color: secondary)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The "What costs you most" card body in the Concentration & breadth
+  /// style: each tag is a bordered stat mini-card (tag glyph + name as the
+  /// muted label, the coloured total as the value, DAYS / WINS / LOSSES
+  /// badges under it). Worst three tags by default (biggest losses first);
+  /// the card's trailing "Show all" link expands the rest. Read-only —
+  /// filtering is the filter dropdown's job.
+  Widget _buildJournalRanking(BuildContext context, TagPnlAnalytics a) {
+    if (a.tags.isEmpty) return const SizedBox.shrink();
+    final tags = [...a.tags]..sort((x, y) => x.totalPnl.compareTo(y.totalPnl));
+    // The bar inside each tile is scaled against the biggest absolute total,
+    // so tile bars stay comparable to each other.
+    var maxAbs = 0.0;
+    for (final t in tags) {
+      if (t.totalPnl.abs() > maxAbs) maxAbs = t.totalPnl.abs();
+    }
+    if (maxAbs <= 0) maxAbs = 1;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              // Design round 1: the ring tiles. Swap back to
+              // _rankingStatTile to compare with the bar variant.
+              for (final t in tags) _rankingRingTile(context, t, maxAbs)
+            ],
+          ),
+        ),
+        // Plain-English version of the backend's double-counting note: only
+        // shown when a day actually carries more than one tag, right where the
+        // overlapping totals are, so it reads as context rather than jargon.
+        if (a.doubleCounting.hasOverlap)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+            child: _insightCaveatLine(
+              context,
+              Icons.info_outline_rounded,
+              'A day with more than one tag counts toward each of them, so '
+              'these totals overlap and won’t add up to your overall P&L.',
+            ),
+          ),
+        const SizedBox(height: 6),
+      ],
+    );
+  }
+
+  /// "2 losing days" / "3 winning days" for pure splits, the mixed split
+  /// spelled out otherwise, and a plain day count when the backend has
+  /// suppressed the win/loss stats (sample too small). Formatting of
+  /// backend numbers only.
+  String _tagDaysLabel(TagPnlStats s) {
+    if (s.sufficientSample && s.winRate != null) {
+      if (s.lossDays > 0 && s.winDays == 0) {
+        return '${s.lossDays} losing day${s.lossDays == 1 ? '' : 's'}';
+      } else if (s.winDays > 0 && s.lossDays == 0) {
+        return '${s.winDays} winning day${s.winDays == 1 ? '' : 's'}';
+      }
+      return '${s.dayCount} days · ${s.winDays}W ${s.lossDays}L';
+    }
+    return '${s.dayCount} day${s.dayCount == 1 ? '' : 's'}';
+  }
+
+  /// Design round 1 (manager's reference): the tag card as a soft tint of
+  /// the tag's colour — name on top, a progress ring showing this tag's
+  /// share of the biggest absolute total (the same comparison the bar tile
+  /// encodes, drawn circular) with the percentage in the middle, then the
+  /// coloured amount and the day count.
+  Widget _rankingRingTile(BuildContext context, TagPnlStats s, double maxAbs) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final tagColor = hexToColor(s.color, fallback: secondary);
+    final frac = (s.totalPnl.abs() / maxAbs).clamp(0.0, 1.0);
+    // The ring reads P&L direction, exactly as the bar variant did: green
+    // for profit, red for loss (softened like the bar). The tag's own
+    // colour stays on the card border only.
+    final ringColor =
+        _getPnlColor(context, s.totalPnl).withValues(alpha: 0.55);
+
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      decoration: BoxDecoration(
+        // color: tagColor.withValues(alpha: 0.06),
+        border: Border.all(color: tagColor.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            s.name ?? 'tag',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: MyntWebTextStyles.body(context,
+                darkColor: MyntColors.textPrimaryDark,
+                lightColor: MyntColors.textPrimary,
+                fontWeight: MyntFonts.semiBold),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: 64,
+            height: 64,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                CircularProgressIndicator(
+                  value: frac,
+                  strokeWidth: 6,
+                  strokeCap: StrokeCap.round,
+                  color: ringColor,
+                  backgroundColor: ringColor.withValues(alpha: 0.15),
+                ),
+                Center(
+                  child: Text(
+                    '${(frac * 100).round()}%',
+                    style: MyntWebTextStyles.bodySmall(context,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.semiBold),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _formatAmount(s.totalPnl),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: MyntWebTextStyles.body(context,
+                color: _getPnlColor(context, s.totalPnl),
+                fontWeight: MyntFonts.semiBold),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _tagDaysLabel(s),
+            style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textTertiaryDark,
+                lightColor: MyntColors.textTertiary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Design round 0 (kept for comparison): the bordered bar tile.
+  // ignore: unused_element
+  Widget _rankingStatTile(BuildContext context, TagPnlStats s, double maxAbs) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final tagColor = hexToColor(s.color, fallback: secondary);
+    final border = resolveThemeColor(context,
+            dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary)
+        .withValues(alpha: 0.2);
+    final daysLabel = _tagDaysLabel(s);
+
+    return Container(
+      width: 250,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: border, width: 1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Name gets the full tile width (sharing its row with the amount
+          // truncated longer names); the amount sits on its own line just
+          // above the bar, right-aligned.
+          Row(
+            children: [
+              Icon(shadcn.LucideIcons.tag, size: 16, color: tagColor),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  s.name ?? 'tag',
+                  overflow: TextOverflow.ellipsis,
+                  style: MyntWebTextStyles.body(context,
+                      darkColor: MyntColors.textPrimaryDark,
+                      lightColor: MyntColors.textPrimary,
+                      fontWeight: MyntFonts.medium),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Padding(
+            // Indent past the 16px glyph + 6px gap so the day count starts
+            // exactly under the tag NAME, not under the icon.
+            padding: const EdgeInsets.only(left: 22),
+            child: Text(
+              daysLabel,
+              style: MyntWebTextStyles.caption(context,
+                  darkColor: MyntColors.textTertiaryDark,
+                  lightColor: MyntColors.textTertiary),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              _formatAmount(s.totalPnl),
+              style: MyntWebTextStyles.title(context,
+                  color: _getPnlColor(context, s.totalPnl),
+                  fontWeight: MyntFonts.semiBold),
+            ),
+          ),
+          const SizedBox(height: 6),
+          // Comparative bar — green for profit, red for loss, its length
+          // relative to the biggest tag so tiles compare at a glance.
+          _pnlBar(context, (s.totalPnl.abs() / maxAbs).clamp(0.02, 1.0),
+              s.totalPnl >= 0),
+        ],
+      ),
+    );
+  }
+
+  // RETIRED with the stat-tile ranking (Concentration & breadth recipe):
+  // the dot + comparative bar rows, kept for rollback.
+  // Widget _buildRankingRow(BuildContext context, TagPnlStats s, double maxAbs) {
+  //   final color = hexToColor(s.color,
+  //       fallback: resolveThemeColor(context,
+  //           dark: MyntColors.textSecondaryDark,
+  //           light: MyntColors.textSecondary));
+  //   final frac = (s.totalPnl.abs() / maxAbs).clamp(0.02, 1.0);
+  //   final meta = (s.sufficientSample && s.winRate != null)
+  //       ? '${s.dayCount} days · ${(s.winRate! * 100).round()}% '
+  //           '${s.winDays}W ${s.lossDays}L'
+  //       : '${s.dayCount} day${s.dayCount == 1 ? '' : 's'}';
+  //   return Padding(
+  //     padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+  //     child: Column(
+  //       children: [
+  //         Row(
+  //           children: [
+  //             Container(
+  //                 width: 9,
+  //                 height: 9,
+  //                 decoration:
+  //                     BoxDecoration(color: color, shape: BoxShape.circle)),
+  //             const SizedBox(width: 8),
+  //             Expanded(
+  //               child: Text(s.name ?? 'tag',
+  //                   overflow: TextOverflow.ellipsis,
+  //                   style: _getTextStyle(context)),
+  //             ),
+  //             Text(_formatAmount(s.totalPnl),
+  //                 style: _getTextStyle(context,
+  //                     color: _getPnlColor(context, s.totalPnl))),
+  //           ],
+  //         ),
+  //         const SizedBox(height: 6),
+  //         Row(
+  //           children: [
+  //             Expanded(child: _pnlBar(context, frac, s.totalPnl >= 0)),
+  //             const SizedBox(width: 10),
+  //             Text(meta,
+  //                 style: MyntWebTextStyles.caption(context,
+  //                     darkColor: MyntColors.textTertiaryDark,
+  //                     lightColor: MyntColors.textTertiary)),
+  //           ],
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  // }
+
+  /// The comparative P&L bar, now drawn inside each ranking stat tile.
+  /// Fill softened to 55% so a wall of tiles doesn't shout.
+  Widget _pnlBar(BuildContext context, double fraction, bool positive) {
+    final track = resolveThemeColor(context,
+        dark: MyntColors.borderMutedDark, light: MyntColors.borderMuted);
+    final fill = (positive
+            ? resolveThemeColor(context,
+                dark: MyntColors.profitDark, light: MyntColors.profit)
+            : resolveThemeColor(context,
+                dark: MyntColors.lossDark, light: MyntColors.loss))
+        .withValues(alpha: 0.55);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        height: 6,
+        color: track,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FractionallySizedBox(
+            widthFactor: fraction,
+            heightFactor: 1,
+            child: Container(color: fill),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- Notes list -----------------------------------------------------------
+
+  Widget _buildNotesList(
+    BuildContext context,
+    List<JournalNote> notes,
+    SegmentGroup group,
+    LDProvider lp,
+    NotesRangeKey? rangeKey,
+  ) {
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final snapshots = _snapshotsByDate(lp, group);
+    // Render incrementally, like the Date Wise / Script Wise tables: only the
+    // first `displayedItemCount` rows are built, and the shared scroll listener
+    // ([ScrollToLoadMixin]) appends more as the page scrolls near the bottom.
+    // A year of daily notes is 200+ rows — building them all at once would jank.
+    final displayed = takeDisplayed(notes);
+    final remaining = notes.length - displayed.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // The note count now rides on the Notes sub-tab as a superscript, the
+        // order book's recipe — so this header only speaks up while the list
+        // is paginated.
+        if (remaining > 0)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(
+              'Showing ${displayed.length} of ${notes.length} notes',
+              style: MyntWebTextStyles.caption(context, color: secondary),
+            ),
+          ),
+        if (notes.isEmpty)
+          // Two empty flavours: a set filter that matched nothing gets the
+          // compact text + Clear action (transient state); genuinely no
+          // notes in the range gets the app-wide empty widget — this branch
+          // is reachable even though the upstream check exists, because the
+          // analytics can carry tags while the range itself has no notes.
+          (_journalTagFilter.isNotEmpty || _journalUntagged)
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('No notes match this filter.',
+                            style: MyntWebTextStyles.bodySmall(context,
+                                color: secondary)),
+                        const SizedBox(height: 8),
+                        Semantics(
+                          label: 'Clear tag filter',
+                          button: true,
+                          child: InkWell(
+                            onTap: () => setState(() {
+                              _journalTagFilter.clear();
+                              _journalUntagged = false;
+                            }),
+                            borderRadius: BorderRadius.circular(4),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 4),
+                              child: Text('Clear filter',
+                                  style: MyntWebTextStyles.bodySmall(context,
+                                      darkColor: MyntColors.primaryDark,
+                                      lightColor: MyntColors.primary,
+                                      fontWeight: MyntFonts.medium)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : const NoDataFound(
+                  title: 'No notes in this range',
+                  subtitle: 'Add a note to a traded day on the heat map and '
+                      'it will show up here.',
+                  secondaryEnabled: false,
+                )
+        else ...[
+          for (var i = 0; i < displayed.length; i++) ...[
+            if (i > 0) _insightHairline(context),
+            _buildJournalNoteRow(context, displayed[i], group, rangeKey,
+                snapshots[displayed[i].noteDate], lp),
+          ],
+          // Scrolling loads more automatically; this is an explicit fallback
+          // and makes the "there's more" state obvious.
+          if (remaining > 0) ...[
+            _insightHairline(context),
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Semantics(
+                  label: 'Show more notes',
+                  button: true,
+                  child: InkWell(
+                    onTap: () => setState(() =>
+                        displayedItemCount += ScrollToLoadMixin.itemsPerPage),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      child: Text(
+                        'Show '
+                        '${remaining < ScrollToLoadMixin.itemsPerPage ? remaining : ScrollToLoadMixin.itemsPerPage} '
+                        'more',
+                        style: MyntWebTextStyles.caption(context,
+                            darkColor: MyntColors.primaryDark,
+                            lightColor: MyntColors.primary,
+                            fontWeight: MyntFonts.medium),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+
+  // RETIRED — rounded tinted count badge, replaced by the order book's
+  // superscript count on the sub-tab itself. Kept for rollback:
+  // Widget _journalCountBadge(BuildContext context, String label) {
+  //   return Container(
+  //     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+  //     decoration: BoxDecoration(
+  //       color: resolveThemeColor(context,
+  //               dark: MyntColors.primaryDark, light: MyntColors.primary)
+  //           .withValues(alpha: 0.12),
+  //       borderRadius: BorderRadius.circular(5),
+  //     ),
+  //     child: Text(
+  //       label,
+  //       style: MyntWebTextStyles.para(context,
+  //           darkColor: MyntColors.primaryDark,
+  //           lightColor: MyntColors.primary,
+  //           fontWeight: MyntFonts.semiBold),
+  //     ),
+  //   );
+  // }
+
+  Widget _buildJournalNoteRow(
+    BuildContext context,
+    JournalNote note,
+    SegmentGroup group,
+    NotesRangeKey? rangeKey,
+    NotePnlSnapshot? snapshot,
+    // Held rather than resolved here: the day's trades are only read when the
+    // row is actually opened, not for every row on every rebuild.
+    LDProvider lp,
+  ) {
+    final pnl = note.pnl?.realised ?? snapshot?.realised;
+    final title = note.title.trim();
+    final comment = note.comment.trim();
+    final headline = title.isNotEmpty
+        ? title
+        : (comment.isNotEmpty ? comment : 'Untitled note');
+    // Only show the comment as a preview line when it isn't already the headline.
+    final preview = title.isNotEmpty ? comment : '';
+    final d = DateTime.tryParse(note.noteDate);
+    // Day over month, both in the same size and weight — the old badge sized
+    // the day up and greyed the month down, which read as a calendar tile.
+    final day = d != null ? DateFormat('dd').format(d) : '';
+    final mon = d != null ? DateFormat('MMM').format(d) : note.noteDate;
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textTertiaryDark, light: MyntColors.textTertiary);
+
+    return Semantics(
+      label: 'View note ${note.noteDate}',
+      button: true,
+      child: InkWell(
+        onTap: rangeKey == null
+            ? null
+            : () => openNoteEditorSheet(
+                  context,
+                  ref: ref,
+                  noteDate: note.noteDate,
+                  group: group,
+                  existing: note,
+                  snapshot: snapshot,
+                  rangeKey: rangeKey,
+                  // Reading a note opens it read-only; the pencil edits.
+                  startInEdit: false,
+                  trades: _tradesForDate(lp, note.noteDate),
+                ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Date column — day over month at one size; the day carries the
+              // primary blue, the month stays in the normal text colour.
+              SizedBox(
+                width: 46,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(day,
+                        style: MyntWebTextStyles.body(context,
+                            darkColor: MyntColors.primaryDark,
+                            lightColor: MyntColors.primary,
+                            fontWeight: MyntFonts.semiBold)),
+                    Text(mon,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: MyntWebTextStyles.body(context,
+                            darkColor: MyntColors.textPrimaryDark,
+                            lightColor: MyntColors.textPrimary,
+                            fontWeight: MyntFonts.semiBold)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(headline,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _getTextStyle(context)
+                            .copyWith(fontWeight: MyntFonts.semiBold)),
+                    if (preview.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(preview,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: MyntWebTextStyles.para(context,
+                              color: secondary)),
+                    ],
+                    if (note.tags.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 5,
+                        runSpacing: 5,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          for (final t in note.tags.take(3))
+                            _journalMiniTag(context, t),
+                          if (note.tags.length > 3)
+                            Text('+${note.tags.length - 3}',
+                                style: MyntWebTextStyles.para(context,
+                                    color: muted)),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (pnl != null)
+                    Text(_formatAmount(pnl),
+                        style: _getTextStyle(context,
+                                color: _getPnlColor(context, pnl))
+                            .copyWith(fontWeight: MyntFonts.semiBold)),
+                  if (note.attachments.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.attach_file_rounded, size: 16, color: muted),
+                        const SizedBox(width: 3),
+                        Text('${note.attachments.length}',
+                            style: MyntWebTextStyles.para(context,
+                                color: muted)),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A compact tag pill for the note rows — the same recipe as the note
+  /// editor's chips: borderless soft tint, the tag glyph in the tag's own
+  /// colour, then the name. (The old dot + outlined pill is below, retired.)
+  Widget _journalMiniTag(BuildContext context, JournalTag tag) {
+    final color = hexToColor(tag.color,
+        fallback: resolveThemeColor(context,
+            dark: MyntColors.textSecondaryDark,
+            light: MyntColors.textSecondary));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(shadcn.LucideIcons.tag, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(tag.name,
+              style: MyntWebTextStyles.para(context,
+                  darkColor: MyntColors.textPrimaryDark,
+                  lightColor: MyntColors.textPrimary,
+                  fontWeight: MyntFonts.medium)),
+        ],
+      ),
+    );
+  }
+
+  // RETIRED — dot + outlined pill version of [_journalMiniTag], kept for
+  // rollback:
+  // return Container(
+  //   padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+  //   decoration: BoxDecoration(
+  //     color: color.withValues(alpha: 0.10),
+  //     borderRadius: BorderRadius.circular(999),
+  //     border: Border.all(color: color.withValues(alpha: 0.30)),
+  //   ),
+  //   child: Row(
+  //     mainAxisSize: MainAxisSize.min,
+  //     children: [
+  //       Container(
+  //           width: 6,
+  //           height: 6,
+  //           decoration:
+  //               BoxDecoration(color: color, shape: BoxShape.circle)),
+  //       const SizedBox(width: 5),
+  //       Text(tag.name,
+  //           style: MyntWebTextStyles.caption(context,
+  //               darkColor: MyntColors.textSecondaryDark,
+  //               lightColor: MyntColors.textSecondary,
+  //               fontWeight: MyntFonts.medium)),
+  //     ],
+  //   ),
+  // );
+
+  Widget _insightHairline(BuildContext context) => Divider(
+        height: 1,
+        thickness: 1,
+        color: resolveThemeColor(context,
+            dark: MyntColors.dividerDark, light: MyntColors.divider),
+      );
+
+  /// A plain-English "some of these are provisional" note at the foot of the
+  /// Journal — only when a day was journalled before the market closed. The
+  /// backend's raw wording is deliberately not used; it reads as jargon.
+  Widget _buildJournalProvisionalNote(BuildContext context, TagPnlAnalytics a) {
+    if (!a.dataQuality.hasProvisional) return const SizedBox.shrink();
+    final n = a.dataQuality.provisionalSnapshotCount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _insightHairline(context),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: _insightCaveatLine(
+            context,
+            Icons.schedule_rounded,
+            '$n ${n == 1 ? 'note was' : 'notes were'} saved before the market '
+            'closed, so ${n == 1 ? 'its' : 'their'} P&L may still change.',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _insightCaveatLine(BuildContext context, IconData icon, String text) {
+    final muted = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: muted),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: MyntWebTextStyles.caption(context, color: muted),
+          ),
+        ),
+      ],
+    );
+  }
+
   // --- Script Wise Section ---
-  Widget _buildScriptWiseSection(BuildContext context, List<DateTime> sortedDates,
-      LDProvider ledgerprovider, bool isCommodity) {
+  /// Aggregate trades into script-wise rows — shared by the on-screen table
+  /// and the download export so both show the same numbers.
+  List<_ScriptWiseRowData> _computeScriptWiseRows(
+      List<DateTime> sortedDates, LDProvider ledgerprovider, bool isCommodity) {
     // Aggregate trades by symbol
     final Map<String, _ScriptWiseRowData> scriptMap = {};
 
     if (isCommodity && ledgerprovider.calenderpnlAllData?.symbolWise != null) {
-      // Use symbolWise data from commodity response
+      // Commodity payload shape (mirrors Vue's commodity Script Wise
+      // mapping at Daily_pnl.vue:2823-2831 — `details.sum` is spread into
+      // the row and `details.realised_pnl` comes from outside `sum`):
+      //   symbolWise: {
+      //     "<symbol>": {
+      //        realised_pnl,
+      //        sum: { total_buy_qty, total_buy_rate, total_sell_qty,
+      //               total_sell_rate, Updated_NETQTY, CLOSING_PRICE, ... },
+      //        trades: [...]
+      //     }
+      //   }
+      double readNum(Map? m, List<String> keys) {
+        if (m == null) return 0;
+        for (final k in keys) {
+          final v = m[k];
+          if (v == null) continue;
+          if (v is num) return v.toDouble();
+          if (v is String) {
+            final parsed = double.tryParse(v);
+            if (parsed != null) return parsed;
+          }
+        }
+        return 0;
+      }
+
+      // Reads a value from `sum` first, then falls back to the symbol-level
+      // map. Backend sometimes hoists fields up to the symbol level.
+      double readField(Map? sum, Map symbolData, List<String> keys) {
+        final fromSum = readNum(sum, keys);
+        if (fromSum != 0) return fromSum;
+        return readNum(symbolData, keys);
+      }
+
       (ledgerprovider.calenderpnlAllData!.symbolWise as Map)
           .forEach((symbol, symbolData) {
-        final buyQty = (symbolData['buy_qty'] ?? 0).toDouble();
-        final buyAmt = (symbolData['buy_amt'] ?? 0).toDouble();
-        final sellQty = (symbolData['sell_qty'] ?? 0).toDouble();
-        final sellAmt = (symbolData['sell_amt'] ?? 0).toDouble();
-        final netQty = (symbolData['net_qty'] ?? 0).toDouble();
-        final closePrice = (symbolData['close_price'] ?? 0).toDouble();
-        final realisedPnl = (symbolData['realised_pnl'] ?? 0).toDouble();
+        if (symbolData is! Map) return;
+        final sum = symbolData['sum'] is Map ? symbolData['sum'] as Map : null;
+
+        final buyQty =
+            readField(sum, symbolData, ['total_buy_qty', 'BUYQTY', 'buy_qty']);
+        final buyRate = readField(sum, symbolData, [
+          'total_buy_rate',
+          'avg_buy_rate',
+          'BUYRATE',
+          'buy_rate',
+        ]);
+        final sellQty = readField(
+            sum, symbolData, ['total_sell_qty', 'SALEQTY', 'sell_qty']);
+        final sellRate = readField(sum, symbolData, [
+          'total_sell_rate',
+          'avg_sell_rate',
+          'SALERATE',
+          'sell_rate',
+        ]);
+        final netQty =
+            readField(sum, symbolData, ['Updated_NETQTY', 'NETQTY', 'net_qty']);
+        final closePrice = readField(
+            sum, symbolData, ['CLOSING_PRICE', 'CL_PRICE', 'close_price']);
+        final realisedPnl =
+            readNum(symbolData, ['realised_pnl', 'realisedpnl', 'PL_AMT']);
+
+        final buyAmt = readField(
+            sum, symbolData, ['total_buy_amt', 'BUYAMT', 'buy_amt', 'BUY_AMT']);
+        final sellAmt = readField(sum, symbolData,
+            ['total_sell_amt', 'SALEAMT', 'sell_amt', 'SALE_AMT']);
+
+        final resolvedBuyRate = buyRate != 0
+            ? buyRate
+            : (buyQty > 0 && buyAmt != 0 ? buyAmt / buyQty : 0.0);
+        final resolvedSellRate = sellRate != 0
+            ? sellRate
+            : (sellQty > 0 && sellAmt != 0 ? sellAmt / sellQty : 0.0);
+        final resolvedBuyAmt = buyAmt != 0 ? buyAmt : buyQty * resolvedBuyRate;
+        final resolvedSellAmt =
+            sellAmt != 0 ? sellAmt : sellQty * resolvedSellRate;
 
         scriptMap[symbol] = _ScriptWiseRowData(
           symbol: symbol,
           buyQty: buyQty,
-          buyRate: buyQty > 0 ? buyAmt / buyQty : 0,
-          buyAmt: buyAmt,
+          buyRate: resolvedBuyRate,
+          buyAmt: resolvedBuyAmt,
           sellQty: sellQty,
-          sellRate: sellQty > 0 ? sellAmt / sellQty : 0,
-          sellAmt: sellAmt,
+          sellRate: resolvedSellRate,
+          sellAmt: resolvedSellAmt,
           netQty: netQty,
           closePrice: closePrice,
           realisedPnl: realisedPnl,
@@ -1008,10 +2673,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
           final existing = scriptMap[symbol];
           final buyQty = trade.safeBuyQty.toDouble();
           final buyRate = trade.safeBuyRate;
-          final buyAmt = double.tryParse(trade.bAMT ?? '0') ?? (buyQty * buyRate);
+          final buyAmt =
+              double.tryParse(trade.bAMT ?? '0') ?? (buyQty * buyRate);
           final sellQty = trade.safeSellQty.toDouble();
           final sellRate = trade.safeSellRate;
-          final sellAmt = double.tryParse(trade.sAMT ?? '0') ?? (sellQty * sellRate);
+          final sellAmt =
+              double.tryParse(trade.sAMT ?? '0') ?? (sellQty * sellRate);
           final netQty = trade.safeNetQty.toDouble();
           final closePrice = double.tryParse(trade.cLOSINGPRICE ?? '0') ?? 0;
           final pnl = trade.safeRealisedPnl;
@@ -1063,7 +2730,158 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
       }
     }
 
-    final scriptRows = scriptMap.values.toList();
+    return scriptMap.values.toList();
+  }
+
+  /// The date-scoped, sorted trade dates for the active segment — the same
+  /// derivation [_buildBody] uses to drive the tables.
+  List<DateTime> _sortedDatesForExport(
+      LDProvider ledgerprovider, bool isCommodity) {
+    final data = ledgerprovider.calenderpnlAllData;
+    List<DateTime> sortedDates;
+    if (isCommodity && data?.dateWise != null) {
+      sortedDates = (data!.dateWise as Map)
+          .keys
+          .map((dateStr) => DateTime.parse(dateStr))
+          .where((date) =>
+              !date.isBefore(ledgerprovider.startTaxDate) &&
+              !date.isAfter(ledgerprovider.endTaxDate))
+          .toList()
+        ..sort((a, b) => b.compareTo(a));
+    } else {
+      sortedDates = ledgerprovider.grouped.keys
+          .where((date) =>
+              !date.isBefore(ledgerprovider.startTaxDate) &&
+              !date.isAfter(ledgerprovider.endTaxDate))
+          .toList()
+        ..sort((a, b) => b.compareTo(a));
+    }
+    return sortedDates;
+  }
+
+  /// Export the current P&L summary (totals + script-wise breakdown) to a
+  /// PDF or Excel file. Mirrors the on-screen figures for the active segment
+  /// and date range.
+  void _downloadPnlSummary(String type, LDProvider ledgerprovider) {
+    final data = ledgerprovider.calenderpnlAllData;
+    if (data == null) {
+      warningMessage(context, 'No data to download');
+      return;
+    }
+    final isCommodity = ledgerprovider.selectedSegment == 'Commodity';
+    final sortedDates = _sortedDatesForExport(ledgerprovider, isCommodity);
+    final scriptRows =
+        _computeScriptWiseRows(sortedDates, ledgerprovider, isCommodity);
+
+    if (scriptRows.isEmpty) {
+      warningMessage(context, 'No data to download');
+      return;
+    }
+
+    final rows = scriptRows
+        .map((r) => PnlSummaryRow(
+              symbol: r.symbol,
+              buyQty: r.buyQty,
+              buyRate: r.buyRate,
+              sellQty: r.sellQty,
+              sellRate: r.sellRate,
+              netQty: r.netQty,
+              closePrice: r.closePrice,
+              realisedPnl: r.realisedPnl,
+            ))
+        .toList();
+
+    final realised = data.realized;
+    final unrealised = data.unrealized;
+    final charges = data.totalCharges ?? 0.0;
+    final net = realised - charges;
+
+    final pref = locator<Preferences>();
+    final dateRange =
+        '${DateFormat('dd/MM/yyyy').format(_startDate)} to ${DateFormat('dd/MM/yyyy').format(_endDate)}';
+
+    if (type == 'pdf') {
+      PnlSummaryDownloadHelper.downloadPdf(
+        rows: rows,
+        segment: ledgerprovider.selectedSegment,
+        clientId: pref.clientId ?? '',
+        clientName: pref.clientName ?? '',
+        dateRange: dateRange,
+        realised: realised,
+        unrealised: unrealised,
+        charges: charges,
+        net: net,
+      );
+    } else if (type == 'excel') {
+      PnlSummaryDownloadHelper.downloadExcel(
+        rows: rows,
+        segment: ledgerprovider.selectedSegment,
+        clientId: pref.clientId ?? '',
+        clientName: pref.clientName ?? '',
+        dateRange: dateRange,
+        realised: realised,
+        unrealised: unrealised,
+        charges: charges,
+        net: net,
+      );
+    }
+  }
+
+  /// The header's download control — a PDF / Excel popup styled to match the
+  /// other Reports download menus.
+  Widget _buildDownloadMenu(
+      BuildContext context, LDProvider ledgerprovider) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.download,
+          size: 20,
+          color: resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary)),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      tooltip: 'Download',
+      color: resolveThemeColor(context,
+          dark: MyntColors.cardDark, light: MyntColors.card),
+      onSelected: (value) => _downloadPnlSummary(value, ledgerprovider),
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'pdf',
+          child: Row(
+            children: [
+              Icon(Icons.picture_as_pdf, size: 18, color: Colors.red[700]),
+              const SizedBox(width: 8),
+              Text('Download PDF',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'excel',
+          child: Row(
+            children: [
+              Icon(Icons.table_chart, size: 18, color: Colors.green[700]),
+              const SizedBox(width: 8),
+              Text('Download Excel',
+                  style: TextStyle(
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary),
+                  )),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildScriptWiseSection(BuildContext context,
+      List<DateTime> sortedDates, LDProvider ledgerprovider, bool isCommodity) {
+    final scriptRows =
+        _computeScriptWiseRows(sortedDates, ledgerprovider, isCommodity);
 
     if (scriptRows.isEmpty) {
       return const Center(
@@ -1116,7 +2934,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                       child: Tooltip(
                         message: row.symbol,
                         child: GestureDetector(
-                          onTap: () => _showSymbolPnlDialog(context, row.symbol, row.symbol),
+                          onTap: () => _showSymbolPnlDialog(
+                              context, row.symbol, row.symbol),
                           child: Text(
                             row.symbol,
                             style: _getTextStyle(context,
@@ -1150,7 +2969,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                           ),
                           Text(
                             row.buyAmt.toStringAsFixed(2),
-                            style: MyntWebTextStyles.caption(context,
+                            style: MyntWebTextStyles.caption(
+                              context,
                               darkColor: MyntColors.textSecondaryDark,
                               lightColor: MyntColors.textSecondary,
                             ),
@@ -1179,7 +2999,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                           ),
                           Text(
                             row.sellAmt.toStringAsFixed(2),
-                            style: MyntWebTextStyles.caption(context,
+                            style: MyntWebTextStyles.caption(
+                              context,
                               darkColor: MyntColors.textSecondaryDark,
                               lightColor: MyntColors.textSecondary,
                             ),
@@ -1222,7 +3043,229 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
-  // --- Date-wise Section ---
+  // --- Trade journal notes -------------------------------------------------
+
+  /// `YYYY-MM-DD`, the only format the notes API accepts.
+  ///
+  /// Deliberately not the `DateFormat('dd/MM/yyyy')` this screen uses for the
+  /// journal endpoints. Both formats go to the same host and must not share a
+  /// formatter — `14/07/2026` is a `400 BAD_DATE` to the notes routes.
+  static String _isoDate(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  /// The scrip rows traded on [iso], read from the calendar P&L response
+  /// already in memory — the note sheet lists them under the note, and no
+  /// extra call is made.
+  ///
+  /// Same two sources the Date Wise tab reads: commodity keeps its own
+  /// per-date bucket (`dateWise`), while the provider's `grouped` map dates a
+  /// commodity row by its BUY date, which is not the day being viewed.
+  List<TradeData> _tradesForDate(LDProvider lp, String iso) {
+    final dateWise = lp.calenderpnlAllData?.dateWise;
+    if (dateWise != null) {
+      final dateData = dateWise[iso];
+      final trades = dateData is Map ? dateData['trades'] : null;
+      if (trades is! List) return const [];
+      return trades
+          .map((t) => TradeData.fromCommodityJson(t as Map<String, dynamic>))
+          .toList();
+    }
+    final d = DateTime.tryParse(iso);
+    if (d == null) return const [];
+    return lp.grouped[DateTime(d.year, d.month, d.day)] ?? const [];
+  }
+
+  /// One-time introduction to the trading journal: dim the page, a centred
+  /// card with a mini heat-map illustration, one line of copy, "Got it".
+  /// Any dismissal (button, X-less barrier click, Esc) counts as seen — the
+  /// card has said its piece and never shows again.
+  Future<void> _showJournalCoachMark() async {
+    await showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Center(
+          child: shadcn.Card(
+            borderRadius: BorderRadius.circular(8),
+            padding: EdgeInsets.zero,
+            child: Container(
+              width: 400,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: resolveThemeColor(dialogContext,
+                    dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Mini heat-map strip: quiet days around a profit day and a
+                  // loss day carrying the note marker.
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 14),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: resolveThemeColor(dialogContext,
+                              dark: MyntColors.borderMutedDark,
+                              light: MyntColors.borderMuted)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'profit'),
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'loss', marked: true),
+                        _coachCell(dialogContext, kind: 'empty'),
+                        _coachCell(dialogContext, kind: 'empty'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Add trading notes!',
+                    textAlign: TextAlign.center,
+                    style: MyntWebTextStyles.title(dialogContext,
+                        darkColor: MyntColors.textPrimaryDark,
+                        lightColor: MyntColors.textPrimary,
+                        fontWeight: MyntFonts.semiBold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Click any traded day on the calendar to save your '
+                    'thoughts, mistakes or strategy to review later.',
+                    textAlign: TextAlign.center,
+                    style: MyntWebTextStyles.body(dialogContext,
+                        fontWeight: FontWeight.w500,
+                        darkColor: MyntColors.textSecondaryDark,
+                        lightColor: MyntColors.textSecondary),
+                  ),
+                  const SizedBox(height: 20),
+                  MyntPrimaryButton(
+                    label: 'Got it',
+                    size: MyntButtonSize.large,
+                    isFullWidth: true,
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    // Persist however it was dismissed.
+    _journalCoachSeen = true;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_journalCoachKey, true);
+  }
+
+  /// One cell of the coach-mark illustration strip.
+  Widget _coachCell(BuildContext context,
+      {required String kind, bool marked = false}) {
+    final Color fill = switch (kind) {
+      'profit' => resolveThemeColor(context,
+          dark: MyntColors.profitDark, light: MyntColors.profit),
+      'loss' => resolveThemeColor(context,
+          dark: MyntColors.lossDark, light: MyntColors.loss),
+      _ => resolveThemeColor(context,
+              dark: MyntColors.textSecondaryDark,
+              light: MyntColors.textSecondary)
+          .withValues(alpha: 0.15),
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+                color: fill, borderRadius: BorderRadius.circular(3)),
+          ),
+          if (marked)
+            Positioned(
+              top: -2,
+              right: -2,
+              child: Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: resolveThemeColor(context,
+                      dark: MyntColors.primaryDark, light: MyntColors.primary),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Null when the active tab is not one of the four known asset classes — in
+  /// which case notes are simply not offered, rather than guessed at.
+  NotesRangeKey? _notesRangeKey(LDProvider lp) {
+    final group = SegmentGroup.fromTabLabel(lp.selectedSegment);
+    if (group == null) return null;
+    return NotesRangeKey(
+      from: _isoDate(lp.startTaxDate),
+      to: _isoDate(lp.endTaxDate),
+      group: group,
+    );
+  }
+
+  /// Every day that has a P&L to snapshot, keyed `YYYY-MM-DD`.
+  ///
+  /// The backend cannot recompute this — realised P&L comes from FIFO matching
+  /// across the whole financial year — so the client sends what it displayed.
+  ///
+  /// Equity/F&O/Currency read `journal[]`, the backend's own per-day rollup and
+  /// the source the heat map itself is built from. Commodity reads `dateWise`:
+  /// [CalenderpnlModel] synthesises commodity `journal[]` rows with
+  /// `unrealisedpnl` hardcoded to `'0'`, so reading those would always send a
+  /// zero unrealised.
+  ///
+  /// Built once per build rather than searched per cell — the calendar renders
+  /// a full financial year of them.
+  ///
+  /// A day absent from this map has no P&L row, so a note on it would be
+  /// invisible to analytics. Those days are not offered a note at all.
+  Map<String, NotePnlSnapshot> _snapshotsByDate(
+      LDProvider lp, SegmentGroup group) {
+    final data = lp.calenderpnlAllData;
+    if (data == null) return const {};
+    final out = <String, NotePnlSnapshot>{};
+
+    if (group.usesJournalDiary3) {
+      (data.dateWise ?? const {}).forEach((key, day) {
+        final iso = key.toString();
+        // `dateWise` carries a literal "unknown" key holding trades whose dates
+        // could not be parsed. It is not a date — never offer a note on it.
+        if (!kNoteDatePattern.hasMatch(iso)) return;
+        if (day is Map) out[iso] = NotePnlSnapshot.fromDateWise(day, group);
+      });
+      return out;
+    }
+
+    for (final row in data.journal ?? const <Journal>[]) {
+      // TRADE_DATE is `yyyy-MM-ddTHH:mm:ss`; its date part is the note key.
+      final raw = row.tRADEDATE;
+      if (raw == null || raw.length < 10) continue;
+      final iso = raw.substring(0, 10);
+      if (!kNoteDatePattern.hasMatch(iso)) continue;
+      out[iso] = NotePnlSnapshot.fromJournalRow(row, group);
+    }
+    return out;
+  }
+
   Widget _buildDateWiseSection(BuildContext context, List<DateTime> sortedDates,
       LDProvider ledgerprovider, bool isCommodity) {
     if (sortedDates.isEmpty) {
@@ -1237,28 +3280,38 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     return LayoutBuilder(
       builder: (context, constraints) {
         final double totalWidth = constraints.maxWidth;
-        final columnWidths = {
-          0: shadcn.FixedTableSize(totalWidth * 0.60), // Arrow + Date + Count
-          1: shadcn.FixedTableSize(totalWidth * 0.40), // P&L
-        };
+        final columnWidths = isCommodity
+            ? {
+                0: shadcn.FixedTableSize(
+                    totalWidth * 0.50), // Arrow + Date + Count
+                1: shadcn.FixedTableSize(totalWidth * 0.25), // Unrealised P&L
+                2: shadcn.FixedTableSize(totalWidth * 0.25), // Realised P&L
+              }
+            : {
+                0: shadcn.FixedTableSize(
+                    totalWidth * 0.60), // Arrow + Date + Count
+                1: shadcn.FixedTableSize(totalWidth * 0.40), // P&L
+              };
 
         // Build rows data
         final List<_DateRowData> dateRows = sortedDates.map((dateKey) {
           List<TradeData> tradesForDate;
           double totalRealisedPnl;
+          double? totalUnrealisedPnl;
 
           if (isCommodity) {
             final dateStr =
                 "${dateKey.year}-${dateKey.month.toString().padLeft(2, '0')}-${dateKey.day.toString().padLeft(2, '0')}";
-            final dateData = (ledgerprovider.calenderpnlAllData!.dateWise
-                as Map)[dateStr];
+            final dateData =
+                (ledgerprovider.calenderpnlAllData!.dateWise as Map)[dateStr];
             tradesForDate = dateData != null && dateData['trades'] != null
                 ? (dateData['trades'] as List)
                     .map((trade) => TradeData.fromCommodityJson(trade))
                     .toList()
                 : [];
-            totalRealisedPnl =
-                dateData?['realised_pnl']?.toDouble() ?? 0.0;
+            totalRealisedPnl = dateData?['realised_pnl']?.toDouble() ?? 0.0;
+            totalUnrealisedPnl =
+                dateData?['total_unrealized_pnl']?.toDouble() ?? 0.0;
           } else {
             tradesForDate = ledgerprovider.grouped[dateKey] ?? [];
             totalRealisedPnl = tradesForDate.fold(
@@ -1276,6 +3329,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
             dateKey: dateKey,
             tradesForDate: tradesForDate,
             totalRealisedPnl: totalRealisedPnl,
+            totalUnrealisedPnl: totalUnrealisedPnl,
             dateString: dateString,
             isExpanded: isExpanded,
           );
@@ -1290,13 +3344,22 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 columnWidths: columnWidths,
                 rows: [
                   shadcn.TableHeader(
-                    cells: [
-                      _buildDateSectionHeaderCell('Date Wise P&L'),
-                      _buildDateSectionHeaderCell(
-                          '${sortedDates.length} Days',
-                          alignRight: true,
-                          isSecondary: true),
-                    ],
+                    cells: isCommodity
+                        ? [
+                            _buildDateSectionHeaderCell('Date',
+                                isSecondary: true),
+                            _buildDateSectionHeaderCell('Unrealised P&L',
+                                alignRight: true, isSecondary: true),
+                            _buildDateSectionHeaderCell('Realised P&L',
+                                alignRight: true, isSecondary: true),
+                          ]
+                        : [
+                            _buildDateSectionHeaderCell('Date Wise P&L'),
+                            _buildDateSectionHeaderCell(
+                                '${sortedDates.length} Days',
+                                alignRight: true,
+                                isSecondary: true),
+                          ],
                   ),
                 ],
               ),
@@ -1358,22 +3421,40 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                                           horizontal: 6, vertical: 2),
                                       decoration: BoxDecoration(
                                         color: resolveThemeColor(context,
-                                                dark: MyntColors.textSecondaryDark,
+                                                dark: MyntColors
+                                                    .textSecondaryDark,
                                                 light: MyntColors.textSecondary)
                                             .withValues(alpha: 0.1),
                                         borderRadius: BorderRadius.circular(4),
                                       ),
                                       child: Text(
                                         '${row.tradesForDate.length}',
-                                        style: MyntWebTextStyles.caption(context,
-                                            darkColor: MyntColors.textSecondaryDark,
-                                            lightColor: MyntColors.textSecondary,
+                                        style: MyntWebTextStyles.caption(
+                                            context,
+                                            darkColor:
+                                                MyntColors.textSecondaryDark,
+                                            lightColor:
+                                                MyntColors.textSecondary,
                                             fontWeight: FontWeight.w500),
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
+                              if (row.totalUnrealisedPnl != null)
+                                _buildDateRowCell(
+                                  rowIndex: index,
+                                  alignRight: true,
+                                  child: Text(
+                                    _formatAmount(row.totalUnrealisedPnl!),
+                                    style: MyntWebTextStyles.body(context,
+                                        darkColor: _getPnlColor(
+                                            context, row.totalUnrealisedPnl!),
+                                        lightColor: _getPnlColor(
+                                            context, row.totalUnrealisedPnl!),
+                                        fontWeight: FontWeight.w500),
+                                  ),
+                                ),
                               _buildDateRowCell(
                                 rowIndex: index,
                                 alignRight: true,
@@ -1454,9 +3535,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
           ),
         ),
         backgroundColor: shadcn.WidgetStatePropertyAll(
-          isDarkMode(context)
-              ? MyntColors.transparent
-              : MyntColors.overlayBg,
+          isDarkMode(context) ? MyntColors.transparent : MyntColors.overlayBg,
         ),
       ),
       child: Container(
@@ -1483,6 +3562,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     // Generate FY presets
     final now = DateTime.now();
     final currentFYStart = now.month < 4 ? now.year - 1 : now.year;
+
+    // Active FY window — restricts which months/days are reachable
+    final fyStart = _getFinancialYearStart(_startDate);
+    final fyEnd = _getFinancialYearEnd(_startDate);
+    final fyStartMonth = DateTime(fyStart.year, fyStart.month);
+    final fyEndMonth = DateTime(fyEnd.year, fyEnd.month);
 
     return Positioned(
       top: 0,
@@ -1514,19 +3599,24 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                       textColor,
                       secondaryTextColor,
                       onPrev: () {
+                        final newLeft =
+                            DateTime(_leftMonth.year, _leftMonth.month - 1);
+                        if (newLeft.isBefore(fyStartMonth)) return;
                         setState(() {
-                          _leftMonth = DateTime(
-                              _leftMonth.year, _leftMonth.month - 1);
-                          _rightMonth = DateTime(
-                              _leftMonth.year, _leftMonth.month + 1);
+                          _leftMonth = newLeft;
+                          _rightMonth =
+                              DateTime(_leftMonth.year, _leftMonth.month + 1);
                         });
                       },
                       onNext: () {
+                        final newLeft =
+                            DateTime(_leftMonth.year, _leftMonth.month + 1);
+                        final newRight =
+                            DateTime(newLeft.year, newLeft.month + 1);
+                        if (newRight.isAfter(fyEndMonth)) return;
                         setState(() {
-                          _leftMonth = DateTime(
-                              _leftMonth.year, _leftMonth.month + 1);
-                          _rightMonth = DateTime(
-                              _leftMonth.year, _leftMonth.month + 1);
+                          _leftMonth = newLeft;
+                          _rightMonth = newRight;
                         });
                       },
                     ),
@@ -1538,19 +3628,24 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                       textColor,
                       secondaryTextColor,
                       onPrev: () {
+                        final newRight =
+                            DateTime(_rightMonth.year, _rightMonth.month - 1);
+                        final newLeft =
+                            DateTime(newRight.year, newRight.month - 1);
+                        if (newLeft.isBefore(fyStartMonth)) return;
                         setState(() {
-                          _rightMonth = DateTime(
-                              _rightMonth.year, _rightMonth.month - 1);
-                          _leftMonth = DateTime(
-                              _rightMonth.year, _rightMonth.month - 1);
+                          _rightMonth = newRight;
+                          _leftMonth = newLeft;
                         });
                       },
                       onNext: () {
+                        final newRight =
+                            DateTime(_rightMonth.year, _rightMonth.month + 1);
+                        if (newRight.isAfter(fyEndMonth)) return;
                         setState(() {
-                          _rightMonth = DateTime(
-                              _rightMonth.year, _rightMonth.month + 1);
-                          _leftMonth = DateTime(
-                              _rightMonth.year, _rightMonth.month - 1);
+                          _rightMonth = newRight;
+                          _leftMonth =
+                              DateTime(_rightMonth.year, _rightMonth.month - 1);
                         });
                       },
                     ),
@@ -1563,12 +3658,24 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                   runSpacing: 8,
                   children: [
                     _buildPresetChip(
-                        'Current FY', () => _applyFYPreset(currentFYStart)),
+                      'Current FY',
+                      () => _applyFYPreset(currentFYStart),
+                      isActive: fyStart.year == currentFYStart,
+                    ),
                     _buildPresetChip(
-                        'Last FY', () => _applyFYPreset(currentFYStart - 1)),
+                      'Last FY',
+                      () => _applyFYPreset(currentFYStart - 1),
+                      isActive: fyStart.year == currentFYStart - 1,
+                    ),
                     // Year presets going back
-                    for (int y = currentFYStart - 2; y >= currentFYStart - 4; y--)
-                      _buildPresetChip('$y', () => _applyFYPreset(y)),
+                    for (int y = currentFYStart - 2;
+                        y >= currentFYStart - 4;
+                        y--)
+                      _buildPresetChip(
+                        '$y',
+                        () => _applyFYPreset(y),
+                        isActive: fyStart.year == y,
+                      ),
                   ],
                 ),
                 if (_dateValidationMsg.isNotEmpty) ...[
@@ -1588,7 +3695,14 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     );
   }
 
-  Widget _buildPresetChip(String label, VoidCallback onTap) {
+  Widget _buildPresetChip(String label, VoidCallback onTap,
+      {bool isActive = false}) {
+    final primaryColor = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final borderColor = isActive
+        ? primaryColor
+        : resolveThemeColor(context,
+            dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
@@ -1596,18 +3710,18 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: resolveThemeColor(context,
-                dark: MyntColors.cardBorderDark,
-                light: MyntColors.cardBorder),
-          ),
+          color: isActive ? primaryColor.withValues(alpha: 0.1) : null,
+          border: Border.all(color: borderColor),
         ),
         child: Text(
           label,
           style: MyntWebTextStyles.para(context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textPrimary,
-              fontWeight: FontWeight.w500),
+              darkColor: isActive
+                  ? MyntColors.primaryDark
+                  : MyntColors.textPrimaryDark,
+              lightColor:
+                  isActive ? MyntColors.primary : MyntColors.textPrimary,
+              fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -1627,6 +3741,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     final firstWeekday = DateTime(month.year, month.month, 1).weekday % 7;
     final today = DateTime.now();
     final dayHeaders = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    final fyStart = _getFinancialYearStart(_startDate);
+    final fyEnd = _getFinancialYearEnd(_startDate);
 
     return SizedBox(
       width: 260,
@@ -1686,28 +3802,28 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
             return Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: List.generate(7, (dayIndex) {
-                final dayNum =
-                    weekIndex * 7 + dayIndex - firstWeekday + 1;
+                final dayNum = weekIndex * 7 + dayIndex - firstWeekday + 1;
                 if (dayNum < 1 || dayNum > daysInMonth) {
                   return const SizedBox(width: 34, height: 34);
                 }
 
-                final date =
-                    DateTime(month.year, month.month, dayNum);
+                final date = DateTime(month.year, month.month, dayNum);
                 final isToday = date.year == today.year &&
                     date.month == today.month &&
                     date.day == today.day;
                 final isFuture = date.isAfter(today);
-                final isStart = _tempStartDate != null &&
-                    _isSameDay(date, _tempStartDate!);
-                final isEnd = _tempEndDate != null &&
-                    _isSameDay(date, _tempEndDate!);
+                final isOutsideFY =
+                    date.isBefore(fyStart) || date.isAfter(fyEnd);
+                final isDisabled = isFuture || isOutsideFY;
+                final isStart =
+                    _tempStartDate != null && _isSameDay(date, _tempStartDate!);
+                final isEnd =
+                    _tempEndDate != null && _isSameDay(date, _tempEndDate!);
                 final isInRange = _tempStartDate != null &&
                     _tempEndDate != null &&
-                    date.isAfter(_tempStartDate!
-                        .subtract(const Duration(days: 1))) &&
-                    date.isBefore(
-                        _tempEndDate!.add(const Duration(days: 1)));
+                    date.isAfter(
+                        _tempStartDate!.subtract(const Duration(days: 1))) &&
+                    date.isBefore(_tempEndDate!.add(const Duration(days: 1)));
 
                 Color? bgColor;
                 Color dayTextColor = textColor;
@@ -1719,13 +3835,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                   bgColor = primaryColor.withValues(alpha: 0.1);
                 }
 
-                if (isFuture) {
-                  dayTextColor =
-                      secondaryTextColor.withValues(alpha: 0.4);
+                if (isDisabled) {
+                  dayTextColor = secondaryTextColor.withValues(alpha: 0.4);
                 }
 
                 return GestureDetector(
-                  onTap: isFuture ? null : () => _onDateTap(date),
+                  onTap: isDisabled ? null : () => _onDateTap(date),
                   child: Container(
                     width: 34,
                     height: 34,
@@ -1734,17 +3849,15 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                       shape: (isStart || isEnd)
                           ? BoxShape.circle
                           : BoxShape.rectangle,
-                      borderRadius: (isStart || isEnd)
-                          ? null
-                          : BorderRadius.zero,
+                      borderRadius:
+                          (isStart || isEnd) ? null : BorderRadius.zero,
                     ),
                     alignment: Alignment.center,
                     child: Text(
                       '$dayNum',
                       style: TextStyle(
                         fontSize: 13,
-                        fontWeight:
-                            isToday ? FontWeight.w700 : FontWeight.w400,
+                        fontWeight: isToday ? FontWeight.w700 : FontWeight.w400,
                         color: dayTextColor,
                       ),
                     ),
@@ -1764,20 +3877,33 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
 
   // --- Trade Table (shadcn) ---
   Widget _buildTradeTable(BuildContext context, List<TradeData> trades) {
+    final isCommodity = ref.read(ledgerProvider).selectedSegment == "Commodity";
     return LayoutBuilder(
       builder: (context, constraints) {
         final double totalWidth = constraints.maxWidth;
-        // 8 columns: Symbol, Buy Qty, Buy Rate, Sell Qty, Sell Rate, Net Qty, Close Price, Realised P&L
-        final columnWidths = {
-          0: shadcn.FixedTableSize(totalWidth * 0.24),
-          1: shadcn.FixedTableSize(totalWidth * 0.09),
-          2: shadcn.FixedTableSize(totalWidth * 0.12),
-          3: shadcn.FixedTableSize(totalWidth * 0.09),
-          4: shadcn.FixedTableSize(totalWidth * 0.12),
-          5: shadcn.FixedTableSize(totalWidth * 0.09),
-          6: shadcn.FixedTableSize(totalWidth * 0.11),
-          7: shadcn.FixedTableSize(totalWidth * 0.14),
-        };
+        // Commodity: 9 columns (with Unrealised P&L); others: 8 columns.
+        final columnWidths = isCommodity
+            ? {
+                0: shadcn.FixedTableSize(totalWidth * 0.22),
+                1: shadcn.FixedTableSize(totalWidth * 0.08),
+                2: shadcn.FixedTableSize(totalWidth * 0.11),
+                3: shadcn.FixedTableSize(totalWidth * 0.08),
+                4: shadcn.FixedTableSize(totalWidth * 0.11),
+                5: shadcn.FixedTableSize(totalWidth * 0.08),
+                6: shadcn.FixedTableSize(totalWidth * 0.10),
+                7: shadcn.FixedTableSize(totalWidth * 0.11),
+                8: shadcn.FixedTableSize(totalWidth * 0.11),
+              }
+            : {
+                0: shadcn.FixedTableSize(totalWidth * 0.24),
+                1: shadcn.FixedTableSize(totalWidth * 0.09),
+                2: shadcn.FixedTableSize(totalWidth * 0.12),
+                3: shadcn.FixedTableSize(totalWidth * 0.09),
+                4: shadcn.FixedTableSize(totalWidth * 0.12),
+                5: shadcn.FixedTableSize(totalWidth * 0.09),
+                6: shadcn.FixedTableSize(totalWidth * 0.11),
+                7: shadcn.FixedTableSize(totalWidth * 0.14),
+              };
 
         return Container(
           color: resolveThemeColor(context,
@@ -1796,6 +3922,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                   _buildTableHeaderCell('Sell Rate', alignRight: true),
                   _buildTableHeaderCell('Net Qty', alignRight: true),
                   _buildTableHeaderCell('Close Price', alignRight: true),
+                  if (isCommodity)
+                    _buildTableHeaderCell('Unrealised P&L', alignRight: true),
                   _buildTableHeaderCell('Realised P&L', alignRight: true),
                 ],
               ),
@@ -1805,14 +3933,18 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                 final trade = entry.value;
                 final scripName = trade.sCRIPNAME ?? '';
                 final scripSymbol = trade.sCRIPSYMBOL ?? '';
-                final displaySymbol = scripSymbol.isNotEmpty ? scripSymbol : scripName;
+                final displaySymbol =
+                    scripSymbol.isNotEmpty ? scripSymbol : scripName;
                 final realisedPnl =
                     double.tryParse(trade.realisedpnl ?? '0') ?? 0.0;
+                final unrealisedPnl = trade.safeUnrealisedPnl;
                 final rowKey = '${trade.tRADEDATE}_${index}_$scripSymbol';
                 final openQty = trade.safeOpenQty;
                 final openRate = trade.safeOpenRate;
-                final buyAmt = double.tryParse(trade.bAMT ?? '0') ?? (trade.safeBuyQty * trade.safeBuyRate);
-                final sellAmt = double.tryParse(trade.sAMT ?? '0') ?? (trade.safeSellQty * trade.safeSellRate);
+                final buyAmt = double.tryParse(trade.bAMT ?? '0') ??
+                    (trade.safeBuyQty * trade.safeBuyRate);
+                final sellAmt = double.tryParse(trade.sAMT ?? '0') ??
+                    (trade.safeSellQty * trade.safeSellRate);
 
                 return shadcn.TableRow(
                   cells: [
@@ -1820,55 +3952,60 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                     _buildTableDataCell(
                       rowKey: rowKey,
                       child: Tooltip(
-                        message: displaySymbol.isNotEmpty ? displaySymbol : '--',
+                        message:
+                            displaySymbol.isNotEmpty ? displaySymbol : '--',
                         child: GestureDetector(
-                        onTap: () => _showSymbolPnlDialog(context, scripSymbol, displaySymbol),
-                        child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                          onTap: () => _showSymbolPnlDialog(
+                              context, scripSymbol, displaySymbol),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Flexible(
-                                child: Text(
-                                  displaySymbol.isNotEmpty ? displaySymbol : '--',
-                                  style: _getTextStyle(context,
-                                      color: resolveThemeColor(context,
-                                          dark: MyntColors.textPrimaryDark,
-                                          light: MyntColors.textPrimary)),
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                                ),
-                              ),
-                              if (openQty != 0) ...[
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 7, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(15),
-                                    border: Border.all(
-                                      color: resolveThemeColor(context,
-                                          dark: MyntColors.profitDark,
-                                          light: MyntColors.profit),
-                                      width: 1,
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      displaySymbol.isNotEmpty
+                                          ? displaySymbol
+                                          : '--',
+                                      style: _getTextStyle(context,
+                                          color: resolveThemeColor(context,
+                                              dark: MyntColors.textPrimaryDark,
+                                              light: MyntColors.textPrimary)),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 1,
                                     ),
                                   ),
-                                  child: Text(
-                                    '${openQty.abs().toStringAsFixed(0)} @ ${openRate.toStringAsFixed(4)}',
-                                    style: MyntWebTextStyles.caption(context,
-                                        color: resolveThemeColor(context,
-                                            dark: MyntColors.profitDark,
-                                            light: MyntColors.profit),
-                                        fontWeight: MyntFonts.medium),
-                                  ),
-                                ),
-                              ],
+                                  if (openQty != 0) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 7, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(15),
+                                        border: Border.all(
+                                          color: resolveThemeColor(context,
+                                              dark: MyntColors.profitDark,
+                                              light: MyntColors.profit),
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        '${openQty.abs().toStringAsFixed(0)} @ ${openRate.toStringAsFixed(4)}',
+                                        style: MyntWebTextStyles.caption(
+                                            context,
+                                            color: resolveThemeColor(context,
+                                                dark: MyntColors.profitDark,
+                                                light: MyntColors.profit),
+                                            fontWeight: MyntFonts.medium),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ],
                           ),
-                        ],
-                      ),
-                      ),
+                        ),
                       ),
                     ),
                     // Buy Qty
@@ -1894,7 +4031,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                           ),
                           Text(
                             buyAmt.toStringAsFixed(2),
-                            style: MyntWebTextStyles.caption(context,
+                            style: MyntWebTextStyles.caption(
+                              context,
                               darkColor: MyntColors.textSecondaryDark,
                               lightColor: MyntColors.textSecondary,
                             ),
@@ -1925,7 +4063,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                           ),
                           Text(
                             sellAmt.toStringAsFixed(2),
-                            style: MyntWebTextStyles.caption(context,
+                            style: MyntWebTextStyles.caption(
+                              context,
                               darkColor: MyntColors.textSecondaryDark,
                               lightColor: MyntColors.textSecondary,
                             ),
@@ -1951,6 +4090,19 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                         style: _getTextStyle(context),
                       ),
                     ),
+                    // Unrealised P&L (Commodity only)
+                    if (isCommodity)
+                      _buildTableDataCell(
+                        rowKey: rowKey,
+                        alignRight: true,
+                        child: Text(
+                          unrealisedPnl == 0
+                              ? '0'
+                              : _formatAmount(unrealisedPnl),
+                          style: _getTextStyle(context,
+                              color: _getPnlColor(context, unrealisedPnl)),
+                        ),
+                      ),
                     // Realised P&L
                     _buildTableDataCell(
                       rowKey: rowKey,
@@ -1988,8 +4140,8 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     if (symbolTrades.isEmpty) return;
 
     // Sort by trade date
-    symbolTrades.sort((a, b) =>
-        (a.tRADEDATE ?? '').compareTo(b.tRADEDATE ?? ''));
+    symbolTrades
+        .sort((a, b) => (a.tRADEDATE ?? '').compareTo(b.tRADEDATE ?? ''));
 
     final dark = isDarkMode(context);
 
@@ -1997,10 +4149,10 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
       context: context,
       builder: (ctx) {
         return Dialog(
-          backgroundColor:
-              dark ? MyntColors.backgroundColorDark : MyntColors.backgroundColor,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          backgroundColor: dark
+              ? MyntColors.backgroundColorDark
+              : MyntColors.backgroundColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           insetPadding:
               const EdgeInsets.symmetric(horizontal: 40, vertical: 40),
           child: ConstrainedBox(
@@ -2097,13 +4249,15 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                               final rKey = 'dialog_${idx}_$scripSymbol';
                               final buyAmt = double.tryParse(t.bAMT ?? '0') ??
                                   (t.safeBuyQty * t.safeBuyRate);
-                              final sellAmt =
-                                  double.tryParse(t.sAMT ?? '0') ??
-                                      (t.safeSellQty * t.safeSellRate);
+                              final sellAmt = double.tryParse(t.sAMT ?? '0') ??
+                                  (t.safeSellQty * t.safeSellRate);
                               final netQty = t.safeNetQty;
-                              final netAmt = double.tryParse(t.nRATE ?? '0') ?? 0.0;
+                              final netAmt =
+                                  double.tryParse(t.nRATE ?? '0') ?? 0.0;
                               final realisedPnl = t.safeRealisedPnl;
-                              final tradeDate = t.tRADEDATE != null ? t.tRADEDATE!.split('T').first : '';
+                              final tradeDate = t.tRADEDATE != null
+                                  ? t.tRADEDATE!.split('T').first
+                                  : '';
 
                               return shadcn.TableRow(
                                 cells: [
@@ -2113,32 +4267,36 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                                     child: Tooltip(
                                       message: displaySymbol,
                                       child: Column(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          displaySymbol,
-                                          style: _getTextStyle(context,
-                                              color: resolveThemeColor(context,
-                                                  dark: MyntColors
-                                                      .textPrimaryDark,
-                                                  light: MyntColors
-                                                      .textPrimary)),
-                                          overflow: TextOverflow.ellipsis,
-                                          maxLines: 1,
-                                        ),
-                                        if (tradeDate.isNotEmpty)
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
                                           Text(
-                                            tradeDate,
-                                            style: MyntWebTextStyles.caption(context,
-                                              darkColor: MyntColors.textSecondaryDark,
-                                              lightColor: MyntColors.textSecondary,
-                                            ),
+                                            displaySymbol,
+                                            style: _getTextStyle(context,
+                                                color: resolveThemeColor(
+                                                    context,
+                                                    dark: MyntColors
+                                                        .textPrimaryDark,
+                                                    light: MyntColors
+                                                        .textPrimary)),
+                                            overflow: TextOverflow.ellipsis,
+                                            maxLines: 1,
                                           ),
-                                      ],
-                                    ),
+                                          if (tradeDate.isNotEmpty)
+                                            Text(
+                                              tradeDate,
+                                              style: MyntWebTextStyles.caption(
+                                                context,
+                                                darkColor: MyntColors
+                                                    .textSecondaryDark,
+                                                lightColor:
+                                                    MyntColors.textSecondary,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                   // Buy Qty
@@ -2166,9 +4324,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                                         ),
                                         Text(
                                           buyAmt.toStringAsFixed(2),
-                                          style: MyntWebTextStyles.caption(context,
-                                            darkColor: MyntColors.textSecondaryDark,
-                                            lightColor: MyntColors.textSecondary,
+                                          style: MyntWebTextStyles.caption(
+                                            context,
+                                            darkColor:
+                                                MyntColors.textSecondaryDark,
+                                            lightColor:
+                                                MyntColors.textSecondary,
                                           ),
                                         ),
                                       ],
@@ -2199,9 +4360,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                                         ),
                                         Text(
                                           sellAmt.toStringAsFixed(2),
-                                          style: MyntWebTextStyles.caption(context,
-                                            darkColor: MyntColors.textSecondaryDark,
-                                            lightColor: MyntColors.textSecondary,
+                                          style: MyntWebTextStyles.caption(
+                                            context,
+                                            darkColor:
+                                                MyntColors.textSecondaryDark,
+                                            lightColor:
+                                                MyntColors.textSecondary,
                                           ),
                                         ),
                                       ],
@@ -2223,9 +4387,12 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
                                         ),
                                         Text(
                                           netAmt.toStringAsFixed(2),
-                                          style: MyntWebTextStyles.caption(context,
-                                            darkColor: MyntColors.textSecondaryDark,
-                                            lightColor: MyntColors.textSecondary,
+                                          style: MyntWebTextStyles.caption(
+                                            context,
+                                            darkColor:
+                                                MyntColors.textSecondaryDark,
+                                            lightColor:
+                                                MyntColors.textSecondary,
                                           ),
                                         ),
                                       ],
@@ -2296,6 +4463,7 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
     required String rowKey,
     required Widget child,
     bool alignRight = false,
+    Color? baseTint,
   }) {
     return shadcn.TableCell(
       theme: const shadcn.TableCellTheme(
@@ -2316,14 +4484,15 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
           builder: (context, hoveredKey, _) {
             final isHovered = hoveredKey == rowKey;
             return Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              // A persistent tint (used for the analytics baseline rows) shows
+              // through until hover, which paints its own wash on top.
               color: isHovered
                   ? resolveThemeColor(context,
                           dark: MyntColors.primaryDark,
                           light: MyntColors.primary)
                       .withValues(alpha: 0.06)
-                  : null,
+                  : baseTint,
               alignment: alignRight ? Alignment.centerRight : null,
               child: child,
             );
@@ -2378,7 +4547,6 @@ class _CalenderpnlScreenState extends ConsumerState<CalenderpnlScreen>
       return price;
     }
   }
-
 }
 
 // --- Commodity daily heatmap builder ---
@@ -2430,6 +4598,18 @@ class _WebCalendarTabs extends StatefulWidget {
   final ValueChanged<DateTime> onMonthSelected;
   final ValueChanged<DateTime> onMonthChanged;
 
+  /// Days that already carry a journal note, keyed `YYYY-MM-DD`.
+  final Set<String> notedDates;
+
+  /// Days that have a P&L to snapshot, and so can be noted. A day outside this
+  /// set is not offered a note — one saved there would be invisible to
+  /// analytics.
+  final Set<String> notableDates;
+
+  /// Null when notes are unavailable for the active tab, which hides the
+  /// affordance entirely.
+  final ValueChanged<DateTime>? onNoteTap;
+
   const _WebCalendarTabs({
     required this.heatmapData,
     required this.monthlyPnL,
@@ -2440,6 +4620,9 @@ class _WebCalendarTabs extends StatefulWidget {
     required this.onTabChanged,
     required this.onMonthSelected,
     required this.onMonthChanged,
+    this.notedDates = const {},
+    this.notableDates = const {},
+    this.onNoteTap,
   });
 
   @override
@@ -2456,10 +4639,11 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
         border: Border.all(
           color: resolveThemeColor(context,
               // dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder),
-              dark: MyntColors.transparent, light: MyntColors.transparent),
+              dark: MyntColors.transparent,
+              light: MyntColors.transparent),
         ),
-        color: resolveThemeColor(
-            context, dark: MyntColors.cardDark, light: MyntColors.card),
+        color: resolveThemeColor(context,
+            dark: MyntColors.cardDark, light: MyntColors.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2483,6 +4667,9 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
               endDate: widget.endFY,
               currentMonth: widget.selectedMonth,
               onMonthChanged: widget.onMonthChanged,
+              notedDates: widget.notedDates,
+              notableDates: widget.notableDates,
+              onNoteTap: widget.onNoteTap,
             ),
         ],
       ),
@@ -2496,9 +4683,9 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
         onTap: () => widget.onTabChanged(label == 'Monthly'),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-           decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(6),
-          color: isActive
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            color: isActive
                 ? (isDarkMode(context)
                     ? Colors.white.withValues(alpha: 0.1)
                     : Colors.black.withValues(alpha: 0.05))
@@ -2508,8 +4695,7 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
             label,
             style: MyntWebTextStyles.body(
               context,
-              fontWeight:
-                  isActive ? MyntFonts.semiBold : MyntFonts.medium,
+              fontWeight: isActive ? MyntFonts.semiBold : MyntFonts.medium,
             ).copyWith(
               color: isActive
                   ? shadcn.Theme.of(context).colorScheme.foreground
@@ -2565,11 +4751,12 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
         "${monthDate.year}-${monthDate.month.toString().padLeft(2, '0')}";
     final double? monthValue = widget.monthlyPnL[key];
 
-    final numval =
-        (monthValue == null || monthValue == 0) ? "-" : monthValue.toStringAsFixed(2);
+    final numval = (monthValue == null || monthValue == 0)
+        ? "-"
+        : monthValue.toStringAsFixed(2);
     var displayText = numval != "-"
         ? NumberFormat.compactCurrency(
-            decimalDigits: 2, locale: 'en_IN', symbol: '')
+                decimalDigits: 2, locale: 'en_IN', symbol: '')
             .format(double.parse(numval))
         : '-';
     if (displayText.contains("T")) {
@@ -2577,8 +4764,18 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
     }
 
     final monthAbbrs = [
-      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
     ];
     final monthName = monthAbbrs[monthDate.month - 1];
 
@@ -2588,10 +4785,10 @@ class _WebCalendarTabsState extends State<_WebCalendarTabs> {
           dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     } else {
       valueColor = monthValue < 0
-          ? resolveThemeColor(
-              context, dark: MyntColors.lossDark, light: MyntColors.loss)
-          : resolveThemeColor(
-              context, dark: MyntColors.profitDark, light: MyntColors.profit);
+          ? resolveThemeColor(context,
+              dark: MyntColors.lossDark, light: MyntColors.loss)
+          : resolveThemeColor(context,
+              dark: MyntColors.profitDark, light: MyntColors.profit);
     }
 
     return GestureDetector(
@@ -2640,22 +4837,33 @@ class _WebDailyCalendar extends StatelessWidget {
   final DateTime currentMonth;
   final ValueChanged<DateTime> onMonthChanged;
 
+  /// Days that already carry a journal note, keyed `YYYY-MM-DD`.
+  final Set<String> notedDates;
+
+  /// Days that have a P&L to snapshot, and so can be noted.
+  final Set<String> notableDates;
+
+  /// Null when notes are unavailable for the active tab.
+  final ValueChanged<DateTime>? onNoteTap;
+
   const _WebDailyCalendar({
     required this.heatmapData,
     required this.startDate,
     required this.endDate,
     required this.currentMonth,
     required this.onMonthChanged,
+    this.notedDates = const {},
+    this.notableDates = const {},
+    this.onNoteTap,
   });
 
   @override
   Widget build(BuildContext context) {
     // Build all weeks from startDate to endDate
     // Align to Monday of the week containing startDate
-    final firstMonday = startDate.subtract(
-        Duration(days: (startDate.weekday - 1) % 7));
-    final lastSunday = endDate.add(
-        Duration(days: (7 - endDate.weekday) % 7));
+    final firstMonday =
+        startDate.subtract(Duration(days: (startDate.weekday - 1) % 7));
+    final lastSunday = endDate.add(Duration(days: (7 - endDate.weekday) % 7));
 
     // Build week columns (each column = 1 week, 7 rows for Mon-Sun)
     final weeks = <List<DateTime?>>[];
@@ -2692,8 +4900,8 @@ class _WebDailyCalendar extends StatelessWidget {
       final firstYear = firstDate.year;
 
       // Check if this week spans multiple months
-      final spansMultipleMonths = datesInWeek
-          .any((d) => d!.month != firstMonth || d.year != firstYear);
+      final spansMultipleMonths =
+          datesInWeek.any((d) => d!.month != firstMonth || d.year != firstYear);
 
       if (!spansMultipleMonths) {
         // Entire week belongs to one month
@@ -2714,10 +4922,16 @@ class _WebDailyCalendar extends StatelessWidget {
       } else {
         // Week spans two months — split into two filtered weeks
         final firstMonthWeek = week
-            .map((d) => (d != null && d.month == firstMonth && d.year == firstYear) ? d : null)
+            .map((d) =>
+                (d != null && d.month == firstMonth && d.year == firstYear)
+                    ? d
+                    : null)
             .toList();
         final secondMonthWeek = week
-            .map((d) => (d != null && (d.month != firstMonth || d.year != firstYear)) ? d : null)
+            .map((d) =>
+                (d != null && (d.month != firstMonth || d.year != firstYear))
+                    ? d
+                    : null)
             .toList();
 
         // Add first part to current group
@@ -2768,15 +4982,18 @@ class _WebDailyCalendar extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Calculate cell size to fill 100% width
-        // Total width = dayLabels + sum(month groups) + gaps between months
-        final totalWeeks = monthGroups.fold<int>(0, (sum, g) => sum + g.weeks.length);
+        final totalWeeks =
+            monthGroups.fold<int>(0, (sum, g) => sum + g.weeks.length);
         final totalMonthGaps = (monthGroups.length - 1) * monthGap;
         final availableWidth =
             constraints.maxWidth - dayLabelWidth - totalMonthGaps;
-        final cellStep = availableWidth / totalWeeks;
-        final cellGap = (cellStep * 0.18).clamp(2.0, 4.0);
-        final cellSize = cellStep - cellGap;
+
+        // Fill the width so the whole financial year is always visible — no
+        // horizontal scroll, no hidden months. Cells scale with the panel; the
+        // note marker (a corner triangle) stays legible even when they are small.
+        final double cellStep = availableWidth / totalWeeks;
+        final double cellGap = (cellStep * 0.18).clamp(2.0, 4.0);
+        final double cellSize = cellStep - cellGap;
 
         Widget buildCell(DateTime? date) {
           if (date == null) {
@@ -2786,8 +5003,7 @@ class _WebDailyCalendar extends StatelessWidget {
             );
           }
 
-          final value =
-              heatmapData[DateTime(date.year, date.month, date.day)];
+          final value = heatmapData[DateTime(date.year, date.month, date.day)];
           final today = DateTime.now();
           final isToday = date.year == today.year &&
               date.month == today.month &&
@@ -2796,40 +5012,71 @@ class _WebDailyCalendar extends StatelessWidget {
           Color bgColor;
           final val = value ?? 0;
           if (val > 0) {
-             bgColor = resolveThemeColor(context,
-                    dark: MyntColors.profitDark, light: MyntColors.profit).withAlpha(900);
+            bgColor = resolveThemeColor(context,
+                    dark: MyntColors.profitDark, light: MyntColors.profit)
+                .withAlpha(900);
           } else if (val < 0) {
             // final intensity = _getIntensity(value.abs());
             bgColor = resolveThemeColor(context,
-                    dark: MyntColors.lossDark, light: MyntColors.loss).withAlpha(900);
+                    dark: MyntColors.lossDark, light: MyntColors.loss)
+                .withAlpha(900);
           } else {
             // final intensity = _getIntensity(value.abs());
             bgColor = emptyColor;
           }
 
           final todayBorderColor = resolveThemeColor(context,
-              dark: MyntColors.textPrimaryDark,
-              light: MyntColors.textPrimary);
+              dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+
+          final iso = _CalenderpnlScreenState._isoDate(date);
+          final hasNote = notedDates.contains(iso);
+          // A note can only be *added* on a day with a P&L row — one saved
+          // elsewhere has no snapshot and would be invisible to analytics. But
+          // an existing note must always open, snapshot or not: a day can lose
+          // its P&L row (a restated back office, a narrowed date range), and
+          // gating on the snapshot alone would strand the note with no way to
+          // edit or delete it.
+          final canNote =
+              onNoteTap != null && (hasNote || notableDates.contains(iso));
+
+          final dateLabel = DateFormat('dd MMM yyyy').format(date);
+          final pnlLabel =
+              value != null ? '₹${value.toStringAsFixed(2)}' : 'No trades';
+          final String tooltip;
+          if (hasNote) {
+            tooltip = '$dateLabel: $pnlLabel\nNote added — click to edit';
+          } else if (canNote) {
+            tooltip = '$dateLabel: $pnlLabel\nClick to add a note';
+          } else {
+            tooltip = '$dateLabel: $pnlLabel';
+          }
 
           return _HoverableHeatmapCell(
-            tooltipMessage:
-                '${DateFormat('dd MMM yyyy').format(date)}: ${value != null ? '₹${value.toStringAsFixed(2)}' : 'No trades'}',
+            tooltipMessage: tooltip,
             cellSize: cellSize,
             cellGap: cellGap,
             bgColor: bgColor,
             isToday: isToday,
             todayBorderColor: todayBorderColor,
+            hasNote: hasNote,
+            // The app's primary blue, theme-resolved: deep blue on the light
+            // theme, the lighter primaryDark on the dark theme so the dot
+            // stays visible on dark cells. The glow supplies edge separation
+            // on the green/red fills.
+            // noteMarkerColor: MyntColors.noteMarker,
+            noteMarkerColor: resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary),
+            onTap: canNote ? () => onNoteTap!(date) : null,
           );
         }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Heatmap grid
+            // Heatmap grid — day labels pinned left, month groups fill the width.
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Day-of-week labels (Mon, Wed, Fri)
                 SizedBox(
                   width: dayLabelWidth,
                   child: Column(
@@ -2850,21 +5097,17 @@ class _WebDailyCalendar extends StatelessWidget {
                     }),
                   ),
                 ),
-                // Month groups with gaps between them
                 Expanded(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       for (int m = 0; m < monthGroups.length; m++) ...[
-                        // Month group
                         Expanded(
                           flex: monthGroups[m].weeks.length,
                           child: Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            children:
-                                monthGroups[m].weeks.map((weekDays) {
+                            children: monthGroups[m].weeks.map((weekDays) {
                               return Column(
                                 children: weekDays
                                     .map((date) => buildCell(date))
@@ -2873,7 +5116,6 @@ class _WebDailyCalendar extends StatelessWidget {
                             }).toList(),
                           ),
                         ),
-                        // Gap between months
                         if (m < monthGroups.length - 1)
                           SizedBox(width: monthGap),
                       ],
@@ -2883,7 +5125,7 @@ class _WebDailyCalendar extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
-            // Month labels below the grid — centered under each group
+            // Month labels below the grid — centered under each group.
             Row(
               children: [
                 SizedBox(width: dayLabelWidth),
@@ -2929,8 +5171,18 @@ class _WebDailyCalendar extends StatelessWidget {
 
   String _monthAbbr(int month) {
     const abbrs = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
     return abbrs[month - 1];
   }
@@ -2955,6 +5207,16 @@ class _HoverableHeatmapCell extends StatefulWidget {
   final bool isToday;
   final Color todayBorderColor;
 
+  /// Draws a dot in the cell to mark a day that carries a journal note.
+  final bool hasNote;
+
+  /// The dot's colour — the page background, so it reads as a punched-out hole
+  /// against both the profit and loss fills.
+  final Color noteMarkerColor;
+
+  /// Null makes the cell inert: no cursor change, no tap.
+  final VoidCallback? onTap;
+
   const _HoverableHeatmapCell({
     required this.tooltipMessage,
     required this.cellSize,
@@ -2962,6 +5224,9 @@ class _HoverableHeatmapCell extends StatefulWidget {
     required this.bgColor,
     required this.isToday,
     required this.todayBorderColor,
+    this.hasNote = false,
+    this.noteMarkerColor = const Color(0xFFFFFFFF),
+    this.onTap,
   });
 
   @override
@@ -2973,30 +5238,71 @@ class _HoverableHeatmapCellState extends State<_HoverableHeatmapCell> {
 
   @override
   Widget build(BuildContext context) {
+    // A dot pinned to the top-right of the cell. Small enough that the day's
+    // colour stays readable underneath — the glow supplies the visibility, so
+    // the core itself must not swallow the box.
+    final markerSize = (widget.cellSize * 0.32).clamp(3.5, 5.0);
+
     return MouseRegion(
+      cursor:
+          widget.onTap != null ? SystemMouseCursors.click : MouseCursor.defer,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: Tooltip(
-        message: widget.tooltipMessage,
-        child: Container(
-          width: widget.cellSize,
-          height: widget.cellSize,
-          margin: EdgeInsets.only(
-              bottom: widget.cellGap, right: widget.cellGap),
-          decoration: BoxDecoration(
-            color: widget.bgColor,
-            borderRadius: BorderRadius.circular(3),
-            border: widget.isToday
-                ? Border.all(
-                    color: widget.todayBorderColor,
-                    width: 1.5,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: widget.tooltipMessage,
+          child: Container(
+            width: widget.cellSize,
+            height: widget.cellSize,
+            margin:
+                EdgeInsets.only(bottom: widget.cellGap, right: widget.cellGap),
+            // Clip children (the corner triangle) to the rounded cell.
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: widget.bgColor,
+              borderRadius: BorderRadius.circular(3),
+              border: widget.isToday
+                  ? Border.all(
+                      color: widget.todayBorderColor,
+                      width: 1.5,
+                    )
+                  : _hovered
+                      ? Border.all(
+                          color: widget.todayBorderColor.withValues(alpha: 0.5),
+                          width: 1.5,
+                        )
+                      : null,
+            ),
+            child: widget.hasNote
+                ? Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      // Flush into the corner (was inset 2/2).
+                      padding: EdgeInsets.zero,
+                      child: Container(
+                        width: markerSize,
+                        height: markerSize,
+                        decoration: BoxDecoration(
+                          color: widget.noteMarkerColor,
+                          shape: BoxShape.circle,
+                          // A lighter halo of the same hue — reads as a glow
+                          // and gives the dot an edge on any fill colour. Kept
+                          // tight so core + glow stay a corner badge rather
+                          // than covering the box.
+                          boxShadow: [
+                            BoxShadow(
+                              color: widget.noteMarkerColor
+                                  .withValues(alpha: 0.55),
+                              blurRadius: 2,
+                              spreadRadius: 0.8,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   )
-                : _hovered
-                    ? Border.all(
-                        color: widget.todayBorderColor.withValues(alpha: 0.5),
-                        width: 1.5,
-                      )
-                    : null,
+                : null,
           ),
         ),
       ),
@@ -3008,6 +5314,7 @@ class _DateRowData {
   final DateTime dateKey;
   final List<TradeData> tradesForDate;
   final double totalRealisedPnl;
+  final double? totalUnrealisedPnl;
   final String dateString;
   final bool isExpanded;
 
@@ -3015,6 +5322,7 @@ class _DateRowData {
     required this.dateKey,
     required this.tradesForDate,
     required this.totalRealisedPnl,
+    this.totalUnrealisedPnl,
     required this.dateString,
     required this.isExpanded,
   });

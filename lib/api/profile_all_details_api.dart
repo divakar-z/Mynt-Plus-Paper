@@ -305,6 +305,23 @@ mixin ProfileAllDetailsApi on ApiCore {
 }
 
 
+  /// Calls /checkrekyc to determine whether a Re-KYC is currently in progress
+  /// for the logged-in client. Returns the raw rekyc_status string ("Yes" / "No") or null on error.
+  Future<String?> checkRekycStatusApi() async {
+    try {
+      final uri = Uri.parse(apiLinks.checkRekycURL);
+      final res = await apiClient.post(
+        uri,
+        headers: funddefaultHeaders,
+        body: jsonEncode({"client_code": prefs.clientId}),
+      );
+      final json = jsonDecode(res.body);
+      return json['rekyc_status']?.toString();
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<DetailsChangeCurrentStatus> fetchMobEmailStatusApi() async {
     try {
       final uri = Uri.parse(apiLinks.detailschangecurrentstatusURL);
@@ -967,12 +984,22 @@ mixin ProfileAllDetailsApi on ApiCore {
   /// Submit nominee form - POST /nominee (multipart/form-data)
   Future<Map<String, dynamic>?> nomineeSubmitApi({
     required Map<String, String> fields,
+    Map<String, ({String filename, Uint8List bytes})>? files,
   }) async {
     try {
       final uri = Uri.parse(apiLinks.nomineeSubmitURL);
       var request = http.MultipartRequest('POST', uri);
       request.headers.addAll(funddefaultHeaders);
       request.fields.addAll(fields);
+      if (files != null) {
+        for (final entry in files.entries) {
+          request.files.add(http.MultipartFile.fromBytes(
+            entry.key,
+            entry.value.bytes,
+            filename: entry.value.filename,
+          ));
+        }
+      }
 
       var response = await request.send();
       if (response.statusCode == 200) {
@@ -1026,29 +1053,38 @@ mixin ProfileAllDetailsApi on ApiCore {
     int count = 3,
   }) async {
     try {
-      final queryParams = 'mob=$mobile'
+      final isAdd = option == 'add';
+      var queryParams = 'mob=$mobile'
           '&bankName=${Uri.encodeComponent(bankName)}'
           '&ifsc=$ifsc'
-          '&accountNo=$accountNo'
-          '&proff_type=${proffType ?? ""}'
-          '&branch=${Uri.encodeComponent(branch)}'
+          '&accountNo=$accountNo';
+
+      if (isAdd) {
+        queryParams += '&proff_type=${Uri.encodeComponent(proffType ?? "")}';
+      }
+
+      queryParams += '&branch=${Uri.encodeComponent(branch)}'
           '&bank_account_type=${Uri.encodeComponent(bankAccountType)}'
-          '&client_name=${prefs.clientName}'
+          '&client_name=${Uri.encodeComponent(prefs.clientName ?? "")}'
           '&option=$option'
           '&client_id=${prefs.clientId}'
-          '&set_defalut=$setDefault'
+          '&set_defalut=${setDefault.toLowerCase()}'
           '&dp_code=$dpCode'
           '&micr=$micr'
           '&client_email=${Uri.encodeComponent(clientEmail)}'
           '&password_required=${passwordRequired ?? "NO"}'
-          '&password=${password ?? ""}'
-          '&count=$count';
+          '&password=${password ?? ""}';
+      if (isAdd) {
+        queryParams += '&count=$count';
+      }
 
       final uri = Uri.parse("${apiLinks.bankURL}?$queryParams");
       var request = http.MultipartRequest('POST', uri);
       request.headers.addAll(funddefaultHeaders);
       request.fields['bank_exists'] = jsonEncode(existingBanks);
 
+      // Only attach the proof/PAN file when one was actually selected.
+      // If it doesn't exist, don't send it (not even an empty field).
       if (proofBytes != null && proofBytes.isNotEmpty) {
         request.files.add(http.MultipartFile.fromBytes(
           'proff',
@@ -1156,9 +1192,12 @@ mixin ProfileAllDetailsApi on ApiCore {
 
       final json = jsonDecode(res.body);
 
-      double balance = json['balance'] ?? 0.0;
+      double balance = (json['balance'] is num)
+          ? (json['balance'] as num).toDouble()
+          : 0.0;
       String msg1 = json['msg1'] ?? '';
       String msg2 = json['msg2'] ?? '';
+      String stat = json['stat'] ?? '';
       String stage = '';
 
       if (balance > 0 && msg2.isEmpty) {
@@ -1186,6 +1225,7 @@ mixin ProfileAllDetailsApi on ApiCore {
         "balance": balance,
         "msg1": msg1,
         "msg2": msg2,
+        "stat": stat,
       };
 
       // if (json['msg1'] == 'zero ledger balance' &&
@@ -1204,7 +1244,7 @@ mixin ProfileAllDetailsApi on ApiCore {
     }
   }
 
-  holdingsapiceckapi() async {
+  Future<Map<String, dynamic>?> holdingsapiceckapi() async {
     try {
       final uri = Uri.parse(apiLinks.getholdingscheckURL);
 
@@ -1215,15 +1255,25 @@ mixin ProfileAllDetailsApi on ApiCore {
           }));
 
       final json = jsonDecode(res.body);
-      // print("djsonjson ==> ${json}");
-      return json['total'];
+      final String stat = (json['stat'] ?? '').toString();
+      final String holdings = stat == 'Ok'
+          ? (json['holdings']?.toString() ?? '')
+          : '';
+      return {
+        "stat": stat,
+        "holdings": holdings,
+        "raw": json,
+      };
     } catch (e) {
-      rethrow;
+      return null;
     }
   }
 
-  acccloserapi(String dpid, String boid, String filepath, String reason,
-      fulldataprf, bankdata) async {
+  Future<dynamic> acccloserapi(String dpid, String boid, String filepath,
+      String reason, fulldataprf, bankdata,
+      {bool hasHoldings = false,
+      Uint8List? fileBytes,
+      String? fileName}) async {
     List<Map<String, dynamic>> decodedBankData =
         List<Map<String, dynamic>>.from(jsonDecode(bankdata));
 
@@ -1256,7 +1306,7 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.fields['dp_code'] = "${fulldataprf.toJson()['CLIENT_DP_CODE']}";
       request.fields['segments'] = bankDataString;
       request.fields['reason'] = reason;
-      request.fields['transfer'] = dpid == "" ? "no" : 'yes';
+      request.fields['transfer'] = hasHoldings ? 'yes' : 'no';
 
       request.fields['address'] =
           "${fulldataprf.toJson()['CL_RESI_ADD1']},${fulldataprf.toJson()['CL_RESI_ADD2']},${fulldataprf.toJson()['CL_RESI_ADD3']}";
@@ -1265,7 +1315,13 @@ mixin ProfileAllDetailsApi on ApiCore {
       // request.fields['cmr_file'] = "";
 //  request.files
 //             .add(await http.MultipartFile.fromPath('cmr_file', filepath));
-      if (filepath.isNotEmpty) {
+      if (fileBytes != null && fileBytes.isNotEmpty) {
+        request.files.add(http.MultipartFile.fromBytes(
+          'cmr_file',
+          fileBytes,
+          filename: fileName ?? 'cmr_file.pdf',
+        ));
+      } else if (filepath.isNotEmpty) {
         request.files
             .add(await http.MultipartFile.fromPath('cmr_file', filepath));
       }
@@ -1378,18 +1434,17 @@ mixin ProfileAllDetailsApi on ApiCore {
   }
 
   // ─── KRA Image Check ───
-  Future<String?> kraImageCheckApi() async {
+  Future<bool> kraImageCheckApi() async {
     try {
-      final uri = Uri.parse(apiLinks.checkingImgURL);
-      final res = await apiClient.post(
+      final uri = Uri.parse('${apiLinks.checkingImgURL}/${prefs.clientId}');
+      final res = await apiClient.get(
         uri,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({"client_id": "${prefs.clientId}"}),
       );
       final json = jsonDecode(res.body);
-      return json['data']?.toString();
+      return json['data'] == true;
     } catch (e) {
-      return null;
+      return false;
     }
   }
 

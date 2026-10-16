@@ -15,7 +15,8 @@ class ProfileAllDetails {
         bankData!.add(BankData.fromJson(v));
       });
     }
-    if (json['nominee_data'] != 'error') {
+    // nominee_data can be "error", missing or null — only parse a list.
+    if (json['nominee_data'] is List) {
       nomineeData = <NomineeDetails>[];
       json['nominee_data'].forEach((v) {
         nomineeData!.add(NomineeDetails.fromJson(v));
@@ -31,7 +32,7 @@ class ProfileAllDetails {
     if (bankData != null) {
       data['bank_data'] = bankData!.map((v) => v.toJson()).toList();
     }
-    data['nominee_data'] = nomineeData!.map((v) => v.toJson()).toList();
+    data['nominee_data'] = nomineeData?.map((v) => v.toJson()).toList();
     return data;
   }
 }
@@ -77,7 +78,54 @@ class ClientData {
   String? bIRTHDATE;
   String? oCCUPATION;
   String? maritalStatus;
+  String? cATEGORY;
   List<SegmentsData>? segmentsData;
+  
+  bool get isIndividual => cATEGORY == 'I';
+
+  /// True when BIRTH_DATE shows the holder is under 18.
+  /// Accepts yyyy-MM-dd[...], dd/MM/yyyy, dd-MM-yyyy and dd-MMM-yyyy;
+  /// an unparseable date is treated as not minor.
+  bool get isMinor {
+    final dob = _parseBirthDate(bIRTHDATE);
+    if (dob == null) return false;
+    final now = DateTime.now();
+    final eighteenth = DateTime(dob.year + 18, dob.month, dob.day);
+    return now.isBefore(eighteenth);
+  }
+
+  static DateTime? _parseBirthDate(String? raw) {
+    final s = raw?.trim() ?? '';
+    if (s.isEmpty || s == 'null') return null;
+    final iso = DateTime.tryParse(s);
+    if (iso != null) return iso;
+    final parts = s.split(RegExp(r'[/\-\s]+'));
+    if (parts.length < 3) return null;
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+        'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    final day = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]) ??
+        (months.indexOf(parts[1].toLowerCase().substring(
+                0, parts[1].length < 3 ? parts[1].length : 3)) + 1);
+    final year = int.tryParse(parts[2]);
+    if (day == null || year == null || month < 1 || month > 12) return null;
+    return DateTime(year, month, day);
+  }
+
+  /// Derived account-closed flag
+  /// Scans segments_data[].inactivetype_DESC for closure markers
+  /// ("Close Client-Close" / "close-Close"), normalized for case + whitespace.
+  bool get isClientClosed {
+    final segs = segmentsData;
+    if (segs == null) return false;
+    for (final s in segs) {
+      final desc = s.inactivetypeDESC?.trim().toLowerCase() ?? '';
+      if (desc == 'close client-close' || desc == 'close-close') {
+        return true;
+      }
+    }
+    return false;
+  }
 
   ClientData(
       {this.cLIENTID,
@@ -163,6 +211,7 @@ class ClientData {
     bIRTHDATE = json['BIRTH_DATE'].toString();
     oCCUPATION = json['OCCUPATION'].toString();
     maritalStatus = json['Marital_status'].toString();
+    cATEGORY = json['CATEGORY']?.toString();
     if (json['segments_data'] != null) {
       segmentsData = <SegmentsData>[];
       json['segments_data'].forEach((v) {
@@ -213,6 +262,7 @@ class ClientData {
     data['BIRTH_DATE'] = bIRTHDATE;
     data['OCCUPATION'] = oCCUPATION;
     data['Marital_status'] = maritalStatus;
+    data['CATEGORY'] = cATEGORY;
     if (segmentsData != null) {
       data['segments_data'] = segmentsData!.map((v) => v.toJson()).toList();
     }
@@ -435,7 +485,7 @@ class NomineeDetails {
     nomPhone = json['Nom_Phone'].toString();
     nomDOB = json['Nom_DOB'].toString();
     nOMEMAIL = json['NOM_EMAIL'].toString();
-    nOMINEEPINCODE = json['NOMINEE_PIN_CODE'];
+    nOMINEEPINCODE = json['NOMINEE_PIN_CODE']?.toString();
     nomCity = json['Nom_City'].toString();
     nomState = json['Nom_State'].toString();
     nomAddress2 = json['Nom_address2'].toString();

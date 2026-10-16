@@ -357,6 +357,18 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     });
   }
 
+  // Parses the API's "HH:mm:ss dd-MM-yyyy" order timestamp into a DateTime.
+  // Returns null for empty/unexpected values so callers can fall back safely.
+  DateTime? _tryParseOrderTime(String? value) {
+    if (value == null || value.isEmpty) return null;
+    final parts = value.split(' ');
+    if (parts.length != 2) return null;
+    final dateParts = parts[1].split('-');
+    if (dateParts.length != 3) return null;
+    return DateTime.tryParse(
+        '${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[0]}');
+  }
+
   // Helper method to format time with seconds (HH:mm:ss)
   String _formatTime(String time) {
     if (time.isEmpty || time == '0.00') return 'N/A';
@@ -520,32 +532,43 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
       int comparison = 0;
 
       switch (_sortColumnIndex) {
-        case 0: // Time
-          comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
+        // Column 0 is Select (checkbox) — not sortable.
+        case 1: // Time
+          // Parse to a real DateTime — the raw "HH:mm:ss dd-MM-yyyy" string
+          // compares by clock only and mis-orders across dates (AMO orders).
+          final aDate = _tryParseOrderTime(a.norentm);
+          final bDate = _tryParseOrderTime(b.norentm);
+          if (aDate != null && bDate != null) {
+            comparison = aDate.compareTo(bDate);
+          } else if (aDate == null && bDate == null) {
+            comparison = (a.norentm ?? '').compareTo(b.norentm ?? '');
+          } else {
+            comparison = aDate == null ? 1 : -1;
+          }
           break;
-        case 1: // Type (BUY/SELL)
+        case 2: // Type (BUY/SELL)
           comparison = (a.trantype ?? '').compareTo(b.trantype ?? '');
           break;
-        case 2: // Instrument
+        case 3: // Instrument
           comparison = (a.tsym ?? '').compareTo(b.tsym ?? '');
           break;
-        case 3: // Product
+        case 4: // Product
           comparison =
               (a.sPrdtAli ?? a.prd ?? '').compareTo(b.sPrdtAli ?? b.prd ?? '');
           break;
-        case 4: // Qty.
+        case 5: // Qty.
           comparison = (int.tryParse(a.qty ?? '0') ?? 0)
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
-        case 5: // LTP
+        case 6: // LTP
           comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
               .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
           break;
-        case 6: // Price
+        case 7: // Price
           comparison = (double.tryParse(a.prc ?? '0') ?? 0)
               .compareTo(double.tryParse(b.prc ?? '0') ?? 0);
           break;
-        case 7: // Status
+        case 8: // Status
           comparison = (CellFormatters.getStatusText(a))
               .compareTo(CellFormatters.getStatusText(b));
           break;
@@ -956,8 +979,9 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
         order.status == "OPEN" ||
         order.status == "TRIGGER_PENDING";
 
-    // Format instrument: remove "-EQ" and don't include exchange
-    final symbol = order.tsym ?? '';
+    // Format instrument: prefer the backend display name (DerivativeMaster) for
+    // derivatives, else the tsym; remove "-EQ" and don't include exchange.
+    final symbol = order.masterName ?? (order.tsym ?? '');
     final displayText = symbol.replaceAll("-EQ", "").trim();
 
     return GestureDetector(
@@ -1538,8 +1562,11 @@ class _OrderLTPCellState extends ConsumerState<_OrderLTPCell> {
           final newLtp = data[widget.token]['lp']?.toString();
           if (newLtp != null &&
               newLtp != ltp &&
-              newLtp != '0.00' &&
-              newLtp != 'null') {
+              newLtp != 'null' &&
+              newLtp != '' &&
+              newLtp != '0' &&
+              newLtp != '0.0' &&
+              newLtp != '0.00') {
             setState(() => ltp = newLtp);
           }
         });

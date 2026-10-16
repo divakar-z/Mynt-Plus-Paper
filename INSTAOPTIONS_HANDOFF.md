@@ -1,0 +1,165 @@
+# InstaOptions Analytics — Build Handoff
+
+> **Read this first**: [INSTAOPTIONS_FLOW.md](INSTAOPTIONS_FLOW.md) — workflow playbook + 9-section catalog. Then check [INSTAOPTIONS_PLAN.md](INSTAOPTIONS_PLAN.md) for the active section. This HANDOFF is the cross-session status tracker.
+
+Last updated: 2026-07-02 (live Contribution attribution recompute + repaint throttle)
+Spec: [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md)
+Audit: [INSTAOPTIONS_DATA_AUDIT.md](INSTAOPTIONS_DATA_AUDIT.md) (OptionZ vs our backend; mirrored at `.claude/insta-options-qa/data-audit.md` for local working copy)
+Backend tickets: [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) (also mirrored at `.claude/insta-options-qa/backend-tickets.md`)
+Plan (original): `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md`
+Plan (post-audit): `~/.claude/plans/now-you-have-complete-purring-turtle.md`
+
+This file is the single source of truth for cross-session progress on the InstaOptions Analytics module. Update it after every phase's QA passes, in the same commit that lands the phase's code.
+
+## Conventions
+
+- ☐ todo
+- ⏳ in progress
+- ✅ verified (QA passed + git commit landed)
+- ⚠️ blocked
+
+## Phase status
+
+| # | Phase | Status | Commit | QA evidence | Notes |
+|---|---|---|---|---|---|
+| 0 | Rewrite README + create this file | ✅ verified | fd6e6e21 | `.claude/insta-options-qa/phase-0/qa-report.md` (local, gitignored) | QA PASS on all 6 criteria. |
+| 1 | Plumbing — config, API, models, theme, route, shell, menu | ✅ verified | 206a9480 | `.claude/insta-options-qa/phase-1/` | QA PASS on all 10 criteria via Playwright MCP. Real `/health` call succeeded against `192.168.5.61:8000`. WS, fixtures, top-nav entry, URL sticking deferred. |
+| 2 | Option Chain (sub-screen 3) | ✅ verified | eb614a78 | `.claude/insta-options-qa/phase-2/` | QA PASS on 12/16 criteria. Sticky ATM, Change-ref, WS, automated bottom-sheet click deferred. |
+| 3 | OI Buildup (sub-screen 8) | ✅ verified | 4ff9285c | `.claude/insta-options-qa/phase-3/` | QA PASS on all 10 criteria. SegmentedButton filter (All/CE/PE/FUT), sort dropdown (\|ΔOI\| desc / Strike asc), DataTable2 with BuildupPill rendering server's classification verbatim. Deferred: row tap → Per-Strike (Phase 5 dependency), right-click bottom-sheet (manual verify), WS LTP/OI live updates. |
+| 4 | OI Statistics + PCR (sub-screens 4 + 6) | ✅ verified | 700f64a4 | `.claude/insta-options-qa/phase-4/` | QA PASS on 8/8 testable criteria via Playwright MCP. OI Stats: CustomPainter cumulative panel (stacked CE/PE + ΔOI tint overlay) + fl_chart per-strike bars (CE up / PE down) + ATM dashed line + 3 KpiCards. PCR Ratio: fl_chart LineChart with PCR (zone-coloured) + scaled spot overlay + dashed 0.7/1.0 reference lines + 3 KpiCards. Both screens own start/stop polling timers (4s for OI Stats, 60s for PCR) tied to mount/unmount. Deferred: live render-path acceptance (backend `/symbols` timing out same as Phase 2/3), BrushChart zoom selector, PCR crosshair tap-drag, WS deltas. |
+
+---
+
+## 2026-05-29 — OptionZ audit + scope clarification
+
+After Phase 4, we opened the live OptionZ app at https://zebu.instaoptions.trade (via Mynt home → OptionZ tile), captured reference screenshots to `.claude/insta-options-qa/optionz-reference/`, and audited our backend (README §8) for data coverage. Conclusions:
+
+- Backend covers ~95% of OptionZ's data points directly. ~5% require trivial client-side transforms (single-line math; not workarounds). 3 backend tickets filed for the rest. See `.claude/insta-options-qa/data-audit.md`.
+- Scope clarified: **replicate the DATA OptionZ shows, in our existing Mynt design idiom** (left side-rail, MyntColors, MyntWebTextStyles, existing widget patterns). Do NOT switch to OptionZ's top-tab nav or visual layout.
+- **No frontend workarounds** for missing backend data — gaps go to backend team. See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md).
+- Phase 5 (uncommitted, Per-Strike Options Chart) scope updated: drop writer-accumulation bands (non-trivial client compute, not in OptionZ).
+- Remaining work renumbered to phases α-κ below. Original sequential Phase numbers 5-11 are superseded.
+
+## Phase status (post-audit)
+
+| # | Phase | Status | Commit | QA evidence | Notes |
+|---|---|---|---|---|---|
+| α | Docs: backend tickets + audit + README §3.1 Reuse Contract + README §10.x Data points + HANDOFF | ✅ verified | d3128f05 | n/a (docs) | [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) at repo root; `.claude/insta-options-qa/{backend-tickets.md, data-audit.md}` local mirrors; README §3.1 + §10.1-§10.9 Data points; §10.7 writer-bands removed; HANDOFF divider added. |
+| β | Per-Strike Options Chart finalized: drop writer bands, switch to `ResponsiveSnackBar`, prune dead caption + param | ✅ verified | 97fd8825 | n/a (Phase 5 code commits + dead-code cleanup) | Removed `_detectWriterAccumulation` + `_WriterBand` + `extraLinesData` bands from `per_strike_screen.dart`. `bs_badges.dart` now uses `ResponsiveSnackBar.showSuccess` with message "Added BUY/SELL {tradingSymbol} to strategy". Removed dead "ΔOI overlay enabled" caption + unused `showChangeOverlay` param plumbed through `_PerStrikeBars` in `oi_stats_screen.dart`. `flutter analyze` clean on insta_options paths. |
+| γ | Option Chain: add LTP %Change column | ✅ verified | 6f2dc3f8 | live Playwright QA confirms CE LTP `−44.44%` red / PE LTP `+153.76%` green at ATM strike 23550 NIFTY 02-JUN-2026 | `ChainRow.prevClose` added; `ChainRow.ltpChangePct` computes `(ltp − prevClose) / prevClose × 100` when `prevClose > 0`. `chain_screen.dart` `_priceText()` now stacks LTP + small coloured `±x.xx%` caption per CE/PE cell. Column widths unchanged. Returns null (LTP-only render) for FUT row (no `prev_close`) + brand-new contracts. `flutter analyze` clean. |
+| δ | PCR Ratio + Per-Strike: Time bucket selector (1/3/5/15 min) | ✅ verified | ca0bfce7 (bundled with the polling-leak fix) | live Playwright QA confirms PCR fires `bucket_minutes=15` after dropdown switch, Per-Strike fires `bucket_minutes=3` for both CE + PE legs and persists across polls | New shared `BucketMinutesSelector` widget. `InstaOptionsApi.getPcrTimeseries` + `.getOiTimeseries` accept optional `bucketMinutes`. `InstaOptionsPcrProvider` + `InstaOptionsStrikeProvider` carry a `bucketMinutes` field (default 1) with `setBucketMinutes(int)` that clears the cached points and refetches when active. `pcr_screen.dart` gains a top controls bar (selector + Refresh); `per_strike_screen.dart` `_Header` row gains the selector between the spacer and the strike dropdown. `flutter analyze` clean. |
+| ε | Markets Dashboard (index ticker tiles + 2×2 buildup quadrants) | ✅ verified | 2d746d3b · re-pass `5cb698c7` | live Playwright QA confirms 3 endpoints 200 OK + per-screen polling + render correct; post-Ticket-4-rollout re-QA confirms tiles render real coloured change% (NIFTY -1.50% etc.) with downsloping sparklines; **2026-05-30 FLOW re-pass** Playwright QA subagent passes all 10 acceptance criteria | Replaces `markets_placeholder_screen.dart`. New `MarketsDashboardScreen` + `IndexTickerTile` + `BuildupQuadrant` + `InstaOptionsMarketsProvider` + 3 models (`MarketSnapshot`/`IndexQuote`, `BuildupSymbolsResponse`/`BuildupBucket`, `SpotTimeseriesPoint`). API extended with `getMarketSnapshot`/`getBuildupSymbols`/`getSpotTimeseries`. Quadrant row tap → updates `selectionProvider.symbol` and switches side-rail to `chain`. Sparklines per tile via `/spot/timeseries`. `flutter analyze` clean on insta_options paths. **2026-05-30 re-pass under FLOW lifecycle**: tile count 4 → 6 (added SENSEX + BANKEX), tile overflow now horizontal-scrollable with dedicated `ScrollController`; bucket tables restructured to OptionZ's 5-col stacked layout (Name · `Prev Close / LTP (Chg%)` · New OI · Old OI · `OI (Chg%)`); new `OpenMarketCard` widget below the buildup grid (inline KPI counters, underlined `_SymbolTab` strip, 2-segment Adv/Declined toggle, side-by-side Stocks + Index DataTable2s); `market_snapshot.dart` now parses `per_index.<KEY>.stocks[]` into `StockGapRow`; §10.1 spec + DATA_AUDIT Screen 01 + FLOW per-section folder convention updated. Per-section QA artefacts archived to `.claude/insta-options-qa/markets-dashboard/{optionz,iteration,qa}/`; PLAN archived to `.claude/insta-options-qa/plans/markets-dashboard.md`. **Remaining Ticket 4 gap**: `/buildup/symbols` per-symbol roll-up still returns empty arrays → 2×2 quadrant grid still empty. Index tiles + advances/declines now populate. |
+| ζ | Index Contributors | ✅ verified | e908339c | live Playwright QA confirms `/contributors/{NIFTY,BANKNIFTY}` 200 OK + Stock/Sector views + tab switch + sort indicator; post-Ticket-4-rollout the `Change %` and `Index Pts` columns now populate (48/50 NIFTY constituents non-zero) | New `IndexContributorsScreen` + `InstaOptionsContributorsProvider` + `ContributorRow` + `SectorAggregate` models. API extended with `getContributors(index)`. Index tab strip (NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY/SENSEX/BANKEX) + Stock/Sector segmented button + sortable DataTable2 columns + live `Sum: ±N.NN points` header. Sector mode = client-side `SectorAggregate.from(rows)` group-by. `flutter analyze` clean. Tap-stock popover with mini chart deferred to Phase κ. |
+| η | Trending OI | ✅ verified | a3453a52 | live Playwright QA confirms `GET /oi/trending` 200 OK with 7-strike ATM±3 default seed, real bucket data populates sentiment chart (oscillating -1↔+1 with green/red area fill), cumulative OI chart (red PE ~3 Cr, green CE ~75 L), and 9-column bucket table sorted desc with client-derived Dir/ΔDir/Dir% | New `TrendingOiScreen` + `InstaOptionsTrendingProvider` (autoDispose + market-hours gated) + `TrendingBucket` model + shared `StrikeMultiPicker` dialog (max-7 cap, ATM tagged). API extended with `getTrending(strikes, types, bucketMinutes)`. Controls row: "Change strikes" button + selected strike chips + `BucketMinutesSelector` (3/5/15 min — backend default 3). Top half = 50/50 sentiment + cumulative OI charts; bottom half = `DataTable2` with `Time · LTP · ΔCallOI · ΔPutOI · DiffOI · Dir · ΔDir · Dir% · PCR`. Dropped dead `placeholder_screen.dart` (all 9 sub-screens now real). `flutter analyze` clean. **Deferred to κ**: strike persistence to `Preferences` (acceptance #2); hover cross-highlight + tap-row-to-seek-charts (acceptance #4); WS `oi_bucket_close` subscription (post-κ streaming phase). |
+| θ | Find Strategy | ✅ verified | b75450a2 | live Playwright QA confirms `POST /strategy/scan` 200 OK with 3 strategies rendered for `direction=Positive, min_reward=100 INR` against NIFTY 02-JUN-2026 expiry | New `FindStrategyScreen` + `StrategyResultCard` + `InstaOptionsStrategyScanProvider` + `StrategyScanResult` / `StrategyLeg` / `StrategyDirection` / `StrategyMinRewardType`. API extended with `scanStrategies(...)` (POST) + internal `_post` helper. Filter card (Direction dropdown + ₹/% toggle + min reward text field + Run scan button) + result cards (template name + Max P&L / Max Loss / BE KPIs + Add to basket + DataTable2 of legs with green B / red S side chips). **Build-time investigation resolved**: backend `/strategy/scan` legs return `{side, trading_symbol, strike, option_type, lot, ltp, oi}` only — no "Direction" field; OptionZ's "Direction" column does not map to our backend, dropped from scope. Add-to-basket currently surfaces a `ResponsiveSnackBar.showSuccess` toast; full wiring to `StrategyBuilderProvider` deferred to **Phase ι**. Inspect icon + breakeven-click-to-copy deferred to **Phase κ**. `flutter analyze` clean. |
+| ι | Basket / order rewire to `StrategyBuilderProvider` | ☐ todo | — | — | Optional, on user request. Deletes `InstaOptionsBasketProvider`, `BasketLeg`, `BasketChip`. Adds `ChainRow → OptionValues` adapter. Routes B/S taps and Find Strategy cart icon through existing strategy builder. |
+| κ | Polish: top-nav entry, URL persistence, brush slider, goldens, investigate pagination ❓ | ☐ todo | — | — | Final phase. |
+
+---
+
+## 2026-06 — Date-based rebuild (new zdf backend, `insta-option` branch)
+
+The InstaOptions screens are being rebuilt **screen-by-screen** onto a new **date-based** REST backend (`<API_BASE>/api/v1/*`, default `http://localhost:8000`; override via `--dart-define=API_BASE=`) — a separate, more reliable service from the legacy OI-Data backend the phases above use. New code lives in `lib/{api,models,provider}/insta_options/{dashboard,option_chain,contribution,charts}/` + `lib/screens/web/insta_options/widgets/{dashboard,option_chain,contribution,charts}/`. Each section **replaces** its legacy screen and registers its API in the locator. Style stays the app's shadcn / `MyntColors` / `MyntWebTextStyles` idiom.
+
+**Global date flow:** the per-section `/dates` endpoints were removed; every date-based screen reads one global **`GET /api/v1/dates`** (`DashboardApiConfig.datesUrl`). Underlying picker = global **`GET /api/v1/symbols`** (`symbolsProvider`). Expiries = `GET /api/v1/option-chain/expiries`.
+
+| Section | Status | Commit | Endpoint(s) |
+|---|---|---|---|
+| Markets Dashboard v2 | ✅ verified | `372fcd37` · `0b0fd3d4` | `/api/v1/dashboard` |
+| Option Chain v2 (ladder + mirrored OI bars + analysis header) | ✅ verified | `d222178a` | `/api/v1/option-chain` (+ `/expiries`) |
+| Global-dates migration (Dashboard + Chain repoint) | ✅ verified | `01d76a8b` | `/api/v1/dates` |
+| Index Contribution (movers/concentration/sector/constituents) | ✅ verified | `01d76a8b` | `/api/v1/contribution` |
+| **OI Statistics** (zoomable OI-by-strike chart) | ✅ verified | `b29dc9fc` | `/api/v1/charts/oi-by-strike` |
+| PCR Ratio (intraday PCR line + bullish/bearish zones) | ✅ verified | `8032a90e` | `/api/v1/charts/pcr-timeline` |
+| Trending OI (multi-line OI + spot/future dual-axis overlay + sentiment table) | ✅ verified | `8032a90e` | `/api/v1/charts/oi-timeline` |
+| Option Chain collapsible overview · rail trimmed to the 6 rebuilt screens | ✅ verified | `8032a90e` | — |
+| **Live intraday mode** (snapshot polling + socket tick overlay) | ✅ verified | `47cbd2c0` | see 2026-07 section |
+
+**OI Statistics** — rebuilt as a zoomable vertical column chart on the new shared **charts data layer** (covers all 3 chart endpoints): `ChartsApi`, models under `models/insta_options/charts/` (`OiByStrike` / `PcrTimeline` / `OiTimeline`), `OiChartsProvider` (one source of truth for `underlying / date / expiry / interval / strikes`, on-demand per-slice load + refetch-loaded-slices on selection change), `chartsBase` config getter, `ChartsApi` registered in the locator.
+- `oi_stats_screen.dart` rewritten on `oiChartsProvider`: `ChartsAppBar` (underlying + expiry + date + refresh) → summary tiles (Spot · ATM · PCR band-coloured · Max-pain · Total CE/PE OI) → Syncfusion `SfCartesianChart`. **Indexed x-axis** (strikes plotted by index, so the irregular 50→1500 strike spacing doesn't distort the bars; labels formatted back to the real strike), **CE green / PE red** columns, **OI ⇄ OI-change** toggle, dashed **spot line** at the true fractional spot, mouse-wheel/pinch zoom + pan (`ZoomPanBehavior`, x-mode), default-zoomed to **ATM ± 12 strikes**, compact L/Cr y-axis + hover tooltip.
+- Shell: `oiStats` added to the `_showSymbolExpiryBar` exclusion (the screen owns its app bar; the legacy selection bar no longer shows above it).
+- Live Playwright QA (NIFTY · 25-Jun · 30-Jun expiry): CE-green resistance above spot / PE-red support below, real strike labels, spot line at 24,052.95, summary tiles populated, zoom/pan working. `flutter analyze` clean on the insta_options paths.
+- **Next:** PCR Ratio (`pcr-timeline` intraday line) + Trending OI (`oi-timeline` per-strike OI lines + sentiment table) reuse this data layer; then retire the legacy `insta_options_aggregate_provider` once all three chart screens are off it.
+
+---
+
+## 2026-07 — Live intraday mode (snapshot polling + Noren socket overlay)
+
+Commit `47cbd2c0`. Two live layers over the date-based screens; **today** (`freshness.is_live`) vs an immutable **finalized day** by `?date=`.
+
+**Snapshot LIVE mode (all six screens).** `GET /api/v1/dates` gains a `live` channel (`{date, as_of}` or null); every payload carries `freshness{is_live, as_of, trade_date}` (`Freshness` model). Each provider defaults to Live when `dates.live` is held, else the latest finalized day; a `?live=true` response with `is_live:false` falls back to that finalized day. A shared **`LivePolling`** mixin polls the opened slice(s) ~90s (silent — no loader flash), pausing while the browser tab is hidden and cancelling on dispose (the charts trio gates polling on a mounted-screen refcount). **`LiveDateSelector`** (one control for every app bar) shows a pulsing `● LIVE · HH:mm` pill beside the finalized-day calendar. All 7 endpoints take `?live=true`.
+
+**Socket tick overlay (price-heavy screens).** **`InstaLiveTicks`** subscribes the active section's `exchange|token` set over the app's existing Noren socket (`websocketProvider.connectTouchLine`), diff-swapping on section change and clearing on module exit (protected-symbol-aware `WebSubscriptionManager.unsubscribeTokens`, so it never kills the watchlist/positions/ticker feeds). It overlays each instrument's own live `lp`/`chng`/`pc` onto the snapshot:
+- **Option Chain** — CE/PE leg LTP + chg% (NFO leg tokens) + the underlying value (index spot / stock future token).
+- **Contribution** — index level/pts/% (index token) + constituent LTP/%, **plus the full point attribution recomputed live** (see the 2026-07-02 resolution below).
+- **Dashboard** — index-card level/% + gainer/loser/buildup LTP/% (stock tokens via `/symbols`).
+- **OI Statistics / Trending OI / PCR Ratio** — no socket overlay: OI/PCR-only, which a socket can't produce; snapshot-live is the correct mechanism.
+
+**Correctness rule:** a value goes live only if it maps to one tradable instrument's own tick (using that instrument's `lp` + its own `chng`/`pc` — never the socket `lp` paired with the snapshot's prev-close). **OI / PCR / max-pain / buildup / breadth stay the backend snapshot, never recomputed** (they need OI / the index methodology). The lone exception is **Index Contribution's point attribution** — exactly linear in price, so it *is* recomputed live (2026-07-02 resolution below). Missing/stale tick → the snapshot value, never a phantom `0`.
+
+**Tokens (backend-supplied):** `/symbols.token` (spot, per underlying); option-chain per-leg `token`+`exchange:NFO` + top-level `future_token`; oi-timeline `future_token`. Modelled on `InstrumentSymbol` / `OptionLeg` / `OptionChainData` / `OiTimeline` (`tickKey` = `exchange|token`).
+
+**§8 removals:** dashboard `StockPcr` block (model + section deleted) and the per-stock constituent PCR (index PCR kept). **Hardening:** `DefaultChangeNotifier.notifyListeners` now guards `_disposed` (a poll/fetch completing after an autoDispose provider is torn down no longer throws).
+
+**Verified live (2026-07-01, market open):** LIVE pill + freshness advancing on all six screens; socket overlay ticking on Option Chain (leg LTPs), Dashboard (index levels + buildup LTPs), Contribution (index level/pts/%) — with OI / aggregates correctly frozen. QA frames under `.claude/insta-options-qa/live/`.
+
+**Resolved 2026-07-02 — live Contribution attribution + repaint throttle (this commit).** The 5-min snapshot cadence was too slow to read intraday moves, so Index Contribution now **recomputes the whole decomposition from live constituent prices**, exactly. A stock's index point-contribution is linear in price, so its points-per-₹ slope is read back out of each snapshot (`point_contribution ÷ change`; `prevLevel × weight ÷ prevClose` fallback when flat at snapshot) and applied to the live move — `IndexContribution.recomputeLive`. Constituent points / share / direction, sector sums, advances/declines and top-N concentration all re-derive from those live points (self-consistent); HHI / breadth and the headline (official index tick) are left as-is; Σ constituents = the *explained* portion, so the coverage residual vs the headline is preserved. Re-anchors to backend truth every ~90s poll.
+- **Repaint throttle** — `InstaLiveTicks` now coalesces the Noren feed to **≤1 notify / 700 ms** (leading + trailing); `socketDatas` still ingests every tick. Caps compute+paint for *every* live screen (was: one rebuild per raw tick).
+- **Throttled re-rank** — the Contribution screen settles row/bar **order every ~4 s** (values/bars still move each repaint), so movers don't reshuffle constantly; small live order-inversions between re-ranks are expected, not a bug.
+- Verified live (2026-07-02, market open): points / sectors / advances-declines / concentration all ticking; measured repaint rate **1.58/s (avg gap 691 ms, min 600 ms)**; order re-ranking on the ~4 s cadence; Net = official index. QA frames in `.claude/insta-options-qa/live/`.
+
+---
+
+## Confirmed scope (locked at start of build, refined 2026-05-29 after OptionZ audit)
+
+1. **OI Data backend is separate** from Mynt's Noren/`go.mynt.in` APIs. Base URL configurable via `Preferences` key `instaoptions:baseUrl`, default `http://192.168.5.61:8000`.
+2. **Order placement** now wires to existing `StrategyBuilderProvider` in Phase ι (was deferred indefinitely; reuse-contract surfaces documented in README §3.1).
+3. **Theme uses MyntColors light + dark** via `InstaOptionsTokens.of(context)`. No hex literals in widget code.
+4. **Navigation:** single `/insta-options` route → `CustomizableSplitHomeScreen(initialRightPanel: ScreenTypeParam.instaOptions)` → internal **left side-rail** in `InstaOptionsShell` switches between the 9 sub-screens. (Kept; we do NOT match OptionZ's top-tab structure.)
+5. **Replicate DATA only, not OptionZ's visual layout.** Mynt design idiom stays.
+6. **No frontend workarounds for missing backend data.** Gaps go to backend team via [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md). Trivial single-line transforms on already-returned fields are OK.
+7. **Writer-accumulation bands** (originally spec'd on Per-Strike) **dropped** — not in OptionZ.
+
+## Open follow-ups (collected during the build)
+
+> Order-placement integration (was a follow-up before 2026-05-29) is now scheduled as **Phase ι** in the phase table above. Remove from this list once Phase ι lands.
+
+- [ ] Confirm production OI Data backend URL (currently dev IP `192.168.5.61:8000`).
+- [ ] Add CI workflow for golden tests once **Phase κ** lands.
+- [ ] After Phase 1: URL doesn't stay at `/insta-options` — `CustomizableSplitHomeScreen` rewrites to `/` after mount. Direct-URL navigation works for first mount; the URL just doesn't reflect the InstaOptions panel afterward. **Phase κ**.
+- [ ] After Phase 1: Top-nav (wide-viewport ≥ 1200 px) entry for "InstaOptions Analytics" not yet added — only the hamburger nav drawer (narrow-viewport) entry is wired. Wide-viewport top-nav entry in **Phase κ**.
+- [ ] After Phase 1: Dark theme not exercised in automated QA — manual verification needed using the host's theme toggle. (Light theme verified.) **Phase κ**.
+- [ ] Phase 1 deferred: WS client (`InstaOptionsWsClient`) + fixture mode + remaining 23 API endpoints — partially landed alongside Phases 2-β; remaining WS topics (`chain_delta`, `iv_update`, `oi_bucket_close`) deferred to a dedicated streaming phase post-κ.
+- [ ] Phase 4 deferred: BrushChart zoom selector under the OI Stats per-strike bar chart (README §10.4) — non-trivial fl_chart custom widget, **Phase κ** polish.
+- [ ] Phase 4 deferred: PCR crosshair tap-and-drag tooltip with 50 ms latency (README §10.6 acceptance #2) — current implementation has hover tooltip only; **Phase κ** polish.
+- [ ] Phase 4 deferred: Live render-path acceptance for OI Stats / PCR — backend `/symbols` keeps timing out, blocking automated QA of populated cumulative panel + KpiCards + chart series. Re-run QA when backend `/symbols` reliability improves or fixtures land.
+- [ ] Phase ε re-pass polish (2026-05-30): Markets Dashboard panel sometimes loads pre-scrolled — tile row partially clipped above viewport on first paint, scrolls to top cleanly after user interaction. Looks like a parent `CustomizableSplitHomeScreen` autoscroll quirk rather than an inner-ListView issue. **Phase κ**.
+- [ ] Phase ε re-pass polish (2026-05-30): Markets Dashboard tile row shows BANKEX off-screen at 1920×1080 (side-rail eats ~700 px). Horizontal scrollbar is visible but a right-edge chevron/fade affordance would make the 6th tile more discoverable. **Phase κ**.
+- [ ] Phase α / β legacy: `oi_stats_screen.dart`'s "Oi change" toggle is wired in the header but no longer drives any visible behavior (the per-strike chart was never extended with ΔOI bar overlays; the cumulative panel always shows ΔOI tints regardless). Either wire the toggle to gate the cumulative-panel tints, or hide the toggle. **Phase ε or κ**.
+- [ ] Phase θ deferred: "Inspect" icon (Icons.fullscreen) per result card — expand to show payoff math (Max Profit, Max Loss, Breakevens, premium estimate). Spec calls it optional in v1. **Phase κ**.
+- [ ] Phase η deferred: hover cross-highlight across the two charts + tap-row-to-seek-charts in the bucket table (§10.5 acceptance #4). Non-trivial fl_chart interaction. **Phase κ**.
+- [ ] Phase η caveat: today's earlier `/oi/trending` buckets still read `ltp=0` (Ticket 4 spillover — spot fix only filled forward from rollout time). New trading sessions should render `LTP` for every row in the bucket table. No frontend change needed.
+- [x] ~~Phase ε / ζ to investigate: timer leak across sub-screens~~ ✅ **Resolved 2026-05-29 (commit ca0bfce7, bundled with Phase δ)** — all five polling providers (Markets, Contributors, Aggregate, PCR, Strike) converted to `ChangeNotifierProvider.autoDispose` + gated on shared `InstaMarketHours.isOpen()` helper. Result: zero background polling outside market hours; per-screen one-shot fetch on mount with the user's Refresh button as the manual trigger. Verified via Playwright network audit (Markets → PCR → Per-Strike navigation produced 13 total backend calls vs 100+ before the fix). During market hours, each provider polls at `InstaMarketHours.tickIntervalInsideHours = 4 s` per spec, and only the *currently mounted* screen's provider stays alive (autoDispose tears the others down).
+
+### Backend tickets pending (added 2026-05-29)
+
+See [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for full ticket text.
+
+- [x] ~~**Ticket 1**: Add `prev_close` field to each row of `GET /analytics/chain`.~~ ✅ **Resolved 2026-05-29** — CE/PE rows populated; FUT row correctly excluded. Phase γ unblocked.
+- [x] ~~**Ticket 2**: Add `bucket_minutes` query param (1/3/5/15) to `GET /oi/pcr/timeseries` AND `GET /oi/timeseries`.~~ ✅ **Resolved 2026-05-29** — param accepted on both endpoints (verified `bm=1/5/15` window correctly). Phase δ unblocked.
+- [x] ~~**Ticket 3**: New endpoint `GET /oi/trending` returning per-bucket `{time, sentiment, cum_ce_oi, cum_pe_oi, delta_ce_oi, delta_pe_oi, pcr, ltp, ltp_pct, dir_spot, dir_oi}`.~~ ✅ **Resolved 2026-05-29** — endpoint live, real per-bucket records returned. **Phase η shipped (commit `a3453a52`).** Lingering Ticket 4 spillover: today's earlier buckets still read `ltp=0`; new trading sessions will populate `ltp` for every bucket.
+- [~] **Ticket 4** (added 2026-05-29 during Phase ε live QA): Populate `today_open` / `yesterday_close` / `change_pct` on `/market/snapshot.indices[]` + `.per_index[].stocks[]` + `/contributors/{index}`; populate `open_oi` / `close_oi` / `price_change` on `/oi/buildup`. ✅ **Mostly resolved 2026-05-29** — `/oi/buildup` per-contract fix landed (real Long/Short/etc. classifications on OI Buildup screen). `/market/snapshot.indices[]` + `.per_index[].stocks[]` + advances/declines/unchanged + `/contributors/{index}.{change_pct, index_points}` all now populated; Phase ε tiles and Phase ζ %change/Pts columns surface real values automatically. **Still outstanding**: `/buildup/symbols` (NFO and BFO) returns empty bucket arrays despite per-contract `/oi/buildup` having non-Neutral classifications — per-symbol futures roll-up bug, distinct from the field-population issue. Phase ε 2×2 quadrant grid stays empty until this lands.
+
+### Open investigations (added 2026-05-29)
+
+- [ ] Bottom pagination `1|2|3|4|5` on OptionZ's Option Data screens (OI Stats, Trending OI, PCR, Options Chart) — meaning unknown. Hypotheses: saved layouts, date-page navigation, alternate views. Confirm in Phase κ before deciding whether to replicate.
+- [ ] "Direction" column in Find Strategy result legs (values like `0.00, 100.00, 200.00`) — meaning unclear. Inspect live `/strategy/scan` response at Phase θ.
+
+## How to resume
+
+1. Read this file top-to-bottom.
+2. Find the first row with status ☐ or ⏳ in the **Phase status (post-audit)** table (Phases α-κ supersede the original Phases 0-11 sequence).
+3. Open [INSTAOPTIONS_FEATURE_README.md](INSTAOPTIONS_FEATURE_README.md) — see §3.1 Reuse Contract for surfaces to integrate with, and the corresponding §10.x sub-screen for visual + data spec.
+4. Pick up from the phase's bullet list in the post-audit plan at `~/.claude/plans/now-you-have-complete-purring-turtle.md`. The original plan at `~/.claude/plans/instaoptions-feature-readme-md-i-wanted-twinkling-leaf.md` is retained for historical reference (its Phase 5-11 sequence is superseded).
+5. Each phase ends with: `flutter analyze` clean on insta_options paths → git commit with `instaoptions(phase-X): …` (no Co-Authored-By, per `feedback_no_coauthor` memory) → update this file's phase row in the same commit.
+6. If the next phase is blocked on a backend ticket (γ, δ, η), check [INSTAOPTIONS_BACKEND_TICKETS.md](INSTAOPTIONS_BACKEND_TICKETS.md) for the ticket details + the frontend fallback if the backend slips.

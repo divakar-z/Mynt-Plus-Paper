@@ -568,15 +568,16 @@ class _OptionChainPutRowState extends ConsumerState<_OptionChainPutRow> {
         false, // Set isOptionStike to false to prevent provider's Fluttertoast
       );
       if (success && mounted) {
-        ResponsiveSnackBar.showInfo(
-            context, 'Removed from ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(
+            context, 'Removed from your watchlist "${scripData.wlName}"');
         setState(() {});
       }
     } else {
-      // Add to watchlist - using depth subscription for web
+      // Add to watchlist - touchline for web (watchlist tile only needs LTP;
+      // depth is reserved for the market-depth panel)
       provider.read(websocketProvider).establishConnection(
             channelInput: scripToken,
-            task: "d",
+            task: "t",
             context: context,
           );
 
@@ -590,7 +591,7 @@ class _OptionChainPutRowState extends ConsumerState<_OptionChainPutRow> {
         false, // Set isOptionStike to prevent provider's Fluttertoast
       );
       if (success && mounted) {
-        ResponsiveSnackBar.showSuccess(context, 'Added to ${scripData.wlName}');
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
         setState(() {});
       }
     }
@@ -727,10 +728,11 @@ Widget _buildOIData(ThemesProvider theme, String oiLack, String oiPerChng, doubl
         fontSize: 14.0,
       );
     } else {
-      // Using depth subscription for web
+      // Touchline for web (watchlist tile only needs LTP; depth is reserved
+      // for the market-depth panel)
       provider.read(websocketProvider).establishConnection(
             channelInput: "${option.exch}|${option.token}",
-            task: "d",
+            task: "t",
             context: context,
           );
       scripData.addDelMarketScrip(

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:mynt_plus/res/dyslexia_font.dart';
 
 import 'package:mynt_plus/routes/route_names.dart';
 
@@ -98,7 +98,7 @@ class _UpiPayementState extends State<UpiPayement> {
                 datachange == false
                     ? Text(
                         'How it works',
-                        style: GoogleFonts.inter(
+                        style: dysInter(
                             fontSize: 18,
                             color: const Color(0xff000000),
                             letterSpacing: 0.36,
@@ -107,7 +107,7 @@ class _UpiPayementState extends State<UpiPayement> {
                       )
                     : Text(
                         'No automatic payments are set',
-                        style: GoogleFonts.inter(
+                        style: dysInter(
                             fontSize: 18,
                             color: const Color(0xff000000),
                             letterSpacing: 0.36,
@@ -210,7 +210,7 @@ class _UpiPayementState extends State<UpiPayement> {
   }
 
   TextStyle textStyle(Color color, double fontSize, fWeight) {
-    return GoogleFonts.inter(
+    return dysInter(
         textStyle: TextStyle(
       fontWeight: fWeight,
       color: color,

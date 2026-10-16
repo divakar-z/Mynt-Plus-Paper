@@ -1,4 +1,8 @@
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -6,6 +10,9 @@ import 'package:mynt_plus/models/marketwatch_model/opt_chain_model.dart';
 import 'package:mynt_plus/provider/strategy_builder_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
+import 'package:mynt_plus/provider/market_watch_provider.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
+import 'package:mynt_plus/models/marketwatch_model/get_quotes.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 
@@ -17,8 +24,12 @@ import 'package:syncfusion_flutter_charts/charts.dart';
 import 'package:mynt_plus/sharedWidget/hover_actions_web.dart';
 import 'package:mynt_plus/screens/web/strategy_builder/entry_price_input.dart';
 import 'package:mynt_plus/screens/web/strategy_builder/strategy_builder_widgets.dart';
+import 'package:mynt_plus/screens/web/insta_options/widgets/dashboard/date_calendar.dart';
 import 'package:mynt_plus/utils/rupee_convert_format.dart';
+import 'package:mynt_plus/res/responsive_extensions.dart';
+import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
 
+part 'strategy_builder_v2_ui.dart';
 
 /// Lightweight tooltip state to avoid full widget rebuilds on hover
 class _PayoffTooltipState {
@@ -34,6 +45,205 @@ class _PayoffTooltipState {
 }
 
 /// Strategy Builder Screen - Full screen strategy builder with payoff analysis
+/// Renders a metric label, optionally followed by a tappable info (i) icon.
+/// Used to attach the Margin Info dialog to the MARGIN label only.
+Widget _labelWithInfo(
+    BuildContext context, Widget label, VoidCallback? onInfoTap) {
+  if (onInfoTap == null) return label;
+  return Row(
+    children: [
+      Flexible(child: label),
+      const SizedBox(width: 3),
+      InkWell(
+        onTap: onInfoTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Icon(Icons.info_outline, size: 16, color:  resolveThemeColor(
+                                                context,
+                                                dark:
+                                                    MyntColors.textPrimaryDark,
+                                                light: MyntColors.textPrimary,
+                                              ),),
+      ),
+    ],
+  );
+}
+
+/// Margin Info dialog — shows the SPAN-based margin breakdown for the current
+/// basket: each leg's own margin, their total, the combined margin, and the
+/// benefit (total - combined). Opened from the info icon next to the MARGIN
+/// label. (UI only)
+void showMarginInfoDialog(BuildContext context, bool isDark) {
+  final provider = ProviderScope.containerOf(context, listen: false)
+      .read(strategyBuilderProvider);
+  // Fire the margin calculation; the dialog watches the provider for results.
+  provider.calculateMarginBenefit();
+
+  final titleColor = isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack;
+  final bodyColor =
+      isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary;
+  final profitColor = isDark ? MyntColors.profitDark : MyntColors.profit;
+
+  String money(double d) => d.toIndianRupee();
+
+  Widget valueRow(String label, String value,
+          {Color? valueColor, bool strong = false, bool indent = false}) =>
+      Padding(
+        padding: EdgeInsets.fromLTRB( 0, 5, 0, 5),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                style: MyntWebTextStyles.para(context,
+                    color: strong ? titleColor : bodyColor,
+                    fontWeight: strong ? MyntFonts.semiBold : MyntFonts.medium),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              value,
+              style: MyntWebTextStyles.body(context,
+                  color: valueColor ?? titleColor,
+                  fontWeight: MyntFonts.semiBold),
+            ),
+          ],
+        ),
+      );
+
+  final Widget content = Consumer(
+    builder: (context, ref, _) {
+      final p = ref.watch(strategyBuilderProvider);
+
+      if (p.isCalcMarginBenefit) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(vertical: 30),
+          child: Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+          ),
+        );
+      }
+
+      if (p.marginBenefitError != null) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Text(
+            p.marginBenefitError!,
+            style: MyntWebTextStyles.para(context, color: bodyColor),
+          ),
+        );
+      }
+
+      final r = p.marginBenefitResult;
+      if (r == null) return const SizedBox.shrink();
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+         
+          for (final leg in r.legs)
+            valueRow(leg.name, money(leg.margin), indent: true),
+          const Divider(height: 10),
+          valueRow('Total', money(r.sumIndividual), strong: true),
+          const Divider(height: 10),
+          valueRow('As a single strategy', money(r.combined), strong: false),
+          // const SizedBox(height: 10),
+          // A benefit is what the legs save by offsetting each other, so it
+          // only means anything once there is more than one leg. On a single
+          // leg the figure is always zero, which read like a failure.
+          if (r.legs.length > 1)
+            valueRow('Margin benefit', money(r.benefit),
+                strong: false, valueColor: profitColor)
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 5, 0, 5),
+              child: Text(
+                'Margin benefit applies to strategies with more than one leg.',
+                style: MyntWebTextStyles.para(context, color: bodyColor),
+              ),
+            ),
+        ],
+      );
+    },
+  );
+
+  showDialog(
+    context: context,
+    barrierColor: Colors.black54,
+    builder: (ctx) => Center(
+      child: Material(
+        color: Colors.transparent,
+        child: shadcn.Card(
+          borderRadius: BorderRadius.circular(8),
+          padding: EdgeInsets.zero,
+          child: Container(
+            width: 400,
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.75,
+            ),
+            decoration: BoxDecoration(
+              color: resolveThemeColor(context,
+                  dark: MyntColors.dialogDark, light: MyntColors.dialog),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: shadcn.Theme.of(context).colorScheme.border,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Margin Info',
+                        style: MyntWebTextStyles.title(
+                          context,
+                          color: resolveThemeColor(
+                            context,
+                            dark: MyntColors.textPrimaryDark,
+                            light: MyntColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      MyntCloseButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                ),
+                // Content
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: content,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class StrategyBuilderScreenWeb extends ConsumerStatefulWidget {
   const StrategyBuilderScreenWeb({super.key});
 
@@ -367,14 +577,15 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
               ),
               const SizedBox(width: 12),
               _buildMetricItemSmall(context, 'MARGIN', provider.totalMargin, null, isDark),
-              const SizedBox(width: 12),
-              _buildMetricItemSmall(
-                context,
-                'MARGIN BENEFIT',
-                provider.marginBenefit,
-                isDark ? MyntColors.profitDark : MyntColors.profit,
-                isDark,
-              ),
+              // MARGIN BENEFIT hidden
+              // const SizedBox(width: 12),
+              // _buildMetricItemSmall(
+              //   context,
+              //   'MARGIN BENEFIT',
+              //   provider.marginBenefit,
+              //   isDark ? MyntColors.profitDark : MyntColors.profit,
+              //   isDark,
+              // ),
             ],
           ),
           const SizedBox(height: 8),
@@ -436,13 +647,20 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ),
             ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 2),
           valueWidget ?? Text(
@@ -3048,7 +3266,8 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
                   isDark,
                 ),
                 _buildMetricItem(context, 'MARGIN', provider.totalMargin, null, isDark),
-                _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
+                // MARGIN BENEFIT hidden
+                // _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
               ],
             ),
             const SizedBox(height: 12),
@@ -3084,13 +3303,20 @@ class _StrategyBuilderScreenWebState extends ConsumerState<StrategyBuilderScreen
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
+          _labelWithInfo(
+            context,
+            Text(
+              label,
+              style: MyntWebTextStyles.caption(
+                context,
+                color: Colors.grey,
+                fontWeight: MyntFonts.medium,
+              ).copyWith(fontSize: 11),
+            ),
+            (label == 'MARGIN' &&
+                    ref.read(strategyBuilderProvider).basketMarginModel != null)
+                ? () => showMarginInfoDialog(context, isDark)
+                : null,
           ),
           const SizedBox(height: 4),
           valueWidget ?? Text(
@@ -4401,38 +4627,72 @@ class _TradingSliderThumbShape extends SliderComponentShape {
 /// Strategy Builder Panel - Embeddable panel version for use within CustomizableSplitHomeScreen
 /// This version has no Scaffold/AppBar and fits directly into the panel layout
 class StrategyBuilderPanelWeb extends ConsumerStatefulWidget {
-  const StrategyBuilderPanelWeb({super.key});
+  /// Set when embedded for analyze mode (Positions); the top bar's back arrow calls it.
+  final VoidCallback? onBack;
+
+  const StrategyBuilderPanelWeb({super.key, this.onBack});
 
   @override
   ConsumerState<StrategyBuilderPanelWeb> createState() => _StrategyBuilderPanelWebState();
 }
 
-class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWeb>
-    with SingleTickerProviderStateMixin {
-  late TabController _strategyTabController;
+class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWeb> {
   final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _lotMultiplierController = TextEditingController(text: '1');
-  final TextEditingController _targetPriceController = TextEditingController();
-  double _lastEmittedTargetPrice = 0;
   String _lastSelectedSymbol = '';
   final LayerLink _searchLayerLink = LayerLink();
   final GlobalKey _searchFieldKey = GlobalKey();
+  final FocusNode _symbolFocus = FocusNode();
 
-  // Payoff chart tooltip state — uses ValueNotifier to avoid full widget rebuild on hover
-  final ValueNotifier<_PayoffTooltipState> _tooltipNotifier = ValueNotifier(const _PayoffTooltipState());
-  bool _isDragging = false;
-  int _tooltipUpdateCounter = 0;
-  // Keep _selectedPrice accessible for chart marker dot rendering
-  double? _selectedPrice;
-  bool _markerUpdateScheduled = false;
+  // Layout state for the v2 UI (strategy_builder_v2_ui.dart)
+  String _view = 'landing'; // landing | builder
+  String _landingTab = 'strategies'; // strategies | saved
+  String _landingFilter = 'All';
+  final TextEditingController _landingSearchController = TextEditingController();
+  String _leftTab = 'legs'; // legs | pre | cus | saved
+  bool _legsFromApply = false; // Strategy legs reached via Custom builder Apply -> show Save
+  final TextEditingController _predefSearchController = TextEditingController();
+  String _predefFilter = 'All'; // Predefined tab category: All | Bullish | Bearish | Neutral
+  // Legs switched to market price (by token) -> the entry price typed before, restored on switching back
+  final Map<String, double> _marketEntryPrev = {};
+  final TextEditingController _savedSearchController = TextEditingController();
+  String _analysisTab = 'overview'; // overview | greeks
+  bool _showExpiryCurve = true;
+  bool _showTargetCurve = true;
+  bool _payoffInPoints = false;
+  double _chartZoom = 1;
+  String? _customStrategyName;
+  final TextEditingController _nameController = TextEditingController();
+  final FocusNode _nameFocus = FocusNode();
+  final ScrollController _legsScrollController = ScrollController();
+  // Horizontal scroll of the legs / custom-builder tables (one is shown at a time)
+  final ScrollController _tableHScroll = ScrollController();
+  // Hover position on the payoff chart; rebuilds only the chart, not the panel
+  final ValueNotifier<Offset?> _chartHover = ValueNotifier(null);
+  // Payoff chart series controller, used to convert the cursor pixel to a price
+  ChartSeriesController<_PayoffData, double>? _payoffSeriesController;
+  // Kept across remounts, like the design's saved width
+  static double _legsPanelWidth = 620;
+  // Read here, as ref.read is not usable in dispose()
+  late final StrategyBuilderProvider _provider;
+
+  /// Only the panel embedded in Positions (it has [onBack]) runs analyze mode.
+  bool get _isAnalyzeHost => widget.onBack != null;
+
+  void _sbSet(VoidCallback fn) {
+    if (mounted) setState(fn);
+  }
 
   @override
   void initState() {
     super.initState();
-    _strategyTabController = TabController(length: 4, vsync: this);
+    _provider = ref.read(strategyBuilderProvider);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = ref.read(strategyBuilderProvider);
+      // A standalone builder never shows analyze mode. It can still be on here
+      // when Positions (analyzing) was swapped for this page in the same frame,
+      // before that panel's dispose callback runs.
+      if (!_isAnalyzeHost && provider.isAnalyzeMode) provider.exitAnalyzeMode();
       // Skip initialization in analyze mode (data already loaded from positions)
       if (!provider.isAnalyzeMode) {
         provider.initialize(context);
@@ -4442,25 +4702,49 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       _lastSelectedSymbol = provider.selectedSymbol;
     });
 
-    _strategyTabController.addListener(() {
-      final tabs = ['Bullish', 'Bearish', 'Neutral', 'CustomBuilder'];
-      ref.read(strategyBuilderProvider).setStrategyTypeTab(tabs[_strategyTabController.index]);
-    });
-
     _searchController.addListener(() {
       if (_searchController.text.isEmpty) {
         ref.read(strategyBuilderProvider).searchStocks('');
+      }
+    });
+
+    // Leaving the symbol field without picking a result restores the current underlying.
+    _symbolFocus.addListener(() {
+      if (!mounted) return;
+      final provider = ref.read(strategyBuilderProvider);
+      if (!_symbolFocus.hasFocus && !provider.searchDropdownVisible) {
+        _searchController.text = provider.selectedSymbol;
+      }
+      setState(() {});
+    });
+
+    _nameFocus.addListener(() {
+      if (!_nameFocus.hasFocus && mounted && _customStrategyName == null) {
+        _nameController.text = _sbAutoName(ref.read(strategyBuilderProvider));
       }
     });
   }
 
   @override
   void dispose() {
-    _strategyTabController.dispose();
     _searchController.dispose();
-    _lotMultiplierController.dispose();
-    _targetPriceController.dispose();
-    _tooltipNotifier.dispose();
+    _symbolFocus.dispose();
+    _landingSearchController.dispose();
+    _predefSearchController.dispose();
+    _savedSearchController.dispose();
+    _nameController.dispose();
+    _nameFocus.dispose();
+    _legsScrollController.dispose();
+    _tableHScroll.dispose();
+    _chartHover.dispose();
+    // Leaving the embedded analyzer (back, tab switch, sidebar) ends analyze mode.
+    // After the frame: notifying during unmount would rebuild a locked tree.
+    if (_isAnalyzeHost) {
+      final provider = _provider;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (provider.isAnalyzeMode) provider.exitAnalyzeMode();
+      });
+    }
     super.dispose();
   }
 
@@ -4490,463 +4774,9 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
       });
     }
 
-    // Don't return loader here - show it as overlay instead to preserve text field state
-
-    // Use screen width to determine layout - more reliable than panel constraints
-    final screenWidth = MediaQuery.of(context).size.width;
-    // Switch to single column when screen width is less than 1200px (typical tablet/small desktop)
-    // This accounts for watchlist panel taking ~350px on the left
-    final isNarrow = screenWidth < 1300;
-
-    final Widget content;
-    if (isNarrow) {
-      content = _buildNarrowPanelLayout(context, provider, isDark);
-    } else {
-      content = Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Left Panel - Basket & Strategies
-            Expanded(
-              flex: 1,
-              child: _buildLeftPanel(context, provider, isDark),
-            ),
-            const SizedBox(width: 16),
-            // Right Panel - Metrics & Chart
-            Expanded(
-              flex: 1,
-              child: _buildRightPanel(context, provider, isDark),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        content,
-        if (provider.searchDropdownVisible)
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: () => provider.dismissSearchDropdown(),
-              behavior: HitTestBehavior.translucent,
-              child: const SizedBox.expand(),
-            ),
-          ),
-        _buildSearchDropdownOverlay(context, provider, isDark),
-      ],
-    );
-  }
-
-  /// Build layout for narrow panels (single column scrollable)
-  Widget _buildNarrowPanelLayout(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Basket Card with search and table
-          Container(
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.overlayBgDark : Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-              ),
-            ),
-            child: Column(
-              children: [
-                // Search bar (hidden in analyze mode) or analyze header
-                if (provider.isAnalyzeMode)
-                  _buildAnalyzeHeader(context, provider, isDark)
-                else
-                  _buildSearchSection(context, provider, isDark),
-                const Divider(height: 1),
-                // Show leg builder when Custom Builder tab is selected, otherwise show basket table
-                // Basket table (limited height)
-                SizedBox(
-                  height: provider.basket.isEmpty ? 100 : (provider.basket.length * 50.0 + 50).clamp(100, 200),
-                  child: Stack(
-                    children: [
-                      _buildBasketTable(context, provider, isDark),
-                      if (provider.isPayoffLoading && provider.basket.isNotEmpty)
-                        Positioned.fill(
-                          child: Container(
-                            color: (isDark ? Colors.black : Colors.white).withValues(alpha: 0.4),
-                            child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                // Lot multiplier and action buttons (hidden in analyze mode)
-                if (provider.basket.isNotEmpty && !provider.isAnalyzeMode)
-                  _buildBottomActions(context, provider, isDark),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          // Metrics section (compact for narrow panels)
-          Container(
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.overlayBgDark : Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-              ),
-            ),
-            child: _buildMetricsSectionNarrow(context, provider, isDark),
-          ),
-          const SizedBox(height: 12),
-          // Payoff Chart section
-          Container(
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.overlayBgDark : Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-              ),
-            ),
-            child: Column(
-              children: [
-                // Tabs
-                _buildPayoffTabs(context, provider, isDark),
-                const Divider(height: 1),
-                // Chart or Greeks table (fixed height)
-                SizedBox(
-                  height: 250,
-                  child: Stack(
-                    children: [
-                      provider.payoffTab == 0
-                          ? _buildPayoffChart(context, provider, isDark)
-                          : _buildGreeksTable(context, provider, isDark),
-                      if (provider.isPayoffLoading && provider.payoffData.isNotEmpty)
-                        Positioned.fill(
-                          child: Container(
-                            color: (isDark ? Colors.black : Colors.white).withValues(alpha: 0.5),
-                            child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Strategies Card (hidden in analyze mode)
-          if (!provider.isAnalyzeMode) ...[
-            const SizedBox(height: 12),
-            Container(
-              decoration: BoxDecoration(
-                color: isDark ? MyntColors.overlayBgDark : Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-                ),
-              ),
-              child: Column(
-                children: [
-                  // Strategy tabs
-                  TabBar(
-                    controller: _strategyTabController,
-                    labelColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-                    unselectedLabelColor: isDark ? Colors.grey : Colors.grey[600],
-                    indicatorColor:resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-                    labelStyle: MyntWebTextStyles.bodySmall(
-                      context,
-                      fontWeight: MyntFonts.medium,
-                    ),
-                    isScrollable: true,
-                    tabs: const [
-                      Tab(text: 'Bullish'),
-                      Tab(text: 'Bearish'),
-                      Tab(text: 'Neutral'),
-                      Tab(text: 'Custom Builder'),
-                    ],
-                  ),
-                  const Divider(height: 1),
-                  // Strategy grid
-                  if (provider.strategyTypeTab == 'CustomBuilder')
-                    _buildStrategyGrid(context, provider, isDark)
-                  else
-                    SizedBox(
-                      height: 180,
-                      child: _buildStrategyGrid(context, provider, isDark),
-                    ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          // Chart controls
-          Container(
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.overlayBgDark : Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-              ),
-            ),
-            child: (provider.isLoading && provider.isAnalyzeMode)
-                ? _buildChartControlsSkeleton(isDark)
-                : _buildChartControls(context, provider, isDark),
-          ),
-          const SizedBox(height: 60), // Bottom padding
-        ],
-      ),
-    );
-  }
-
-  /// Build compact metrics section for narrow panels
-  Widget _buildMetricsSectionNarrow(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    if (provider.isLoading && provider.isAnalyzeMode) {
-      return _buildMetricsSkeleton(isDark);
-    }
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        children: [
-          // Row 1: MAX PROFIT, MAX LOSS, NET PREMIUM, MARGIN
-          Row(
-            children: [
-              _buildMetricItemNarrow(context, 'MAX PROFIT', provider.metrics.maxProfit, MyntColors.profit, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(context, 'MAX LOSS', provider.metrics.maxLoss, isDark ? MyntColors.errorDark : MyntColors.loss, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(
-                context,
-                'NET PREMIUM',
-                provider.netPremium.abs().toIndianFormat(),
-                provider.netPremium > 0
-                    ? (isDark ? MyntColors.profitDark : MyntColors.profit)
-                    : provider.netPremium < 0
-                        ? (isDark ? MyntColors.errorDark : MyntColors.loss)
-                        : (isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack),
-                isDark,
-              ),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(context, 'MARGIN', provider.totalMargin, null, isDark),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // Row 2: MARGIN BENEFIT, POP, REWARD/RISK, BREAKEVEN
-          Row(
-            children: [
-              _buildMetricItemNarrow(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(context, 'POP', '${provider.metrics.popPercent.toStringAsFixed(0)}%', null, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(context, 'REWARD/RISK', provider.metrics.riskRewardRatio, null, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(
-                context,
-                'BREAKEVEN',
-                '--',
-                null,
-                isDark,
-                valueWidget: provider.metrics.breakevens.isNotEmpty
-                    ? _buildBreakevenRichText(provider, MyntWebTextStyles.bodySmall(
-                        context,
-                        color: isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack,
-                        fontWeight: MyntFonts.semiBold,
-                      ).copyWith(fontSize: 14))
-                    : null,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(child: SizedBox()),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Divider(height: 1),
-          const SizedBox(height: 8),
-          // Row 3: Greeks
-          Row(
-            children: [
-              _buildMetricItemNarrow(context, '\u0394 DELTA', provider.greeksTotal('delta').toStringAsFixed(4), null, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(context, '\u0398 THETA', provider.greeksTotal('theta').toStringAsFixed(4), null, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(context, '\u0393 GAMMA', provider.greeksTotal('gamma').toStringAsFixed(4), null, isDark),
-              const SizedBox(width: 8),
-              _buildMetricItemNarrow(context, '\u03BD VEGA', provider.greeksTotal('vega').toStringAsFixed(4), null, isDark),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Build compact metric item for narrow panels
-  Widget _buildMetricItemNarrow(BuildContext context, String label, String value, Color? valueColor, bool isDark, {bool isExpanded = true, Widget? valueWidget}) {
-    final content = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: isDark ? MyntColors.overlayBgDark : const Color(0xFFF5F5F5),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: Colors.grey,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
-          ),
-          const SizedBox(height: 2),
-          valueWidget ?? Text(
-            value,
-            style: MyntWebTextStyles.bodySmall(
-              context,
-              color: valueColor ?? (isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack),
-              fontWeight: MyntFonts.semiBold,
-            ).copyWith(fontSize: 14), 
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-
-    return isExpanded ? Expanded(child: content) : content;
-  }
-
-  Widget _buildLeftPanel(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return Column(
-      children: [
-        // Basket Card
-        Expanded(
-          flex: 2,
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.dashboardCarColor : MyntColors.backgroundColor,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isDark ? MyntColors.dividerDark : MyntColors.divider,
-              ),
-            ),
-            child: Column(
-              children: [
-                // Search bar (hidden in analyze mode) or analyze header
-                if (provider.isAnalyzeMode)
-                  _buildAnalyzeHeader(context, provider, isDark)
-                else
-                  _buildSearchSection(context, provider, isDark),
-                const Divider(height: 1),
-                // Basket table
-                Expanded(
-                  child: Stack(
-                    children: [
-                      _buildBasketTable(context, provider, isDark),
-                      if (provider.isPayoffLoading && provider.basket.isNotEmpty)
-                        Positioned.fill(
-                          child: Container(
-                            color: (isDark ? Colors.black : Colors.white).withValues(alpha: 0.4),
-                            child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                // Lot multiplier and action buttons (hidden in analyze mode)
-                if (provider.basket.isNotEmpty && !provider.isAnalyzeMode)
-                  _buildBottomActions(context, provider, isDark),
-              ],
-            ),
-          ),
-        ),
-        // Strategies Card (hidden in analyze mode)
-        if (!provider.isAnalyzeMode) ...[
-          const SizedBox(height: 16),
-          Expanded(
-            flex: 1,
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark ? MyntColors.dashboardCarColor : MyntColors.backgroundColor,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isDark ? MyntColors.dividerDark : MyntColors.divider,
-                ),
-              ),
-              child: Column(
-                children: [
-                  // Strategy tabs
-                  TabBar(
-                    controller: _strategyTabController,
-                    isScrollable: true,
-                    tabAlignment: TabAlignment.start,
-                    labelColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-                    unselectedLabelColor: isDark ? Colors.grey : Colors.grey[600],
-                    indicatorColor:resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-                    labelStyle: MyntWebTextStyles.bodySmall(
-                      context,
-                      fontWeight: MyntFonts.medium,
-                    ),
-                    tabs: const [
-                      Tab(text: 'Bullish'),
-                      Tab(text: 'Bearish'),
-                      Tab(text: 'Neutral'),
-                      Tab(text: 'Custom Builder'),
-                    ],
-                  ),
-                  const Divider(height: 1),
-                  // Strategy grid
-                  Expanded(
-                    child: _buildStrategyGrid(context, provider, isDark),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildAnalyzeHeader(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return buildStrategyAnalyzeHeader(context: context, provider: provider, isDark: isDark);
-  }
-
-  Widget _buildSearchSection(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return buildStrategySearchSection(
-      context: context,
-      searchController: _searchController,
-      provider: provider,
-      isDark: isDark,
-      placeholder: 'Search & add',
-      chainButtonLabel: 'Chain',
-      buttonHeight: 45,
-      showClearButton: false,
-      onChainPressed: provider.optionChain.isNotEmpty
-          ? () => _showOptionChainDialog(context, provider, isDark)
-          : null,
-      onRefreshPressed: () => provider.refreshEntryPrices(context),
-      onClearBasket: () => provider.clearBasket(),
-      onSearchChanged: (value) => provider.searchStocks(value),
-      onClearSearch: () {
-        _searchController.clear();
-        provider.searchStocks('');
-      },
-      searchLayerLink: _searchLayerLink,
-      searchFieldKey: _searchFieldKey,
-    );
-  }
-
-  Widget _buildSearchDropdownOverlay(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return buildStrategySearchDropdown(
-      context: context,
-      provider: provider,
-      isDark: isDark,
-      searchController: _searchController,
-      onStockSelected: (result) => provider.selectStock(result, context),
-      onLastSelectedSymbolChanged: (name) => _lastSelectedSymbol = name,
-      searchLayerLink: _searchLayerLink,
-      searchFieldKey: _searchFieldKey,
-      onDismiss: () => provider.dismissSearchDropdown(),
-    );
+    // Landing page + builder workspace (strategy_builder_v2_ui.dart).
+    // Analyze mode (Positions dialog) always opens straight into the builder.
+    return _sbRoot(provider, isDark);
   }
 
   void _showOptionChainDialog(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
@@ -5091,7 +4921,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                                     // const SizedBox(width: 4),
                                     // Text('>', style: TextStyle(color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: FontWeight.bold)),
                                     // const SizedBox(width: 8),
-                                    Text('CALLS', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: MyntFonts.semiBold)),
+                                    Text('CALL', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit), fontWeight: MyntFonts.semiBold)),
                                   ],
                                 ),
                               ),
@@ -5106,7 +4936,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                                     // const SizedBox(width: 4),
                                     // Text('>', style: TextStyle(color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: FontWeight.bold)),
                                     // const SizedBox(width: 8),
-                                    Text('PUTS', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: MyntFonts.semiBold)),
+                                    Text('PUT', style: MyntWebTextStyles.bodySmall(context, color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), fontWeight: MyntFonts.semiBold)),
                                   ],
                                 ),
                               ),
@@ -5203,22 +5033,6 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
     }
     if (ceOI == 0) return '0.00';
     return (peOI / ceOI).toStringAsFixed(2);
-  }
-
-  Widget _buildHeaderCell(BuildContext context, String title, String subtitle, bool isDark) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text(title, style: MyntWebTextStyles.caption(context, color: isDark ? Colors.white70 : Colors.black87, fontWeight: MyntFonts.medium)),
-        Text(
-          '($subtitle)',
-          style: MyntWebTextStyles.caption(
-            context,
-            color: Colors.grey,
-          ).copyWith(fontSize: 10),
-        ),
-      ],
-    );
   }
 
   /// Panel version of Option Chain - Matches OptionChainSSWeb logic and layout
@@ -5389,7 +5203,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                         ? Border(right: BorderSide(color: ceBasketBorder, width: 3))
                         : null,
                   ),
-                  child: _buildSideCell(context, provider, row.callOption, callSocketData, isDark, true),
+                  child: _buildSideCell(context, provider, row.callOption, callSocketData, isDark, true, ceBasketBg != null),
                 ),
               ),
               
@@ -5422,7 +5236,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
                         ? Border(left: BorderSide(color: peBasketBorder, width: 3))
                         : null,
                   ),
-                  child: _buildSideCell(context, provider, row.putOption, putSocketData, isDark, false),
+                  child: _buildSideCell(context, provider, row.putOption, putSocketData, isDark, false, peBasketBg != null),
                 ),
               ),
             ],
@@ -5432,7 +5246,7 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
     );
   }
 
-  Widget _buildSideCell(BuildContext context, StrategyBuilderProvider provider, OptionValues? option, dynamic socketData, bool isDark, bool isCall) {
+  Widget _buildSideCell(BuildContext context, StrategyBuilderProvider provider, OptionValues? option, dynamic socketData, bool isDark, bool isCall, bool isSelected) {
     if (option == null) return const SizedBox();
 
     final Map<String, dynamic>? sData = (socketData is Map) ? socketData as Map<String, dynamic> : null;
@@ -5456,43 +5270,59 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
         ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss) 
         : (perChange == "0.00" ? Colors.grey : resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit));
         
-    final oiChangeColor = oiPerChng.startsWith("-") 
-        ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss) 
+    final oiChangeColor = oiPerChng.startsWith("-")
+        ?resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss)
         : (oiPerChng == "0.00" ? Colors.grey : resolveThemeColor(context, dark: MyntColors.profitDark, light: MyntColors.profit));
 
-    // Hover mechanism with Square Buttons
+    // Watch so the bookmark icon updates immediately.
+    final isInWatchlist = ref.watch(
+      marketWatchProvider.select(
+        (p) => p.scrips.any(
+          (s) => "${s['exch']}|${s['token']}" == "${option.exch}|${option.token}",
+        ),
+      ),
+    );
+
+    // Reuse the same hover action button UI as the watchlist option chain.
     return HoverActionsWrapper(
       actionsAlignment: isCall ? Alignment.centerRight : Alignment.centerLeft,
       actionsPadding: const EdgeInsets.symmetric(horizontal: 2),
+      // Blue hover background (matches the watchlist option chain), but only
+      // when this leg isn't already selected — a selected Buy/Sell leg keeps
+      // its green/red selection background instead.
+      hoverBackgroundColor: isSelected
+          ? null
+          : resolveThemeColor(context,
+                  dark: MyntColors.primaryDark, light: MyntColors.primary)
+              .withValues(alpha: 0.10),
       actionsBuilder: (ctx) => [
-        // Buy Button
-        InkWell(
-          onTap: () => provider.addToBasket(option, 'BUY', context),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.secondary : MyntColors.primary,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: const Text('B', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+        HoverActionButton.buy(
+          context: ctx,
+          onPressed: () => provider.addToBasket(option, 'BUY', context),
         ),
-        const SizedBox(width: 2),
-        // Sell Button
-        InkWell(
-          onTap: () => provider.addToBasket(option, 'SELL', context),
-          child: Container(
-            width: 25,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: isDark ? MyntColors.lossDark : MyntColors.loss,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: const Text('S', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+        HoverActionButton.sell(
+          context: ctx,
+          onPressed: () => provider.addToBasket(option, 'SELL', context),
+        ),
+        // Chart Button — navigates to home and opens the option's chart
+        HoverActionButton.icon(
+          context: ctx,
+          iconAsset: assets.chartnew,
+          onPressed: () => _handleChartTapSB(option),
+        ),
+        HoverActionButton.icon(
+          context: ctx,
+          iconAsset: isInWatchlist
+              ? assets.bookmarkIcon
+              : assets.bookmarkLineIcon,
+          iconColor: isInWatchlist
+              ? resolveThemeColor(
+                  ctx,
+                  dark: MyntColors.primaryDark,
+                  light: MyntColors.primary,
+                )
+              : null,
+          onPressed: () => _handleSaveToWatchlistSB(option),
         ),
       ],
       child: Row(
@@ -5543,209 +5373,70 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
     );
   }
 
-  Widget _buildBasketTable(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    if (provider.basket.isEmpty) {
-      // Show skeleton shimmer rows when loading in analyze mode
-      if (provider.isLoading && provider.isAnalyzeMode) {
-        return _buildBasketTableSkeleton(isDark);
-      }
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              "There's nothing here yet.",
-              style: MyntWebTextStyles.body(
-                context,
-                color: Colors.grey,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Add some options to see them here.' ,
-              style: MyntWebTextStyles.bodySmall(
-                context,
-                color: Colors.grey,
-              ),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton(
-              onPressed: provider.optionChain.isNotEmpty
-                  ? () => _showOptionChainDialog(context, provider, isDark)
-                  : null,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                side: BorderSide(
-                  color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0),
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: Text(
-                'Create your Strategy',
-                style: MyntWebTextStyles.body(
-                  context,
-                  darkColor: MyntColors.textPrimaryDark,
-                  lightColor: MyntColors.textBlack,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
+  /// Open this option's chart. The strategy builder is hosted inside
+  /// CustomizableSplitHomeScreen, which owns the chart panel — so we close the
+  /// option-chain dialog and open the chart in that panel (on the Chart tab),
+  /// the same mechanism the watchlist option chain uses. No navigation, so the
+  /// strategy (basket) is untouched.
+  void _handleChartTapSB(OptionValues option) {
+    if (option.tsym?.contains("|||") ?? false) {
+      ResponsiveSnackBar.showWarning(
+          context, "Symbol not available for trading");
+      return;
     }
 
-    // Add both horizontal and vertical scrolling for the basket table
-    // Horizontal scrollbar is fixed at the bottom of the container
-    final ScrollController horizontalController = ScrollController();
-    final ScrollController verticalController = ScrollController();
-
-    final dataTable = DataTable(
-      columnSpacing: 10,
-      horizontalMargin: 8,
-      headingRowHeight: 40,
-      headingRowColor: WidgetStateProperty.all(
-        isDark ? MyntColors.overlayBgDark : MyntColors.listItemBg,
-      ),
-      dataRowMinHeight: 40,
-      dataRowMaxHeight: 48,
-      columns: [
-        DataColumn(
-          label: Checkbox(
-            value: provider.isAllSelected,
-            onChanged: (value) => provider.toggleAllCheckboxes(value ?? false, context),
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            activeColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
-            checkColor: isDark ? Colors.white : null,
-            // side: isDark ? const BorderSide(color: Color(0xFF6E7681), width: 1.5) : null,
-          ),
-        ),
-        DataColumn(
-          label: Text(
-            'B/S',
-            style: MyntWebTextStyles.bodySmall(
-              context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textBlack,
-              fontWeight: MyntFonts.regular,
-            ),
-          ),
-        ),
-        DataColumn(
-          label: Text(
-            'Expiry',
-            style: MyntWebTextStyles.bodySmall(
-              context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textBlack,
-              fontWeight: MyntFonts.medium,
-            ),
-          ),
-        ),
-        DataColumn(
-          label: Text(
-            'Strike',
-           style: MyntWebTextStyles.bodySmall(
-              context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textBlack,
-              fontWeight: MyntFonts.medium,
-            ),
-          ),
-        ),
-        DataColumn(
-          label: Text(
-            'CE/PE',
-            style: MyntWebTextStyles.bodySmall(
-              context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textBlack,
-              fontWeight: MyntFonts.medium,
-            ),
-          ),
-        ),
-        DataColumn(
-          label: Expanded(
-            child: Text(
-              'Lots',
-              textAlign: TextAlign.center,
-             style: MyntWebTextStyles.bodySmall(
-                context,
-                darkColor: MyntColors.textPrimaryDark,
-                lightColor: MyntColors.textBlack,
-                fontWeight: MyntFonts.medium,
-              ),
-            ),
-          ),
-        ),
-        DataColumn(
-          label: Text(
-            'Entry Price',
-           style: MyntWebTextStyles.bodySmall(
-              context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textBlack,
-              fontWeight: MyntFonts.medium,
-            ),
-          ),
-        ),
-        DataColumn(
-          label: Text(
-            'LTP',
-           style: MyntWebTextStyles.bodySmall(
-              context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textBlack,
-              fontWeight: MyntFonts.medium,
-            ),
-          ),
-        ),
-        const DataColumn(label: SizedBox()), // Delete action column
-      ],
-      rows: provider.basket.asMap().entries.map((entry) {
-        final index = entry.key;
-        final item = entry.value;
-        return _buildBasketRow(context, provider, item, index, isDark);
-      }).toList(),
+    final marketWatch = ref.read(marketWatchProvider);
+    final depthArgs = DepthInputArgs(
+      exch: option.exch?.toString() ?? '',
+      token: option.token?.toString() ?? '',
+      tsym: option.tsym?.toString() ?? '',
+      instname: '',
+      symbol: option.symbol?.toString() ?? option.tsym?.toString() ?? '',
+      expDate: option.expDate?.toString() ?? '',
+      option: option.option?.toString() ?? '',
+      isOption: true,
     );
 
-    // Horizontal scrollbar (outer) appears at bottom, vertical scrollbar (inner) appears on right
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return ScrollbarTheme(
-          data: ScrollbarThemeData(
-            thumbVisibility: WidgetStateProperty.all(true),
-            thickness: WidgetStateProperty.all(8),
-            radius: const Radius.circular(4),
-            thumbColor: WidgetStateProperty.all(Colors.grey.withValues(alpha: 0.6)),
-            trackColor: WidgetStateProperty.all(Colors.grey.withValues(alpha: 0.2)),
-            trackVisibility: WidgetStateProperty.all(true),
-          ),
-          child: Scrollbar(
-            controller: horizontalController,
-            thumbVisibility: true,
-            trackVisibility: true,
-            child: SingleChildScrollView(
-              controller: horizontalController,
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                child: Scrollbar(
-                  controller: verticalController,
-                  thumbVisibility: true,
-                  child: SingleChildScrollView(
-                    controller: verticalController,
-                    scrollDirection: Axis.vertical,
-                    child: dataTable,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
+    // Close the option-chain dialog so the chart panel is visible.
+    Navigator.of(context).pop();
+    marketWatch.openOnChartTab = true;
+    marketWatch.scripdepthsize(false);
+    marketWatch.calldepthApis(context, depthArgs, "");
+  }
+
+  /// Add / remove this option to the current watchlist — mirrors the
+  /// watchlist option-chain "Add to Watchlist" action.
+  Future<void> _handleSaveToWatchlistSB(OptionValues option) async {
+    final scripData = ref.read(marketWatchProvider);
+
+    if (scripData.isPreDefWLs == "Yes") {
+      ResponsiveSnackBar.showWarning(
+          context, "This is a pre-defined watchlist that cannot be edited!");
+      return;
+    }
+
+    final scripToken = "${option.exch}|${option.token}";
+    final isCurrentlyInWatchlist = scripData.scrips
+        .any((scrip) => "${scrip['exch']}|${scrip['token']}" == scripToken);
+
+    if (isCurrentlyInWatchlist) {
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, false, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Removed from your watchlist "${scripData.wlName}"');
+      }
+    } else {
+      ref.read(websocketProvider).establishConnection(
+            channelInput: scripToken,
+            task: "t",
+            context: context,
+          );
+      final success = await scripData.addDelMarketScrip(
+          scripData.wlName, scripToken, context, true, true, false, false);
+      if (success && mounted) {
+        ResponsiveSnackBar.showSuccess(context, 'Added to your watchlist "${scripData.wlName}"');
+      }
+    }
   }
 
   /// Skeleton shimmer for metrics section (MAX PROFIT, MAX LOSS, etc.)
@@ -5969,2580 +5660,6 @@ class _StrategyBuilderPanelWebState extends ConsumerState<StrategyBuilderPanelWe
         ],
       ),
     );
-  }
-
-  DataRow _buildBasketRow(
-    BuildContext context,
-    StrategyBuilderProvider provider,
-    StrategyBasketItem item,
-    int index,
-    bool isDark,
-  ) {
-    return DataRow(
-      cells: [
-        // Checkbox
-        DataCell(
-          Checkbox(
-            value: item.checkbox,
-            onChanged: (_) => provider.toggleCheckbox(index, context),
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            activeColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
-            checkColor: isDark ? Colors.white : null,
-            side: isDark ? const BorderSide(color: Color(0xFF6E7681), width: 1.5) : null,
-          ),
-        ),
-        // Buy/Sell toggle
-        DataCell(
-          InkWell(
-            onTap: () => provider.toggleBuySell(index, context),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: item.buySell == 'BUY'
-                    ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withOpacity(0.15)
-                    : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss).withOpacity(0.15),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                item.buySell == 'BUY' ? 'B' : 'S',
-                style: MyntWebTextStyles.bodySmall(
-                  context,
-                  color: item.buySell == 'BUY' ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary) 
-                  : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss),
-                  fontWeight: MyntFonts.bold,
-                ).copyWith(fontSize: 12),
-              ),
-            ),
-          ),
-        ),
-        // Expiry Dropdown
-        DataCell(
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-            decoration: BoxDecoration(
-              border: Border.all(color: (isDark ? MyntColors.cardBorderDark : MyntColors.cardBorder)),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: provider.expiryDates.contains(item.expdate) ? item.expdate : null,
-                hint: Text(item.expdate, style: MyntWebTextStyles.bodySmall(context).copyWith(fontSize: 12)),
-                isDense: true,
-                style: MyntWebTextStyles.bodySmall(context).copyWith(fontSize: 12),
-                onChanged: (val) {
-                  if (val != null) provider.updateExpiry(index, val, context);
-                },
-                items: provider.expiryDates.map((e) {
-                  return DropdownMenuItem(
-                    value: e,
-                    child: Text(e, style: MyntWebTextStyles.bodySmall(context).copyWith(fontSize: 12)),
-                  );
-                }).toList(),
-              ),
-            ),
-          ),
-        ),
-        // Strike Dropdown
-        DataCell(
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-            decoration: BoxDecoration(
-              border: Border.all(color: (isDark ? MyntColors.cardBorderDark : MyntColors.cardBorder)),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: item.strprc,
-                isDense: true,
-                menuMaxHeight: 250,
-                style: MyntWebTextStyles.bodySmall(context).copyWith(fontSize: 12),
-                onChanged: (val) {
-                  if (val != null) provider.updateStrike(index, val, context);
-                },
-                items: provider.getStrikesForExpiry(item.expdate, currentStrike: item.strprc)
-                    .map((s) => DropdownMenuItem(
-                          value: s,
-                          child: Text(s, style: MyntWebTextStyles.bodySmall(context).copyWith(fontSize: 12)),
-                        ))
-                    .toList(),
-              ),
-            ),
-          ),
-        ),
-        // CE/PE toggle
-        DataCell(
-          InkWell(
-            onTap: () => provider.toggleCePe(index, context),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: item.optt == 'CE'
-                    ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withOpacity(0.15)
-                    : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss).withOpacity(0.15),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                item.optt,
-                style: MyntWebTextStyles.bodySmall(
-                  context,
-                  color: item.optt == 'CE' ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary) : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss),
-                  fontWeight: MyntFonts.bold,
-                ).copyWith(fontSize: 12),
-              ),
-            ),
-          ),
-        ),
-        // Lots with - Input +
-        DataCell(
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.remove, size: 16),
-                onPressed: () => provider.updateLots(index, item.ordlot - 1, context),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                width: 40,
-                height: 28,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  border: Border.all(color: (isDark ? MyntColors.cardBorderDark : MyntColors.cardBorder)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  '${item.ordlot * provider.lotMultiplier}',
-                  style: MyntWebTextStyles.bodySmall(context).copyWith(fontSize: 12),
-                ),
-              ),
-              const SizedBox(width: 8),
-               IconButton(
-                icon: const Icon(Icons.add, size: 16),
-                onPressed: () => provider.updateLots(index, item.ordlot + 1, context),
-                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ],
-          ),
-        ),
-        // Entry Price
-        DataCell(
-          SizedBox(
-            width: 90,
-            child: EntryPriceTableInput(
-              value: item.entryPrice,
-              onChanged: (price) => provider.updateEntryPrice(index, price, context),
-            ),
-          ),
-        ),
-        // LTP
-        DataCell(
-          Text(
-            item.ltp.toIndianFormat(),
-            style: MyntWebTextStyles.bodySmall(
-              context,
-              darkColor: MyntColors.textPrimaryDark,
-              lightColor: MyntColors.textBlack,
-            ).copyWith(fontSize: 12),
-          ),
-        ),
-        // Delete Action
-        DataCell(
-          IconButton(
-            icon:  Icon(Icons.delete_outline, color: resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss), size: 20),
-            onPressed: () => provider.removeFromBasket(index, context),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBottomActions(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(
-            color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-          ),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Lot Multiplier row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Text(
-                  'Lot Multiplier',
-                  style: MyntWebTextStyles.bodySmall(
-                    context,
-                    darkColor: MyntColors.textPrimaryDark,
-                    lightColor: MyntColors.textPrimary,
-                    fontWeight: MyntFonts.medium,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  height: 28,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0),
-                    ),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<int>(
-                      value: provider.lotMultiplier,
-                      isDense: true,
-                      menuMaxHeight: 300,
-                      style: MyntWebTextStyles.bodySmall(
-                        context,
-                        darkColor: MyntColors.textPrimaryDark,
-                        lightColor: MyntColors.textPrimary,
-                        fontWeight: MyntFonts.semiBold,
-                      ),
-                      dropdownColor: isDark ? MyntColors.textPrimary : Colors.white,
-                      items: List.generate(200, (i) => i + 1)
-                          .map((val) => DropdownMenuItem<int>(
-                                value: val,
-                                child: Text('$val'),
-                              ))
-                          .toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          provider.setLotMultiplier(val, context);
-                          _lotMultiplierController.text = val.toString();
-                        }
-                      },
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Divider(height: 1, thickness: 1, color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0)),
-          // Clear, Save, Place Order row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                OutlinedButton(
-                  onPressed: () => provider.clearBasket(),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    minimumSize: const Size(60, 36),
-                    side: BorderSide(
-                      color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                  child: Text(
-                    'Clear',
-                    style: MyntWebTextStyles.bodySmall(
-                      context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textBlack,
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                ElevatedButton(
-                  onPressed: provider.isOrderLoading ? null : () => provider.placeOrder(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    minimumSize: const Size(100, 36),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                  child: provider.isOrderLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          'Place order',
-                          style: MyntWebTextStyles.bodySmall(
-                            context,
-                            color: Colors.white,
-                            fontWeight: MyntFonts.medium,
-                          ),
-                        ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStrategyGrid(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    final strategies = provider.filteredStrategies;
-    final isCustomTab = provider.strategyTypeTab == 'CustomBuilder';
-    final activeColor = resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary);
-
-    if (strategies.isEmpty && !isCustomTab) {
-      return Center(
-        child: Text(
-          'No strategies found.',
-          textAlign: TextAlign.center,
-          style: MyntWebTextStyles.bodySmall(
-            context,
-            color: Colors.grey,
-          ),
-        ),
-      );
-    }
-
-    return SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Leg builder (only for Custom Builder tab)
-          if (isCustomTab) ...[
-            _buildLegBuilder(context, provider, isDark),
-            _buildLegBuilderBottomActions(context, provider, isDark),
-          ],
-          // Strategy cards
-          if (strategies.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: strategies.map((strategy) {
-                  final isActive = provider.activePredefinedStrategy == strategy.title;
-                  final showDelete = strategy.type == 'CustomBuilder';
-                  return InkWell(
-                    onTap: () => provider.setActivePredefinedStrategy(strategy, context),
-                    child: Stack(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isActive
-                                ? (isDark ? MyntColors.overlayBgDark : MyntColors.cardHover)
-                                : (isDark ? MyntColors.cardDark : Colors.white),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: isActive
-                                  ? activeColor
-                                  : (isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0)),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // Strategy SVG image
-                              Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                padding: const EdgeInsets.all(3),
-                                child: SvgPicture.asset(
-                                  strategy.image,
-                                  width: 34,
-                                  height: 34,
-                                  placeholderBuilder: (context) => Icon(
-                                    Icons.show_chart,
-                                    color: isActive ? activeColor : resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
-                                    size: 18,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                strategy.title,
-                                style: MyntWebTextStyles.bodySmall(
-                                  context,
-                                  color: isActive
-                                      ? activeColor
-                                      : (isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack),
-                                  fontWeight: MyntFonts.medium,
-                                ),
-                              ),
-                              // Extra space for delete icon
-                              if (showDelete)
-                                const SizedBox(width: 12),
-                            ],
-                          ),
-                        ),
-                        // Delete button at top-right corner
-                        if (showDelete)
-                          Positioned(
-                            top: 2,
-                            right: 2,
-                            child: InkWell(
-                              onTap: () => _showDeleteCustomStrategyDialog(context, provider, strategy.title, isDark),
-                              child: Padding(
-                                padding: const EdgeInsets.all(2),
-                                child: Icon(
-                                  Icons.close,
-                                  size: 14,
-                                  color: isActive
-                                      ? activeColor.withValues(alpha: 0.7)
-                                      : (isDark ? Colors.grey : Colors.grey[600]),
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-            )
-          ,
-        ],
-      ),
-    );
-  }
-
-  /// Leg builder section — shown above strategy tabs when on Custom Builder tab
-  Widget _buildLegBuilder(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    final draftLegs = provider.draftLegs;
-
-    if (draftLegs.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const SizedBox(height: 16),
-            Text(
-              "No legs defined yet.",
-              style: MyntWebTextStyles.body(context, color: Colors.grey),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Add legs to build your custom strategy.',
-              style: MyntWebTextStyles.bodySmall(context, color: Colors.grey),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: () => provider.addDraftLeg(),
-              icon: const Icon(Icons.add, size: 16),
-              label: Text(
-                'Add Leg',
-                style: MyntWebTextStyles.body(context,
-                    darkColor: MyntColors.textPrimaryDark,
-                    lightColor: MyntColors.textBlack),
-              ),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                side: BorderSide(color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      );
-    }
-
-    final ScrollController horizontalController = ScrollController();
-    final ScrollController verticalController = ScrollController();
-
-    final dataTable = DataTable(
-      columnSpacing: 10,
-      horizontalMargin: 8,
-      headingRowHeight: 40,
-      headingRowColor: WidgetStateProperty.all(
-        isDark ? MyntColors.dividerDark : MyntColors.divider,
-      ),
-      dataRowMinHeight: 40,
-      dataRowMaxHeight: 48,
-      columns: [
-        DataColumn(
-          label: Checkbox(
-            value: provider.isAllDraftLegsSelected,
-            activeColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
-            checkColor: isDark ? Colors.white : null,
-            onChanged: (value) => provider.toggleAllDraftLegCheckboxes(value ?? false),
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-        ),
-        DataColumn(
-          label: Text('B/S',
-              style: MyntWebTextStyles.bodySmall(context,
-                  darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack, fontWeight: MyntFonts.medium)),
-        ),
-        DataColumn(
-          label: Text('CE/PE',
-              style: MyntWebTextStyles.bodySmall(context,
-                  darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack, fontWeight: MyntFonts.medium)),
-        ),
-        DataColumn(
-          label: Text('Lots',
-              style: MyntWebTextStyles.bodySmall(context,
-                  darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack, fontWeight: MyntFonts.medium)),
-        ),
-        DataColumn(
-          label: Text('Exp Offset',
-              style: MyntWebTextStyles.bodySmall(context,
-                  darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack, fontWeight: MyntFonts.medium)),
-        ),
-        DataColumn(
-          label: Text('Strike Type',
-              style: MyntWebTextStyles.bodySmall(context,
-                  darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack, fontWeight: MyntFonts.medium)),
-        ),
-        DataColumn(
-          label: Text('Offset/Premium',
-              style: MyntWebTextStyles.bodySmall(context,
-                  darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack, fontWeight: MyntFonts.medium)),
-        ),
-        const DataColumn(label: SizedBox()),
-      ],
-      rows: draftLegs.asMap().entries.map((entry) {
-        final index = entry.key;
-        final draft = entry.value;
-        return _buildDraftLegDataRow(context, provider, index, draft, isDark);
-      }).toList(),
-    );
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return ScrollbarTheme(
-          data: ScrollbarThemeData(
-            thumbVisibility: WidgetStateProperty.all(true),
-            thickness: WidgetStateProperty.all(8),
-            radius: const Radius.circular(4),
-            thumbColor: WidgetStateProperty.all(Colors.grey.withValues(alpha: 0.6)),
-            trackColor: WidgetStateProperty.all(Colors.grey.withValues(alpha: 0.2)),
-            trackVisibility: WidgetStateProperty.all(true),
-          ),
-          child: Scrollbar(
-            controller: horizontalController,
-            thumbVisibility: true,
-            trackVisibility: true,
-            child: SingleChildScrollView(
-              controller: horizontalController,
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                child: Scrollbar(
-                  controller: verticalController,
-                  thumbVisibility: true,
-                  child: SingleChildScrollView(
-                    controller: verticalController,
-                    scrollDirection: Axis.vertical,
-                    child: dataTable,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  DataRow _buildDraftLegDataRow(BuildContext context, StrategyBuilderProvider provider,
-      int index, CustomStrategyLegDraft draft, bool isDark) {
-    return DataRow(
-      cells: [
-        // Checkbox
-        DataCell(
-          Checkbox(
-            value: draft.checkbox,
-            activeColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
-            checkColor: isDark ? Colors.white : null,
-            onChanged: (value) {
-              draft.checkbox = value ?? false;
-              provider.updateDraftLeg(index, draft);
-            },
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-        ),
-        // B/S toggle
-        DataCell(
-          InkWell(
-            onTap: () {
-              draft.action = draft.action == 'BUY' ? 'SELL' : 'BUY';
-              provider.updateDraftLeg(index, draft);
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: draft.action == 'BUY'
-                    ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withValues(alpha: 0.15)
-                    : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                draft.action == 'BUY' ? 'B' : 'S',
-                style: MyntWebTextStyles.bodySmall(
-                  context,
-                  color: draft.action == 'BUY'
-                      ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary)
-                      : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss),
-                  fontWeight: MyntFonts.bold,
-                ).copyWith(fontSize: 12),
-              ),
-            ),
-          ),
-        ),
-        // CE/PE toggle
-        DataCell(
-          InkWell(
-            onTap: () {
-              draft.optionType = draft.optionType == 'CE' ? 'PE' : 'CE';
-              provider.updateDraftLeg(index, draft);
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: draft.optionType == 'CE'
-                    ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withValues(alpha: 0.15)
-                    : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                draft.optionType,
-                style: MyntWebTextStyles.bodySmall(
-                  context,
-                  color: draft.optionType == 'CE'
-                      ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary)
-                      : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss),
-                  fontWeight: MyntFonts.bold,
-                ).copyWith(fontSize: 12),
-              ),
-            ),
-          ),
-        ),
-        // Lots (+/- stepper)
-        DataCell(
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              InkWell(
-                onTap: draft.ordlot > 1 ? () {
-                  draft.ordlot--;
-                  provider.updateDraftLeg(index, draft);
-                } : null,
-                child: const Icon(Icons.remove, size: 16),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 40,
-                child: Text(
-                  '${draft.ordlot}',
-                  textAlign: TextAlign.center,
-                  style: MyntWebTextStyles.bodySmall(
-                    context,
-                    darkColor: MyntColors.textPrimaryDark,
-                    lightColor: MyntColors.textBlack,
-                    fontWeight: MyntFonts.medium,
-                  ).copyWith(fontSize: 12),
-                ),
-              ),
-              const SizedBox(width: 8),
-              InkWell(
-                onTap: () {
-                  draft.ordlot++;
-                  provider.updateDraftLeg(index, draft);
-                },
-                child: const Icon(Icons.add, size: 16),
-              ),
-            ],
-          ),
-        ),
-        // Expiry Offset (+/- stepper)
-        DataCell(
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              InkWell(
-                onTap: draft.expiryOffset > 0 ? () {
-                  draft.expiryOffset--;
-                  provider.updateDraftLeg(index, draft);
-                } : null,
-                child: const Icon(Icons.remove, size: 16),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 40,
-                child: Text(
-                  '${draft.expiryOffset}',
-                  textAlign: TextAlign.center,
-                  style: MyntWebTextStyles.bodySmall(
-                    context,
-                    darkColor: MyntColors.textPrimaryDark,
-                    lightColor: MyntColors.textBlack,
-                    fontWeight: MyntFonts.medium,
-                  ).copyWith(fontSize: 12),
-                ),
-              ),
-              const SizedBox(width: 8),
-              InkWell(
-                onTap: () {
-                  draft.expiryOffset++;
-                  provider.updateDraftLeg(index, draft);
-                },
-                child: const Icon(Icons.add, size: 16),
-              ),
-            ],
-          ),
-        ),
-        // Strike Type (PopupMenuButton dropdown)
-        DataCell(
-          PopupMenuButton<String>(
-            tooltip: '',
-            offset: const Offset(0, 30),
-            splashRadius: isDark ? 0 : null,
-            color: isDark ? MyntColors.cardDark : null,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: isDark ? MyntColors.cardDark : MyntColors.card,
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0),
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    draft.strikeType == 'PREMIUM' ? 'P' : draft.strikeType,
-                    style: MyntWebTextStyles.bodySmall(
-                      context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textBlack,
-                    ).copyWith(fontSize: 12),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.keyboard_arrow_down,
-                    size: 14,
-                    color: isDark ? Colors.grey : Colors.grey[600],
-                  ),
-                ],
-              ),
-            ),
-            itemBuilder: (context) => ['ATM', 'ITM', 'OTM', 'PREMIUM']
-                .map((type) => PopupMenuItem(
-                      value: type,
-                      child: Text(
-                        type == 'PREMIUM' ? 'P (Premium)' : type,
-                        style: MyntWebTextStyles.bodySmall(context).copyWith(fontSize: 12),
-                      ),
-                    ))
-                .toList(),
-            onSelected: (value) {
-              draft.strikeType = value;
-              if (value == 'PREMIUM') draft.strikeOffset = 0;
-              provider.updateDraftLeg(index, draft);
-            },
-          ),
-        ),
-        // Offset / Premium value
-        DataCell(
-          draft.strikeType == 'PREMIUM'
-              ? SizedBox(
-                  width: 80,
-                  child: EntryPriceTableInput(
-                    value: draft.premiumValue,
-                    onChanged: (price) {
-                      draft.premiumValue = price;
-                      provider.updateDraftLeg(index, draft);
-                    },
-                  ),
-                )
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    InkWell(
-                      onTap: draft.strikeOffset > 0 ? () {
-                        draft.strikeOffset--;
-                        provider.updateDraftLeg(index, draft);
-                      } : null,
-                      child: const Icon(Icons.remove, size: 16),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 40,
-                      child: Text(
-                        '${draft.strikeOffset}',
-                        textAlign: TextAlign.center,
-                        style: MyntWebTextStyles.bodySmall(
-                          context,
-                          darkColor: MyntColors.textPrimaryDark,
-                          lightColor: MyntColors.textBlack,
-                          fontWeight: MyntFonts.medium,
-                        ).copyWith(fontSize: 12),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: () {
-                        draft.strikeOffset++;
-                        provider.updateDraftLeg(index, draft);
-                      },
-                      child: const Icon(Icons.add, size: 16),
-                    ),
-                  ],
-                ),
-        ),
-        // Delete
-        DataCell(
-          IconButton(
-            onPressed: () => provider.removeDraftLeg(index),
-            icon: Icon(Icons.delete_outline, size: 20, color: isDark ? MyntColors.lossDark : MyntColors.loss),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Bottom actions for the custom strategy leg builder
-  Widget _buildLegBuilderBottomActions(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(
-            color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-          ),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Add Leg row (similar to Lot Multiplier row)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () => provider.addDraftLeg(),
-                  icon: const Icon(Icons.add, size: 16),
-                  label: Text(
-                    'Add Leg',
-                    style: MyntWebTextStyles.bodySmall(
-                      context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textBlack,
-                    ),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    minimumSize: const Size(70, 36),
-                    side: BorderSide(
-                      color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Divider(height: 1, thickness: 1, color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0)),
-          // Clear, Save, Apply row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                OutlinedButton(
-                  onPressed: () => provider.clearDraftLegs(),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    minimumSize: const Size(60, 36),
-                    side: BorderSide(
-                      color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                  child: Text(
-                    'Clear',
-                    style: MyntWebTextStyles.bodySmall(
-                      context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textBlack,
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                OutlinedButton(
-                  onPressed: () => _showSaveCustomStrategyDialog(context, provider, isDark),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    minimumSize: const Size(60, 36),
-                    side: BorderSide(
-                      color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                  child: Text(
-                    'Save',
-                    style: MyntWebTextStyles.bodySmall(
-                      context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textBlack,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: provider.isLoading ? null : () => provider.applyCustomStrategy(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary),
-                    disabledBackgroundColor: resolveThemeColor(context, dark: MyntColors.secondary, light: MyntColors.primary).withValues(alpha: 0.6),
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    minimumSize: const Size(100, 36),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                  child: provider.isLoading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          'Apply',
-                          style: MyntWebTextStyles.bodySmall(
-                            context,
-                            color: Colors.white,
-                            fontWeight: MyntFonts.medium,
-                          ),
-                        ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Save custom strategy dialog
-  void _showSaveCustomStrategyDialog(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    final nameController = TextEditingController(text: provider.editingCustomBuilderName ?? '');
-    final focusNode = FocusNode();
-
-    // Request focus after dialog animation completes
-    Future.delayed(const Duration(milliseconds: 250), () {
-      focusNode.requestFocus();
-      if (provider.editingCustomBuilderName != null && nameController.text.isNotEmpty) {
-        Future.delayed(const Duration(milliseconds: 50), () {
-          nameController.selection = TextSelection.collapsed(
-            offset: nameController.text.length,
-          );
-        });
-      }
-    });
-
-    showDialog(
-      context: context,
-      barrierColor: Colors.black54,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            final isUpdateMode = provider.editingCustomBuilderName != null &&
-                nameController.text == provider.editingCustomBuilderName;
-            return Center(
-              child: Material(
-                color: Colors.transparent,
-                child: shadcn.Card(
-                  borderRadius: BorderRadius.circular(8),
-                  padding: EdgeInsets.zero,
-                  child: Container(
-                    width: 400,
-                    constraints: const BoxConstraints(maxHeight: 300),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Header
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            border: Border(
-                              bottom: BorderSide(
-                                color: shadcn.Theme.of(context).colorScheme.border,
-                              ),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                isUpdateMode ? 'Update Custom Builder' : 'Save Custom Builder',
-                                style: MyntWebTextStyles.title(
-                                  context,
-                                  color: resolveThemeColor(
-                                    context,
-                                    dark: MyntColors.textPrimaryDark,
-                                    light: MyntColors.textPrimary,
-                                  ),
-                                ),
-                              ),
-                              MyntCloseButton(
-                                onPressed: () => Navigator.of(dialogContext).pop(),
-                              ),
-                            ],
-                          ),
-                        ),
-                        // Content
-                        Flexible(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: MyntFormTextField(
-                                        controller: nameController,
-                                        focusNode: focusNode,
-                                        placeholder: 'Enter strategy name',
-                                        enabled: !isUpdateMode,
-                                        onChanged: (_) => setState(() {}),
-                                      ),
-                                    ),
-                                    if (isUpdateMode) ...[
-                                      const SizedBox(width: 8),
-                                      GestureDetector(
-                                        onTap: () {
-                                          nameController.clear();
-                                          focusNode.requestFocus();
-                                          setState(() {});
-                                        },
-                                        child: Icon(
-                                          Icons.close,
-                                          size: 18,
-                                          color: resolveThemeColor(
-                                            context,
-                                            dark: MyntColors.textSecondaryDark,
-                                            light: MyntColors.textSecondary,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                                const SizedBox(height: 24),
-                                MyntPrimaryButton(
-                                  size: MyntButtonSize.large,
-                                  label: isUpdateMode ? 'Update' : 'Save',
-                                  isFullWidth: true,
-                                  onPressed: nameController.text.trim().isEmpty
-                                      ? null
-                                      : () {
-                                          provider.saveCustomStrategy(nameController.text.trim(), context);
-                                          Navigator.pop(dialogContext);
-                                        },
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  /// Delete custom strategy dialog
-  void _showDeleteCustomStrategyDialog(BuildContext context, StrategyBuilderProvider provider, String strategyName, bool isDark) {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black54,
-      builder: (dialogContext) {
-        return Center(
-          child: Material(
-            color: Colors.transparent,
-            child: shadcn.Card(
-              borderRadius: BorderRadius.circular(8),
-              padding: EdgeInsets.zero,
-              child: Container(
-                width: 400,
-                constraints: const BoxConstraints(maxHeight: 250),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Header
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          bottom: BorderSide(
-                            color: shadcn.Theme.of(context).colorScheme.border,
-                          ),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Delete Strategy',
-                            style: MyntWebTextStyles.title(
-                              context,
-                              color: resolveThemeColor(
-                                context,
-                                dark: MyntColors.textPrimaryDark,
-                                light: MyntColors.textPrimary,
-                              ),
-                            ),
-                          ),
-                          MyntCloseButton(
-                            onPressed: () => Navigator.of(dialogContext).pop(),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Content
-                    Flexible(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Text(
-                              'Are you sure you want to delete "$strategyName"?',
-                              textAlign: TextAlign.center,
-                              style: MyntWebTextStyles.body(
-                                context,
-                                fontWeight: FontWeight.w500,
-                                color: resolveThemeColor(
-                                  context,
-                                  dark: MyntColors.textPrimaryDark,
-                                  light: MyntColors.textPrimary,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 24),
-                            MyntButton(
-                              type: MyntButtonType.primary,
-                              size: MyntButtonSize.large,
-                              label: 'Delete',
-                              isFullWidth: true,
-                              backgroundColor: resolveThemeColor(
-                                context,
-                                dark: MyntColors.errorDark,
-                                light: MyntColors.tertiary,
-                              ),
-                              onPressed: () {
-                                provider.deleteCustomStrategy(strategyName, context);
-                                Navigator.pop(dialogContext);
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildRightPanel(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? MyntColors.dashboardCarColor : Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-        ),
-      ),
-      child: Column(
-        children: [
-          // Metrics section
-          _buildMetricsSection(context, provider, isDark),
-          const Divider(height: 1),
-          // Tabs
-          _buildPayoffTabs(context, provider, isDark),
-          const Divider(height: 1),
-          // Chart or Greeks table
-          Expanded(
-            child: Stack(
-              children: [
-                provider.payoffTab == 0
-                    ? _buildPayoffChart(context, provider, isDark)
-                    : _buildGreeksTable(context, provider, isDark),
-                if (provider.isPayoffLoading && provider.payoffData.isNotEmpty)
-                  Positioned.fill(
-                    child: Container(
-                      color: (isDark ? Colors.black : Colors.white).withValues(alpha: 0.5),
-                      child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          // Greeks row
-          const Divider(height: 1),
-          if (provider.isLoading && provider.isAnalyzeMode)
-            _buildGreeksRowSkeleton(isDark)
-          else
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                children: [
-                  _buildMetricItem(context, '\u0394 DELTA', provider.greeksTotal('delta').toStringAsFixed(4), null, isDark),
-                  _buildMetricItem(context, '\u0398 THETA', provider.greeksTotal('theta').toStringAsFixed(4), null, isDark),
-                  _buildMetricItem(context, '\u0393 GAMMA', provider.greeksTotal('gamma').toStringAsFixed(4), null, isDark),
-                  _buildMetricItem(context, '\u03BD VEGA', provider.greeksTotal('vega').toStringAsFixed(4), null, isDark),
-                ],
-              ),
-            ),
-          // Chart controls
-          if (provider.isLoading && provider.isAnalyzeMode)
-            _buildChartControlsSkeleton(isDark)
-          else
-            _buildChartControls(context, provider, isDark),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetricsSection(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    if (provider.isLoading && provider.isAnalyzeMode) {
-      return _buildMetricsSkeleton(isDark);
-    }
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              _buildMetricItem(context, 'MAX PROFIT', provider.metrics.maxProfit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
-              _buildMetricItem(context, 'MAX LOSS', provider.metrics.maxLoss, isDark ? MyntColors.lossDark : MyntColors.loss, isDark),
-              _buildMetricItem(
-                context,
-                'NET PREMIUM',
-                // Show absolute value - color indicates if it's credit (green) or debit (red)
-                provider.netPremium.abs().toIndianFormat(),
-                provider.netPremium > 0
-                    ? (isDark ? MyntColors.profitDark : MyntColors.profit)
-                    : provider.netPremium < 0
-                        ? (isDark ? MyntColors.lossDark : MyntColors.loss)
-                        : (isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack),
-                isDark,
-              ),
-              _buildMetricItem(context, 'MARGIN', provider.totalMargin, null, isDark),
-              _buildMetricItem(context, 'MARGIN BENEFIT', provider.marginBenefit, isDark ? MyntColors.profitDark : MyntColors.profit, isDark),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              _buildMetricItem(context, 'POP', '${provider.metrics.popPercent.toStringAsFixed(0)}%', null, isDark),
-              _buildMetricItem(context, 'REWARD/RISK', provider.metrics.riskRewardRatio, null, isDark),
-              _buildMetricItem(
-                context,
-                'BREAKEVEN',
-                '--',
-                null,
-                isDark,
-                valueWidget: provider.metrics.breakevens.isNotEmpty
-                    ? _buildBreakevenRichText(provider, MyntWebTextStyles.bodySmall(
-                        context,
-                        color: isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack,
-                        fontWeight: MyntFonts.medium,
-                      ).copyWith(fontSize: 14))
-                    : null,
-              ),
-              const Expanded(child: SizedBox()),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetricItem(BuildContext context, String label, String value, Color? valueColor, bool isDark, {Widget? valueWidget}) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: MyntWebTextStyles.caption(
-              context,
-              color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 11),
-          ),
-          const SizedBox(height: 2),
-          valueWidget ?? Text(
-            value,
-            style: MyntWebTextStyles.bodySmall(
-              context,
-              color: valueColor ?? (isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack),
-              fontWeight: MyntFonts.medium,
-            ).copyWith(fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBreakevenRichText(StrategyBuilderProvider provider, TextStyle baseStyle) {
-    final spans = <InlineSpan>[];
-    final breakevens = provider.metrics.breakevens;
-    for (int i = 0; i < breakevens.length; i++) {
-      final b = breakevens[i];
-      final pct = provider.spotPrice > 0 ? ((b - provider.spotPrice) / provider.spotPrice) * 100 : 0.0;
-      if (i > 0) spans.add(TextSpan(text: '  |  ', style: baseStyle));
-      spans.add(TextSpan(text: b.toIndianFormat(), style: baseStyle));
-      spans.add(TextSpan(
-        text: ' (${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(2)}%)',
-        style: baseStyle.copyWith(fontSize: (baseStyle.fontSize ?? 14) - 3, color: Colors.grey),
-      ));
-    }
-    return RichText(text: TextSpan(children: spans));
-  }
-
-  Widget _buildPayoffTabs(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    // final hasData = provider.payoffData.isNotEmpty;
-    // final targetDate = DateTime.now().add(Duration(days: provider.targetDaysToExpiry));
-    // final borderColor = isDark ? Colors.grey[700]! : Colors.grey[300]!;
-    // final labelStyle = MyntWebTextStyles.caption(
-    //   context,
-    //   darkColor: Colors.grey,
-    //   lightColor: Colors.grey[700],
-    //   fontWeight: MyntFonts.medium,
-    // ).copyWith(fontSize: 11);
-    // final resetStyle = MyntWebTextStyles.caption(
-    //   context,
-    //   color: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-    //   fontWeight: MyntFonts.bold,
-    // ).copyWith(fontSize: 11);
-    // final valueStyle = MyntWebTextStyles.bodySmall(
-    //   context,
-    //   darkColor: MyntColors.textPrimaryDark,
-    //   lightColor: MyntColors.textBlack,
-    //   fontWeight: MyntFonts.semiBold,
-    // ).copyWith(fontSize: 13);
-
-    return Padding(
-      padding: const EdgeInsets.only(left: 8, right: 8, top: 8),
-      child: Row(
-        children: [
-          _buildTabButton(context, 'Payoff Graph', provider.payoffTab == 0, isDark, () {
-            provider.setPayoffTab(0);
-          }),
-          const SizedBox(width: 16),
-          _buildTabButton(context, 'Greeks', provider.payoffTab == 1, isDark, () {
-            provider.setPayoffTab(1);
-          }),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTabButton(BuildContext context, String label, bool isActive, bool isDark, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(
-              color: isActive ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary) : Colors.transparent,
-              width: 2,
-            ),
-          ),
-        ),
-        child: Text(
-          label,
-          style: MyntWebTextStyles.bodySmall(
-            context,
-            color: isActive ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary) : Colors.grey,
-            fontWeight: MyntFonts.medium,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPayoffChart(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    if (provider.isLoading && provider.isAnalyzeMode) {
-      return _buildPayoffChartSkeleton(isDark);
-    }
-    if (provider.payoffData.isEmpty) {
-      return Center(
-        child: Text(
-          'Add options to see payoff chart',
-          style: MyntWebTextStyles.body(
-            context,
-            color: Colors.grey,
-          ),
-        ),
-      );
-    }
-
-    final currentPrice = provider.isTargetSpotActive ? provider.targetSpotPrice : provider.spotPrice;
-
-    // Convert payoff data to lists
-    final stockPrices = provider.payoffData.map((p) => p.price).toList();
-    final payoffsExpiry = provider.payoffData.map((p) => p.profit).toList();
-    final payoffsTarget = provider.targetPayoffData.map((p) => p.profit).toList();
-
-    if (stockPrices.isEmpty || payoffsExpiry.isEmpty) {
-      return Center(
-        child: Text(
-          'No payoff data available',
-          style: MyntWebTextStyles.body(context, color: Colors.grey),
-        ),
-      );
-    }
-
-    // Calculate Y-axis range with nice round intervals
-    double minPayoff = payoffsExpiry.reduce((a, b) => a < b ? a : b);
-    double maxPayoff = payoffsExpiry.reduce((a, b) => a > b ? a : b);
-
-    if (payoffsTarget.isNotEmpty) {
-      final targetMin = payoffsTarget.reduce((a, b) => a < b ? a : b);
-      final targetMax = payoffsTarget.reduce((a, b) => a > b ? a : b);
-      minPayoff = minPayoff < targetMin ? minPayoff : targetMin;
-      maxPayoff = maxPayoff > targetMax ? maxPayoff : targetMax;
-    }
-
-    // Add padding
-    double yRange = maxPayoff - minPayoff;
-    if (yRange <= 0) yRange = 10000;
-    minPayoff = minPayoff - (yRange * 0.15);
-    maxPayoff = maxPayoff + (yRange * 0.15);
-
-    // Round to nice intervals (multiples of 10000 for large values, 1000 for smaller)
-    double roundingFactor = 10000;
-    if ((maxPayoff - minPayoff).abs() < 50000) {
-      roundingFactor = 5000;
-    }
-    if ((maxPayoff - minPayoff).abs() < 10000) {
-      roundingFactor = 1000;
-    }
-
-    // Round min down and max up to nice values
-    minPayoff = (minPayoff / roundingFactor).floor() * roundingFactor;
-    maxPayoff = (maxPayoff / roundingFactor).ceil() * roundingFactor;
-
-    // Ensure zero is visible with proper negative space
-    if (minPayoff > 0) {
-      minPayoff = -roundingFactor;
-    } else if (maxPayoff < 0) {
-      maxPayoff = roundingFactor;
-    }
-
-    // Ensure minimum visible range
-    if ((maxPayoff - minPayoff) < roundingFactor * 4) {
-      maxPayoff = minPayoff + roundingFactor * 4;
-    }
-
-    // Calculate X-axis range
-    double minPrice = stockPrices.reduce((a, b) => a < b ? a : b);
-    double maxPrice = stockPrices.reduce((a, b) => a > b ? a : b);
-    final priceRange = maxPrice - minPrice;
-
-    // Center around midpoint of payoff data (stable, not affected by live price ticks)
-    final centerPrice = (minPrice + maxPrice) / 2;
-    
-    // If SD lines are enabled, expand range to include all SD lines
-    double zoomedRange = priceRange * 0.6;
-    if (provider.showSDLines && provider.sdPrices.isNotEmpty) {
-      final sdMin = provider.sdPrices['-2σ'] ?? minPrice;
-      final sdMax = provider.sdPrices['+2σ'] ?? maxPrice;
-      final sdRange = sdMax - sdMin;
-      // Ensure SD range fits with 10% padding
-      if (sdRange * 1.15 > zoomedRange) {
-        zoomedRange = sdRange * 1.15;
-      }
-    }
-    
-    minPrice = centerPrice - (zoomedRange / 2);
-    maxPrice = centerPrice + (zoomedRange / 2);
-
-    // Ensure we don't go beyond actual data bounds
-    final actualMinPrice = stockPrices.reduce((a, b) => a < b ? a : b);
-    final actualMaxPrice = stockPrices.reduce((a, b) => a > b ? a : b);
-
-    if (minPrice < actualMinPrice) {
-      final adjustment = actualMinPrice - minPrice;
-      minPrice = actualMinPrice;
-      maxPrice = maxPrice + adjustment;
-    }
-    if (maxPrice > actualMaxPrice) {
-      final adjustment = maxPrice - actualMaxPrice;
-      maxPrice = actualMaxPrice;
-      minPrice = minPrice - adjustment;
-      if (minPrice < actualMinPrice) {
-        minPrice = actualMinPrice;
-      }
-    }
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final chartWidth = constraints.maxWidth;
-        final chartHeight = constraints.maxHeight;
-
-        return Stack(
-          children: [
-            MouseRegion(
-              onExit: (event) {
-                _hidePayoffTooltipAfterDelay();
-              },
-              child: Listener(
-                onPointerDown: (event) {
-                  setState(() {
-                    _isDragging = true;
-                  });
-                  _updatePayoffTooltipFromPosition(
-                    event.localPosition.dx,
-                    event.localPosition.dy,
-                    chartWidth,
-                    chartHeight,
-                    minPrice,
-                    maxPrice,
-                  );
-                },
-                onPointerMove: (event) {
-                  _updatePayoffTooltipFromPosition(
-                    event.localPosition.dx,
-                    event.localPosition.dy,
-                    chartWidth,
-                    chartHeight,
-                    minPrice,
-                    maxPrice,
-                  );
-                },
-                onPointerHover: (event) {
-                  _updatePayoffTooltipFromPosition(
-                    event.localPosition.dx,
-                    event.localPosition.dy,
-                    chartWidth,
-                    chartHeight,
-                    minPrice,
-                    maxPrice,
-                  );
-                },
-                onPointerUp: (event) {
-                  setState(() {
-                    _isDragging = false;
-                  });
-                  _hidePayoffTooltipAfterDelay();
-                },
-                onPointerCancel: (event) {
-                  _isDragging = false;
-                  _selectedPrice = null;
-                  _tooltipNotifier.value = const _PayoffTooltipState();
-                },
-              child: SfCartesianChart(
-                plotAreaBorderWidth: 0,
-                enableAxisAnimation: false,
-                primaryXAxis: NumericAxis(
-                  minimum: minPrice,
-                  maximum: maxPrice,
-                  rangePadding: ChartRangePadding.none,
-                  axisLine: const AxisLine(width: 0),
-                  majorGridLines: MajorGridLines(
-                    width: 1,
-                    color: Colors.grey.withOpacity(0.15),
-                  ),
-                  desiredIntervals: 5,
-                  axisLabelFormatter: (AxisLabelRenderDetails args) {
-                    return ChartAxisLabel(
-                      args.value.toStringAsFixed(0),
-                      TextStyle(
-                        fontFamily: MyntFonts.fontFamily,
-                        fontSize: MyntFonts.caption,
-                        color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                      ),
-                    );
-                  },
-                  plotBands: <PlotBand>[
-                    // Current price line (vertical blue line)
-                    PlotBand(
-                      start: currentPrice,
-                      end: currentPrice,
-                      borderColor: const Color(0xFF2962FF),
-                      borderWidth: 1.5,
-                    ),
-                    // Breakeven lines (vertical grey dashed lines)
-                    ...provider.metrics.breakevens.map(
-                      (be) => PlotBand(
-                        start: be,
-                        end: be,
-                        color: Colors.transparent,
-                        borderColor: Colors.grey.withOpacity(0.5),
-                        borderWidth: 1.5,
-                        dashArray: const <double>[5, 5],
-                      ),
-                    ),
-                    // SD lines (standard deviation lines)
-                    if (provider.showSDLines && provider.sdPrices.isNotEmpty) ...[
-                      // -2σ line
-                      PlotBand(
-                        start: provider.sdPrices['-2σ']!,
-                        end: provider.sdPrices['-2σ']!,
-                        color: Colors.transparent,
-                        borderColor: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                        borderWidth: 1.5,
-                        dashArray: const <double>[6, 4],
-                        text: '-2σ',
-                        textStyle: TextStyle(
-                          fontFamily: MyntFonts.fontFamily,
-                          color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                          fontSize: MyntFonts.caption,
-                          fontWeight: MyntFonts.medium,
-                        ),
-                        verticalTextAlignment: TextAnchor.start,
-                        horizontalTextAlignment: TextAnchor.middle,
-                        verticalTextPadding: '2%',
-                      ),
-                      // -1σ line
-                      PlotBand(
-                        start: provider.sdPrices['-1σ']!,
-                        end: provider.sdPrices['-1σ']!,
-                        color: Colors.transparent,
-                        borderColor: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                        borderWidth: 1.5,
-                        dashArray: const <double>[6, 4],
-                        text: '-1σ',
-                        textStyle: TextStyle(
-                          fontFamily: MyntFonts.fontFamily,
-                          color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                          fontSize: MyntFonts.caption,
-                          fontWeight: MyntFonts.medium,
-                        ),
-                        verticalTextAlignment: TextAnchor.start,
-                        horizontalTextAlignment: TextAnchor.middle,
-                        verticalTextPadding: '2%',
-                      ),
-                      // +1σ line
-                      PlotBand(
-                        start: provider.sdPrices['+1σ']!,
-                        end: provider.sdPrices['+1σ']!,
-                        color: Colors.transparent,
-                        borderColor: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                        borderWidth: 1.5,
-                        dashArray: const <double>[6, 4],
-                        text: '+1σ',
-                        textStyle: TextStyle(
-                          fontFamily: MyntFonts.fontFamily,
-                          color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                          fontSize: MyntFonts.caption,
-                          fontWeight: MyntFonts.medium,
-                        ),
-                        verticalTextAlignment: TextAnchor.start,
-                        horizontalTextAlignment: TextAnchor.middle,
-                        verticalTextPadding: '2%',
-                      ),
-                      // +2σ line
-                      PlotBand(
-                        start: provider.sdPrices['+2σ']!,
-                        end: provider.sdPrices['+2σ']!,
-                        color: Colors.transparent,
-                        borderColor: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                        borderWidth: 1.5,
-                        dashArray: const <double>[6, 4],
-                        text: '+2σ',
-                        textStyle: TextStyle(
-                          fontFamily: MyntFonts.fontFamily,
-                          color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                          fontSize: MyntFonts.caption,
-                          fontWeight: MyntFonts.medium,
-                        ),
-                        verticalTextAlignment: TextAnchor.start,
-                        horizontalTextAlignment: TextAnchor.middle,
-                        verticalTextPadding: '2%',
-                      ),
-                    ],
-                  ],
-                ),
-                primaryYAxis: NumericAxis(
-                  minimum: minPayoff,
-                  maximum: maxPayoff,
-                  rangePadding: ChartRangePadding.none,
-                  axisLine: const AxisLine(width: 0),
-                  majorGridLines: MajorGridLines(
-                    width: 1,
-                    color: isDark ? MyntColors.dividerDark : MyntColors.divider,
-                  ),
-                  title: AxisTitle(
-                    text: 'Profit/Loss',
-                    textStyle: TextStyle(
-                      fontFamily: MyntFonts.fontFamily,
-                      fontSize: MyntFonts.caption,
-                      fontWeight: MyntFonts.medium,
-                      color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                    ),
-                  ),
-                  desiredIntervals: 6,
-                  axisLabelFormatter: (AxisLabelRenderDetails args) {
-                    final value = args.value;
-                    String sign = value >= 0 ? '+' : '';
-                    String label = '${sign}₹${value.toInt()}';
-                    return ChartAxisLabel(
-                      label,
-                      TextStyle(
-                        fontFamily: MyntFonts.fontFamily,
-                        fontSize: MyntFonts.caption,
-                        color: isDark ? MyntColors.textSecondaryDark : MyntColors.textSecondary,
-                      ),
-                    );
-                  },
-                  plotBands: <PlotBand>[
-                    // Zero line (horizontal line)
-                    PlotBand(
-                      start: 0,
-                      end: 0,
-                      borderColor: isDark ? MyntColors.textPrimaryDark : Colors.black,
-                      borderWidth: 1,
-                    ),
-                  ],
-                ),
-                trackballBehavior: TrackballBehavior(
-                  enable: true,
-                  activationMode: ActivationMode.longPress,
-                  tooltipDisplayMode: TrackballDisplayMode.groupAllPoints,
-                  shouldAlwaysShow: _isDragging,
-                  hideDelay: 0,
-                  lineType: TrackballLineType.vertical,
-                  lineColor: Colors.grey.withOpacity(0.5),
-                  lineWidth: 1,
-                  markerSettings: const TrackballMarkerSettings(
-                    markerVisibility: TrackballVisibilityMode.visible,
-                    height: 8,
-                    width: 8,
-                  ),
-                  tooltipSettings: const InteractiveTooltip(
-                    enable: false,
-                  ),
-                ),
-                series: <CartesianSeries<dynamic, dynamic>>[
-                  // Loss shaded area (below zero) - light red fill
-                  AreaSeries<_PayoffData, double>(
-                    dataSource: _generateAreaDataFromZero(stockPrices, payoffsExpiry, false),
-                    xValueMapper: (_PayoffData data, _) => data.price,
-                    yValueMapper: (_PayoffData data, _) => data.payoff,
-                    color: const Color(0xFFFF6B6B).withOpacity(0.15),
-                    borderWidth: 0,
-                    animationDuration: 0,
-                    name: 'Loss',
-                    enableTooltip: false,
-                  ),
-                  // Profit shaded area (above zero) - light green fill
-                  AreaSeries<_PayoffData, double>(
-                    dataSource: _generateAreaDataFromZero(stockPrices, payoffsExpiry, true),
-                    xValueMapper: (_PayoffData data, _) => data.price,
-                    yValueMapper: (_PayoffData data, _) => data.payoff,
-                    color: const Color(0xFF4CAF50).withOpacity(0.15),
-                    borderWidth: 0,
-                    animationDuration: 0,
-                    name: 'Profit',
-                    enableTooltip: false,
-                  ),
-                  // Target/Today line (BLUE solid) - matches reference image
-                  if (payoffsTarget.isNotEmpty)
-                    LineSeries<_PayoffData, double>(
-                      dataSource: _generateLineData(stockPrices, payoffsTarget),
-                      xValueMapper: (_PayoffData data, _) => data.price,
-                      yValueMapper: (_PayoffData data, _) => data.payoff,
-                      color: const Color(0xFF2962FF), // Blue solid line
-                      width: 2.5,
-                      animationDuration: 0,
-                      name: 'Target',
-                      enableTooltip: false,
-                    ),
-                  // Expiry line (Segmented Red/Green) - matches reference image
-                  ..._generateSegmentedLineSeries(
-                    stockPrices: stockPrices,
-                    payoffs: payoffsExpiry,
-                    colorPositive: MyntColors.profit,
-                    colorNegative: MyntColors.loss,
-                    width: 2.5,
-                    dashArray: null,
-                    name: 'Expiry',
-                  ),
-                  // Marker dot on Target line at tooltip position
-                  if (_selectedPrice != null && payoffsTarget.isNotEmpty)
-                    ScatterSeries<_PayoffData, double>(
-                      dataSource: [
-                        _PayoffData(
-                          price: _selectedPrice!,
-                          payoff: _getPayoffAtPrice(stockPrices, payoffsTarget, _selectedPrice!),
-                        ),
-                      ],
-                      xValueMapper: (_PayoffData data, _) => data.price,
-                      yValueMapper: (_PayoffData data, _) => data.payoff,
-                      pointColorMapper: (_PayoffData data, _) => const Color(0xFF2962FF),
-                      markerSettings: MarkerSettings(
-                        isVisible: true,
-                        height: 10,
-                        width: 10,
-                        shape: DataMarkerType.circle,
-                        borderWidth: 2,
-                        borderColor: isDark ? MyntColors.textPrimaryDark : MyntColors.textBlack,
-                      ),
-                      animationDuration: 0,
-                      name: 'Target Marker',
-                      enableTooltip: false,
-                    ),
-                ],
-              ),
-            ), // Close Listener
-            ), // Close MouseRegion
-            // Custom tooltip — uses ValueListenableBuilder to avoid rebuilding the chart
-            ValueListenableBuilder<_PayoffTooltipState>(
-              valueListenable: _tooltipNotifier,
-              builder: (context, tooltipState, _) {
-                if (!tooltipState.showTooltip || tooltipState.selectedPrice == null) {
-                  return const SizedBox.shrink();
-                }
-                return _buildPayoffCustomTooltip(provider, isDark, stockPrices, payoffsExpiry, payoffsTarget, tooltipState);
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _updatePayoffTooltipFromPosition(double xPosition, double yPosition, double chartWidth, double chartHeight, double minPrice, double maxPrice) {
-    ++_tooltipUpdateCounter;
-
-    // Account for chart padding
-    final plotAreaWidth = chartWidth * 0.85;
-    final plotAreaStart = chartWidth * 0.075;
-    final relativeX = ((xPosition - plotAreaStart) / plotAreaWidth).clamp(0.0, 1.0);
-
-    final calculatedPrice = minPrice + (relativeX * (maxPrice - minPrice));
-
-    // Calculate tooltip position
-    const tooltipOffset = 20.0;
-    const tooltipWidth = 200.0;
-    const tooltipHeight = 150.0;
-    const edgePadding = 8.0;
-
-    final maxX = chartWidth - tooltipWidth - edgePadding;
-    final maxY = chartHeight - tooltipHeight - edgePadding;
-    final minX = edgePadding;
-    final minY = edgePadding;
-
-    double tooltipX;
-    final rightPosition = xPosition + tooltipOffset;
-    final leftPosition = xPosition - tooltipWidth - tooltipOffset;
-
-    if (rightPosition + tooltipWidth <= maxX) {
-      tooltipX = rightPosition;
-    } else if (leftPosition >= minX) {
-      tooltipX = leftPosition;
-    } else {
-      final rightSpace = maxX - xPosition;
-      final leftSpace = xPosition - minX;
-      tooltipX = rightSpace > leftSpace ? maxX : minX;
-    }
-
-    tooltipX = tooltipX.clamp(minX, maxX);
-    double tooltipY = yPosition - tooltipHeight / 2;
-    tooltipY = tooltipY.clamp(minY, maxY);
-
-    _selectedPrice = calculatedPrice;
-    _tooltipNotifier.value = _PayoffTooltipState(
-      selectedPrice: calculatedPrice,
-      showTooltip: true,
-      position: Offset(tooltipX, tooltipY),
-    );
-    // Schedule a single setState per frame for chart marker dot update
-    if (!_markerUpdateScheduled) {
-      _markerUpdateScheduled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() {});
-        _markerUpdateScheduled = false;
-      });
-    }
-  }
-
-  void _hidePayoffTooltipAfterDelay() {
-    if (!_isDragging) {
-      final counterWhenScheduled = _tooltipUpdateCounter;
-      Future.delayed(const Duration(milliseconds: 2000), () {
-        if (mounted && !_isDragging && counterWhenScheduled == _tooltipUpdateCounter) {
-          _selectedPrice = null;
-          _tooltipNotifier.value = const _PayoffTooltipState();
-        }
-      });
-    }
-  }
-
-  Widget _buildPayoffCustomTooltip(StrategyBuilderProvider provider, bool isDark, List<double> stockPrices, List<double> payoffsExpiry, List<double> payoffsTarget, _PayoffTooltipState tooltipState) {
-    final selectedPrice = tooltipState.selectedPrice!;
-    final initialPrice = provider.spotPrice;
-
-    // Get payoff values at selected price
-    final expiryPayoff = _getPayoffAtPrice(stockPrices, payoffsExpiry, selectedPrice);
-    final targetPayoff = payoffsTarget.isNotEmpty
-        ? _getPayoffAtPrice(stockPrices, payoffsTarget, selectedPrice)
-        : 0.0;
-
-    // Calculate price difference percentage from spot
-    final priceDiffPercent = initialPrice > 0 ? ((selectedPrice - initialPrice) / initialPrice) * 100 : 0.0;
-
-    // Calculate payoff percentages
-    final expiryPayoffPercent = initialPrice > 0 ? (expiryPayoff / initialPrice) * 100 : 0.0;
-    final targetPayoffPercent = initialPrice > 0 ? (targetPayoff / initialPrice) * 100 : 0.0;
-
-    return Positioned(
-      left: tooltipState.position.dx,
-      top: tooltipState.position.dy,
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Underlying Price with percentage difference from spot
-            _buildTooltipRowWithPercent(context, 'Underlying Price:', selectedPrice.toIndianFormat(), priceDiffPercent, MyntColors.textBlack),
-            const SizedBox(height: 6),
-            // Expiry P&L with percentage
-            _buildTooltipRowWithPercent(context, 'Expiry P&L:', '\u20B9${expiryPayoff.toIndianFormat()}', expiryPayoffPercent, expiryPayoff >= 0 ? MyntColors.profit : MyntColors.loss),
-            // Target P&L (if available)
-            if (payoffsTarget.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              _buildTooltipRowWithPercent(context, 'Target P&L:', '\u20B9${targetPayoff.toIndianFormat()}', targetPayoffPercent, targetPayoff >= 0 ? MyntColors.profit : MyntColors.loss),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-
-  Widget _buildTooltipRowWithPercent(BuildContext context, String label, String value, double percent, Color valueColor) {
-    final baseStyle = MyntWebTextStyles.bodySmall(
-      context,
-      color: valueColor,
-      fontWeight: MyntFonts.medium,
-    );
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          '$label ',
-          style: MyntWebTextStyles.bodySmall(
-            context,
-            color: MyntColors.textBlack,
-            fontWeight: MyntFonts.medium,
-          ),
-        ),
-        RichText(
-          text: TextSpan(
-            children: [
-              TextSpan(text: value, style: baseStyle),
-              TextSpan(
-                text: ' (${percent >= 0 ? '+' : ''}${percent.toStringAsFixed(2)}%)',
-                style: baseStyle.copyWith(fontSize: (baseStyle.fontSize ?? 14) - 3, color: Colors.grey),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  List<_PayoffData> _generateLineData(List<double> prices, List<double> payoffs) {
-    final length = prices.length < payoffs.length ? prices.length : payoffs.length;
-    return List.generate(
-      length,
-      (i) => _PayoffData(price: prices[i], payoff: payoffs[i]),
-    );
-  }
-
-  double _getPayoffAtPrice(List<double> prices, List<double> payoffs, double targetPrice) {
-    if (prices.isEmpty || payoffs.isEmpty) return 0.0;
-
-    int closestIndex = 0;
-    double minDiff = (prices[0] - targetPrice).abs();
-
-    for (int i = 1; i < prices.length; i++) {
-      final diff = (prices[i] - targetPrice).abs();
-      if (diff < minDiff) {
-        minDiff = diff;
-        closestIndex = i;
-      }
-    }
-
-    if (minDiff < 0.01 || closestIndex == 0 || closestIndex == prices.length - 1) {
-      return payoffs[closestIndex];
-    }
-
-    final prevIndex = targetPrice < prices[closestIndex] ? closestIndex - 1 : closestIndex;
-    final nextIndex = targetPrice < prices[closestIndex] ? closestIndex : closestIndex + 1;
-
-    if (prevIndex < 0 || nextIndex >= prices.length) {
-      return payoffs[closestIndex];
-    }
-
-    final prevPrice = prices[prevIndex];
-    final nextPrice = prices[nextIndex];
-    final prevPayoff = payoffs[prevIndex];
-    final nextPayoff = payoffs[nextIndex];
-
-    if ((nextPrice - prevPrice).abs() < 0.01) {
-      return prevPayoff;
-    }
-
-    final t = (targetPrice - prevPrice) / (nextPrice - prevPrice);
-    return prevPayoff + (nextPayoff - prevPayoff) * t;
-  }
-
-  List<CartesianSeries<_PayoffData, double>> _generateSegmentedLineSeries({
-    required List<double> stockPrices,
-    required List<double> payoffs,
-    required Color colorPositive,
-    required Color colorNegative,
-    required double width,
-    required List<double>? dashArray,
-    required String name,
-    bool enableTooltip = true,
-  }) {
-    final length = stockPrices.length < payoffs.length ? stockPrices.length : payoffs.length;
-
-    List<_PayoffData> positiveData = [];
-    List<_PayoffData> negativeData = [];
-
-    for (int i = 0; i < length; i++) {
-      final price = stockPrices[i];
-      final payoff = payoffs[i];
-
-      if (i > 0) {
-        final prevPayoff = payoffs[i - 1];
-        final prevPrice = stockPrices[i - 1];
-
-        if ((prevPayoff >= 0 && payoff < 0) || (prevPayoff < 0 && payoff >= 0)) {
-          final t = prevPayoff / (prevPayoff - payoff);
-          final zeroCrossPrice = prevPrice + (price - prevPrice) * t;
-
-          if (prevPayoff >= 0) {
-            positiveData.add(_PayoffData(price: zeroCrossPrice, payoff: 0.0));
-            negativeData.add(_PayoffData(price: zeroCrossPrice, payoff: 0.0));
-          } else {
-            negativeData.add(_PayoffData(price: zeroCrossPrice, payoff: 0.0));
-            positiveData.add(_PayoffData(price: zeroCrossPrice, payoff: 0.0));
-          }
-        }
-      }
-
-      if (payoff >= 0) {
-        positiveData.add(_PayoffData(price: price, payoff: payoff));
-      } else {
-        negativeData.add(_PayoffData(price: price, payoff: payoff));
-      }
-    }
-
-    List<CartesianSeries<_PayoffData, double>> series = [];
-
-    if (positiveData.isNotEmpty) {
-      series.add(LineSeries<_PayoffData, double>(
-        dataSource: positiveData,
-        xValueMapper: (_PayoffData data, _) => data.price,
-        yValueMapper: (_PayoffData data, _) => data.payoff,
-        color: colorPositive,
-        width: width,
-        dashArray: dashArray,
-        animationDuration: 0,
-        name: '$name (Positive)',
-        enableTooltip: enableTooltip,
-      ));
-    }
-
-    if (negativeData.isNotEmpty) {
-      series.add(LineSeries<_PayoffData, double>(
-        dataSource: negativeData,
-        xValueMapper: (_PayoffData data, _) => data.price,
-        yValueMapper: (_PayoffData data, _) => data.payoff,
-        color: colorNegative,
-        width: width,
-        dashArray: dashArray,
-        animationDuration: 0,
-        name: '$name (Negative)',
-        enableTooltip: enableTooltip,
-      ));
-    }
-
-    return series;
-  }
-
-  List<_PayoffData> _generateAreaDataFromZero(List<double> prices, List<double> payoffs, bool isPositive) {
-    final length = prices.length < payoffs.length ? prices.length : payoffs.length;
-    final List<_PayoffData> result = [];
-
-    for (int i = 0; i < length; i++) {
-      final price = prices[i];
-      final payoff = payoffs[i];
-
-      if (isPositive) {
-        result.add(_PayoffData(
-          price: price,
-          payoff: payoff > 0 ? payoff : 0.0,
-        ));
-      } else {
-        result.add(_PayoffData(
-          price: price,
-          payoff: payoff < 0 ? payoff : 0.0,
-        ));
-      }
-    }
-
-    return result;
-  }
-
-  Widget _buildGreeksTable(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    if (provider.basket.isEmpty) {
-      return Center(
-        child: Text(
-          'Add options to see Greeks',
-          style: MyntWebTextStyles.body(
-            context,
-            color: Colors.grey,
-          ),
-        ),
-      );
-    }
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-      return SingleChildScrollView(
-      padding: const EdgeInsets.all(12),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minWidth: constraints.maxWidth - 24),
-          child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: isDark ? const Color(0xFF444444) : const Color(0xFFE0E0E0)),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: DataTable(
-            columnSpacing: 16,
-          headingRowHeight: 40,
-          headingRowColor: WidgetStateProperty.all(
-            isDark ? MyntColors.overlayBgDark : MyntColors.listItemBg,
-          ),
-          dataRowMinHeight: 40,
-          dataRowMaxHeight: 48,
-          horizontalMargin: 12,
-          dividerThickness: 0,
-          columns: [
-            DataColumn(
-              label: Text('Instrument', style: MyntWebTextStyles.bodySmall(context, fontWeight: MyntFonts.bold)),
-            ),
-            DataColumn(
-              label: Text('IV', style: MyntWebTextStyles.bodySmall(context, fontWeight: MyntFonts.bold)),
-              numeric: true,
-            ),
-            DataColumn(
-              label: Text('Delta', style: MyntWebTextStyles.bodySmall(context, fontWeight: MyntFonts.bold)),
-              numeric: true,
-            ),
-            DataColumn(
-              label: Text('Theta', style: MyntWebTextStyles.bodySmall(context, fontWeight: MyntFonts.bold)),
-              numeric: true,
-            ),
-            DataColumn(
-              label: Text('Gamma', style: MyntWebTextStyles.bodySmall(context, fontWeight: MyntFonts.bold)),
-              numeric: true,
-            ),
-            DataColumn(
-              label: Text('Vega', style: MyntWebTextStyles.bodySmall(context, fontWeight: MyntFonts.bold)),
-              numeric: true,
-            ),
-          ],
-          rows: [
-            ...provider.basket.where((item) => item.checkbox).map((item) {
-              return DataRow(
-                cells: [
-                  DataCell(
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          item.buySell == 'BUY' ? 'B' : 'S',
-                          style: MyntWebTextStyles.bodySmall(
-                            context,
-                            color: item.buySell == 'BUY' ? resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary) : resolveThemeColor(context, dark: MyntColors.lossDark, light: MyntColors.loss),
-                            fontWeight: MyntFonts.bold,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${item.ordlot} x ${item.tsym}',
-                          style: MyntWebTextStyles.bodySmall(
-                            context,
-                            darkColor: MyntColors.textPrimaryDark,
-                            lightColor: MyntColors.textBlack,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  DataCell(Text(
-                    item.iv?.toStringAsFixed(2) ?? '--',
-                    style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                  )),
-                  DataCell(Text(
-                    item.delta?.toStringAsFixed(4) ?? '--',
-                    style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                  )),
-                  DataCell(Text(
-                    item.theta?.toStringAsFixed(4) ?? '--',
-                    style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                  )),
-                  DataCell(Text(
-                    item.gamma?.toStringAsFixed(4) ?? '--',
-                    style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                  )),
-                  DataCell(Text(
-                    item.vega?.toStringAsFixed(4) ?? '--',
-                    style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                  )),
-                ],
-              );
-            }),
-            // Total row
-            DataRow(
-              cells: [
-                DataCell(
-                  Text(
-                    'Total',
-                    style: MyntWebTextStyles.bodySmall(
-                      context,
-                      darkColor: MyntColors.textPrimaryDark,
-                      lightColor: MyntColors.textBlack,
-                      fontWeight: MyntFonts.bold,
-                    ),
-                  ),
-                ),
-                const DataCell(Text('')),
-                DataCell(Text(
-                  provider.greeksTotal('delta').toStringAsFixed(4),
-                  style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                )),
-                DataCell(Text(
-                  provider.greeksTotal('theta').toStringAsFixed(4),
-                  style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                )),
-                DataCell(Text(
-                  provider.greeksTotal('gamma').toStringAsFixed(4),
-                  style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                )),
-                DataCell(Text(
-                  provider.greeksTotal('vega').toStringAsFixed(4),
-                  style: MyntWebTextStyles.bodySmall(context, darkColor: MyntColors.textPrimaryDark, lightColor: MyntColors.textBlack),
-                )),
-              ],
-            ),
-          ],
-        ),
-      ),
-      ),
-      ),
-    );
-      },
-    );
-  }
-
-  Widget _buildChartControls(BuildContext context, StrategyBuilderProvider provider, bool isDark) {
-    final hasData = provider.payoffData.isNotEmpty;
-
-    // Sync target price controller with provider (only if value changed externally)
-    final currentTargetPrice = provider.targetSpotPrice > 0 ? provider.targetSpotPrice : provider.spotPrice;
-    if ((_lastEmittedTargetPrice - currentTargetPrice).abs() > 0.001) {
-      _targetPriceController.text = currentTargetPrice.toStringAsFixed(2);
-      _lastEmittedTargetPrice = currentTargetPrice;
-    }
-
-    final percentChange = _getPercentChange(provider.targetSpotPrice, provider.spotPrice);
-    final percentPrefix = percentChange.startsWith('-') ? '' : '+';
-
-    final labelStyle = MyntWebTextStyles.caption(
-      context,
-      darkColor: Colors.grey,
-      lightColor: Colors.grey[700],
-      fontWeight: MyntFonts.medium,
-    ).copyWith(fontSize: 11);
-
-    final resetStyle = MyntWebTextStyles.caption(
-      context,
-      color: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-      fontWeight: MyntFonts.bold,
-    ).copyWith(fontSize: 11);
-
-    final valueStyle = MyntWebTextStyles.bodySmall(
-      context,
-      darkColor: MyntColors.textPrimaryDark,
-      lightColor: MyntColors.textBlack,
-      fontWeight: MyntFonts.semiBold,
-    ).copyWith(fontSize: 13);
-
-    final borderColor = isDark ? Colors.grey[700]! : Colors.grey[300]!;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0)),
-        ),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              Text('${provider.selectedSymbol.split(' ')[0]} Target', style: labelStyle),
-              const SizedBox(width: 8),
-              InkWell(
-                onTap: hasData ? () => provider.resetTargetSpotPrice() : null,
-                child: Text('Reset', style: resetStyle),
-              ),
-              const SizedBox(width: 8),
-              Text('$percentPrefix$percentChange%', style: labelStyle),
-              const Spacer(),
-              Container(
-                height: 28,
-                decoration: BoxDecoration(
-                  border: Border.all(color: borderColor),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    InkWell(
-                      onTap: () {
-                        if (!hasData) return;
-                        provider.setTargetSpotPrice(provider.targetSpotPrice - (provider.spotPrice * 0.005));
-                      },
-                      child: Container(
-                        width: 28, height: 28, alignment: Alignment.center,
-                        child: Icon(Icons.remove, size: 14, color: isDark ? Colors.white70 : Colors.black54),
-                      ),
-                    ),
-                    VerticalDivider(width: 1, color: borderColor),
-                    SizedBox(
-                      width: 90,
-                      height: 28,
-                      child: TextField(
-                        controller: _targetPriceController,
-                        style: valueStyle,
-                        textAlign: TextAlign.center,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                          isDense: true,
-                        ),
-                        onChanged: (val) {
-                          final price = double.tryParse(val);
-                          if (price != null && hasData) {
-                            _lastEmittedTargetPrice = price;
-                            provider.setTargetSpotPrice(price);
-                          }
-                        },
-                      ),
-                    ),
-                    VerticalDivider(width: 1, color: borderColor),
-                    InkWell(
-                      onTap: () {
-                        if (!hasData) return;
-                        provider.setTargetSpotPrice(provider.targetSpotPrice + (provider.spotPrice * 0.005));
-                      },
-                      child: Container(
-                        width: 28, height: 28, alignment: Alignment.center,
-                        child: Icon(Icons.add, size: 14, color: isDark ? Colors.white70 : Colors.black54),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          SliderTheme(
-            data: SliderThemeData(
-              trackHeight: 2,
-              activeTrackColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-              inactiveTrackColor: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFE0E0E0),
-              thumbColor: Colors.white,
-              overlayColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withValues(alpha: 0.08),
-              thumbShape: _TradingSliderThumbShape(
-                enabledThumbRadius: 7,
-                borderColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-              ),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-              trackShape: const RoundedRectSliderTrackShape(),
-            ),
-            child: Slider(
-              value: (provider.targetSpotPrice > 0
-                  ? provider.targetSpotPrice
-                  : provider.spotPrice).clamp(provider.spotPrice * 0.8, provider.spotPrice * 1.2),
-              min: provider.spotPrice * 0.8,
-              max: provider.spotPrice * 1.2,
-              onChanged: hasData ? (value) => provider.setTargetSpotPrice(value) : null,
-            ),
-          ),
-          // Target Date controls
-          _buildTargetDateRow(context, provider, isDark, hasData, labelStyle, resetStyle, valueStyle, borderColor),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTargetDateRow(BuildContext context, StrategyBuilderProvider provider, bool isDark, bool hasData, TextStyle labelStyle, TextStyle resetStyle, TextStyle valueStyle, Color borderColor) {
-    final targetDate = DateTime.now().add(Duration(days: provider.targetDaysToExpiry));
-
-    return Column(
-      children: [
-        Row(
-          children: [
-            Text('Target Date: ${provider.daysToExpiry - provider.targetDaysToExpiry}D - Expiry', style: labelStyle),
-            const SizedBox(width: 8),
-            InkWell(
-              onTap: hasData ? () => provider.setTargetDaysToExpiry(0) : null,
-              child: Text('Reset', style: resetStyle),
-            ),
-            const Spacer(),
-            Container(
-              height: 28,
-              decoration: BoxDecoration(
-                border: Border.all(color: borderColor),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  InkWell(
-                    onTap: () {
-                      if (!hasData || provider.targetDaysToExpiry <= 0) return;
-                      provider.setTargetDaysToExpiry(provider.targetDaysToExpiry - 1);
-                    },
-                    child: Container(
-                      width: 28, height: 28, alignment: Alignment.center,
-                      child: Icon(Icons.chevron_left, size: 14, color: isDark ? Colors.white70 : Colors.black54),
-                    ),
-                  ),
-                  VerticalDivider(width: 1, color: borderColor),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Text(
-                      "${_getWeekday(targetDate.weekday)}, ${targetDate.day} ${_getMonth(targetDate.month)}",
-                      style: valueStyle,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  VerticalDivider(width: 1, color: borderColor),
-                  InkWell(
-                    onTap: () {
-                      if (!hasData || provider.targetDaysToExpiry >= provider.daysToExpiry) return;
-                      provider.setTargetDaysToExpiry(provider.targetDaysToExpiry + 1);
-                    },
-                    child: Container(
-                      width: 28, height: 28, alignment: Alignment.center,
-                      child: Icon(Icons.chevron_right, size: 14, color: isDark ? Colors.white70 : Colors.black54),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        SliderTheme(
-          data: SliderThemeData(
-            trackHeight: 2,
-            activeTrackColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-            inactiveTrackColor: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFE0E0E0),
-            thumbColor: resolveThemeColor(context, dark: MyntColors.textWhite, light: MyntColors.textWhite),
-            overlayColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary).withValues(alpha: 0.08),
-            thumbShape: _TradingSliderThumbShape(
-              enabledThumbRadius: 7,
-              borderColor: resolveThemeColor(context, dark: MyntColors.primaryDark, light: MyntColors.primary),
-            ),
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-            trackShape: const RoundedRectSliderTrackShape(),
-          ),
-          child: Slider(
-            value: provider.targetDaysToExpiry.toDouble(),
-            min: 0,
-            max: provider.daysToExpiry.toDouble(),
-            divisions: provider.daysToExpiry > 0 ? provider.daysToExpiry : 1,
-            onChanged: hasData ? (value) => provider.setTargetDaysToExpiry(value.round()) : null,
-          ),
-        ),
-      ],
-    );
-  }
-
-  String _getWeekday(int weekday) {
-    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    return days[weekday - 1];
-  }
-
-  String _getMonth(int month) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return months[month - 1];
-  }
-
-
-
-  String _getPercentChange(double current, double original) {
-    if (original == 0) return '0.0';
-    final change = ((current - original) / original) * 100;
-    return change.toStringAsFixed(1);
   }
 }
 

@@ -134,7 +134,8 @@ class _TradeBookDetailScreenWebState
                 updatedTradeData.perChange = pc;
               }
 
-              if (chng != null && chng != "null") {
+              if (chng != null && chng != "null" && chng != "" &&
+                  chng != "0" && chng != "0.0" && chng != "0.00") {
                 updatedTradeData.change = chng;
               }
             }
@@ -233,7 +234,7 @@ class _TradeBookDetailScreenWebState
             Row(
               children: [
                 Text(
-                  "${displayData.symbol?.replaceAll("-EQ", "") ?? ''} ${displayData.expDate ?? ''} ${displayData.option ?? ''} ",
+                  "${displayData.displayName} ",
                   style: MyntWebTextStyles.title(
                     context,
                     color: resolveThemeColor(context,
@@ -352,7 +353,8 @@ class _TradeBookDetailScreenWebState
                 children: [
                   _buildInfoRow("Transaction Type",
                       displayData.trantype == "B" ? "Buy" : "Sell", theme),
-                  _buildInfoRow("Quantity", displayData.qty ?? '0', theme),
+                  _buildInfoRow("Quantity",
+                      _formatMcxQty(displayData, displayData.qty), theme),
                   _buildInfoRow("Price", displayData.avgprc ?? '0.00', theme),
                   _buildInfoRow("Product", displayData.sPrdtAli ?? '-', theme),
                   _buildInfoRow(
@@ -374,14 +376,14 @@ class _TradeBookDetailScreenWebState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildInfoRow(
-                      "Fill Quantity", displayData.flqty ?? '0', theme),
+                  _buildInfoRow("Fill Quantity",
+                      _formatMcxQty(displayData, displayData.flqty), theme),
                   _buildInfoRow(
                       "Fill Price", displayData.flprc ?? '0.00', theme),
                   _buildInfoRow("Fill ID", displayData.flid ?? '-', theme),
                   _buildInfoRow("Fill Time", displayData.fltm ?? "-", theme),
-                  _buildInfoRow(
-                      "Fill Shares", displayData.fillshares ?? '0', theme),
+                  _buildInfoRow("Fill Shares",
+                      _formatMcxQty(displayData, displayData.fillshares), theme),
                   _buildInfoRow(
                       "Product Type", displayData.prctyp ?? '-', theme),
                 ],
@@ -442,6 +444,18 @@ class _TradeBookDetailScreenWebState
     } catch (e) {
       return 0.0;
     }
+  }
+
+  // TC_327.6: MCX quantities are displayed in LOTS (raw units / lot size) so
+  // this popup matches the trade list and every other order/trade view.
+  // Non-MCX shows units as-is. Same logic as trade_book_screen._formatTradeQty.
+  // (Trade Value stays in real units — it is money, not a quantity.)
+  String _formatMcxQty(TradeBookModel d, String? rawValue) {
+    final raw = int.tryParse(rawValue?.toString() ?? '0') ?? 0;
+    final lotSize =
+        d.exch == 'MCX' ? (int.tryParse(d.ls?.toString() ?? '1') ?? 1) : 1;
+    final safeLot = lotSize > 0 ? lotSize : 1;
+    return (raw ~/ safeLot).toString();
   }
 
   // Action handlers

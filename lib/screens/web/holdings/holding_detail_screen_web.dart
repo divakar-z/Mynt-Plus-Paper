@@ -1,10 +1,13 @@
+import '../../../locator/locator.dart';
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../models/portfolio_model/holdings_model.dart';
 import '../../../models/marketwatch_model/get_quotes.dart';
 import '../../../provider/market_watch_provider.dart';
+import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../provider/websocket_provider.dart';
 import '../../../provider/ledger_provider.dart';
@@ -107,27 +110,17 @@ class _HoldingDetailScreenWebState
     final socketData = wsProvider.socketDatas[_exchTsym.token];
 
     if (socketData != null) {
-      // Update with initial socket data
+      // Update with initial socket data — strict guards match the listener
+      // body below so broker zero defaults can never overwrite valid API data.
       final lp = socketData['lp']?.toString();
       final pc = socketData['pc']?.toString();
       final chng = socketData['chng']?.toString();
       final c = socketData['c']?.toString();
 
-      if (lp != null && lp != "null") {
-        _exchTsym.lp = lp;
-      }
-
-      if (pc != null && pc != "null") {
-        _exchTsym.perChange = pc;
-      }
-
-      if (chng != null && chng != "null") {
-        _exchTsym.change = chng;
-      }
-
-      if (c != null && c != "null") {
-        _exchTsym.close = c;
-      }
+      if (_isValidValue(lp)) _exchTsym.lp = lp;
+      if (_isValidValue(pc)) _exchTsym.perChange = pc;
+      if (_isValidValue(chng)) _exchTsym.change = chng;
+      if (_isValidValue(c)) _exchTsym.close = c;
 
       _updateProfitLossValues();
     }
@@ -183,10 +176,8 @@ class _HoldingDetailScreenWebState
   // Calculate profit and loss values
   void _updateProfitLossValues() {
     final ltp = double.tryParse(_exchTsym.lp ?? "0.0") ?? 0.0;
-    final qty = _holdingData.currentQty ?? 0;
-    // Include npoadt1qty (Non-POA T1 holdings) in financial calculations
-    final int t1Qty = int.parse(_holdingData.npoadt1qty ?? "0");
-    final int totalQty = qty + t1Qty;
+    // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
+    final int totalQty = _holdingData.currentQty ?? 0;
     final avgPrice = double.tryParse(_holdingData.upldprc ?? "0.0") ?? 0.0;
 
     if (ltp > 0 && totalQty > 0 && avgPrice > 0) {
@@ -417,6 +408,8 @@ class _HoldingDetailScreenWebState
 
   Widget _buildPledgeUnpledgeButton(
       ThemesProvider theme, LDProvider ledgerdate) {
+    // Paper-only platform: no real pledge.
+    if (isPaperTrading) return const SizedBox.shrink();
     return Center(
       child: MyntOutlinedButton(
         label: "Pledge-Unpledge",
@@ -432,7 +425,8 @@ class _HoldingDetailScreenWebState
   }
 
   Widget _buildPnLSection(ThemesProvider theme) {
-    final displayValue = _exchTsym.profitNloss ?? "0.00";
+    final privacy = ref.watch(privacyProvider);
+    final displayValue = privacy.mask(_exchTsym.profitNloss ?? "0.00");
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -482,8 +476,9 @@ class _HoldingDetailScreenWebState
   }
 
   Widget _buildDetailsSection(ThemesProvider theme) {
-    final pnlValue = _exchTsym.profitNloss ?? "0.00";
-    final pnlPercent = _exchTsym.pNlChng ?? "0.00";
+    final privacy = ref.watch(privacyProvider);
+    final pnlValue = privacy.mask(_exchTsym.profitNloss ?? "0.00");
+    final pnlPercent = privacy.mask(_exchTsym.pNlChng ?? "0.00");
     final pnlColor = _getPnLColor(pnlValue);
 
     return Column(
@@ -512,7 +507,8 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Non POA / Sell",
           Text(
-            "${_holdingData.npoadqty ?? 0} / ${_holdingData.saleableQty ?? 0}",
+            privacy.mask(
+                "${_holdingData.npoadqty ?? 0} / ${_holdingData.saleableQty ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -523,7 +519,8 @@ class _HoldingDetailScreenWebState
           _rowOfInfoData(
             "T1 Qty",
             Text(
-              "${int.parse(_holdingData.btstqty ?? "0") + int.parse(_holdingData.npoadt1qty ?? "0")}",
+              privacy.mask(
+                  "${math.max(int.parse(_holdingData.btstqty ?? "0"), int.parse(_holdingData.npoadt1qty ?? "0"))}"),
               style:
                   MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
             ),
@@ -533,7 +530,7 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Avg price",
           Text(
-            "${_holdingData.upldprc ?? 0}",
+            privacy.mask("${_holdingData.upldprc ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -541,8 +538,12 @@ class _HoldingDetailScreenWebState
         ),
         _rowOfInfoData(
           "Product",
-          Text(
-            _holdingData.sPrdtAli != "null" ? "${_holdingData.sPrdtAli}" : "--",
+        Text(
+            (_holdingData.sPrdtAli == null ||
+                    _holdingData.sPrdtAli!.isEmpty ||
+                    _holdingData.sPrdtAli == "null")
+                ? ""
+                : _holdingData.sPrdtAli!,
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -551,7 +552,8 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Invested",
           Text(
-            "${_holdingData.invested == "0.00" ? _exchTsym.close ?? 0.00 : _holdingData.invested ?? 0.00}",
+            privacy.mask(
+                "${_holdingData.invested == "0.00" ? _exchTsym.close ?? 0.00 : _holdingData.invested ?? 0.00}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -560,10 +562,9 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Current",
           Text(
-            ((int.parse("${_holdingData.currentQty ?? 0}") +
-                        int.parse(_holdingData.npoadt1qty ?? "0")) *
+            privacy.mask((int.parse("${_holdingData.currentQty ?? 0}") *
                     double.parse(_exchTsym.lp?.toString() ?? "0.0"))
-                .toStringAsFixed(2),
+                .toStringAsFixed(2)),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -573,7 +574,7 @@ class _HoldingDetailScreenWebState
           _rowOfInfoData(
             "Realised P&L",
             Text(
-              "${_holdingData.rpnl ?? 0}",
+              privacy.mask("${_holdingData.rpnl ?? 0}"),
               style:
                   MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
             ),
@@ -583,7 +584,7 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Pledged Qty",
           Text(
-            "${_holdingData.brkcolqty ?? 0}",
+            privacy.mask("${_holdingData.brkcolqty ?? 0}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),
@@ -592,7 +593,8 @@ class _HoldingDetailScreenWebState
         _rowOfInfoData(
           "Buy / Sell Value",
           Text(
-            "${(double.tryParse(_holdingData.invested?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)} / ${(double.tryParse(_holdingData.sellAmt?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)}",
+            privacy.mask(
+                "${(double.tryParse(_holdingData.invested?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)} / ${(double.tryParse(_holdingData.sellAmt?.toString() ?? '0') ?? 0.0).toStringAsFixed(2)}"),
             style:
                 MyntWebTextStyles.body(context, fontWeight: MyntFonts.medium),
           ),

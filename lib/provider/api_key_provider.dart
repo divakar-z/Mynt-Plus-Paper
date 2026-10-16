@@ -223,11 +223,52 @@ Future fetchgenerateapikey(BuildContext context, String month, String apistatus)
     }
   }
 
-  fetchTotp() async {
-    _totpKey = await api.getTotp(false);
-    if (_totpKey?.pwd == "") {
-      _totpKey = await api.getTotp(true);
+  bool _isFetchingTotp = false;
+  bool get isFetchingTotp => _isFetchingTotp;
+
+  /// Fetch existing TOTP key via GetSecretKey.
+  /// Leaves `_totpKey.pwd` empty when the user has not generated one yet —
+  /// the UI uses that to show the "Generate Key" button.
+  Future<void> fetchTotp() async {
+    _isFetchingTotp = true;
+    notifyListeners();
+    try {
+      _totpKey = await api.getTotp(false);
+    } finally {
+      _isFetchingTotp = false;
+      notifyListeners();
     }
+  }
+
+  /// Generate a new TOTP secret via GenSecretKey. Called only when the user
+  /// explicitly taps the "Generate" button — never as a fallback from fetch.
+  Future<void> generateTotp() async {
+    _isFetchingTotp = true;
+    notifyListeners();
+    try {
+      _totpKey = await api.getTotp(true);
+    } finally {
+      _isFetchingTotp = false;
+      notifyListeners();
+    }
+  }
+
+  /// Reset all per-user state. Called from the logout flow so the next
+  /// logged-in user does not see the previous user's TOTP / API keys.
+  void clearOnLogout() {
+    _apikeyres = null;
+    _generateApikey = null;
+    _generateApikeyNew = null;
+    _totpKey = null;
+    _generatedSecretCode = null;
+    _hidePass = true;
+    _hideSecret = true;
+    _isHighFrequency = false;
+    _isFetchingTotp = false;
+    _urlController.clear();
+    _primaryIpController.clear();
+    _backupIpController.clear();
+    notifyListeners();
   }
 
   Future<GenerateNewApiKeyModel?> submitApiKeyNew({
@@ -239,7 +280,7 @@ Future fetchgenerateapikey(BuildContext context, String month, String apistatus)
     required List<String> userIds,
   }) async {
     try {
-      _generateApikeyNew = await api.submitApiKeyNew(
+      final res = await api.submitApiKeyNew(
         appKey: appKey,
         secretCode: secretCode,
         redirectUrl: redirectUrl,
@@ -247,9 +288,15 @@ Future fetchgenerateapikey(BuildContext context, String month, String apistatus)
         ipAddresses: ipAddresses,
         userIds: userIds,
       );
-      
-      notifyListeners();
-        return _generateApikeyNew;
+
+      // Only overwrite existing data if the update succeeded.
+      // If it failed (stat != 'Ok'), keep existing fields (secretCode, etc.) intact.
+      if (res.stat == "Ok") {
+        _generateApikeyNew = res;
+        notifyListeners();
+      }
+
+      return res;
     } catch (e) {
       rethrow;
     }

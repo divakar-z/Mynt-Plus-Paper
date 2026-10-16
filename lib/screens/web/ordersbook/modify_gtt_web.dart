@@ -20,10 +20,25 @@ import 'package:mynt_plus/res/mynt_web_text_styles.dart';
 import '../../../sharedWidget/common_text_fields_web.dart';
 import '../../../sharedWidget/no_internet_widget.dart';
 import '../../../sharedWidget/snack_bar.dart';
+import '../../../utils/safe_parse.dart';
 import 'dart:html' as html;
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import '../market_watch/tv_chart/chart_iframe_guard.dart';
 import '../../../utils/overlay_manager.dart';
+import '../order/order_depth_panel_web.dart';
+
+
+/// Rejects a keystroke that would make a numeric field invalid, keeping the
+/// last valid value instead of clearing it. Empty is always allowed so the
+/// user can still backspace the field clear. Replaces the earlier anchored
+/// allow-filter, which wiped the whole field on any non-matching input
+/// (a letter, or a second decimal point) and then fired a spurious warning.
+TextInputFormatter _rejectIfNoMatch(RegExp pattern) =>
+    TextInputFormatter.withFunction((oldValue, newValue) =>
+        (newValue.text.isEmpty || pattern.hasMatch(newValue.text))
+            ? newValue
+            : oldValue);
+
 
 // InheritedWidget to pass close callback to child widgets
 class _ModifyGttDialogCloseNotifier extends InheritedWidget {
@@ -144,6 +159,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
   String product = "I";
   int lotSize = 0;
   int multiplayer = 0;
+  int frezQty = 0;
   String price = "0.00";
   bool _GTTPriceTypeIsMarket = false;
   bool _GTTOCOPriceTypeIsMarket = false;
@@ -157,6 +173,161 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
 
   double roundOffWithInterval(double input, double interval) {
     return ((input / interval).round() * interval);
+  }
+
+  /// MCX uses lot count in the qty field; multiply by lot size to get the actual qty.
+  String _lotsToActualQty(String value) {
+    if (widget.gttOrderBook.exch == "MCX") {
+      final int lotCount = int.tryParse(value) ?? 0;
+      return (lotCount * lotSize).toString();
+    }
+    return value;
+  }
+
+  /// Returns true if the field value (after MCX lots→units conversion) exceeds
+  /// the freeze qty cap. GTT has no slicing, so cap = single frezQty.
+  bool _exceedsFreezeCap(String value) {
+    if (frezQty <= lotSize) return false; // no real freeze limit for this scrip
+    final int parsed = int.tryParse(value) ?? 0;
+    final int finalUnits =
+        widget.gttOrderBook.exch == "MCX" ? parsed * lotSize : parsed;
+    return finalUnits > frezQty;
+  }
+
+  /// Freeze-cap warning text. MCX shows lots to match field display;
+  /// everything else shows qty (since modify GTT field stores units).
+  String _gttFreezeCapMessage() {
+    if (widget.gttOrderBook.exch == "MCX" && lotSize > 0) {
+      return "Maximum Allowed Lots: ${frezQty ~/ lotSize}";
+    }
+    return "Maximum Allowed Quantity $frezQty";
+  }
+
+  /// Tick-size check for a GTT price/trigger field.
+  
+  String? _gttTickError(String value, String fieldName) {
+    if (tik <= 0) return null; // no tick size on this scrip — nothing to check
+    final String text = value.trim();
+    if (text.isEmpty || text == "Market") return null;
+    final double parsed = SafeParse.toDouble(text);
+    if (parsed <= 0) return null;
+    final String rounded = roundOffWithInterval(parsed, tik).toStringAsFixed(2);
+    if (parsed == SafeParse.toDouble(rounded)) return null;
+    return "$fieldName should be multiple of tick size $tik => $rounded";
+  }
+
+  /// Field label for the quantity box. MCX holds a lot COUNT; everything
+  /// else holds units.
+  String _qtyFieldLabel({bool isOcoLeg = false}) =>
+      "${isOcoLeg ? "OCO " : ""}${widget.gttOrderBook.exch == "MCX" ? "Lot" : "Quantity"}";
+
+  /// Empty / zero check for a price or trigger field.
+  ///
+  /// Market is a real value for an MKT leg, not a zero - without this skip it
+  /// parses to 0 and every Market GTT becomes impossible to modify.
+  String? _gttPriceFieldError(String value, String fieldName) {
+    final String text = value.trim();
+    if (text.isEmpty) return "$fieldName cannot be empty";
+    if (text == "Market") return null;
+    if (SafeParse.toDouble(text) > 0) return null;
+    return "$fieldName cannot be 0";
+  }
+
+  /// Lot-multiple check ONLY.
+  ///
+  /// Returns null for empty and non-positive values so it can run as an early
+  /// guard without stealing their messages. The Place Order GTT branch had it
+  /// the other way round and reported a bogus "multiple of lot size 1 => 1"
+  /// on a blank field (TC_114) - do not make this fire on empty.
+  ///
+  /// MCX is skipped: its field holds a lot count, so it is a whole number of
+  /// lots by construction.
+  String? _gttLotError(String value, {bool isOcoLeg = false}) {
+    if (widget.gttOrderBook.exch == "MCX" || lotSize <= 0) return null;
+    final int parsed = int.tryParse(value.trim()) ?? 0;
+    if (parsed <= 0) return null;
+    int rounded = (parsed / lotSize).round() * lotSize;
+    if (rounded < lotSize) rounded = lotSize; // never suggest 0
+    if (parsed == rounded) return null;
+    return "${_qtyFieldLabel(isOcoLeg: isOcoLeg)} should be multiple of lot size $lotSize => $rounded";
+  }
+
+  /// Empty / zero / freeze-cap / lot-multiple check for a quantity field.
+  String? _gttQtyFieldError(String value, {bool isOcoLeg = false}) {
+    final String text = value.trim();
+    final String label = _qtyFieldLabel(isOcoLeg: isOcoLeg);
+    if (text.isEmpty) return "$label cannot be empty";
+    if ((int.tryParse(text) ?? 0) <= 0) return "$label cannot be 0";
+    if (_exceedsFreezeCap(text)) return _gttFreezeCapMessage();
+    return _gttLotError(text, isOcoLeg: isOcoLeg);
+  }
+
+  /// Diagnostic chain for the gate else branch.
+  ///
+  /// Walks the fields in the SAME order the Place Order GTT chain reports
+  /// them - target trigger, quantity, price, then the OCO leg - and returns
+  /// the first problem, so both screens name the same field for the same
+  /// input. Falls back to the original generic text if nothing is found.
+  String _gttFieldError(OrderInputProvider o, {required bool isOco}) {
+    String? e = _gttPriceFieldError(o.val1Ctrl.text, "Target trigger price");
+    if (e != null) return e;
+    e = _gttQtyFieldError(o.qtyCtrl.text);
+    if (e != null) return e;
+    e = _gttPriceFieldError(o.priceCtrl.text, "Price");
+    if (e != null) return e;
+    if (!isOco) return "Enter all Input fields";
+    e = _gttPriceFieldError(o.val2Ctrl.text, "Stoploss trigger price");
+    if (e != null) return e;
+    e = _gttQtyFieldError(o.ocoQtyCtrl.text, isOcoLeg: true);
+    if (e != null) return e;
+    e = _gttPriceFieldError(o.ocoPriceCtrl.text, "OCO price");
+    if (e != null) return e;
+    return "Enter all Input fields";
+  }
+
+  bool get _isStockExch =>
+      widget.gttOrderBook.exch == "NSE" || widget.gttOrderBook.exch == "BSE";
+
+  /// Step size that moves the qty field by exactly one lot.
+  int get _qtyStep =>
+      widget.gttOrderBook.exch == "MCX" ? 1 : (lotSize > 0 ? lotSize : 1);
+
+  void _decrementQty(TextEditingController ctrl) {
+    final int step = _qtyStep;
+    setState(() {
+      final int current = int.tryParse(ctrl.text) ?? 0;
+      final int snapped =
+          current >= step ? ((current / step).floor()) * step : step;
+      if (current != snapped) {
+        ctrl.text = snapped.toString();
+      } else if (current > step) {
+        ctrl.text = (current - step).toString();
+      } else {
+        ctrl.text = step.toString();
+      }
+    });
+  }
+
+  void _incrementQty(TextEditingController ctrl) {
+    final int step = _qtyStep;
+    setState(() {
+      final String input = ctrl.text;
+      final int current = int.tryParse(input) ?? 0;
+      final int snapped =
+          current >= step ? ((current / step).floor()) * step : step;
+      if (input.isEmpty) {
+        ctrl.text = step.toString();
+      } else if (current != snapped) {
+        ctrl.text = snapped.toString();
+      } else {
+        final String nextValue = (current + step).toString();
+        if (_exceedsFreezeCap(nextValue)) {
+          showResponsiveWarningMessage(context, _gttFreezeCapMessage());
+        } else {
+          ctrl.text = nextValue;
+        }
+      }
+    });
   }
 
   /// Handles keyboard up/down arrow to increment/decrement a price field by tick size.
@@ -182,7 +353,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     return KeyEventResult.handled;
   }
 
-  /// Handles keyboard up/down arrow to increment/decrement qty by 1.
+  /// Handles keyboard up/down arrow to increment/decrement qty by one lot.
   KeyEventResult _handleQtyArrowKey(KeyEvent event, TextEditingController ctrl) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
 
@@ -190,19 +361,20 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     final isDown = event.logicalKey == LogicalKeyboardKey.arrowDown;
     if (!isUp && !isDown) return KeyEventResult.ignored;
 
-    final current = int.tryParse(ctrl.text) ?? 0;
-    int newVal = isUp ? current + 1 : current - 1;
-    if (newVal < 1) newVal = 1;
-    ctrl.text = newVal.toString();
+    if (isUp) {
+      _incrementQty(ctrl);
+    } else {
+      _decrementQty(ctrl);
+    }
     ctrl.selection = TextSelection.collapsed(offset: ctrl.text.length);
-    setState(() {});
     return KeyEventResult.handled;
   }
 
   @override
   void initState() {
+    final int initialLotSize = int.tryParse("${widget.scripInfo.ls ?? 0}") ?? 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(ordInputProvider).getModifyData(widget.gttOrderBook);
+      ref.read(ordInputProvider).getModifyData(widget.gttOrderBook, lotSize: initialLotSize);
     });
 
     tik = double.tryParse(widget.scripInfo.ti.toString()) ?? 0.00;
@@ -217,6 +389,9 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
               : widget.gttOrderBook.ls)
           .toString());
 
+      final int sfq = int.tryParse(widget.scripInfo.frzqty?.toString() ?? '1') ?? 1;
+      frezQty = sfq > 1 ? (sfq / lotSize).floor() * lotSize : lotSize;
+
       product = "I";
       
       // Initialize LTP from order book
@@ -229,6 +404,15 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
 
   @override
   Widget build(BuildContext context) {
+    // Market depth panel (Task #9168): view only on GTT, a tapped price has
+    // no single field to go to (trigger vs order price).
+    OrderDepthController.syncFrom(
+      context,
+      token: widget.gttOrderBook.token ?? "",
+      exch: widget.gttOrderBook.exch ?? "",
+      instname: widget.scripInfo.instname,
+      onPriceTap: null,
+    );
     final theme = ref.read(themeProvider);
     final internet = ref.watch(networkStateProvider);
     
@@ -354,6 +538,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     final expDate = widget.gttOrderBook.expDate ?? widget.scripInfo.expDate ?? '';
     final option = widget.gttOrderBook.option ?? widget.scripInfo.option ?? '';
     final exchange = widget.gttOrderBook.exch ?? widget.scripInfo.exch ?? '';
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = widget.gttOrderBook.masterName ?? widget.scripInfo.masterName;
 
     final ltp = currentLtp ?? widget.gttOrderBook.ltp ?? widget.gttOrderBook.prc ?? '0.00';
     final change = currentChange ?? widget.gttOrderBook.change ?? '0.00';
@@ -364,6 +550,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     final closeNotifier = _ModifyGttDialogCloseNotifier.of(context);
 
     Widget headerContent = Container(
+      // Depth panel lines its header up with this row.
+      key: OrderDepthScope.of(context)?.anchorRowKey,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: theme.isDarkMode ? MyntColors.overlayBgDark : const Color(0xfffafbff),
@@ -380,7 +568,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                   child: Row(
                     children: [
                       Text(
-                        "$symbol $expDate $option ",
+                        "${master ?? "$symbol $expDate $option"} ",
                         style: WebTextStyles.title(
                           isDarkTheme: theme.isDarkMode,
                           color: theme.isDarkMode ? MyntColors.textPrimaryDark : MyntColors.textPrimary,
@@ -427,6 +615,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
               ],
             ),
           ),
+          // Market depth toggle (Task #9168)
+          const OrderDepthToggle(padding: EdgeInsets.only(right: 6)),
           // Close button
           Material(
             color: Colors.transparent,
@@ -538,52 +728,59 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
           ),
         ),
         const SizedBox(height: 10),
-        SizedBox(
-          height: 40,
-          width: 200,
-          child: MyntTextField(
-         backgroundColor: theme.isDarkMode
-                                                            ? colors.darkGrey
-                                                            : const Color(
-                                                                0xffF1F3F8),
-            onChanged: (value) {
-              double inputPrice = double.tryParse(value) ?? 0;
+        // Arrow-key stepping — the Price / OCO Price fields already have
+        // this; the two trigger fields were missing it, so up/down did
+        // nothing on them (Place Order GTT wires all four).
+        Focus(
+          onKeyEvent: (node, event) =>
+              _handlePriceArrowKey(event, orderInput.val1Ctrl),
+          child: SizedBox(
+            height: 40,
+            width: 200,
+            child: MyntTextField(
+           backgroundColor: theme.isDarkMode
+                                                              ? colors.darkGrey
+                                                              : const Color(
+                                                                  0xffF1F3F8),
+              onChanged: (value) {
+                double inputPrice = double.tryParse(value) ?? 0;
 
-              if (value.isNotEmpty && inputPrice > 0) {
-                final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
-                if (!regex.hasMatch(value)) {
-                  orderInput.val1Ctrl.text = value.substring(0, value.length - 1);
-                  orderInput.val1Ctrl.selection = TextSelection.collapsed(
-                    offset: orderInput.val1Ctrl.text.length,
+                if (value.isNotEmpty && inputPrice > 0) {
+                  final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
+                  if (!regex.hasMatch(value)) {
+                    orderInput.val1Ctrl.text = value.substring(0, value.length - 1);
+                    orderInput.val1Ctrl.selection = TextSelection.collapsed(
+                      offset: orderInput.val1Ctrl.text.length,
+                    );
+                  }
+                }
+                if (value.isEmpty || inputPrice <= 0) {
+                  showResponsiveWarningMessage(
+                    context,
+                    "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
                   );
                 }
-              }
-              if (value.isEmpty || inputPrice <= 0) {
-                showResponsiveWarningMessage(
-                  context,
-                  "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
-                );
-              }
-            },
-            placeholder: "${widget.gttOrderBook.ltp}",
-          placeholderStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textSecondary
-                                    : MyntColors.textSecondary,
-                              ),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
-            ],
-          textStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textPrimaryDark
-                                    : MyntColors.textPrimary,
-                              ),
-            controller: orderInput.val1Ctrl,
-            textAlign: TextAlign.start,
+              },
+              placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
+            placeholderStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textSecondary
+                                      : MyntColors.textSecondary,
+                                ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
+              ],
+            textStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textPrimaryDark
+                                      : MyntColors.textPrimary,
+                                ),
+              controller: orderInput.val1Ctrl,
+              textAlign: TextAlign.start,
+            ),
           ),
         ),
       ],
@@ -600,7 +797,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                "Qty",
+                widget.scripInfo.exch == "MCX" ? "Lot" : "Qty",
                 style: WebTextStyles.formLabel(
                   isDarkTheme: theme.isDarkMode,
                   color: theme.isDarkMode ? MyntColors.textPrimaryDark : MyntColors.textPrimary,
@@ -628,8 +825,24 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     ? MyntColors.textPrimaryDark
                                     : MyntColors.textPrimary,
                               ),
+                  leadingWidget: _isStockExch ? null : GestureDetector(
+                    onTap: () => _decrementQty(orderInput.qtyCtrl),
+                    child: Icon(
+                      Icons.remove,
+                      size: 18,
+                      color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary,
+                    ),
+                  ),
+                  trailingWidget: _isStockExch ? null : GestureDetector(
+                    onTap: () => _incrementQty(orderInput.qtyCtrl),
+                    child: Icon(
+                      Icons.add,
+                      size: 18,
+                      color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary,
+                    ),
+                  ),
                   controller: orderInput.qtyCtrl,
-                  textAlign: TextAlign.start,
+                  textAlign: _isStockExch ? TextAlign.start : TextAlign.center,
                   onChanged: (value) {
                     if (value.isEmpty || value == "0") {
                       showResponsiveWarningMessage(
@@ -644,11 +857,35 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                           TextPosition(offset: newValue.length),
                         );
                       }
+                      if (_exceedsFreezeCap(newValue)) {
+                        showResponsiveWarningMessage(
+                            context, _gttFreezeCapMessage());
+                      }
                     }
                   },
                 ),
               ),
               ),
+              // MCX field is in lots — show the actual quantity underneath,
+              // kept live via the controller listener. Uses the SAME
+              // _lotsToActualQty conversion as the submit payload, so the
+              // shown qty always matches what gets placed.
+              if (widget.scripInfo.exch == "MCX")
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: orderInput.qtyCtrl,
+                  builder: (context, value, _) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      "Qty : ${_lotsToActualQty(value.text)}",
+                      style: WebTextStyles.para(
+                        isDarkTheme: theme.isDarkMode,
+                        color: theme.isDarkMode
+                            ? MyntColors.textSecondaryDark
+                            : MyntColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -674,10 +911,19 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                         orderInput.actPrcType == "SL MKT") {
                       orderInput.priceCtrl.text = "Market";
                     } else {
+                      // A leg saved as MKT stores prc "0.00" - a real string,
+                      // not null - so the `??` below never fell through to LTP
+                      // and the box showed 0.00. Treat a non-positive stored
+                      // price as absent and seed from LTP, as Place Order does.
+                      // A leg saved as LMT still restores its own price.
+                      final String storedPrc =
+                          widget.gttOrderBook.placeOrderParams?.prc ?? "";
                       orderInput.priceCtrl.text =
-                          widget.gttOrderBook.placeOrderParams?.prc ??
-                              currentLtp ??
-                              "0.00";
+                          SafeParse.toDouble(storedPrc) > 0
+                              ? storedPrc
+                              : (currentLtp ??
+                                  widget.gttOrderBook.ltp ??
+                                  "0.00");
                     }
                   });
                 },
@@ -735,7 +981,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     : MyntColors.textPrimary,
                               ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   readOnly: orderInput.actPrcType == "Limit" ||
                       orderInput.actPrcType == "SL Limit"
@@ -767,52 +1013,59 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
           ),
         ),
         const SizedBox(height: 10),
-        SizedBox(
-          height: 40,
-          width: 200,
-          child: MyntTextField(
-            backgroundColor: theme.isDarkMode
-                                                            ? colors.darkGrey
-                                                            : const Color(
-                                                                0xffF1F3F8),
-            onChanged: (value) {
-              double inputPrice = double.tryParse(value) ?? 0;
+        // Arrow-key stepping — the Price / OCO Price fields already have
+        // this; the two trigger fields were missing it, so up/down did
+        // nothing on them (Place Order GTT wires all four).
+        Focus(
+          onKeyEvent: (node, event) =>
+              _handlePriceArrowKey(event, orderInput.val2Ctrl),
+          child: SizedBox(
+            height: 40,
+            width: 200,
+            child: MyntTextField(
+              backgroundColor: theme.isDarkMode
+                                                              ? colors.darkGrey
+                                                              : const Color(
+                                                                  0xffF1F3F8),
+              onChanged: (value) {
+                double inputPrice = double.tryParse(value) ?? 0;
 
-              if (value.isNotEmpty && inputPrice > 0) {
-                final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
-                if (!regex.hasMatch(value)) {
-                  orderInput.val2Ctrl.text = value.substring(0, value.length - 1);
-                  orderInput.val2Ctrl.selection = TextSelection.collapsed(
-                    offset: orderInput.val2Ctrl.text.length,
+                if (value.isNotEmpty && inputPrice > 0) {
+                  final regex = RegExp(r'^(\d+)?(\.\d{0,2})?$');
+                  if (!regex.hasMatch(value)) {
+                    orderInput.val2Ctrl.text = value.substring(0, value.length - 1);
+                    orderInput.val2Ctrl.selection = TextSelection.collapsed(
+                      offset: orderInput.val2Ctrl.text.length,
+                    );
+                  }
+                }
+                if (value.isEmpty || inputPrice <= 0) {
+                  showResponsiveWarningMessage(
+                    context,
+                    "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
                   );
                 }
-              }
-              if (value.isEmpty || inputPrice <= 0) {
-                showResponsiveWarningMessage(
-                  context,
-                  "Trigger Price can not be ${inputPrice <= 0 ? 'zero' : 'empty'}",
-                );
-              }
-            },
-            placeholder: "${widget.gttOrderBook.ltp}",
-           placeholderStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textSecondary
-                                    : MyntColors.textSecondary,
-                              ),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
-            ],
-            textStyle: WebTextStyles.formInput(
-                                isDarkTheme: theme.isDarkMode,
-                                color: theme.isDarkMode
-                                    ? MyntColors.textPrimaryDark
-                                    : MyntColors.textPrimary,
-                              ),
-            controller: orderInput.val2Ctrl,
-            textAlign: TextAlign.start,
+              },
+              placeholder: currentLtp ?? widget.gttOrderBook.ltp ?? "",
+             placeholderStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textSecondary
+                                      : MyntColors.textSecondary,
+                                ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
+              ],
+              textStyle: WebTextStyles.formInput(
+                                  isDarkTheme: theme.isDarkMode,
+                                  color: theme.isDarkMode
+                                      ? MyntColors.textPrimaryDark
+                                      : MyntColors.textPrimary,
+                                ),
+              controller: orderInput.val2Ctrl,
+              textAlign: TextAlign.start,
+            ),
           ),
         ),
       ],
@@ -829,7 +1082,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                "Qty",
+                widget.scripInfo.exch == "MCX" ? "Lot" : "Qty",
                 style: WebTextStyles.formLabel(
                   isDarkTheme: theme.isDarkMode,
                   color: theme.isDarkMode ? MyntColors.textPrimaryDark : MyntColors.textPrimary,
@@ -857,8 +1110,24 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     ? MyntColors.textPrimaryDark
                                     : MyntColors.textPrimary,
                               ),
+                  leadingWidget: _isStockExch ? null : GestureDetector(
+                    onTap: () => _decrementQty(orderInput.ocoQtyCtrl),
+                    child: Icon(
+                      Icons.remove,
+                      size: 18,
+                      color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary,
+                    ),
+                  ),
+                  trailingWidget: _isStockExch ? null : GestureDetector(
+                    onTap: () => _incrementQty(orderInput.ocoQtyCtrl),
+                    child: Icon(
+                      Icons.add,
+                      size: 18,
+                      color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary,
+                    ),
+                  ),
                   controller: orderInput.ocoQtyCtrl,
-                  textAlign: TextAlign.start,
+                  textAlign: _isStockExch ? TextAlign.start : TextAlign.center,
                   onChanged: (value) {
                     if (value.isEmpty || value == "0") {
                       showResponsiveWarningMessage(
@@ -873,11 +1142,34 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                           TextPosition(offset: newValue.length),
                         );
                       }
+                      if (_exceedsFreezeCap(newValue)) {
+                        showResponsiveWarningMessage(
+                            context, _gttFreezeCapMessage());
+                      }
                     }
                   },
                 ),
               ),
               ),
+              // MCX field is in lots — show the actual quantity underneath,
+              // kept live via the controller listener (same conversion as the
+              // submit payload).
+              if (widget.scripInfo.exch == "MCX")
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: orderInput.ocoQtyCtrl,
+                  builder: (context, value, _) => Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      "Qty : ${_lotsToActualQty(value.text)}",
+                      style: WebTextStyles.para(
+                        isDarkTheme: theme.isDarkMode,
+                        color: theme.isDarkMode
+                            ? MyntColors.textSecondaryDark
+                            : MyntColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -903,10 +1195,19 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                         orderInput.actOcoPrcType == "SL MKT") {
                       orderInput.ocoPriceCtrl.text = "Market";
                     } else {
+                      // The OCO leg saved as MKT stores prc "0.00" - a real string,
+                      // not null - so the `??` below never fell through to LTP
+                      // and the box showed 0.00. Treat a non-positive stored
+                      // price as absent and seed from LTP, as Place Order does.
+                      // The OCO leg saved as LMT still restores its own price.
+                      final String storedOcoPrc =
+                          widget.gttOrderBook.placeOrderParamsLeg2?.prc ?? "";
                       orderInput.ocoPriceCtrl.text =
-                          widget.gttOrderBook.placeOrderParamsLeg2?.prc ??
-                              currentLtp ??
-                              "0.00";
+                          SafeParse.toDouble(storedOcoPrc) > 0
+                              ? storedOcoPrc
+                              : (currentLtp ??
+                                  widget.gttOrderBook.ltp ??
+                                  "0.00");
                     }
                   });
                 },
@@ -956,7 +1257,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                                     : MyntColors.textPrimary,
                               ),
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
+                    _rejectIfNoMatch(RegExp(r'^\d*\.?\d{0,2}$')),
                   ],
                   readOnly: orderInput.actOcoPrcType == "Limit" ||
                       orderInput.actOcoPrcType == "SL Limit"
@@ -977,8 +1278,6 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
   Widget _buildFooter(ThemesProvider theme) {
     final orderInput = ref.watch(ordInputProvider);
     final internet = ref.watch(networkStateProvider);
-    final closeNotifier = _ModifyGttDialogCloseNotifier.of(context);
-    
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -1048,40 +1347,122 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                     ref.read(orderProvider).loading
                     ? null
                     : () async {
+                        // Freeze qty cap guard — GTT has no slicing, so block any
+                        // qty whose final units exceed single freeze qty (frezQty).
+                        if (_exceedsFreezeCap(orderInput.qtyCtrl.text)) {
+                          showResponsiveWarningMessage(
+                              context, _gttFreezeCapMessage());
+                          return;
+                        }
+                        if (orderInput.disableGTTCond &&
+                            _exceedsFreezeCap(orderInput.ocoQtyCtrl.text)) {
+                          showResponsiveWarningMessage(
+                              context, _gttFreezeCapMessage());
+                          return;
+                        }
+                        // Lot-multiple guard - runs before the gate, as Place Order GTT does,
+                        // because the gate itself does not test lot multiples. Returns null for
+                        // empty/zero so it can never steal their messages (TC_114).
+                        String? gttLotErr = _gttLotError(orderInput.qtyCtrl.text);
+                        if (gttLotErr == null && orderInput.disableGTTCond) {
+                          gttLotErr =
+                              _gttLotError(orderInput.ocoQtyCtrl.text, isOcoLeg: true);
+                        }
+                        if (gttLotErr != null) {
+                          showResponsiveWarningMessage(context, gttLotErr);
+                          return;
+                        }
+                        // Tick-size guard — trigger/price must be a multiple of the scrip's
+                        // tick size, matching the Place Order GTT path. Early return so the
+                        // existing validation chain below is untouched.
+                        String? gttTickErr =
+                            _gttTickError(orderInput.val1Ctrl.text, "Target trigger price");
+                        gttTickErr ??= _gttTickError(orderInput.priceCtrl.text, "Price");
+                        if (gttTickErr == null && orderInput.disableGTTCond) {
+                          gttTickErr = _gttTickError(
+                              orderInput.val2Ctrl.text, "Stoploss trigger price");
+                          gttTickErr ??=
+                              _gttTickError(orderInput.ocoPriceCtrl.text, "OCO price");
+                        }
+                        if (gttTickErr != null) {
+                          showResponsiveWarningMessage(context, gttTickErr);
+                          return;
+                        }
                         if (orderInput.disableGTTCond) {
+                          // Gate - every field present AND positive, mirroring the Place Order
+                          // GTT gate. Market is a real price for an MKT leg, not a zero.
                           if ((orderInput.val1Ctrl.text.isNotEmpty &&
                                   orderInput.val2Ctrl.text.isNotEmpty &&
                                   orderInput.priceCtrl.text.isNotEmpty &&
                                   orderInput.ocoPriceCtrl.text.isNotEmpty &&
                                   orderInput.ocoQtyCtrl.text.isNotEmpty) &&
-                              orderInput.qtyCtrl.text.isNotEmpty) {
-                            double ltp = double.parse(widget.gttOrderBook.ltp ?? "0.00");
-                            double val1 = double.parse(orderInput.val1Ctrl.text);
-                            double val2 = double.parse(orderInput.val2Ctrl.text);
+                              orderInput.qtyCtrl.text.isNotEmpty &&
+                              SafeParse.toDouble(orderInput.val1Ctrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.val2Ctrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.qtyCtrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.ocoQtyCtrl.text) > 0 &&
+                              (orderInput.priceCtrl.text == "Market" ||
+                                  SafeParse.toDouble(orderInput.priceCtrl.text) > 0) &&
+                              (orderInput.ocoPriceCtrl.text == "Market" ||
+                                  SafeParse.toDouble(orderInput.ocoPriceCtrl.text) > 0)) {
+                            double ltp = SafeParse.toDouble(currentLtp ?? widget.gttOrderBook.ltp);
+                            double val1 = SafeParse.toDouble(orderInput.val1Ctrl.text);
+                            double val2 = SafeParse.toDouble(orderInput.val2Ctrl.text);
 
-                            if (val1 > ltp && val2 < ltp) {
+                            // SELL OCO: target > LTP, stoploss < LTP. BUY OCO (F&O): target < LTP, stoploss > LTP.
+                            final bool ocoConditionValid = (isBuy ?? false)
+                                ? (val1 < ltp && val2 > ltp)
+                                : (val1 > ltp && val2 < ltp);
+
+                            if (ocoConditionValid) {
                               prepareToModifyOCOOrder(orderInput);
                             } else {
-                              showResponsiveWarningMessage(
-                                context,
-                                val1 <= ltp
-                                    ? "Target Trigger Price can not be Less than LTP"
-                                    : val2 >= ltp
-                                        ? "Stoploss Trigger Price can not be Greater than LTP"
-                                        : "Trigger Price can not be equal to LTP",
-                              );
+                              final String ocoErrorMsg = (isBuy ?? false)
+                                  ? (val1 >= ltp
+                                      ? "Target Trigger Price can not be Greater than or equal to LTP"
+                                      : val2 <= ltp
+                                          ? "Stoploss Trigger Price can not be Less than or equal to LTP"
+                                          : "Invalid trigger prices")
+                                  // Both sell branches reject the equal case as well, so the
+                                  // wording has to say so. The buy branch above already spelled
+                                  // it out; the mismatch meant a trigger typed exactly at LTP was
+                                  // refused with "cannot be less than LTP", which contradicted
+                                  // what the user had entered (TC_274 / TC_276). The old third
+                                  // branch here read "cannot be equal to LTP" and was
+                                  // unreachable - every failing sell case is caught by one of the
+                                  // two above it - so it now matches the buy fallback.
+                                  : (val1 <= ltp
+                                      ? "Target Trigger Price can not be Less than or equal to LTP"
+                                      : val2 >= ltp
+                                          ? "Stoploss Trigger Price can not be Greater than or equal to LTP"
+                                          : "Invalid trigger prices");
+                              showResponsiveWarningMessage(context, ocoErrorMsg);
                             }
                           } else {
-                            showResponsiveWarningMessage(context, "Enter all Input fields");
+                            showResponsiveWarningMessage(
+                                context, _gttFieldError(orderInput, isOco: true));
                           }
                         } else {
+                          // Gate - every field present AND positive, mirroring the Place Order
+                          // GTT gate. Market is a real price for an MKT leg, not a zero.
                           if ((orderInput.val1Ctrl.text.isNotEmpty &&
                                   orderInput.priceCtrl.text.isNotEmpty) &&
-                              orderInput.qtyCtrl.text.isNotEmpty) {
-                            double ltp = double.parse(widget.gttOrderBook.ltp ?? "0.00");
-                            double val1 = double.parse(orderInput.val1Ctrl.text);
+                              orderInput.qtyCtrl.text.isNotEmpty &&
+                              SafeParse.toDouble(orderInput.val1Ctrl.text) > 0 &&
+                              SafeParse.toDouble(orderInput.qtyCtrl.text) > 0 &&
+                              (orderInput.priceCtrl.text == "Market" ||
+                                  SafeParse.toDouble(orderInput.priceCtrl.text) > 0)) {
+                            double ltp = SafeParse.toDouble(currentLtp ?? widget.gttOrderBook.ltp);
+                            double val1 = SafeParse.toDouble(orderInput.val1Ctrl.text);
 
+                            // chngCond must run before chngAlert (chngAlert reads _actCond to set _ait).
                             if (val1 > ltp) {
+                              orderInput.chngCond("Greater than");
+                              orderInput.chngAlert("LTP");
+                              prepareToModifyGttOrder(orderInput);
+                            } else if (val1 < ltp) {
+                              orderInput.chngCond("Less than");
+                              orderInput.chngAlert("LTP");
                               prepareToModifyGttOrder(orderInput);
                             } else {
                               showResponsiveWarningMessage(
@@ -1090,7 +1471,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
                               );
                             }
                           } else {
-                            showResponsiveWarningMessage(context, "Enter all Input fields");
+                            showResponsiveWarningMessage(
+                                context, _gttFieldError(orderInput, isOco: false));
                           }
                         }
                       },
@@ -1132,7 +1514,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
   prepareToModifyGttOrder(OrderInputProvider orderInput) async {
     PlaceGTTOrderInput input = PlaceGTTOrderInput(
       exch: '${widget.gttOrderBook.exch}',
-      qty: orderInput.qtyCtrl.text,
+      qty: _lotsToActualQty(orderInput.qtyCtrl.text),
       tsym: '${widget.gttOrderBook.tsym}',
       validity: "GTT",
       prc: orderInput.priceCtrl.text,
@@ -1177,7 +1559,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
       trantype: isBuy! ? 'B' : "S",
       ret: 'DAY',
       remarks: orderInput.reMarksCtrl.text,
-      qty1: orderInput.qtyCtrl.text,
+      qty1: _lotsToActualQty(orderInput.qtyCtrl.text),
       trgprc1: orderInput.actOcoPrcType == "SL Limit" || orderInput.actOcoPrcType == "SL MKT"
           ? orderInput.trgPrcCtrl.text
           : "",
@@ -1189,7 +1571,7 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
       prctyp2: orderInput.ocoPrcType,
       prc2: orderInput.ocoPriceCtrl.text,
       prd2: orderInput.ocoOrderType,
-      qty2: orderInput.ocoQtyCtrl.text,
+      qty2: _lotsToActualQty(orderInput.ocoQtyCtrl.text),
       trgprc2: orderInput.actOcoPrcType == "SL Limit" || orderInput.actOcoPrcType == "SL MKT"
           ? orderInput.ocoTrgPrcCtrl.text
           : "",
@@ -1242,10 +1624,59 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
   late Offset _position;
   bool _isDragging = false;
 
+  // Where the window is drawn (clamped) plus any drag since the last frame.
+  Offset _dragBase = Offset.zero;
+
+  late final OrderDepthController _depth;
+
   @override
   void initState() {
     super.initState();
     _position = widget.initialPosition;
+    _depth = OrderDepthController()..addListener(_onDepthChanged);
+  }
+
+  void _onDepthChanged() {
+    if (mounted) setState(() {});
+  }
+
+  // Same chart-iframe guard as the order window, for the depth panel.
+  Widget _guardChartIframes(Widget child) {
+    return PointerInterceptor(
+      child: MouseRegion(
+        cursor: SystemMouseCursors.basic,
+        // _disableAllChartIframes also resets the page cursor to the arrow
+        // on every move, which wiped the hand cursor on the depth rows. The
+        // panel only needs the chart iframes kept from taking the mouse.
+        onEnter: (_) {
+          ChartIframeGuard.acquire();
+          _blockChartIframesOnly();
+        },
+        onHover: (_) => _blockChartIframesOnly(),
+        onExit: (_) {
+          ChartIframeGuard.release();
+          _enableAllChartIframes();
+        },
+        child: Listener(
+          onPointerMove: (_) => _blockChartIframesOnly(),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  void _blockChartIframesOnly() {
+    try {
+      final iframes = html.document.querySelectorAll('iframe');
+      for (var iframe in iframes) {
+        if (iframe is html.IFrameElement &&
+            iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = 'none';
+        }
+      }
+    } catch (e) {
+      // DOM access can fail during teardown — ignore
+    }
   }
 
   // Directly disable all chart iframes and reset cursor (like chart's onExit)
@@ -1277,6 +1708,8 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
 
   @override
   void dispose() {
+    _depth.removeListener(_onDepthChanged);
+    _depth.dispose();
     ChartIframeGuard.release();
     _enableAllChartIframes();
     super.dispose();
@@ -1290,13 +1723,32 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
     // Constrain position to screen bounds
     const dialogWidth = 450.0;
     final dialogHeight = screenSize.height * 0.7;
-    final constrainedPosition = Offset(
-      _position.dx.clamp(0, screenSize.width - dialogWidth),
-      _position.dy.clamp(0, screenSize.height - dialogHeight),
+    // final constrainedPosition = Offset(
+    //   _position.dx.clamp(0, screenSize.width - dialogWidth),
+    //   _position.dy.clamp(0, screenSize.height - dialogHeight),
+    // );
+    // Market depth panel beside the window (Task #9168).
+    final depthPlacement = OrderDepthPlacement.of(
+      screenWidth: screenSize.width,
+      windowLeft: _position.dx.clamp(0, screenSize.width - dialogWidth),
+      windowWidth: dialogWidth,
+      showPanel: _depth.showing,
     );
+    final double top =
+        _position.dy.clamp(0, screenSize.height - dialogHeight);
+    final constrainedPosition = Offset(depthPlacement.windowLeft, top);
+    _dragBase = constrainedPosition;
 
     return Stack(
       children: [
+        if (depthPlacement.panelLeft != null)
+          Positioned(
+            left: depthPlacement.panelLeft,
+            // top: top,
+            // Level with the depth icon, not the window's top edge.
+            top: top + _depth.anchorOffset,
+            child: _guardChartIframes(OrderDepthDock(controller: _depth)),
+          ),
         // Actual dialog
         Positioned(
           left: constrainedPosition.dx,
@@ -1326,6 +1778,7 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
                     borderRadius: BorderRadius.circular(5),
                     color: theme.isDarkMode ? MyntColors.backgroundColorDark : MyntColors.backgroundColor,
                     child: Container(
+                      key: _depth.windowKey,
                       width: dialogWidth,
                       height: dialogHeight,
                       decoration: BoxDecoration(
@@ -1344,10 +1797,14 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
                           },
                           onPanUpdate: (details) {
                             setState(() {
-                              _position = Offset(
-                                _position.dx + details.delta.dx,
-                                _position.dy + details.delta.dy,
-                              );
+                              // _position = Offset(
+                              //   _position.dx + details.delta.dx,
+                              //   _position.dy + details.delta.dy,
+                              // );
+                              // Move from where the window is drawn, updated
+                              // per event (same as the Place Order shell).
+                              _dragBase = _dragBase + details.delta;
+                              _position = _dragBase;
                             });
                             widget.onPositionChanged(_position);
                           },
@@ -1357,9 +1814,12 @@ class _DraggableModifyGttDialogState extends ConsumerState<_DraggableModifyGttDi
                             });
                           },
                           isDragging: _isDragging,
-                          child: ModifyGttWeb(
-                            gttOrderBook: widget.gttOrderBook,
-                            scripInfo: widget.scripInfo,
+                          child: OrderDepthScope(
+                            controller: _depth,
+                            child: ModifyGttWeb(
+                              gttOrderBook: widget.gttOrderBook,
+                              scripInfo: widget.scripInfo,
+                            ),
                           ),
                         ),
                       ),

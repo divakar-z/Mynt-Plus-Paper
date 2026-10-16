@@ -14,6 +14,38 @@ class Preferences {
   Future clearClientSession() async {
     await _prefInstance?.remove(_clientSession);
   }
+
+  /// Clears the OAuth-only session. Leaves the main web session intact.
+  Future clearOauthSession() async {
+    await _prefInstance?.remove(_oauthSession);
+  }
+
+  /// Clears the logged-in user's identity + session keys (the "Client Details"
+  /// group) while leaving device, theme, and filter prefs intact. Used by the
+  /// URL token-based auto-login so a new user can never inherit the previous
+  /// user's session, profile token, or mobile number.
+  Future clearUserSession() async {
+    await _prefInstance?.remove(_clientId);
+    await _prefInstance?.remove(_clientSession);
+    await _prefInstance?.remove(_apiToken);
+    await _prefInstance?.remove(_clientMob);
+    await _prefInstance?.remove(_clientName);
+    await _prefInstance?.remove(_clientList);
+  }
+
+  // QR session invalidation — stores the device UUID of the currently active
+  // QR login session so we can tell the backend to invalidate it when the
+  // user refreshes the browser, closes the tab, or re-enters the QR screen
+  // (which generates a new UUID). Prevents the race where mobile confirms
+  // an orphaned QR session.
+  Future setPendingQrUuid(String uuid) async =>
+      await _prefInstance?.setString(_pendingQrUuid, uuid);
+
+  String? get pendingQrUuid => _prefInstance?.getString(_pendingQrUuid);
+
+  Future clearPendingQrUuid() async =>
+      await _prefInstance?.remove(_pendingQrUuid);
+
   // setters
 
   Future setTheme(bool theme) async {
@@ -33,6 +65,22 @@ class Preferences {
     await _prefInstance!.setString(_userAppTheme, theme);
   }
 
+  Future setChartEngineSession(String json) async {
+    await _prefInstance!.setString(_chartEngineSession, json);
+  }
+
+  String? getChartEngineSession() =>
+      _prefInstance?.getString(_chartEngineSession);
+
+  // Generic accessors used by chart-engine modules that own their own keys
+  // (e.g. chartEngineOrderDefaultsV1). Avoid adding bespoke wrappers per key
+  // when the data shape is opaque JSON owned by the calling notifier.
+  SharedPreferences? get sharedPreferences => _prefInstance;
+
+  Future<void> setString(String key, String value) async {
+    await _prefInstance!.setString(key, value);
+  }
+
   Future setDeviceName(String deviceName) async {
     await _prefInstance!.setString(_deviceName, deviceName);
   }
@@ -45,6 +93,10 @@ class Preferences {
       await _prefInstance!.setString(_clientSession, session);
   Future setApiToken(String session) async =>
       await _prefInstance!.setString(_apiToken, session);
+  // OAuth session — stored separately so the OAuth flow never overwrites the
+  // main web session (clientSession).
+  Future setOauthSession(String session) async =>
+      await _prefInstance!.setString(_oauthSession, session);
   Future setClientName(String name) async =>
       await _prefInstance!.setString(_clientName, name);
   Future setImei(String val) async =>
@@ -298,6 +350,7 @@ class Preferences {
   String? get clientId => _prefInstance?.getString(_clientId) ?? "";
   String? get clientSession => _prefInstance?.getString(_clientSession) ?? "";
   String? get token => _prefInstance?.getString(_apiToken) ?? "";
+  String? get oauthSession => _prefInstance?.getString(_oauthSession) ?? "";
   String? get clientMob => _prefInstance?.getString(_clientMob) ?? "";
   String? get clientName => _prefInstance?.getString(_clientName) ?? "";
 
@@ -432,6 +485,13 @@ class Preferences {
 
   bool get isTickerVisible => _prefInstance?.getBool(_isTickerVisible) ?? true;
 
+  // Watchlist (market watch) panel visibility
+  Future setWatchlistVisible(bool isVisible) async =>
+      await _prefInstance!.setBool(_isWatchlistVisible, isVisible);
+
+  bool get isWatchlistVisible =>
+      _prefInstance?.getBool(_isWatchlistVisible) ?? true;
+
   // Saved custom strategies (per-user, stored as JSON string)
   Future setSavedCustomStrategies(String userId, String data) async =>
       await _prefInstance!.setString('${_savedCustomStrategies}_$userId', data);
@@ -535,6 +595,34 @@ class Preferences {
 
   Future<void> setIsPaperTradingPref(bool value) async =>
       await _prefInstance!.setBool(_isPaperTradingKey, value);
+  // ── Accessibility panel ───────────────────────────────────────────
+  // The whole panel state is persisted as one opaque JSON blob owned by
+  // AccessibilityNotifier (same "opaque JSON owned by the caller" pattern as
+  // the chart-engine session), so adding a new toggle doesn't need a bespoke
+  // key/getter/setter here each time.
+  Future<void> setAccessibilitySettings(String json) async =>
+      await _prefInstance!.setString(_accessibilitySettings, json);
+
+  String? get accessibilitySettings =>
+      _prefInstance?.getString(_accessibilitySettings);
+
+  // Privacy Mode — masks sensitive monetary values (P&L, holdings, funds)
+  // across the app when enabled. Stored per client id so one account's
+  // choice never carries over to the next login on the same browser.
+  // Defaults to false (values visible).
+  Future setPrivacyMode(String userId, bool enabled) async =>
+      await _prefInstance!.setBool('${_privacyMode}_$userId', enabled);
+
+  bool getPrivacyMode(String userId) =>
+      _prefInstance?.getBool('${_privacyMode}_$userId') ?? false;
+
+  // Preferred chart in symbol details — "tfc" (Trade from Chart) or "tv"
+  // (TradingView). Stored per client id; defaults to Trade from Chart.
+  Future setChartPreference(String userId, String chart) async =>
+      await _prefInstance!.setString('${_chartPreference}_$userId', chart);
+
+  String getChartPreference(String userId) =>
+      _prefInstance?.getString('${_chartPreference}_$userId') ?? 'tfc';
 }
 
 const String _userTheme = 'userTheme';
@@ -547,12 +635,19 @@ const String _imei = 'imei';
 
 const String _ismobileLogin = 'ismobileLogin';
 
+// QR session invalidation key — see setPendingQrUuid above.
+const String _pendingQrUuid = 'pendingQrUuid';
+
 const String _hideLoginOptBtn = 'hideLoginOptBtn';
 
 // Cleint Details
 const String _clientId = 'clientId';
 const String _clientSession = 'clientSession';
 const String _apiToken = 'apiToken';
+
+// OAuth session — kept separate from the main web session so the OAuth flow
+// never overwrites clientId / clientSession.
+const String _oauthSession = 'oauthSession';
 
 const String _clientMob = 'clientMob';
 const String _clientName = 'clientName';
@@ -640,6 +735,9 @@ const String _isSipDate = "isSipDate";
 ////TICKER VISIBILITY
 const String _isTickerVisible = "isTickerVisible";
 
+////WATCHLIST VISIBILITY
+const String _isWatchlistVisible = "isWatchlistVisible";
+
 ////SAVED CUSTOM STRATEGIES
 const String _savedCustomStrategies = "savedCustomStrategies";
 
@@ -661,3 +759,13 @@ const String _scalperDefaultSymbol = "scalperDefaultSymbol";
 const String _scalperMktProtEnabled = "scalperMktProtEnabled";
 const String _scalperMktProtPoints = "scalperMktProtPoints";
 const String _scalperPosFilter = "scalperPosFilter";
+
+//// CHART ENGINE SESSION
+const String _chartEngineSession = 'chartEngineSessionV1';
+
+//// ACCESSIBILITY PANEL
+const String _accessibilitySettings = 'accessibilitySettingsV1';
+
+const String _privacyMode = "privacyMode";
+
+const String _chartPreference = "chartPreference";

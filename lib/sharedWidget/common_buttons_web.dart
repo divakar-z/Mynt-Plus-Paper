@@ -91,6 +91,18 @@ class MyntButton extends StatelessWidget {
   final EdgeInsets? padding;
   final MainAxisAlignment? iconAlignment;
 
+  /// Puts the icon after the label instead of before it.
+  ///
+  /// Defaults false, so every existing call site keeps leading icons. Trailing
+  /// suits an icon that depicts the *outcome* rather than the category — a
+  /// paper plane on Send reads as the message leaving, which belongs after the
+  /// word, where an arrow or a chevron would also go.
+  final bool iconAfterLabel;
+  /// Override the default button height (40). Applies to primary, secondary,
+  /// outlined, and tertiary variants that render a Container with a fixed
+  /// height — ghost / text buttons ignore this since they have no chrome.
+  final double? height;
+
   const MyntButton({
     super.key,
     this.label,
@@ -108,6 +120,8 @@ class MyntButton extends StatelessWidget {
     this.borderRadius,
     this.padding,
     this.iconAlignment,
+    this.iconAfterLabel = false,
+    this.height,
   }) : assert(
           label != null ||
               icon != null ||
@@ -169,7 +183,7 @@ class MyntButton extends StatelessWidget {
     final buttonPadding = padding ?? _getDefaultPadding();
 
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(borderRadiusValue),
@@ -211,7 +225,7 @@ class MyntButton extends StatelessWidget {
     final buttonPadding = padding ?? _getDefaultPadding();
 
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(borderRadiusValue),
@@ -261,7 +275,7 @@ class MyntButton extends StatelessWidget {
     final buttonPadding = padding ?? _getDefaultPadding();
 
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         border: Border.all(
@@ -338,7 +352,7 @@ class MyntButton extends StatelessWidget {
 
     // Tertiary button: Primary style but with tertiary background
     return Container(
-      height: 40,
+      height: height,
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(_getDefaultBorderRadius()),
@@ -397,17 +411,16 @@ class MyntButton extends StatelessWidget {
     if (hasLabel && hasIcon) {
       // Button with icon and text
       final alignment = iconAlignment ?? MainAxisAlignment.center;
+      final text = Text(
+        label!,
+        style: _getTextStyle(context, textColor, fontWeight: fontWeight),
+      );
       return Row(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: alignment,
-        children: [
-          _buildIconWidget(textColor),
-          const SizedBox(width: 6),
-          Text(
-            label!,
-            style: _getTextStyle(context, textColor, fontWeight: fontWeight),
-          ),
-        ],
+        children: iconAfterLabel
+            ? [text, const SizedBox(width: 6), _buildIconWidget(textColor)]
+            : [_buildIconWidget(textColor), const SizedBox(width: 6), text],
       );
     }
 
@@ -527,6 +540,7 @@ class MyntPrimaryButton extends MyntButton {
     super.isLoading = false,
     super.isFullWidth = false,
     super.iconAlignment,
+    super.iconAfterLabel,
     super.backgroundColor,
     super.textColor,
     super.borderColor,
@@ -548,6 +562,7 @@ class MyntSecondaryButton extends MyntButton {
     super.isLoading = false,
     super.isFullWidth = false,
     super.iconAlignment,
+    super.iconAfterLabel,
     super.padding,
   }) : super(type: MyntButtonType.secondary);
 }
@@ -567,6 +582,7 @@ class MyntOutlinedButton extends MyntButton {
     super.borderColor,
     super.textColor,
     super.iconAlignment,
+    super.iconAfterLabel,
     super.padding,
   }) : super(type: MyntButtonType.outlined);
 }
@@ -584,6 +600,7 @@ class MyntTextButton extends MyntButton {
     super.isLoading = false,
     super.isFullWidth = false,
     super.iconAlignment,
+    super.iconAfterLabel,
     super.padding,
   }) : super(type: MyntButtonType.text);
 }
@@ -601,6 +618,7 @@ class MyntTertiaryButton extends MyntButton {
     super.isLoading = false,
     super.isFullWidth = false,
     super.iconAlignment,
+    super.iconAfterLabel,
     super.padding,
   }) : super(type: MyntButtonType.tertiary);
 }
@@ -795,7 +813,7 @@ class MyntIconTextButton extends StatelessWidget {
             children: [
               iconWidget,
               if (label != null && label!.isNotEmpty) ...[
-                // const SizedBox(width: 6),
+                const SizedBox(width: 6),
                 Text(
                   label!,
                   style: _getTextStyle(context, defaultTextColor),

@@ -54,8 +54,10 @@ class _MfHoldingsScreenWebState extends ConsumerState<MfHoldingsScreenWeb> {
   void initState() {
     super.initState();
     // Fetch mutual fund holdings data when screen initializes
+    // (old MF holdings API decommissioned — demat endpoint is the source)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(mfProvider).fetchmfholdingnew();
+      // ref.read(mfProvider).fetchmfholdingnew();
+      ref.read(mfProvider).fetchmfdematholding();
     });
     // Add listener for hover changes to manage popover
     _hoveredRowToken.addListener(_onHoverChanged);
@@ -120,7 +122,8 @@ class _MfHoldingsScreenWebState extends ConsumerState<MfHoldingsScreenWeb> {
       onTap: () => FocusScope.of(context).unfocus(),
       child: RefreshIndicator(
         onRefresh: () async {
-          await mfData.fetchmfholdingnew();
+          // await mfData.fetchmfholdingnew();
+          await mfData.fetchmfdematholding();
         },
         child: widget.showSummaryCards
             ? Padding(
@@ -852,8 +855,8 @@ class _MfHoldingsScreenWebState extends ConsumerState<MfHoldingsScreenWeb> {
               // Build menu items
               List<shadcn.MenuItem> menuItems = [];
 
-              // Redeem option - only if has units
-              if (hasUnits) {
+              // Redeem option - needs units AND the Redemption_Allowed gate
+              if (hasUnits && holding.isRedemptionAllowed) {
                 menuItems.add(
                   _buildMenuButton(
                     icon: Icons.currency_exchange,

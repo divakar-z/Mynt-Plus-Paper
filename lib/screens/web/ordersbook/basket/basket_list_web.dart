@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mynt_plus/provider/accessibility_provider.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:intl/intl.dart';
 import 'package:mynt_plus/res/mynt_web_color_styles.dart';
@@ -29,6 +30,10 @@ import '../../../../sharedWidget/mynt_loader.dart';
 import 'create_basket_web.dart';
 // import '../../../web/market_watch/search_dialog_web.dart'; // Commented out - search bar integrated
 import '../../../web/order/place_order_screen_web.dart';
+import '../../market_watch/tv_chart/chart_iframe_guard.dart';
+import '../../../../utils/overlay_manager.dart';
+import 'dart:html' as html;
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 
 class BasketList extends ConsumerStatefulWidget {
   const BasketList({super.key});
@@ -150,7 +155,7 @@ class _BasketListState extends ConsumerState<BasketList> {
   TextStyle _geistTextStyle(
       {Color? color, double? fontSize, FontWeight? fontWeight}) {
     return TextStyle(
-      fontFamily: 'Geist',
+      fontFamily: dyslexiaFontOr('Geist'),
       color: color,
       fontSize: fontSize,
       fontWeight: fontWeight,
@@ -297,7 +302,7 @@ class _BasketListState extends ConsumerState<BasketList> {
   // Calculate minimum column widths dynamically
   Map<int, double> _calculateMinWidths(
       List<dynamic> baskets, BuildContext context) {
-    final textStyle = const TextStyle(fontSize: 14, fontFamily: 'Geist');
+    final textStyle = TextStyle(fontSize: 14, fontFamily: dyslexiaFontOr('Geist'));
     const padding = 24.0;
     const sortIconWidth = 24.0;
 
@@ -389,6 +394,17 @@ class _BasketListState extends ConsumerState<BasketList> {
     }
   }
 
+  /// A basket's createdDate, saved by convDateWithTime() as
+  /// "dd MMM yyyy, hh:mm a" (e.g. "09 Oct 2026, 01:30 PM").
+  DateTime _basketCreatedAt(Map basket) {
+    final raw = (basket['createdDate'] ?? '').toString().trim();
+    try {
+      return DateFormat("dd MMM yyyy, hh:mm a").parse(raw);
+    } catch (_) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+  }
+
   List<dynamic> _getSortedBaskets(List<dynamic> baskets) {
     if (_sortColumnIndex == null) return baskets;
     final sorted = [...baskets];
@@ -411,9 +427,10 @@ class _BasketListState extends ConsumerState<BasketList> {
           comparison = aItems.compareTo(bItems);
           break;
         case 2: // Created Date
-          comparison = ((a as Map)['createdDate'] ?? '')
-              .toString()
-              .compareTo(((b as Map)['createdDate'] ?? '').toString());
+          // Compare as dates, not text ("09 Oct" sorted before "10 Sep").
+          // Unreadable dates sort as the oldest.
+          comparison = _basketCreatedAt(a as Map)
+              .compareTo(_basketCreatedAt(b as Map));
           break;
       }
       return asc ? comparison : -comparison;
@@ -702,6 +719,8 @@ class _BasketListState extends ConsumerState<BasketList> {
     final sortedBaskets = baskets.isNotEmpty
         ? _getSortedBaskets(baskets)
         : <dynamic>[];
+    // TC_219: search-aware empty state, same as the other Order Book tabs.
+    final searchQuery = ref.read(orderProvider).orderSearchCtrl.text.trim();
 
     return SizedBox.expand(
       child: shadcn.OutlinedContainer(
@@ -793,8 +812,12 @@ class _BasketListState extends ConsumerState<BasketList> {
                             child: Padding(
                               padding: const EdgeInsets.all(16.0),
                               child: NoDataFoundWeb(
-                                title: "No Baskets",
-                                subtitle: "You don't have any baskets yet.",
+                                title: searchQuery.isNotEmpty
+                                    ? "No Baskets Found"
+                                    : "No Baskets",
+                                subtitle: searchQuery.isNotEmpty
+                                    ? "No baskets match your search \"$searchQuery\"."
+                                    : "You don't have any baskets yet.",
                                 primaryEnabled: false,
                                 secondaryEnabled: false,
                               ),
@@ -1020,8 +1043,14 @@ class _BasketListState extends ConsumerState<BasketList> {
     );
 
     if (shouldDelete == true) {
+      // `index` is the row's place in the sorted / searched table, not in the
+      // provider's list, so deleting by it could remove another basket.
+      // Find the basket by name, as the basket window's own delete does.
+      final realIndex = basketProvider.bsktList
+          .indexWhere((b) => b['bsketName'].toString() == bsktName.toString());
+      if (realIndex == -1) return;
       setState(() => _isDeleting = true);
-      await basketProvider.removeBasket(index);
+      await basketProvider.removeBasket(realIndex);
       if (mounted) {
         setState(() => _isDeleting = false);
         ResponsiveSnackBar.showSuccess(
@@ -1040,47 +1069,70 @@ class _BasketListState extends ConsumerState<BasketList> {
     await basketProvider.fetchBasketMargin();
     await basketProvider.chngBsktName(bsktName, context, true);
 
+    // Client ask: basket window floats like the place-order window — no dim,
+    // page behind stays usable, draggable, stays until closed.
     if (context.mounted) {
-      final colorScheme = shadcn.Theme.of(context).colorScheme;
-      showDialog(
-        context: context,
-        barrierDismissible: true,
-        builder: (BuildContext context) {
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.6,
-                maxHeight: MediaQuery.of(context).size.height * 0.8,
-              ),
-              decoration: BoxDecoration(
-                color: colorScheme.popover,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: colorScheme.border,
-                  width: 1,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: BasketScripList(
-                  bsktName: bsktName,
-                ),
-              ),
-            ),
-          );
-        },
-      );
+      _BasketWindow.show(context, bsktName);
     }
   }
+
+  // Previous modal dialog (dimmed backdrop), kept for rollback:
+    // if (context.mounted) {
+    //   final colorScheme = shadcn.Theme.of(context).colorScheme;
+    //   // Offset from the centred position; kept for this open only.
+    //   Offset dragOffset = Offset.zero;
+    //   showDialog(
+    //     context: context,
+    //     barrierDismissible: true,
+    //     builder: (BuildContext context) {
+    //       return StatefulBuilder(builder: (context, setDialogState) {
+    //       final screen = MediaQuery.of(context).size;
+    //       return Transform.translate(
+    //         offset: dragOffset,
+    //         child: Dialog(
+    //         backgroundColor: Colors.transparent,
+    //         elevation: 0,
+    //         child: Container(
+    //           constraints: BoxConstraints(
+    //             maxWidth: MediaQuery.of(context).size.width * 0.6,
+    //             maxHeight: MediaQuery.of(context).size.height * 0.8,
+    //           ),
+    //           decoration: BoxDecoration(
+    //             color: colorScheme.popover,
+    //             borderRadius: BorderRadius.circular(6),
+    //             border: Border.all(
+    //               color: colorScheme.border,
+    //               width: 1,
+    //             ),
+    //             boxShadow: [
+    //               BoxShadow(
+    //                 color: Colors.black.withOpacity(0.1),
+    //                 blurRadius: 8,
+    //                 offset: const Offset(0, 4),
+    //               ),
+    //             ],
+    //           ),
+    //           child: ClipRRect(
+    //             borderRadius: BorderRadius.circular(6),
+    //             child: BasketScripList(
+    //               bsktName: bsktName,
+    //               onDrag: (delta) => setDialogState(() {
+    //                 // Keep the header reachable on screen.
+    //                 final next = dragOffset + delta;
+    //                 dragOffset = Offset(
+    //                   next.dx.clamp(-screen.width * 0.45, screen.width * 0.45),
+    //                   next.dy.clamp(-screen.height * 0.1, screen.height * 0.8),
+    //                 );
+    //               }),
+    //             ),
+    //           ),
+    //         ),
+    //         ),
+    //       );
+    //       });
+    //     },
+    //   );
+    // }
 
   @override
   Widget build(BuildContext context) {
@@ -1177,7 +1229,12 @@ class _BasketListState extends ConsumerState<BasketList> {
 
 class BasketScripList extends ConsumerStatefulWidget {
   final String bsktName;
-  const BasketScripList({super.key, required this.bsktName});
+  /// Drag the dialog by its header (client ask: movable basket window).
+  final ValueChanged<Offset>? onDrag;
+  /// Closes the floating basket window; null = page route (pop).
+  final VoidCallback? onClose;
+  const BasketScripList(
+      {super.key, required this.bsktName, this.onDrag, this.onClose});
 
   @override
   ConsumerState<BasketScripList> createState() => _BasketScripListState();
@@ -1201,6 +1258,81 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   final ValueNotifier<int?> _hoveredColumnIndex = ValueNotifier<int?>(null);
   int? _sortColumnIndex;
   bool _sortAscending = true;
+  // TC_324.2: ticked rows by ORIGINAL basket index (table can be sorted).
+  // Sent rows can be ticked to delete only (Kite style).
+  final Set<int> _selected = {};
+
+  /// True once any row has been sent; rows are then placed one by one or by
+  /// selection. A fresh basket keeps the single Place Order.
+  bool _isSentMode(OrderProvider p) =>
+      _hasOrdersPlacedInBasket(widget.bsktName, p) ||
+      p.isBasketPlaced(p.selectedBsktName) ||
+      p.bsktScripList.any((e) => e['orderStatus'] != null);
+
+  /// Rows the Place button would send now: ticked unsent rows, else every
+  /// unsent row once something was sent, else the whole fresh basket. The
+  /// one-segment rule is checked on these only, so a PLACED row from another
+  /// segment no longer blocks the rest.
+  List _rowsToSend(OrderProvider p) {
+    final ticked = _selectedUnsent(p);
+    if (ticked.isNotEmpty) return [for (final i in ticked) p.bsktScripList[i]];
+    if (_isSentMode(p)) {
+      return p.bsktScripList.where((e) => e['orderStatus'] == null).toList();
+    }
+    return p.bsktScripList;
+  }
+
+  List<int> _selectedUnsent(OrderProvider p) => [
+        for (final i in _selected)
+          if (i < p.bsktScripList.length &&
+              p.bsktScripList[i]['orderStatus'] == null)
+            i
+      ];
+
+  Widget _buildRowCheckbox(
+      {required bool value, required ValueChanged<bool> onChanged}) {
+    return SizedBox(
+      width: 28,
+      height: 28,
+      child: Checkbox(
+        value: value,
+        onChanged: (v) => onChanged(v ?? false),
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+        activeColor: resolveThemeColor(context,
+            dark: MyntColors.primaryDark, light: MyntColors.primary),
+      ),
+    );
+  }
+
+  void _closeWindow() {
+    if (widget.onClose != null) {
+      widget.onClose!();
+    } else {
+      Navigator.pop(context);
+    }
+  }
+
+  String get _currentBasketName {
+    final p = ref.read(orderProvider);
+    return p.selectedBsktName.isEmpty ? widget.bsktName : p.selectedBsktName;
+  }
+
+  Future<void> _deleteSelected() async {
+    final indices = _selected.toList();
+    if (indices.isEmpty) return;
+    final ok = await _confirmDelete(
+      'Delete Scripts',
+      indices.length == 1
+          ? 'Are you sure you want to delete 1 script?'
+          : 'Are you sure you want to delete ${indices.length} scripts?',
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _selected.clear());
+    final basket = ref.read(orderProvider);
+    await basket.removeBsktScrips(indices, _currentBasketName);
+    await basket.fetchBasketMargin();
+  }
 
   @override
   void initState() {
@@ -1281,17 +1413,19 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   // Builds a sortable header cell with sort indicator
   shadcn.TableCell buildHeaderCell(
       String label, int columnIndex, ThemesProvider theme, int totalColumns,
-      [bool alignRight = false]) {
+      [bool alignRight = false, Widget? leading]) {
     final isFirstColumn = columnIndex == 0;
     final isLastColumn = columnIndex == totalColumns - 1;
 
+    // Vertical padding 6 matches the positions table header — 12 left only
+    // ~16px for the label inside the 40px header row and clipped it.
     EdgeInsets headerPadding;
     if (isFirstColumn) {
-      headerPadding = const EdgeInsets.fromLTRB(16, 12, 4, 12);
+      headerPadding = const EdgeInsets.fromLTRB(16, 6, 4, 6);
     } else if (isLastColumn) {
-      headerPadding = const EdgeInsets.fromLTRB(4, 12, 16, 12);
+      headerPadding = const EdgeInsets.fromLTRB(4, 6, 16, 6);
     } else {
-      headerPadding = const EdgeInsets.symmetric(horizontal: 6, vertical: 12);
+      headerPadding = const EdgeInsets.symmetric(horizontal: 6, vertical: 6);
     }
 
     return shadcn.TableCell(
@@ -1324,6 +1458,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
             mainAxisAlignment:
                 alignRight ? MainAxisAlignment.end : MainAxisAlignment.start,
             children: [
+              if (leading != null) ...[leading, const SizedBox(width: 6)],
               if (alignRight && _sortColumnIndex == columnIndex)
                 Icon(
                   _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
@@ -1397,7 +1532,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         header == 'Price' ||
         header == 'LTP' ||
         header == 'Status' ||
-        header == 'Product') return true;
+        header == 'Product / Type') return true;
     return false;
   }
 
@@ -1428,29 +1563,33 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         case 1: // Type (Buy/Sell)
           r = cmp<String>(a["trantype"]?.toString(), b["trantype"]?.toString());
           break;
-        case 2: // Order type
-          r = cmp<String>(a['prctype']?.toString(), b['prctype']?.toString());
-          break;
-        case 3: // Product
+        case 2: // Product / Type
           r = cmp<String>(a['prd']?.toString(), b['prd']?.toString());
+          if (r == 0) {
+            r = cmp<String>(
+                a['prctype']?.toString(), b['prctype']?.toString());
+          }
           break;
-        case 4: // Qty.
+        case 3: // Qty.
           final aQty = int.tryParse(a["qty"]?.toString() ?? "0") ?? 0;
           final bQty = int.tryParse(b["qty"]?.toString() ?? "0") ?? 0;
           r = aQty.compareTo(bQty);
           break;
-        case 5: // LTP
+        case 4: // LTP
           // LTP is dynamic, but we can sort by the 'lp' value if present in the raw item data
           final aLtp = parseNum(a["lp"]?.toString());
           final bLtp = parseNum(b["lp"]?.toString());
           r = cmp<num>(aLtp, bLtp);
           break;
-        case 6: // Price
+        case 5: // Price
           final aPrice = parseNum(a["prc"]?.toString());
           final bPrice = parseNum(b["prc"]?.toString());
           r = cmp<num>(aPrice, bPrice);
           break;
-        // Actions (6) is not sortable
+        case 6: // Status
+          r = cmp<String>(
+              a['orderStatus']?.toString(), b['orderStatus']?.toString());
+          break;
       }
       return asc ? r : -r;
     });
@@ -1458,20 +1597,25 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   }
 
   /// Checks if the basket contains scripts from multiple exchanges
-  bool _hasMultipleExchanges(List scriptList) {
-    if (scriptList.isEmpty) return false;
-
-    // Extract all exchanges from the basket scripts
-    Set<String> exchanges = {};
-    for (var script in scriptList) {
-      if (script['exch'] != null) {
-        exchanges.add(script['exch'].toString());
-      }
-    }
-
-    // If there's more than one unique exchange, return true
-    return exchanges.length > 1;
-  }
+  // TC_263: mixed segments are allowed in one basket (vendor and Kite
+  // allow it; basket margin verified against the vendor on 12 Oct 2026 for
+  // NSE+NFO, BSE+NSE+BFO and NSE+NFO+MCX). Returning false removes the
+  // "only 1 segment" warning and the Place block. Old check kept below.
+  bool _hasMultipleExchanges(List scriptList) => false;
+  // bool _hasMultipleExchanges(List scriptList) {
+  //   if (scriptList.isEmpty) return false;
+// 
+  //   // Extract all exchanges from the basket scripts
+  //   Set<String> exchanges = {};
+  //   for (var script in scriptList) {
+  //     if (script['exch'] != null) {
+  //       exchanges.add(script['exch'].toString());
+  //     }
+  //   }
+// 
+  //   // If there's more than one unique exchange, return true
+  //   return exchanges.length > 1;
+  // }
 
   /// Checks if the current basket has any orders placed
   bool _hasOrdersPlacedInBasket(
@@ -1571,9 +1715,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                   crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
                                     Text(
-                                      "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
-                                          .replaceAll("-EQ", "")
-                                          .toUpperCase(),
+                                      (scrip.masterName?.isNotEmpty == true)
+                                          ? scrip.masterName!
+                                          : "${scrip.symbol?.isNotEmpty == true ? scrip.symbol : scrip.tsym}"
+                                              .replaceAll("-EQ", "")
+                                              .toUpperCase(),
                                       style: WebTextStyles.symbolList(
                                         isDarkTheme: theme.isDarkMode,
                                         color: theme.isDarkMode
@@ -1581,7 +1727,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                             : WebColors.textPrimary,
                                       ),
                                     ),
-                                    if (scrip.option != null &&
+                                    if (scrip.masterName == null &&
+                                        scrip.option != null &&
                                         scrip.option.toString().isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(left: 4),
@@ -1595,7 +1742,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                           ),
                                         ),
                                       ),
-                                    if (scrip.expDate != null &&
+                                    if (scrip.masterName == null &&
+                                        scrip.expDate != null &&
                                         scrip.expDate.toString().isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(left: 4),
@@ -1818,6 +1966,9 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
           'option': scrip.option?.toString() ?? '',
           'trantype': isBuy ? 'B' : 'S',
           'qty': marketWatch.scripInfoModel?.ls?.toString() ?? '1',
+          // TC_235: without a prd the order window shows the Delivery chip
+          // but saves NRML; equity Delivery must save as CNC.
+          'prd': marketWatch.scripInfoModel?.seg == "EQT" ? 'C' : 'M',
         },
       );
 
@@ -1851,6 +2002,17 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     final ref = this.ref;
     final theme = ref.read(themeProvider);
     final basket = ref.watch(orderProvider);
+    // TC_324.2: Kite-style row placing once any row has been sent.
+    final sentMode = _isSentMode(basket);
+    _selected.removeWhere((i) => i >= basket.bsktScripList.length);
+    final toPlace = _selectedUnsent(basket);
+    final onlySentTicked = _selected.isNotEmpty && toPlace.isEmpty;
+    final unsent = [
+      for (int i = 0; i < basket.bsktScripList.length; i++)
+        if (basket.bsktScripList[i]['orderStatus'] == null) i
+    ];
+    final isPlacing =
+        basket.basketOverallStatus[basket.selectedBsktName] == 'placing';
 
     // Calculate margins
     final preTradeMargin = basket.bsktScripList.isEmpty ||
@@ -1863,6 +2025,15 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         ? "0.00"
         : basket.bsktOrderMargin!.postTradeMargin.toIndianFormat();
 
+    // The basket margin API rejects some baskets (e.g. more than 20 rows:
+    // "Basket size should be less than or equal to 20"). Its error used to
+    // read as ₹0.00; show "Not available" with the API's reason instead.
+    final marginError = basket.bsktScripList.isNotEmpty &&
+            basket.bsktOrderMargin?.stat != null &&
+            basket.bsktOrderMargin!.stat != 'Ok'
+        ? (basket.bsktOrderMargin!.emsg ?? 'Margin not available')
+        : null;
+
     return Material(
       color: theme.isDarkMode
           ? styles.MyntColors.backgroundColorDark
@@ -1871,8 +2042,17 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         children: [
           Column(
             children: [
-              // 1. Header: "Basket order" + Close
-              Container(
+              // 1. Header: "Basket order" + Close — drag handle for the dialog
+              MouseRegion(
+                cursor: widget.onDrag != null
+                    ? SystemMouseCursors.move
+                    : MouseCursor.defer,
+                child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanUpdate: widget.onDrag == null
+                    ? null
+                    : (d) => widget.onDrag!(d.delta),
+                child: Container(
                 height: 50,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
@@ -1900,17 +2080,19 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       ),
                     ),
                     IconButton(
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: _closeWindow,
                       icon: Icon(
                         Icons.close,
                         size: 20,
                         color: theme.isDarkMode
                             ? WebDarkColors.iconSecondary
-                            : WebColors.secondary,
+                            : WebColors.iconSecondary,
                       ),
                       splashRadius: 20,
                     ),
                   ],
+                ),
+              ),
                 ),
               ),
 
@@ -1946,7 +2128,10 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     ),
                     const SizedBox(width: 8),
                     // Action Icons (Edit/Delete Basket Placeholder)
-                    _buildBasketHoverButton(
+                    // TC_173/TC_234: Rename tooltip on the header Edit icon.
+                    Tooltip(
+                      message: 'Rename Basket',
+                      child: _buildBasketHoverButton(
                       icon: Icons.edit_outlined,
                       color: resolveThemeColor(
                         context,
@@ -1956,6 +2141,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       onPressed: () {
                         showDialog(
                           context: context,
+                          // Open inside the basket window's own navigator, not under it.
+                          useRootNavigator: false,
                           barrierDismissible: true,
                           builder: (BuildContext context) {
                             final theme = ref.read(themeProvider);
@@ -1983,19 +2170,50 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                       },
                       theme: theme,
                     ),
-                    const SizedBox(width: 4),
-                    _buildBasketHoverButton(
-                      icon: Icons.delete_outline,
-                      color: resolveThemeColor(
-                        context,
-                        dark: styles.MyntColors.textSecondaryDark,
-                        light: styles.MyntColors.textSecondary,
-                      ),
-                      onPressed: () => _handleDeleteBasket(theme),
-                      theme: theme,
                     ),
+                    const SizedBox(width: 8),
+                    // How many of the basket's 20 orders are used.
+                    _buildBasketCountChip(basket.bsktScripList.length,
+                        basket.basketMaxOrders, theme),
+                    // TC_123: basket delete lives on the basket row hover only.
+                    // const SizedBox(width: 4),
+                    // _buildBasketHoverButton(
+                    //   icon: Icons.delete_outline,
+                    //   color: resolveThemeColor(
+                    //     context,
+                    //     dark: styles.MyntColors.textSecondaryDark,
+                    //     light: styles.MyntColors.textSecondary,
+                    //   ),
+                    //   onPressed: () => _handleDeleteBasket(theme),
+                    //   theme: theme,
+                    // ),
 
                     const Spacer(),
+
+                    // TC_324.2: delete ticked rows (Kite "Delete (N)").
+                    if (_selected.isNotEmpty) ...[
+                      TextButton.icon(
+                        onPressed: isPlacing ? null : _deleteSelected,
+                        icon: Icon(
+                          Icons.delete_outline,
+                          size: 18,
+                          color: resolveThemeColor(context,
+                              dark: styles.MyntColors.lossDark,
+                              light: styles.MyntColors.loss),
+                        ),
+                        label: Text(
+                          "Delete (${_selected.length})",
+                          style: MyntWebTextStyles.body(
+                            context,
+                            fontWeight: MyntFonts.medium,
+                            color: resolveThemeColor(context,
+                                dark: styles.MyntColors.lossDark,
+                                light: styles.MyntColors.loss),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
 
                     // Search Bar
                     Container(
@@ -2124,13 +2342,12 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                 // Define headers and fixed widths for shadcn.Table
                                 final basket = ref.read(orderProvider);
                                 final count = basket.bsktScripList.length;
-                                final maxCount =
-                                    basket.frezQtyOrderSliceMaxLimit;
+                                final maxCount = basket.basketMaxOrders;
 
                                 final headers = [
                                   'Instrument ($count / $maxCount)',
                                   'Type',
-                                  'Product',
+                                  'Product / Type',
                                   'Qty.',
                                   'LTP',
                                   'Price',
@@ -2173,8 +2390,24 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                             final isNumeric =
                                                 _isNumericColumnBasketItems(
                                                     label);
+                                            // TC_324.2: select-all beside Instrument once rows are sent.
+                                            final selectAll = index == 0
+                                                ? _buildRowCheckbox(
+                                                    value: sortedItems.isNotEmpty &&
+                                                        _selected.length ==
+                                                            sortedItems.length,
+                                                    onChanged: (v) => setState(() {
+                                                      _selected.clear();
+                                                      if (v) {
+                                                        _selected.addAll(List.generate(
+                                                            sortedItems.length,
+                                                            (i) => i));
+                                                      }
+                                                    }),
+                                                  )
+                                                : null;
                                             return buildHeaderCell(label,
-                                                index, theme, headers.length, isNumeric);
+                                                index, theme, headers.length, isNumeric, selectAll);
                                           }).toList(),
                                         ),
                                       ],
@@ -2225,80 +2458,13 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                                     child: GestureDetector(
                                                       behavior:
                                                           HitTestBehavior.opaque,
-                                                      onTap: () async {
-                                                        // Handle row tap logic
-                                                        await ref
-                                                            .read(
-                                                                marketWatchProvider)
-                                                            .fetchScripInfo(
-                                                                "${item['token']}",
-                                                                '${item['exch']}',
-                                                                context,
-                                                                true);
-                                                        if (!context.mounted)
-                                                          return;
-
-                                                        final basket = ref
-                                                            .read(orderProvider);
-                                                        basket.bsktScripList[
-                                                                originalIndex]
-                                                            ['index'] = originalIndex;
-                                                        basket.bsktScripList[
-                                                                originalIndex]
-                                                            ['prctyp'] = basket
-                                                                .bsktScripList[
-                                                            originalIndex]['prctype'];
-
-                                                        final ltp = item['lp']
-                                                                ?.toString() ??
-                                                            "0.00";
-                                                        final perChange = item['pc']
-                                                                ?.toString() ??
-                                                            "0.00";
-
-                                                        OrderScreenArgs orderArgs =
-                                                            OrderScreenArgs(
-                                                                exchange:
-                                                                    '${item['exch']}',
-                                                                tSym:
-                                                                    '${item['tsym']}',
-                                                                isExit: false,
-                                                                token:
-                                                                    "${item['token']}",
-                                                                transType: item[
-                                                                        'trantype'] ==
-                                                                    'B',
-                                                                lotSize: ref
-                                                                    .read(
-                                                                        marketWatchProvider)
-                                                                    .scripInfoModel
-                                                                    ?.ls
-                                                                    .toString(),
-                                                                ltp: ltp,
-                                                                perChange:
-                                                                    perChange,
-                                                                orderTpye: '',
-                                                                holdQty: '',
-                                                                isModify: true,
-                                                                prd: item['prd']
-                                                                    ?.toString(),
-                                                                raw: item);
-
-                                                        final scripInfo = ref
-                                                            .read(
-                                                                marketWatchProvider)
-                                                            .scripInfoModel;
-                                                        if (scripInfo != null) {
-                                                          PlaceOrderScreenWeb
-                                                              .showDraggable(
-                                                            context: context,
-                                                            orderArg: orderArgs,
-                                                            scripInfo: scripInfo,
-                                                            isBasket:
-                                                                'BasketEdit',
-                                                          );
-                                                        }
-                                                      },
+                                                      // TC_312: same path as the modify icon so CO/BO rows
+                                                      // keep the CO - BO chip instead of opening as Delivery.
+                                                      onTap: () =>
+                                                          _handleEditBasketScript(
+                                                              item,
+                                                              originalIndex,
+                                                              theme),
                                                       child:
                                                           _buildBasketCellWidget(
                                                         headerLabel,
@@ -2306,6 +2472,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                                         originalIndex,
                                                         theme,
                                                         uniqueId,
+                                                        sentMode: sentMode,
                                                       ),
                                                     ),
                                                   );
@@ -2330,7 +2497,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // Multi-segment warning bar
-                  if (_hasMultipleExchanges(basket.bsktScripList))
+                  if (_hasMultipleExchanges(_rowsToSend(basket)))
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
@@ -2408,8 +2575,12 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w400),
                               ),
-                              Text(
-                                "₹$preTradeMargin",
+                              Tooltip(
+                                message: marginError ?? "",
+                                child: Text(
+                                marginError != null
+                                    ? "Not available"
+                                    : "₹$preTradeMargin",
                                 style: WebTextStyles.custom(
                                     fontSize: 13,
                                     isDarkTheme: theme.isDarkMode,
@@ -2417,6 +2588,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         ? WebDarkColors.textPrimary
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w700),
+                              ),
                               ),
                               const SizedBox(width: 24),
                               Text(
@@ -2429,8 +2601,12 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w400),
                               ),
-                              Text(
-                                "₹$postTradeMargin",
+                              Tooltip(
+                                message: marginError ?? "",
+                                child: Text(
+                                marginError != null
+                                    ? "Not available"
+                                    : "₹$postTradeMargin",
                                 style: WebTextStyles.custom(
                                     fontSize: 13,
                                     isDarkTheme: theme.isDarkMode,
@@ -2439,37 +2615,130 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                                         : WebColors.textPrimary,
                                     fontWeight: FontWeight.w700),
                               ),
+                              ),
+                              // TC_105: refresh sits with the margins it
+                              // re-fetches, away from Reset Orders.
+                              const SizedBox(width: 4),
+                              IconButton(
+                                tooltip: 'Refresh margin',
+                                onPressed: () async {
+                                  await basket.fetchBasketMargin();
+                                },
+                                icon: Icon(
+                                  Icons.refresh,
+                                  size: 18,
+                                  color: resolveThemeColor(
+                                    context,
+                                    dark: MyntColors.textSecondaryDark,
+                                    light: MyntColors.textSecondary,
+                                  ),
+                                ),
+                                splashRadius: 16,
+                              ),
                             ],
                           ),
                         ),
 
-                    // Refresh Button
-                    IconButton(
-                      onPressed: () async {
-                        await basket.fetchBasketMargin();
-                      },
-                      icon: Icon(
-                        Icons.refresh,
-                        size: 22,
-                        color: resolveThemeColor(
-                          context,
-                          dark: MyntColors.textSecondaryDark,
-                          light: MyntColors.textSecondary,
-                        ),
-                      ),
-                      splashRadius: 20,
-                    ),
+                    // TC_105: moved into the margin group above.
+                    // // Refresh Button
+                    // IconButton(
+                    //   onPressed: () async {
+                    //     await basket.fetchBasketMargin();
+                    //   },
+                    //   icon: Icon(
+                    //     Icons.refresh,
+                    //     size: 22,
+                    //     color: resolveThemeColor(
+                    //       context,
+                    //       dark: MyntColors.textSecondaryDark,
+                    //       light: MyntColors.textSecondary,
+                    //     ),
+                    //   ),
+                    //   splashRadius: 20,
+                    // ),
                     const SizedBox(width: 16),
 
-                    // Place Order / Reset Orders Button
+                    // One flow (user): ticked -> "Place Selected (N)"; nothing
+                    // ticked -> "Place Order" for every row not sent yet.
+                    // Sent rows are never re-sent.
+                    if (!sentMode || toPlace.isNotEmpty || unsent.isNotEmpty) ...[
+                      Tooltip(
+                        // Ticked rows that are all sent used to fall back to
+                        // "every unsent row", placing rows the user had not
+                        // ticked. Now the button waits for a placeable tick.
+                        message: onlySentTicked
+                            ? "Selected rows are already sent. Reset Orders to place them again."
+                            : "",
+                        child: SizedBox(
+                        height: 36,
+                        child: ElevatedButton(
+                          onPressed: isPlacing ||
+                                  onlySentTicked ||
+                                  basket.bsktScripList.isEmpty ||
+                                  _hasMultipleExchanges(_rowsToSend(basket))
+                              ? null
+                              : () async {
+                                  // A basket may hold at most 20 orders;
+                                  // older baskets can still have more.
+                                  final extra = basket.bsktScripList.length -
+                                      basket.basketMaxOrders;
+                                  if (extra > 0) {
+                                    ResponsiveSnackBar.showWarning(context,
+                                        "A basket can have up to ${basket.basketMaxOrders} orders. Delete $extra ${extra == 1 ? 'order' : 'orders'} to place.");
+                                    return;
+                                  }
+                                  if (toPlace.isNotEmpty) {
+                                    setState(() => _selected.removeAll(toPlace));
+                                    await basket.placeBasketItems(
+                                        context, toPlace);
+                                  } else if (!sentMode) {
+                                    // Fresh basket: original whole-basket path.
+                                    await basket.placeBasketOrder(context,
+                                        navigateToOrderBook: false);
+                                  } else {
+                                    await basket.placeBasketItems(
+                                        context, unsent);
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.isDarkMode
+                                ? MyntColors.secondary
+                                : MyntColors.primary,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(5)),
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            isPlacing
+                                ? "Placing..."
+                                : toPlace.isNotEmpty
+                                    ? "Place Selected (${toPlace.length})"
+                                    : "Place Order",
+                            style: WebTextStyles.custom(
+                                fontSize: 13,
+                                isDarkTheme: theme.isDarkMode,
+                                color: MyntColors.backgroundColor,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+
+                    // Reset Orders once anything has been sent. (The Place
+                    // Order branch below is now handled by the button above.)
+                    if (sentMode)
                     SizedBox(
                       height: 36,
-                      child: _hasOrdersPlacedInBasket(widget.bsktName, basket)
+                      child: sentMode
                           // Reset Orders - Outlined style matching the image
                           ? OutlinedButton(
                               onPressed: basket.bsktScripList.isEmpty
                                   ? null
                                   : () {
+                                      setState(() => _selected.clear());
                                       basket.resetBasketOrderTracking(
                                           widget.bsktName);
                                       ResponsiveSnackBar.showSuccess(context,
@@ -2607,10 +2876,11 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     Map<String, dynamic> item,
     int originalIndex,
     ThemesProvider theme,
-    String uniqueId,
-  ) {
+    String uniqueId, {
+    bool sentMode = false,
+  }) {
     if (column.startsWith('Instrument')) {
-      return _BasketInstrumentCell(
+      final cell = _BasketInstrumentCell(
         item: item,
         originalIndex: originalIndex,
         theme: theme,
@@ -2622,6 +2892,21 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
             _handleCopyBasketScript(item, index, theme),
         onEdit: (item, index, theme) =>
             _handleEditBasketScript(item, index, theme),
+        showDelete: false,
+      );
+      // One flow (user): tick box on every row from the start (sent rows:
+      // delete only).
+      return Row(
+        children: [
+          _buildRowCheckbox(
+            value: _selected.contains(originalIndex),
+            onChanged: (v) => setState(() {
+              v ? _selected.add(originalIndex) : _selected.remove(originalIndex);
+            }),
+          ),
+          const SizedBox(width: 6),
+          Expanded(child: cell),
+        ],
       );
     }
 
@@ -2650,7 +2935,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
             ),
           ),
         );
-      case 'Product':
+      case 'Product / Type':
         String product = "CNC";
         switch (item["prd"]) {
           case "I":
@@ -2662,14 +2947,23 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
           case "M":
             product = "NRML";
             break;
+          case "H":
+            product = "CO";
+            break;
+          case "B":
+            product = "BO";
+            break;
         }
+        // Show the stored order price type as-is (LMT / MKT / SL-LMT / SL-MKT)
+        final priceTypeLabel = item["prctype"]?.toString() ?? "LMT";
+        final productType = "$product / $priceTypeLabel";
         return SizedBox.expand(
           child: Align(
             alignment: Alignment.centerRight,
             child: Tooltip(
-              message: product,
+              message: productType,
               child: Text(
-                product,
+                productType,
                 style: MyntWebTextStyles.tableCell(
                   context,
                   fontWeight: MyntFonts.medium,
@@ -2716,25 +3010,140 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         );
       case 'Price':
         final price = item["prc"]?.toString() ?? '0.00';
+        final basketPrcType = item["prctype"]?.toString() ?? 'LMT';
+        final trigger = item["trgprc"]?.toString() ?? '';
+        // height 1.1 keeps the two-line price + trigger within the 40px row
+        final priceStyle = MyntWebTextStyles.tableCell(
+          context,
+          fontWeight: MyntFonts.medium,
+        ).copyWith(height: 1.1, fontFeatures: [FontFeature.tabularFigures()]);
+        final trigColor = resolveThemeColor(context,
+            dark: styles.MyntColors.textSecondaryDark,
+            light: styles.MyntColors.textSecondary);
+        final trigStyle = MyntWebTextStyles.tableCell(
+          context,
+          color: trigColor,
+          darkColor: trigColor,
+          lightColor: trigColor,
+          fontWeight: MyntFonts.medium,
+        ).copyWith(
+            fontSize: 11,
+            height: 1.1,
+            fontFeatures: [FontFeature.tabularFigures()]);
+
+        Widget priceContent;
+        String tooltipText;
+        if (basketPrcType == 'SL-MKT') {
+          // Executes at market once triggered — MKT on top, trigger below
+          tooltipText = 'MKT  Trig. $trigger';
+          priceContent = Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'MKT',
+                style: priceStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                'Trig. $trigger',
+                style: trigStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          );
+        } else if (basketPrcType == 'SL-LMT') {
+          tooltipText = '$price  Trig. $trigger';
+          priceContent = Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                price,
+                style: priceStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                'Trig. $trigger',
+                style: trigStyle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          );
+        } else if (basketPrcType == 'MKT') {
+          tooltipText = 'MKT';
+          priceContent = Text(
+            tooltipText,
+            style: priceStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          );
+        } else {
+          tooltipText = price;
+          priceContent = Text(
+            price,
+            style: priceStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          );
+        }
         return SizedBox.expand(
           child: Align(
             alignment: Alignment.centerRight,
             child: Tooltip(
-              message: price,
-              child: Text(
-                price,
-                style: MyntWebTextStyles.tableCell(
-                  context,
-                  fontWeight: MyntFonts.medium,
-                ).copyWith(fontFeatures: [FontFeature.tabularFigures()]),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+              message: tooltipText,
+              child: priceContent,
             ),
           ),
         );
       case 'Status':
-        final orderStatus = item["orderStatus"]?.toString().toUpperCase() ?? 'PENDING';
+        // TC_324.2: unsent row in a sent basket — no badge (was a misleading
+        // 'PENDING'); users tick it and use Place Selected. Per-row Place dropped.
+        if (item["orderStatus"] == null) {
+          return const SizedBox.shrink();
+        }
+        // if (item["orderStatus"] == null && sentMode) {
+        //   final basket = ref.read(orderProvider);
+        //   final isPlacing =
+        //       basket.basketOverallStatus[basket.selectedBsktName] == 'placing';
+        //   return SizedBox.expand(
+        //     child: Align(
+        //       alignment: Alignment.centerRight,
+        //       child: SizedBox(
+        //         height: 28,
+        //         child: MyntPrimaryButton(
+        //           label: "Place",
+        //           size: MyntButtonSize.small,
+        //           padding: const EdgeInsets.symmetric(horizontal: 14),
+        //           onPressed: isPlacing ||
+        //                   _hasMultipleExchanges(basket.bsktScripList)
+        //               ? null
+        //               : () => basket.placeBasketItems(context, [originalIndex]),
+        //         ),
+        //       ),
+        //     ),
+        //   );
+        // }
+        final rawStatus =
+            item["orderStatus"]?.toString().toUpperCase() ?? 'PENDING';
+        // The API says CANCELED; show CANCELLED like the option chain basket
+        // and the other order books.
+        final orderStatus = rawStatus == 'CANCELED' ? 'CANCELLED' : rawStatus;
+        // TC_324.1 sibling: FAILED/REJECTED badge shows the reason on hover.
+        final reason = item["rejectionReason"]?.toString().trim() ?? '';
+        final statusTooltip =
+            (orderStatus == 'FAILED' || orderStatus == 'REJECTED') &&
+                    reason.isNotEmpty
+                ? reason
+                : orderStatus;
         Color statusColor;
         if (orderStatus == 'PLACED') {
           statusColor = resolveThemeColor(
@@ -2755,7 +3164,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
           child: Align(
             alignment: Alignment.centerRight,
             child: Tooltip(
-              message: orderStatus,
+              message: statusTooltip,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -2910,6 +3319,46 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   }
 
 
+  /// "5 / 20 orders" pill beside the basket name: blue normally, amber when
+  /// 2 or fewer slots are left, red once the basket is full (or over the
+  /// limit, for baskets saved before the 20-order cap).
+  Widget _buildBasketCountChip(int count, int max, ThemesProvider theme) {
+    final bool full = count >= max;
+    final bool near = !full && max - count <= 2;
+    final Color fg = full
+        ? resolveThemeColor(context,
+            dark: MyntColors.lossDark, light: MyntColors.loss)
+        : near
+            ? resolveThemeColor(context,
+                dark: MyntColors.warning, light: const Color(0xFFC25E00))
+            : resolveThemeColor(context,
+                dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final String label = count > max
+        ? "Over limit · $count / $max"
+        : full
+            ? "Full · $count / $max"
+            : "$count / $max orders";
+    return Tooltip(
+      message: "A basket can have up to $max orders",
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: fg.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: WebTextStyles.custom(
+            fontSize: 12,
+            isDarkTheme: theme.isDarkMode,
+            color: fg,
+            fontWeight: FontWeight.w600,
+          ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBasketHoverButton({
     String? label,
     IconData? icon,
@@ -2992,7 +3441,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         orderTpye: '',
         holdQty: '',
         isModify: false, // Copy as new order
-        prd: item['prd']?.toString(),
+        // TC_237: CO/BO rows go through raw so the CO - BO chip is kept.
+        prd: _prdArgForBasketRow(item),
         raw: item);
 
     final scripInfo = ref.read(marketWatchProvider).scripInfoModel;
@@ -3010,12 +3460,25 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
     );
   }
 
+  // The order window's prd lookup has no CO (H) / BO (B), so those would
+  // open on Delivery and save as NRML. Leave prd empty for them; the raw
+  // row then selects CO - BO and its Cover/Bracket ticks.
+  String? _prdArgForBasketRow(Map<String, dynamic> item) {
+    final prd = item['prd']?.toString();
+    return (prd == 'H' || prd == 'B') ? null : prd;
+  }
+
   Future<void> _handleEditBasketScript(
       Map<String, dynamic> item, int index, ThemesProvider theme) async {
     await ref.read(marketWatchProvider).fetchScripInfo(
         "${item['token']}", '${item['exch']}', context, true);
 
     if (!context.mounted) return;
+
+    // Stamp the row position and price type so the edit dialog's save
+    // removes the correct row (raw['index']) instead of falling back to 0.
+    item['index'] = index;
+    item['prctyp'] = item['prctype'];
 
     final ltp = item['lp']?.toString() ?? "0.00";
     final perChange = item['pc']?.toString() ?? "0.00";
@@ -3036,7 +3499,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         orderTpye: '',
         holdQty: '',
         isModify: true,
-        prd: item['prd']?.toString(),
+        // TC_237: CO/BO rows go through raw so the CO - BO chip is kept.
+        prd: _prdArgForBasketRow(item),
         raw: item);
 
     final scripInfo = ref.read(marketWatchProvider).scripInfoModel;
@@ -3057,9 +3521,27 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
   Future<void> _handleDeleteBasketScript(
       Map<String, dynamic> item, int index, ThemesProvider theme) async {
     // Show confirmation dialog
-    final symbol = item['symbol']?.replaceAll("-EQ", "") ?? 'N/A';
-    final shouldDelete = await showDialog<bool>(
+    final symbol = DerivativeMaster.nameFor(
+            item['exch']?.toString(), item['token']?.toString()) ??
+        (item['symbol']?.replaceAll("-EQ", "") ?? 'N/A');
+    final shouldDelete = await _confirmDelete(
+        'Delete Script', 'Are you sure you want to delete "$symbol"?');
+
+    if (shouldDelete == true && mounted) {
+      final basket = ref.read(orderProvider);
+      setState(() => _selected.clear());
+      // TC_324.2: removeBsktScrips re-saves row statuses after the index shift.
+      await basket.removeBsktScrips([index], _currentBasketName);
+      await basket.fetchBasketMargin();
+    }
+  }
+
+  /// Delete confirmation used by single-row and ticked-rows delete.
+  Future<bool?> _confirmDelete(String title, String message) {
+    return showDialog<bool>(
       context: context,
+      // Open inside the basket window's own navigator, not under it.
+      useRootNavigator: false,
       builder: (BuildContext dialogContext) {
         return Dialog(
           backgroundColor: Colors.transparent,
@@ -3092,7 +3574,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'Delete Script',
+                        title,
                         style: MyntWebTextStyles.title(
                           context,
                           color: resolveThemeColor(context,
@@ -3129,7 +3611,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
                     children: [
                       // Confirmation text with symbol in quotes
                       Text(
-                        'Are you sure you want to delete "$symbol"?',
+                        message,
                         textAlign: TextAlign.center,
                         style: MyntWebTextStyles.body(
                           context,
@@ -3172,18 +3654,10 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
         );
       },
     );
-
-    if (shouldDelete == true && mounted) {
-      final basket = ref.read(orderProvider);
-      await basket.removeBsktScrip(
-          index,
-          basket.selectedBsktName.isEmpty
-              ? widget.bsktName
-              : basket.selectedBsktName);
-      await basket.fetchBasketMargin();
-    }
   }
 
+  // Kept for rollback: header delete icon commented out (TC_123).
+  // ignore: unused_element
   Future<void> _handleDeleteBasket(ThemesProvider theme) async {
     final basketProvider = ref.read(orderProvider);
     final bsktName = basketProvider.selectedBsktName.isEmpty
@@ -3192,6 +3666,8 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
 
     final shouldDelete = await showDialog<bool>(
       context: context,
+      // Open inside the basket window's own navigator, not under it.
+      useRootNavigator: false,
       builder: (BuildContext dialogContext) {
         return Dialog(
           backgroundColor: Colors.transparent,
@@ -3326,7 +3802,7 @@ class _BasketScripListState extends ConsumerState<BasketScripList>
       if (index != -1) {
         await basketProvider.removeBasket(index);
         if (mounted) {
-          Navigator.pop(context);
+          _closeWindow();
         }
       }
     }
@@ -3343,6 +3819,8 @@ class _BasketInstrumentCell extends ConsumerStatefulWidget {
   final Function(Map<String, dynamic>, int, ThemesProvider) onDelete;
   final Function(Map<String, dynamic>, int, ThemesProvider)? onCopy;
   final Function(Map<String, dynamic>, int, ThemesProvider)? onEdit;
+  /// One flow (user): delete via tick + Delete (N), so the hover 🗑 is off.
+  final bool showDelete;
 
   const _BasketInstrumentCell({
     required this.item,
@@ -3353,6 +3831,7 @@ class _BasketInstrumentCell extends ConsumerStatefulWidget {
     required this.onDelete,
     this.onCopy,
     this.onEdit,
+    this.showDelete = true,
   });
 
   @override
@@ -3453,7 +3932,10 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
   @override
   Widget build(BuildContext context) {
     final tsym = widget.item['tsym']?.toString() ?? widget.item['symbol']?.toString() ?? '';
-    final displayText = tsym.replaceAll("-EQ", "").trim();
+    // Prefer the backend display name (DerivativeMaster) for derivatives.
+    final master = DerivativeMaster.nameFor(
+        widget.item['exch']?.toString(), widget.item['token']?.toString());
+    final displayText = master ?? tsym.replaceAll("-EQ", "").trim();
     final exch = widget.item['exch']?.toString() ?? '';
 
     return SizedBox.expand(
@@ -3470,7 +3952,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                 child: Tooltip(
                   message: '$displayText${exch.isNotEmpty ? ' $exch' : ''}',
                   child: Padding(
-                    padding: EdgeInsets.only(right: isRowHovered ? 100.0 : 0.0),
+                    padding: EdgeInsets.only(right: isRowHovered ? (widget.showDelete ? 100.0 : 70.0) : 0.0),
                     child: RichText(
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
@@ -3512,30 +3994,37 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // Copy button
-                        _buildActionButton(
-                          icon: Icons.copy_outlined,
-                          iconColor: resolveThemeColor(
-                            context,
-                            dark: styles.MyntColors.textPrimary,
-                            light: styles.MyntColors.textSecondary,
+                        Tooltip(
+                          message: 'Duplicate',
+                          child: _buildActionButton(
+                            icon: Icons.copy_outlined,
+                            iconColor: resolveThemeColor(
+                              context,
+                              dark: styles.MyntColors.textPrimary,
+                              light: styles.MyntColors.textSecondary,
+                            ),
+                            onPressed: widget.onCopy != null
+                                ? () => widget.onCopy!(widget.item, widget.originalIndex, widget.theme)
+                                : null,
                           ),
-                          onPressed: widget.onCopy != null
-                              ? () => widget.onCopy!(widget.item, widget.originalIndex, widget.theme)
-                              : null,
                         ),
                         const SizedBox(width: 6),
                         // Edit button
-                        _buildActionButton(
-                          icon: Icons.edit_outlined,
-                          iconColor: resolveThemeColor(
-                            context,
-                            dark: styles.MyntColors.textPrimary,
-                            light: styles.MyntColors.textSecondary,
+                        Tooltip(
+                          message: 'Modify',
+                          child: _buildActionButton(
+                            icon: Icons.edit_outlined,
+                            iconColor: resolveThemeColor(
+                              context,
+                              dark: styles.MyntColors.textPrimary,
+                              light: styles.MyntColors.textSecondary,
+                            ),
+                            onPressed: widget.onEdit != null
+                                ? () => widget.onEdit!(widget.item, widget.originalIndex, widget.theme)
+                                : null,
                           ),
-                          onPressed: widget.onEdit != null
-                              ? () => widget.onEdit!(widget.item, widget.originalIndex, widget.theme)
-                              : null,
                         ),
+                        if (widget.showDelete) ...[
                         const SizedBox(width: 6),
                         // Delete button
                         _buildActionButton(
@@ -3543,6 +4032,7 @@ class _BasketInstrumentCellState extends ConsumerState<_BasketInstrumentCell> {
                           iconColor: styles.MyntColors.loss,
                           onPressed: () => widget.onDelete(widget.item, widget.originalIndex, widget.theme),
                         ),
+                        ],
                       ],
                     ),
                   ),
@@ -3645,6 +4135,160 @@ class _BasketLtpCellState extends ConsumerState<_BasketLtpCell> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
+    );
+  }
+}
+
+
+/// Floating basket window (client ask): behaves like the place-order window —
+/// no dimmed backdrop, page behind stays usable, draggable by the header,
+/// stays open until closed. One basket window at a time.
+class _BasketWindow {
+  _BasketWindow._();
+
+  static OverlayEntry? _entry;
+
+  static void show(BuildContext context, String bsktName) {
+    close();
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final entry = OverlayEntry(
+      builder: (_) => _DraggableBasketWindow(bsktName: bsktName, onClose: close),
+    );
+    _entry = entry;
+    // Closed on logout / session expiry / account switch. Not via
+    // OverlayManager.register — that would close the basket whenever an
+    // order window opens from it.
+    OverlayManager.registerSheetCloser(close);
+    overlay.insert(entry);
+  }
+
+  static void close() {
+    OverlayManager.unregisterSheetCloser(close);
+    final entry = _entry;
+    _entry = null;
+    try {
+      if (entry != null && entry.mounted) entry.remove();
+    } catch (_) {}
+  }
+}
+
+class _DraggableBasketWindow extends StatefulWidget {
+  final String bsktName;
+  final VoidCallback onClose;
+  const _DraggableBasketWindow({required this.bsktName, required this.onClose});
+
+  @override
+  State<_DraggableBasketWindow> createState() => _DraggableBasketWindowState();
+}
+
+class _DraggableBasketWindowState extends State<_DraggableBasketWindow> {
+  Offset? _position; // null = centred on first build
+  double _maxX = 0;
+  double _maxY = 0;
+  bool _guardHeld = false;
+
+  // Several pointer moves can land in one frame — accumulate every delta onto
+  // the live position (using the last drawn position dropped most of them,
+  // so the window lagged the mouse). Clamped so the window stays on screen.
+  void _onDrag(Offset delta) {
+    final next = (_position ?? Offset.zero) + delta;
+    setState(() => _position = Offset(
+          next.dx.clamp(0.0, _maxX),
+          next.dy.clamp(0.0, _maxY),
+        ));
+  }
+
+  // Chart iframes sit above Flutter and steal mouse events — same guard as
+  // the place-order window. Does NOT touch the body cursor: resetting it on
+  // every hover wiped out Flutter's move cursor on the header.
+  void _setChartIframes(bool enabled) {
+    try {
+      for (final iframe in html.document.querySelectorAll('iframe')) {
+        if (iframe is html.IFrameElement && iframe.id.contains('chart-iframe')) {
+          iframe.style.pointerEvents = enabled ? 'auto' : 'none';
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _onEnter() {
+    if (!_guardHeld) {
+      ChartIframeGuard.acquire();
+      _guardHeld = true;
+    }
+    _setChartIframes(false);
+  }
+
+  void _onExit() {
+    if (_guardHeld) {
+      ChartIframeGuard.release();
+      _guardHeld = false;
+    }
+    _setChartIframes(true);
+  }
+
+  @override
+  void dispose() {
+    if (_guardHeld) _onExit();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.of(context).size;
+    final colorScheme = shadcn.Theme.of(context).colorScheme;
+    // Same size as the old dialog's max constraints.
+    final width = screen.width * 0.6;
+    final height = screen.height * 0.8;
+    _maxX = (screen.width - width).clamp(0.0, double.infinity);
+    _maxY = (screen.height - height).clamp(0.0, double.infinity);
+    _position ??= Offset(_maxX / 2, _maxY / 2);
+    // Re-clamp on browser resize.
+    final pos = Offset(
+        _position!.dx.clamp(0.0, _maxX), _position!.dy.clamp(0.0, _maxY));
+
+    return Stack(
+      children: [
+        Positioned(
+          left: pos.dx,
+          top: pos.dy,
+          width: width,
+          height: height,
+          child: PointerInterceptor(
+            child: MouseRegion(
+              onEnter: (_) => _onEnter(),
+              onExit: (_) => _onExit(),
+              child: Material(
+                color: Colors.transparent,
+                elevation: 8,
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: colorScheme.popover,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: colorScheme.border, width: 1),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    // Own navigator so the window's popups (delete confirm,
+                    // edit name) open inside it instead of under it.
+                    child: Navigator(
+                      onGenerateRoute: (_) => PageRouteBuilder(
+                        transitionDuration: Duration.zero,
+                        pageBuilder: (_, __, ___) => BasketScripList(
+                          bsktName: widget.bsktName,
+                          onClose: widget.onClose,
+                          onDrag: _onDrag,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
