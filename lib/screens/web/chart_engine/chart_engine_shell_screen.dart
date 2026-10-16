@@ -494,6 +494,14 @@ class _ChartEngineShellScreenState
         if (mounted) setState(() {});
         break;
       case 'fetchHistory':
+        // Every shell hears every iframe's messages on `window`. Answer only
+        // our own iframe, or each extra mounted shell repeats the TPSeries
+        // download for a reply its iframe then drops (unknown requestId).
+        // No frameId = an older cached chart-engine.js; keep old behaviour.
+        final frameId = msg['frameId'];
+        if (frameId is String && frameId.isNotEmpty && frameId != _iframeId) {
+          break;
+        }
         _handleFetchHistory(msg['value']);
         break;
       case 'subscribe':

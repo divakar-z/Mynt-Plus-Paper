@@ -106,6 +106,12 @@ class WebSocketProvider extends ChangeNotifier {
   final _socketDataController = StreamController<Map>.broadcast();
   Stream<Map> get socketDataStream => _socketDataController.stream;
 
+  /// When [_refreshData] last re-fetched holdings, order book and funds.
+  /// The web home screen reads it after a reconnect so it doesn't repeat
+  /// the same calls a moment later.
+  DateTime? _lastDataRefreshAt;
+  DateTime? get lastDataRefreshAt => _lastDataRefreshAt;
+
   // Getters
   bool get wsConnected => _wsConnected;
   bool get retryScreen => _retryScreen;
@@ -1286,6 +1292,7 @@ class WebSocketProvider extends ChangeNotifier {
     log('🔄 WebSocket: _refreshData - clientId: $clientIdForDebug, session: ${sessionForDebug != null && sessionForDebug.isNotEmpty ? sessionForDebug.substring(0, sessionForDebug.length > 10 ? 10 : sessionForDebug.length) : "EMPTY"}...');
 
     try {
+      _lastDataRefreshAt = DateTime.now();
       ref.read(portfolioProvider).fetchHoldings(context, "");
       ref.read(orderProvider).fetchOrderBook(context, true);
       ref.read(orderProvider).fetchTradeBook(context);
