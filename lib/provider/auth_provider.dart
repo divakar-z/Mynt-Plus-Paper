@@ -49,6 +49,7 @@ import '../screens/Mobile/authentication/login/bottom_otp_screen.dart';
 // import '../sharedWidget/functions.dart';
 import '../sharedWidget/functions.dart';
 import '../sharedWidget/risk_disclosure_bottom_sheet.dart';
+import '../utils/sebi_message.dart';
 import '../sharedWidget/snack_bar.dart';
 import '../utils/overlay_manager.dart';
 import '../utils/responsive_snackbar.dart';
@@ -1957,32 +1958,12 @@ class AuthProvider extends DefaultChangeNotifier {
               }
               
               // Show risk disclosure if needed (non-blocking)
-              if (pref.showRiskDis != 'true') {
+              if (getResponsiveWidth(context) == 600 ||
+                  pref.showRiskDis != 'true') {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (context.mounted) {
                     getResponsiveWidth(context) == 600
-                        ? showDialog(
-                            context: context,
-                            barrierDismissible: false,
-                            builder: (BuildContext context) {
-                              return PopScope(
-                                canPop: false,
-                                onPopInvokedWithResult: (didPop, result) async {
-                                  if (didPop) return;
-                                },
-                                child: Dialog(
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  child: SizedBox(
-                                    width: MediaQuery.of(context).size.width *
-                                        0.3,
-                                    child: const RiskDisclousreBottomSheet(),
-                                  ),
-                                ),
-                              );
-                            },
-                          )
+                        ? showSebiMessageIfNeeded()
                         : showModalBottomSheet(
                             shape: const RoundedRectangleBorder(
                                 borderRadius: BorderRadius.vertical(
@@ -2163,29 +2144,10 @@ class AuthProvider extends DefaultChangeNotifier {
                         context, Routes.homeScreen, (route) => false);
               }
 
-              if (pref.showRiskDis != 'true') {
+              if (getResponsiveWidth(context) == 600 ||
+                  pref.showRiskDis != 'true') {
                 getResponsiveWidth(context) == 600
-                    ? showDialog(
-                        context: context,
-                        barrierDismissible: false,
-                        builder: (BuildContext context) {
-                          return PopScope(
-                            canPop: false,
-                            onPopInvokedWithResult: (didPop, result) async {
-                              if (didPop) return;
-                            },
-                            child: Dialog(
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: SizedBox(
-                                width: MediaQuery.of(context).size.width * 0.3,
-                                child: const RiskDisclousreBottomSheet(),
-                              ),
-                            ),
-                          );
-                        },
-                      )
+                    ? showSebiMessageIfNeeded()
                     : showModalBottomSheet(
                         shape: const RoundedRectangleBorder(
                             borderRadius: BorderRadius.vertical(
