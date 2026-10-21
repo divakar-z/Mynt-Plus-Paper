@@ -231,6 +231,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
 
   void removeItem(int index) {
     setState(() {
+      _userBid.remove(addIpo[index]);
+      _fittedBid.remove(addIpo[index]);
       addIpo.removeAt(index);
     });
   }
@@ -334,6 +336,138 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
             ipoData, selectedChip);
       }
     }
+  }
+
+  // On a category change, move each bid into the new category's allowed
+  // amount instead of leaving a "minimum / maximum investment" error under
+  // Qty. The quantity moves first, in whole lots (never below the minimum bid
+  // quantity). The bid price moves only when no quantity can fit, and not at
+  // all while Cut-off is ticked, because that price is fixed. A bid that is
+  // already inside the limits is left alone. Empty fields keep their normal
+  // "required" message.
+  //
+  // Each bid is fitted from the quantity and price the user chose, not from the
+  // last adjusted values, so switching back (HNI -> Individual) returns the
+  // original 12 instead of whatever HNI raised it to. A value that differs from
+  // what this method last wrote was typed or stepped by the user, and becomes
+  // the new one to return to.
+  final Map<IpoDetails, List<int>> _userBid = {}; // [qty, price] the user chose
+  final Map<IpoDetails, List<int>> _fittedBid = {}; // [qty, price] written here
+
+  void _fitBidsToCategory(IPOProvider ipo) {
+    final minAmt = selectedChip == "HNI" ? 200000 : 0;
+    final maxAmt = ipo.maxUPIAmt.toInt();
+    final lowPrice = double.tryParse(minPrice)?.toInt() ?? 0;
+    final highPrice = double.tryParse(maxPrice)?.toInt() ?? 0;
+    final minQty = int.tryParse(minBidQuantity) ?? 0;
+
+    for (final bid in addIpo) {
+      final lot = bid.lotsize > 0 ? bid.lotsize : 1;
+      // Smallest allowed quantity: a whole number of lots, at least minQty.
+      final lowQty = ((minQty > lot ? minQty : lot) + lot - 1) ~/ lot * lot;
+      final nowQty = int.tryParse(bid.qualityController.text) ?? 0;
+      final nowPrice = int.tryParse(bid.bidpricecontroller.text) ?? 0;
+      final written = _fittedBid[bid];
+      if (written == null || written[0] != nowQty || written[1] != nowPrice) {
+        // First time, or the user changed it since: this is their choice.
+        if (nowQty > 0 && nowPrice > 0) _userBid[bid] = [nowQty, nowPrice];
+      }
+      final chosen = _userBid[bid];
+      if (chosen == null) continue;
+      var qty = chosen[0];
+      var price = bid.isChecked ? highPrice : chosen[1];
+      if (price <= 0 || qty <= 0) continue;
+
+      if (maxAmt > 0 && price * qty > maxAmt) {
+        // Too much: take the most lots that fit.
+        final fit = (maxAmt ~/ price) ~/ lot * lot;
+        if (fit >= lowQty) {
+          qty = fit;
+        } else {
+          // Even the smallest quantity is too much: lower the price.
+          qty = lowQty;
+          if (!bid.isChecked) {
+            price = maxAmt ~/ lowQty;
+            if (price < lowPrice) price = lowPrice;
+          }
+        }
+      } else if (price * qty < minAmt) {
+        // Too little: take the fewest lots that reach the minimum.
+        int lotsFor(int p) => ((minAmt + p - 1) ~/ p + lot - 1) ~/ lot * lot;
+        qty = lotsFor(price);
+        if (maxAmt > 0 && price * qty > maxAmt && !bid.isChecked) {
+          // That overshoots the maximum: raise the price instead.
+          price = highPrice;
+          qty = lotsFor(price);
+        }
+      }
+
+      if (qty.toString() != bid.qualityController.text) {
+        bid.qualityController.text = qty.toString();
+      }
+      if (!bid.isChecked && price.toString() != bid.bidpricecontroller.text) {
+        bid.bidpricecontroller.text = price.toString();
+        // Re-run the price check so an old price message is cleared.
+        if (isSME) {
+          ipo.smebidpriceOnChange(
+              price.toString(), bid, _getButtonActiveState(ipo), ipoData);
+        } else {
+          ipo.bidpricefunction(
+              bid, ipoData, price.toString(), _getButtonActiveState(ipo));
+        }
+      }
+      _fittedBid[bid] = [
+        int.tryParse(bid.qualityController.text) ?? 0,
+        int.tryParse(bid.bidpricecontroller.text) ?? 0,
+      ];
+    }
+  }
+
+  // Why a + / - step is not allowed, or null when it is. A step is not allowed
+  // when it would leave the quantity range this category allows: at least the
+  // minimum bid quantity (for HNI, also the quantity that reaches ₹2,00,000),
+  // at most the lots that fit the category's investment limit. The button is
+  // dimmed and tapping it shows this message instead of stepping.
+  // A quantity already outside the range can still step back towards it.
+  // Empty or invalid fields are never blocked (the step fallback handles them).
+  String? _stepBlockMessage(IPOProvider ipo, IpoDetails bid,
+      {required bool up}) {
+    final cur = int.tryParse(bid.qualityController.text) ?? 0;
+    final price = bid.isChecked
+        ? (double.tryParse(maxPrice)?.toInt() ?? 0)
+        : (int.tryParse(bid.bidpricecontroller.text) ?? 0);
+    if (cur <= 0 || price <= 0) return null;
+    final lot = bid.lotsize > 0 ? bid.lotsize : 1;
+    final minQty = int.tryParse(minBidQuantity) ?? 0;
+
+    if (up) {
+      final maxAmt = ipo.maxUPIAmt.toInt();
+      if (maxAmt <= 0) return null;
+      final hi = (maxAmt ~/ price) ~/ lot * lot;
+      final next = cur % lot != 0 ? (cur + lot - 1) ~/ lot * lot : cur + lot;
+      if (hi >= lot && next > hi) {
+        return "Maximum investment upto ₹$maxAmt only. "
+            "Quantity can't go above $hi.";
+      }
+      return null;
+    }
+    var lo = ((minQty > lot ? minQty : lot) + lot - 1) ~/ lot * lot;
+    var hni = false;
+    if (selectedChip == "HNI") {
+      final byAmount = ((200000 + price - 1) ~/ price + lot - 1) ~/ lot * lot;
+      if (byAmount > lo) {
+        lo = byAmount;
+        hni = true;
+      }
+    }
+    final next = cur % lot != 0 ? cur ~/ lot * lot : cur - lot;
+    if (next < lo) {
+      return hni
+          ? "Minimum investment for HNI is ₹200000. "
+              "Quantity can't go below $lo."
+          : "Minimum bid quantity is $lo. Quantity can't go below it.";
+    }
+    return null;
   }
 
   @override
@@ -538,6 +672,7 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                   //   _getButtonActiveState(ipo),
                                   //   selectedChip,
                                   // );
+                                  _fitBidsToCategory(ipo);
                                   _revalidateAllQty(ipo);
                                   setState(() {});
                                 }
@@ -976,6 +1111,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
       text.replaceFirst(RegExp(r'^\*\s*'), '');
 
   Widget _buildBidRow(int index, IPOProvider ipo, ThemesProvider theme) {
+    final minusMessage = _stepBlockMessage(ipo, addIpo[index], up: false);
+    final plusMessage = _stepBlockMessage(ipo, addIpo[index], up: true);
+    final minusBlocked = minusMessage != null;
+    final plusBlocked = plusMessage != null;
     return Column(
       children: [
         // Headers Row
@@ -1080,6 +1219,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                       onPressed: ipo.loading
                           ? null
                           : () {
+                              if (minusMessage != null) {
+                                showResponsiveWarning(context, minusMessage);
+                                return;
+                              }
                               // TC_154: the provider step does nothing on an
                               // empty quantity and throws on an empty price.
                               if (_stepQtyFallback(ipo, index, up: false)) {
@@ -1107,7 +1250,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 _updateProviderState(ipo);
                               });
                             },
-                      icon: Icon(Icons.remove, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      icon: Opacity(
+                        opacity: minusBlocked ? 0.35 : 1,
+                        child: Icon(Icons.remove, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      ),
                     ),
                     Expanded(
                       child: TextFormField(
@@ -1154,6 +1300,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                       onPressed: ipo.loading
                           ? null
                           : () {
+                              if (plusMessage != null) {
+                                showResponsiveWarning(context, plusMessage);
+                                return;
+                              }
                               // TC_154: the provider step does nothing on an
                               // empty quantity and throws on an empty price.
                               if (_stepQtyFallback(ipo, index, up: true)) {
@@ -1181,7 +1331,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 _updateProviderState(ipo);
                               });
                             },
-                      icon: Icon(Icons.add, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      icon: Opacity(
+                        opacity: plusBlocked ? 0.35 : 1,
+                        child: Icon(Icons.add, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      ),
                     ),
                   ],
                 ),
