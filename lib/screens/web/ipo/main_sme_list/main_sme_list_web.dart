@@ -107,11 +107,26 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
     }).toList();
 
     final preCloseMsg = ipos.ipoPreClose?.msg;
-    final List<Msg> closedIpos =
-        preCloseMsg != null ? List<Msg>.from(preCloseMsg) : <Msg>[];
+    // final List<Msg> closedIpos =
+    //     preCloseMsg != null ? List<Msg>.from(preCloseMsg) : <Msg>[];
+    // Search covers closed IPOs too (same name match as the open list);
+    // before, closed rows were always added unfiltered.
+    final searchText =
+        ref.watch(stocksProvide).searchController.text.toUpperCase();
+    final List<Msg> closedIpos = preCloseMsg != null
+        ? List<Msg>.from(preCloseMsg)
+            .where((m) =>
+                searchText.isEmpty ||
+                (m.companyName ?? "").toUpperCase().contains(searchText) ||
+                (m.name ?? "").toUpperCase().contains(searchText))
+            .toList()
+        : <Msg>[];
     if (closedIpos.isNotEmpty) {
       ipos.sortpreCloseIPOListByDate(closedIpos);
     }
+    // TC_58/59: closed rows stay at the bottom but follow the column sort
+    // within their own group.
+    final List<dynamic> sortedClosedIpos = _getSortedIPOs(closedIpos);
 
     // Combine all IPOs for table display (open + pre-open, sortable;
     // closed appended at the end and not sorted by column headers).
@@ -127,8 +142,12 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
       );
     }
 
-    if (ref.watch(stocksProvide).searchController.text.isNotEmpty &&
-        ipos.ipoCommonSearchList.isEmpty) {
+    // if (ref.watch(stocksProvide).searchController.text.isNotEmpty &&
+    //     ipos.ipoCommonSearchList.isEmpty) {
+    // No Data only when neither open nor closed IPOs match the search.
+    if (searchText.isNotEmpty &&
+        ipos.ipoCommonSearchList.isEmpty &&
+        closedIpos.isEmpty) {
       return const Center(
         child: NoDataFoundWeb(),
       );
@@ -141,10 +160,16 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
     }
 
     // Apply sorting to open/pre-open, then append closed rows at the end.
-    final List<dynamic> sortedIpos = [
-      ..._getSortedIPOs(allIpos),
-      ...closedIpos,
-    ];
+    // Sorting Type (status) descending puts Closed first; otherwise the
+    // closed group stays at the bottom.
+    final closedFirst = _sortColumnIndex == 2 && !_sortAscending;
+    final List<dynamic> sortedIpos = closedFirst
+        ? [...sortedClosedIpos, ..._getSortedIPOs(allIpos)]
+        : [
+            ..._getSortedIPOs(allIpos),
+            // ...closedIpos,
+            ...sortedClosedIpos,
+          ];
 
     return SizedBox.expand(
       child: Container(
@@ -161,8 +186,11 @@ class _MainSmeListCardState extends ConsumerState<MainSmeListCard> {
 
   List<dynamic> _getFilteredIPOs(
       IPOProvider ipos, IPOProvider mainstreamipo, WidgetRef ref) {
-    if (ref.watch(stocksProvide).searchController.text.isNotEmpty &&
-        ipos.ipoCommonSearchList.isNotEmpty) {
+    // if (ref.watch(stocksProvide).searchController.text.isNotEmpty &&
+    //     ipos.ipoCommonSearchList.isNotEmpty) {
+    // While searching, show only the matches, even when no open IPO matches
+    // (closed matches may still be listed).
+    if (ref.watch(stocksProvide).searchController.text.isNotEmpty) {
       return ipos.ipoCommonSearchList;
     }
     return mainstreamipo.mainsme;
@@ -175,33 +203,153 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     sorted.sort((a, b) {
       int comparison = 0;
 
+      // TC_58/59: header indexes are 0 = Stock name, 1 = IPO date. The old
+      // switch had 1 = Type (hidden column) and 2 = date (no header), and
+      // compared dates as text ("Fri, 24 Oct ..." sorts by weekday).
       switch (_sortColumnIndex) {
-        case 0: // Stock name
-          final aName = _toTitleCase(a.name ?? "");
-          final bName = _toTitleCase(b.name ?? "");
-          comparison = aName.compareTo(bName);
+        case 0: // Stock name (same text the row shows, case-insensitive)
+          comparison = _sortName(a).compareTo(_sortName(b));
           break;
-        case 1: // Type
-          final aType = a.key ?? "";
-          final bType = b.key ?? "";
-          comparison = aType.compareTo(bType);
+        case 1: // IPO date: start date, then end date
+          // Rows with no readable date stay last in both directions.
+          final aStart = _sortStartDate(a);
+          final bStart = _sortStartDate(b);
+          if ((aStart == null) != (bStart == null)) {
+            return aStart == null ? 1 : -1;
+          }
+          comparison = _compareDates(aStart, bStart);
+          if (comparison == 0) {
+            comparison = _compareDates(_sortEndDate(a), _sortEndDate(b));
+          }
           break;
-        case 2: // IPO date
-          final aDate = a.biddingEndDate ?? a.biddingStartDate ?? "";
-          final bDate = b.biddingEndDate ?? b.biddingStartDate ?? "";
-          comparison = aDate.compareTo(bDate);
+        case 3: // Min. amount: the same price x qty the row shows
+          final aAmt = _minAmountValue(a);
+          final bAmt = _minAmountValue(b);
+          // Rows with no amount ("-") stay last in both directions.
+          if ((aAmt == null) != (bAmt == null)) {
+            return aAmt == null ? 1 : -1;
+          }
+          comparison = (aAmt == null || bAmt == null) ? 0 : aAmt.compareTo(bAmt);
           break;
-        case 5: // Subscription (index 5 after Price range and Min. amount)
-          final aSub = double.tryParse(a.totalsub ?? "0") ?? 0.0;
-          final bSub = double.tryParse(b.totalsub ?? "0") ?? 0.0;
-          comparison = aSub.compareTo(bSub);
+        case 2: // Type = status: Open, Pre-open, Closed; then name
+          // comparison = _ipoTypeLabel(a).compareTo(_ipoTypeLabel(b));
+          comparison = _statusRank(a).compareTo(_statusRank(b));
+          if (comparison == 0) {
+            comparison = _sortName(a).compareTo(_sortName(b));
+          }
           break;
+        // case 1: // Type
+        //   final aType = a.key ?? "";
+        //   final bType = b.key ?? "";
+        //   comparison = aType.compareTo(bType);
+        //   break;
+        // case 2: // IPO date
+        //   final aDate = a.biddingEndDate ?? a.biddingStartDate ?? "";
+        //   final bDate = b.biddingEndDate ?? b.biddingStartDate ?? "";
+        //   comparison = aDate.compareTo(bDate);
+        //   break;
+        // case 5: // Subscription (index 5 after Price range and Min. amount)
+        //   final aSub = double.tryParse(a.totalsub ?? "0") ?? 0.0;
+        //   final bSub = double.tryParse(b.totalsub ?? "0") ?? 0.0;
+        //   comparison = aSub.compareTo(bSub);
+        //   break;
       }
 
       return _sortAscending ? comparison : -comparison;
     });
 
     return sorted;
+  }
+
+  // Open rows come from separate Mainboard / SME lists; closed rows carry
+  // ipo_type from the API ("MAIN_IPO" or "SME").
+  String _ipoTypeLabel(dynamic ipo) {
+    if (ipo is Msg) {
+      return (ipo.ipoType ?? "").toUpperCase() == "SME" ? "SME" : "Mainboard";
+    }
+    return ipo is SMEIPO ? "SME" : "Mainboard";
+  }
+
+  // Type column shows the IPO status (Open / Pre-open / Closed).
+  String _statusLabel(dynamic ipo) {
+    if (ipo is Msg) return "Closed";
+    return ipostartdate(ipo.biddingStartDate, ipo.biddingEndDate) ?? "Closed";
+  }
+
+  int _statusRank(dynamic ipo) {
+    switch (_statusLabel(ipo)) {
+      case "Open":
+        return 0;
+      case "Pre-open":
+        return 1;
+      default:
+        return 2;
+    }
+  }
+
+  shadcn.TableCell _buildTypeCell(dynamic ipo, String uniqueId,
+      bool rowIsHovered, ThemesProvider theme, VoidCallback onTap) {
+    final status = _statusLabel(ipo);
+    return _buildShadcnCell(
+      uniqueId: uniqueId,
+      rowIsHovered: rowIsHovered,
+      theme: theme,
+      onTap: onTap,
+      // Every status gets a badge: Open green, Pre-open grey, Closed red.
+      child: Align(
+          alignment: Alignment.centerLeft, child: _buildStatusBadge(status)),
+      // child: status == "Closed"
+      //     ? Align(alignment: Alignment.centerLeft, child: _buildClosedBadge())
+      //     : Text(
+      //   // _ipoTypeLabel(ipo),
+      //   status,
+      //   style: MyntWebTextStyles.bodyMedium(
+      //         context,
+      //         color: resolveThemeColor(context,
+      //             dark: MyntColors.textPrimaryDark,
+      //             light: MyntColors.textPrimary),
+      //         fontWeight: MyntFonts.medium,
+      //       ),
+      //   overflow: TextOverflow.ellipsis,
+      //   maxLines: 1,
+      // ),
+    );
+  }
+
+  double? _minAmountValue(dynamic ipo) {
+    double price;
+    double qty;
+    if (ipo is Msg) {
+      price = (ipo.minPrice ?? 0).toDouble();
+      qty = (ipo.minBidQu ?? 0).toDouble();
+    } else {
+      price = double.tryParse(ipo.minPrice?.toString() ?? "") ?? 0;
+      qty = double.tryParse(ipo.minBidQuantity?.toString() ?? "") ?? 0;
+    }
+    if (price <= 0 || qty <= 0) return null;
+    return price * qty;
+  }
+
+  String _sortName(dynamic ipo) {
+    final name = ipo is Msg ? (ipo.companyName ?? ipo.name ?? "") : (ipo.name ?? "");
+    return name.toString().trim().toLowerCase();
+  }
+
+  DateTime? _sortStartDate(dynamic ipo) {
+    final s = ipo is Msg ? ipo.iPOStartDate : ipo.biddingStartDate;
+    return (s == null || s.isEmpty) ? null : _tryParseClosedDate(s);
+  }
+
+  DateTime? _sortEndDate(dynamic ipo) {
+    final s = ipo is Msg ? ipo.iPOEndDate : ipo.biddingEndDate;
+    return (s == null || s.isEmpty) ? null : _tryParseClosedDate(s);
+  }
+
+  int _compareDates(DateTime? a, DateTime? b) {
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    return a.compareTo(b);
   }
 
   String _toTitleCase(String input) {
@@ -219,16 +367,23 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         // Allocation: All columns 25%
-        final nameWidth = width * 0.35;
-        final dateWidth = width * 0.25;
+        // final nameWidth = width * 0.35;
+        // final dateWidth = width * 0.25;
+        // final priceWidth = width * 0.15;
+        // final minWidth = width * 0.25;
+        // Type column added so Mainboard/SME can be sorted on its own.
+        final nameWidth = width * 0.30;
+        final typeWidth = width * 0.12;
+        final dateWidth = width * 0.23;
         final priceWidth = width * 0.15;
-        final minWidth = width * 0.25;
+        final minWidth = width * 0.20;
 
         final columnWidths = {
           0: shadcn.FixedTableSize(nameWidth),
-          1: shadcn.FixedTableSize(dateWidth),
-          2: shadcn.FixedTableSize(priceWidth),
-          3: shadcn.FixedTableSize(minWidth),
+          1: shadcn.FixedTableSize(typeWidth),
+          2: shadcn.FixedTableSize(dateWidth),
+          3: shadcn.FixedTableSize(priceWidth),
+          4: shadcn.FixedTableSize(minWidth),
         };
 
         return shadcn.OutlinedContainer(
@@ -248,10 +403,14 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                                 right: 12.0,
                                 top: 12.0,
                                 bottom: 12.0)),
+                        // Sort index 2 = Status (0 name, 1 date kept as before).
+                        // _buildHeaderCell("Type", 2, theme),
+                        _buildHeaderCell("Status", 2, theme),
                         _buildHeaderCell("IPO date", 1, theme),
                         _buildHeaderCell("Price range", -1, theme,
                             alignRight: true),
-                        _buildHeaderCell("Min. amount", -1, theme,
+                        // _buildHeaderCell("Min. amount", -1, theme,
+                        _buildHeaderCell("Min. amount", 3, theme,
                             alignRight: true,
                             padding: const EdgeInsets.only(
                                 left: 12.0,
@@ -296,6 +455,15 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     );
   }
 
+  Widget _buildSortArrow() {
+    return Icon(
+      _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+      size: 16,
+      color: resolveThemeColor(context,
+          dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary),
+    );
+  }
+
   shadcn.TableCell _buildHeaderCell(
       String text, int sortIndex, ThemesProvider theme,
       {bool alignRight = false, EdgeInsets? padding}) {
@@ -311,9 +479,12 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
         ),
       ),
       child: GestureDetector(
-        onTap: sortIndex >= 0
-            ? () => _onSortTable(sortIndex, !_sortAscending)
-            : null,
+        // Whole header cell is tappable, not just the label text.
+        behavior: HitTestBehavior.opaque,
+        // onTap: sortIndex >= 0
+        //     ? () => _onSortTable(sortIndex, !_sortAscending)
+        //     : null,
+        onTap: sortIndex >= 0 ? () => _onSortTable(sortIndex, true) : null,
         child: Container(
           alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
           padding: padding ?? const EdgeInsets.symmetric(horizontal: 12.0),
@@ -325,10 +496,20 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Sort arrow on the sorted column, as in the Bonds table:
+              // before the label when right-aligned, after it otherwise.
+              if (alignRight && sortIndex >= 0 && _sortColumnIndex == sortIndex) ...[
+                _buildSortArrow(),
+                const SizedBox(width: 4),
+              ],
               Text(
                 text,
                 style: _getHeaderStyle(context),
               ),
+              if (!alignRight && sortIndex >= 0 && _sortColumnIndex == sortIndex) ...[
+                const SizedBox(width: 4),
+                _buildSortArrow(),
+              ],
             ],
           ),
         ),
@@ -362,6 +543,9 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
           ipoProvider: ipoProvider,
           upiProvider: upiProvider,
         ),
+        // Type Cell
+        _buildTypeCell(ipo, uniqueId, rowIsHovered, theme,
+            () => _onIPOTap(context, ipo, ipoProvider)),
         // IPO Date Cell
         _buildShadcnCell(
           uniqueId: uniqueId,
@@ -454,6 +638,7 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     return shadcn.TableRow(
       cells: [
         _buildClosedNameCell(ipo, uniqueId, rowIsHovered, theme, onTap),
+        _buildTypeCell(ipo, uniqueId, rowIsHovered, theme, onTap),
         _buildShadcnCell(
           uniqueId: uniqueId,
           rowIsHovered: rowIsHovered,
@@ -585,8 +770,11 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                 const SizedBox(height: 4),
                 Row(
                   children: [
+                    // Text(
+                    //   ipo.ipoType ?? "IPO",
+                    // API sends "MAIN_IPO"; show "IPO" like the open rows.
                     Text(
-                      ipo.ipoType ?? "IPO",
+                      _ipoTypeLabel(ipo) == "SME" ? "SME" : "IPO",
                       style: MyntWebTextStyles.bodySmall(
                         context,
                         color: resolveThemeColor(context,
@@ -595,8 +783,9 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                         fontWeight: MyntFonts.medium,
                       ),
                     ),
-                    const SizedBox(width: 6),
-                    _buildClosedBadge(),
+                    // Closed badge moved to the Type column.
+                    // const SizedBox(width: 6),
+                    // _buildClosedBadge(),
                     if (ipo.totalsub != null && ipo.totalsub!.isNotEmpty) ...[
                       const SizedBox(width: 6),
                       Text(
@@ -661,9 +850,16 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     }
   }
 
-  Widget _buildClosedBadge() {
-    final color = resolveThemeColor(context,
-        dark: MyntColors.lossDark, light: MyntColors.loss);
+  Widget _buildStatusBadge(String status) {
+    final color = status == "Open"
+        ? resolveThemeColor(context,
+            dark: MyntColors.profitDark, light: MyntColors.profit)
+        : status == "Pre-open"
+            ? resolveThemeColor(context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.textSecondary)
+            : resolveThemeColor(context,
+                dark: MyntColors.lossDark, light: MyntColors.loss);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
       decoration: BoxDecoration(
@@ -671,7 +867,7 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        "Closed",
+        status,
         style: MyntWebTextStyles.bodySmall(
           context,
           color: color,
@@ -680,6 +876,27 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
       ),
     );
   }
+
+  // Replaced by _buildStatusBadge (all statuses get a badge).
+  // Widget _buildClosedBadge() {
+  //   final color = resolveThemeColor(context,
+  //       dark: MyntColors.lossDark, light: MyntColors.loss);
+  //   return Container(
+  //     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+  //     decoration: BoxDecoration(
+  //       color: color.withOpacity(0.12),
+  //       borderRadius: BorderRadius.circular(4),
+  //     ),
+  //     child: Text(
+  //       "Closed",
+  //       style: MyntWebTextStyles.bodySmall(
+  //         context,
+  //         color: color,
+  //         fontWeight: MyntFonts.semiBold,
+  //       ),
+  //     ),
+  //   );
+  // }
 
   DateTime? _tryParseClosedDate(String s) {
     const formats = [
@@ -898,17 +1115,18 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                                 fontWeight: MyntFonts.medium,
                               ),
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              status,
-                              style: MyntWebTextStyles.bodySmall(
-                                context,
-                                color: resolveThemeColor(context,
-                                    dark: MyntColors.textSecondaryDark,
-                                    light: MyntColors.textSecondary),
-                                fontWeight: MyntFonts.medium,
-                              ),
-                            ),
+                            // Status moved to the Type column.
+                            // const SizedBox(width: 6),
+                            // Text(
+                            //   status,
+                            //   style: MyntWebTextStyles.bodySmall(
+                            //     context,
+                            //     color: resolveThemeColor(context,
+                            //         dark: MyntColors.textSecondaryDark,
+                            //         light: MyntColors.textSecondary),
+                            //     fontWeight: MyntFonts.medium,
+                            //   ),
+                            // ),
                           ],
                         ),
                       ],
@@ -1085,10 +1303,17 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     );
   }
 
+  // Same column again reverses; a new column starts ascending (as Upcoming).
   void _onSortTable(int columnIndex, bool ascending) {
     setState(() {
-      _sortColumnIndex = columnIndex;
-      _sortAscending = ascending;
+      // _sortColumnIndex = columnIndex;
+      // _sortAscending = ascending;
+      if (_sortColumnIndex == columnIndex) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortColumnIndex = columnIndex;
+        _sortAscending = ascending;
+      }
     });
   }
 

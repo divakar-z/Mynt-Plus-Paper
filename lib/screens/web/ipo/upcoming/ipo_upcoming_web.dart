@@ -2,15 +2,18 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../provider/iop_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../sharedWidget/no_data_found.dart';
+import '../../../../sharedWidget/snack_bar.dart';
 
 class UpcomingIpo extends ConsumerStatefulWidget {
   const UpcomingIpo({super.key});
@@ -55,16 +58,23 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         // Allocation: All columns 25%
-        final nameWidth = width * 0.25;
-        final sizeWidth = width * 0.25;
-        final updatedWidth = width * 0.25;
-        final excWidth = width * 0.25;
+        // final nameWidth = width * 0.25;
+        // final sizeWidth = width * 0.25;
+        // final updatedWidth = width * 0.25;
+        // final excWidth = width * 0.25;
+        // DRHP link column added: 30 / 18 / 18 / 22 / 12
+        final nameWidth = width * 0.30;
+        final sizeWidth = width * 0.18;
+        final updatedWidth = width * 0.18;
+        final excWidth = width * 0.22;
+        final drhpWidth = width * 0.12;
 
         final columnWidths = {
           0: shadcn.FixedTableSize(nameWidth),
           1: shadcn.FixedTableSize(sizeWidth),
           2: shadcn.FixedTableSize(updatedWidth),
           3: shadcn.FixedTableSize(excWidth),
+          4: shadcn.FixedTableSize(drhpWidth),
         };
 
         return shadcn.OutlinedContainer(
@@ -82,6 +92,9 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
                         _buildHeaderCell("Issue Size", 1, theme),
                         _buildHeaderCell("Last Updated", 2, theme),
                         _buildHeaderCell("Stock Exchanges", 3, theme),
+                        // _buildHeaderCell("DRHP", -1, theme),
+                        // Link column: no header label (the link itself reads DRHP).
+                        _buildHeaderCell("", -1, theme),
                       ],
                     ),
                   ],
@@ -134,20 +147,35 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
     sorted.sort((a, b) {
       int comparison = 0;
       switch (_sortColumnIndex) {
+        // Name is case-insensitive; Issue Size ("5000.0") and Last Updated
+        // ("15-May-2025") were compared as text, so "999" sorted above
+        // "1000" and dates sorted by day number.
         case 0: // Company Name
-          final nameA = a.companyName ?? '';
-          final nameB = b.companyName ?? '';
+          // final nameA = a.companyName ?? '';
+          // final nameB = b.companyName ?? '';
+          final nameA = (a.companyName ?? '').toString().trim().toLowerCase();
+          final nameB = (b.companyName ?? '').toString().trim().toLowerCase();
           comparison = nameA.compareTo(nameB);
           break;
         case 1: // Issue Size
-          final sizeA = a.issueSize ?? '';
-          final sizeB = b.issueSize ?? '';
+          // final sizeA = a.issueSize ?? '';
+          // final sizeB = b.issueSize ?? '';
+          final sizeA = double.tryParse(a.issueSize ?? '') ?? 0.0;
+          final sizeB = double.tryParse(b.issueSize ?? '') ?? 0.0;
           comparison = sizeA.compareTo(sizeB);
           break;
         case 2: // Last Updated
-          final updatedA = a.lastUpdated ?? '';
-          final updatedB = b.lastUpdated ?? '';
-          comparison = updatedA.compareTo(updatedB);
+          // final updatedA = a.lastUpdated ?? '';
+          // final updatedB = b.lastUpdated ?? '';
+          final updatedA = _parseUpdatedDate(a.lastUpdated);
+          final updatedB = _parseUpdatedDate(b.lastUpdated);
+          // Rows with no readable date stay last in both directions.
+          if ((updatedA == null) != (updatedB == null)) {
+            return updatedA == null ? 1 : -1;
+          }
+          comparison = (updatedA == null || updatedB == null)
+              ? 0
+              : updatedA.compareTo(updatedB);
           break;
         case 3: // Stock Exchanges
           final exchangeA = a.stockExchanges ?? '';
@@ -158,6 +186,16 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
       return _sortAscending ? comparison : -comparison;
     });
     return sorted;
+  }
+
+  // Last Updated comes as "15-May-2025".
+  DateTime? _parseUpdatedDate(String? s) {
+    if (s == null || s.trim().isEmpty) return null;
+    try {
+      return DateFormat('dd-MMM-yyyy').parse(s.trim());
+    } catch (_) {
+      return null;
+    }
   }
 
   void _onSortTable(int columnIndex, bool ascending) {
@@ -183,6 +221,15 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
     );
   }
 
+  Widget _buildSortArrow() {
+    return Icon(
+      _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+      size: 16,
+      color: resolveThemeColor(context,
+          dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary),
+    );
+  }
+
   shadcn.TableCell _buildHeaderCell(
       String text, int sortIndex, ThemesProvider theme,
       {bool alignRight = false, bool centered = false}) {
@@ -205,9 +252,13 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
         ),
       ),
       child: GestureDetector(
-        onTap: sortIndex >= 0
-            ? () => _onSortTable(sortIndex, !_sortAscending)
-            : null,
+        // Whole header cell is tappable, not just the label text.
+        behavior: HitTestBehavior.opaque,
+        // onTap: sortIndex >= 0
+        //     ? () => _onSortTable(sortIndex, !_sortAscending)
+        //     : null,
+        // A new column always starts ascending; same column again reverses.
+        onTap: sortIndex >= 0 ? () => _onSortTable(sortIndex, true) : null,
         child: Container(
           alignment: alignment,
           padding: const EdgeInsets.symmetric(horizontal: 12.0),
@@ -219,10 +270,20 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Sort arrow on the sorted column, as in the Bonds table:
+              // before the label when right-aligned, after it otherwise.
+              if (alignRight && sortIndex >= 0 && _sortColumnIndex == sortIndex) ...[
+                _buildSortArrow(),
+                const SizedBox(width: 4),
+              ],
               Text(
                 text,
                 style: _getHeaderStyle(context),
               ),
+              if (!alignRight && sortIndex >= 0 && _sortColumnIndex == sortIndex) ...[
+                const SizedBox(width: 4),
+                _buildSortArrow(),
+              ],
             ],
           ),
         ),
@@ -234,6 +295,28 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
       dynamic ipo, int index, ThemesProvider theme) {
     final uniqueId = '${ipo.companyName ?? ""}$index';
     final rowIsHovered = _hoveredRowId == uniqueId;
+    // Row click opens the DRHP in a new tab (as on mobile); lost in the
+    // Jan 2026 table redesign. No link = no action.
+    // Only a full http(s) link counts. The API currently sends the same
+    // relative path ("/report/...") for every IPO, which is not a real DRHP
+    // link, so those rows show "-" until the backend sends full URLs.
+    // final String drhpUrl = (ipo.drhp ?? '').toString().trim();
+    final String rawDrhp = (ipo.drhp ?? '').toString().trim();
+    // final String drhpUrl =
+    //     rawDrhp.startsWith('http://') || rawDrhp.startsWith('https://')
+    //         ? rawDrhp
+    //         : '';
+    // User wants the DRHP link on every row: a relative "/report/..." path
+    // is Chittorgarh's DRHP/RHP list page, so open it on that site.
+    final String drhpUrl = rawDrhp.isEmpty
+        ? ''
+        : rawDrhp.startsWith('http://') || rawDrhp.startsWith('https://')
+            ? rawDrhp
+            : rawDrhp.startsWith('/')
+                ? 'https://www.chittorgarh.com$rawDrhp'
+                : 'https://$rawDrhp';
+    final VoidCallback? onTap =
+        drhpUrl.isNotEmpty ? () => _onDRHPTap(drhpUrl) : null;
 
     final cellTextStyle = MyntWebTextStyles.tableCell(
       context,
@@ -249,6 +332,7 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
           uniqueId: uniqueId,
           rowIsHovered: rowIsHovered,
           theme: theme,
+          onTap: onTap,
           child: Text(
             ipo.companyName ?? '',
             style: cellTextStyle,
@@ -260,6 +344,7 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
           uniqueId: uniqueId,
           rowIsHovered: rowIsHovered,
           theme: theme,
+          onTap: onTap,
           child: Text(
             ipo.issueSize ?? '',
             style: cellTextStyle,
@@ -270,6 +355,7 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
           uniqueId: uniqueId,
           rowIsHovered: rowIsHovered,
           theme: theme,
+          onTap: onTap,
           child: Text(
             ipo.lastUpdated ?? '',
             style: cellTextStyle,
@@ -280,13 +366,59 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
           uniqueId: uniqueId,
           rowIsHovered: rowIsHovered,
           theme: theme,
+          onTap: onTap,
           child: Text(
             ipo.stockExchanges ?? '',
             style: cellTextStyle,
           ),
         ),
+        // DRHP link (blue); '-' when the API sends no link
+        _buildShadcnCell(
+          uniqueId: uniqueId,
+          rowIsHovered: rowIsHovered,
+          theme: theme,
+          onTap: onTap,
+          child: drhpUrl.isNotEmpty
+              ? Text(
+                  'DRHP',
+                  style: MyntWebTextStyles.tableCell(
+                    context,
+                    fontWeight: MyntFonts.semiBold,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.primaryDark,
+                        light: MyntColors.primary),
+                  ),
+                )
+              : Text(
+                  '-',
+                  style: MyntWebTextStyles.tableCell(
+                    context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary),
+                  ),
+                ),
+        ),
       ],
     );
+  }
+
+  Future<void> _onDRHPTap(String url) async {
+    // Callers pass full http(s) links only (see _buildShadcnRow).
+    final String finalUrl = url;
+    // if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+    //   finalUrl = 'https://$finalUrl';
+    // }
+    try {
+      final opened =
+          await launchUrl(Uri.parse(finalUrl), webOnlyWindowName: '_blank');
+      if (!opened && mounted) {
+        warningMessage(context, 'Could not open DRHP');
+      }
+    } catch (e) {
+      debugPrint("Error launching DRHP URL: $e");
+      if (mounted) warningMessage(context, 'Could not open DRHP');
+    }
   }
 
   shadcn.TableCell _buildShadcnCell({
@@ -317,7 +449,10 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
         ),
       ),
       child: MouseRegion(
-        cursor: SystemMouseCursors.click,
+        cursor: onTap != null
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        // cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hoveredRowId = uniqueId),
         onExit: (_) => setState(() => _hoveredRowId = null),
         child: GestureDetector(

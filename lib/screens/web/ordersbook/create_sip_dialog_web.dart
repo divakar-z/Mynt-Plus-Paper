@@ -51,9 +51,16 @@ class _CreateSipDialogWebState extends ConsumerState<CreateSipDialogWeb> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_onSearchTextChanged);
+  }
+
+  @override
   void dispose() {
     _debounceTimer?.cancel();
     _sipNameController.dispose();
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     _noOfSipsController.dispose();
     for (var item in _addedScrips) {
@@ -228,6 +235,24 @@ class _CreateSipDialogWebState extends ConsumerState<CreateSipDialogWeb> {
   }
 
   List<ScripNewValue> _searchResults = [];
+
+  String _lastSearchText = '';
+
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Run the clear here when the box goes from text to empty.
+  void _onSearchTextChanged() {
+    final text = _searchController.text;
+    final wasNotEmpty = _lastSearchText.isNotEmpty;
+    _lastSearchText = text;
+    if (text.isEmpty && wasNotEmpty) {
+      _debounceTimer?.cancel();
+      ref.read(marketWatchProvider).searchClear();
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+    }
+  }
 
   void _onSearchChanged(String query) {
     // Cancel previous timer

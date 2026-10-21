@@ -248,11 +248,16 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
   }
 
   Widget _buildStatusBadge(BuildContext context, String status, bool isOpen) {
+    // Open green, Pre-open grey, Closed red (same on every IPO screen).
     final Color statusColor = isOpen
         ? resolveThemeColor(context,
             dark: MyntColors.profitDark, light: MyntColors.profit)
-        : resolveThemeColor(context,
-            dark: MyntColors.lossDark, light: MyntColors.loss);
+        : status == "Pre-open"
+            ? resolveThemeColor(context,
+                dark: MyntColors.textSecondaryDark,
+                light: MyntColors.textSecondary)
+            : resolveThemeColor(context,
+                dark: MyntColors.lossDark, light: MyntColors.loss);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),

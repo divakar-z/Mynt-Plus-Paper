@@ -372,8 +372,11 @@ class IPOProvider extends DefaultChangeNotifier {
     // notifyListeners();
   }
 
-  searchCommonIpo(String value, BuildContext context) {
-    if (value.length > 1) {
+  // TC_29: web passes minChars 1 so filtering starts from the first letter;
+  // mobile and global search keep the old two-letter default.
+  searchCommonIpo(String value, BuildContext context, {int minChars = 2}) {
+    // if (value.length > 1) {
+    if (value.length >= minChars) {
       _ipoCommonSearchList = [];
       // ScaffoldMessenger.of(context).hideCurrentSnackBar();
 

@@ -35,9 +35,77 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
   int selectedTab = 0;
   final ScrollController _tabScrollController = ScrollController();
 
+  // TC_30: the search field's X button only empties the text box; it never
+  // calls onClear. Watch the box and reset the IPO search when it goes empty.
+  late final TextEditingController _searchController;
+  String _lastSearchText = '';
+
+  void _onSearchTextChanged() {
+    final text = _searchController.text;
+    if (text.isEmpty && _lastSearchText.isNotEmpty) {
+      _lastSearchText = text;
+      ref.read(ipoProvide).clearCommonIpoSearch();
+      return;
+    }
+    _lastSearchText = text;
+  }
+
+  // TC_220: Upcoming tab gets its own search box (same as Holdings: one box
+  // per tab, filter follows the text, so X/backspace also reset it). It feeds
+  // the existing Upcoming filter via setIpoSearchQuery.
+  final TextEditingController _upcomingSearchController =
+      TextEditingController();
+
+  void _onUpcomingSearchChanged() {
+    final ipo = ref.read(ipoProvide);
+    if (ipo.ipocommonsearchcontroller.text != _upcomingSearchController.text) {
+      ipo.setIpoSearchQuery(_upcomingSearchController.text);
+    }
+  }
+
+  // My Bids gets its own box the same way; it feeds the existing open/closed
+  // bids filter through the same query.
+  final TextEditingController _bidsSearchController = TextEditingController();
+
+  void _onBidsSearchChanged() {
+    final ipo = ref.read(ipoProvide);
+    if (ipo.ipocommonsearchcontroller.text != _bidsSearchController.text) {
+      ipo.setIpoSearchQuery(_bidsSearchController.text);
+    }
+  }
+
+  // When the query is cleared from inside My Bids (Open / Close orders
+  // switch), empty the box too so text and list stay in step.
+  late final TextEditingController _ipoQueryController;
+
+  void _onIpoQueryChanged() {
+    if (_ipoQueryController.text.isEmpty) {
+      if (_bidsSearchController.text.isNotEmpty) _bidsSearchController.clear();
+      if (_upcomingSearchController.text.isNotEmpty) {
+        _upcomingSearchController.clear();
+      }
+    }
+  }
+
+  // Switching tabs clears every IPO search (as Holdings does), whether by
+  // click, swipe or a tab change from elsewhere.
+  void _clearIpoSearches() {
+    ref.read(ipoProvide).clearCommonIpoSearch();
+    _upcomingSearchController.clear();
+    _bidsSearchController.clear();
+    ref.read(ipoProvide).setIpoSearchQuery("");
+  }
+
   @override
   void initState() {
     super.initState();
+    _searchController = ref.read(stocksProvide).searchController;
+    _lastSearchText = _searchController.text;
+    _searchController.addListener(_onSearchTextChanged);
+    _upcomingSearchController.addListener(_onUpcomingSearchChanged);
+    _bidsSearchController.addListener(_onBidsSearchChanged);
+    _ipoQueryController = ref.read(ipoProvide).ipocommonsearchcontroller;
+    _ipoQueryController.addListener(_onIpoQueryChanged);
     _tabController = TabController(
         length: 3, vsync: this, initialIndex: widget.initialTabIndex ?? 0);
     selectedTab = widget.initialTabIndex ?? 0;
@@ -48,6 +116,7 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
         setState(() {
           selectedTab = newIndex;
         });
+        _clearIpoSearches();
         ref.read(ipoProvide).setSelectedTab(newIndex);
       }
     });
@@ -63,6 +132,7 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
           setState(() {
             selectedTab = providerTab;
           });
+          _clearIpoSearches();
           _tabController.animateTo(providerTab);
         }
       }
@@ -71,6 +141,12 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
 
   @override
   void dispose() {
+    _searchController.removeListener(_onSearchTextChanged);
+    _upcomingSearchController.removeListener(_onUpcomingSearchChanged);
+    _upcomingSearchController.dispose();
+    _bidsSearchController.removeListener(_onBidsSearchChanged);
+    _ipoQueryController.removeListener(_onIpoQueryChanged);
+    _bidsSearchController.dispose();
     _tabController.dispose();
     _tabScrollController.dispose();
     super.dispose();
@@ -136,12 +212,37 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
                 placeholder: 'Search IPO',
                 leadingIcon: assets.searchIcon,
                 onChanged: (value) {
-                  ipo.searchCommonIpo(value, context);
+                  // ipo.searchCommonIpo(value, context);
+                  ipo.searchCommonIpo(value, context, minChars: 1);
                 },
                 onClear: () {
                   ref.read(stocksProvide).searchController.clear();
                   ipo.clearCommonIpoSearch();
                 },
+              ),
+            ),
+            const SizedBox(width: 16),
+          ],
+          if (selectedTab == 1) ...[
+            SizedBox(
+              width: 400,
+              child: MyntSearchTextField.withSmartClear(
+                controller: _upcomingSearchController,
+                placeholder: 'Search upcoming IPO',
+                leadingIcon: assets.searchIcon,
+                onClear: () => _upcomingSearchController.clear(),
+              ),
+            ),
+            const SizedBox(width: 16),
+          ],
+          if (selectedTab == 2) ...[
+            SizedBox(
+              width: 400,
+              child: MyntSearchTextField.withSmartClear(
+                controller: _bidsSearchController,
+                placeholder: 'Search my bids',
+                leadingIcon: assets.searchIcon,
+                onClear: () => _bidsSearchController.clear(),
               ),
             ),
             const SizedBox(width: 16),
@@ -197,8 +298,9 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
             selectedTab = index;
           });
           _tabController.animateTo(index);
-          ref.read(ipoProvide).clearCommonIpoSearch();
-          ref.read(ipoProvide).setIpoSearchQuery("");
+          // ref.read(ipoProvide).clearCommonIpoSearch();
+          // ref.read(ipoProvide).setIpoSearchQuery("");
+          _clearIpoSearches();
           FocusScope.of(context).unfocus();
         },
         child: Container(
