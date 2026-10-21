@@ -33,6 +33,7 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
     with TickerProviderStateMixin {
   late TabController _tabController;
   int selectedTab = 0;
+  ProviderSubscription<int>? _tabSub;
   final ScrollController _tabScrollController = ScrollController();
 
   // TC_30: the search field's X button only empties the text box; it never
@@ -110,6 +111,16 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
         length: 3, vsync: this, initialIndex: widget.initialTabIndex ?? 0);
     selectedTab = widget.initialTabIndex ?? 0;
 
+    // Bug fix: placing or cancelling a bid sets My Bids as the tab in the
+    // provider, but this screen only read it when first opened, so it stayed
+    // on the current tab. Follow later changes too.
+    _tabSub = ref.listenManual<int>(
+        ipoProvide.select((p) => p.selectedTab), (prev, next) {
+      if (!mounted || next == selectedTab) return;
+      setState(() => selectedTab = next);
+      _tabController.animateTo(next);
+    });
+
     _tabController.animation!.addListener(() {
       final newIndex = _tabController.animation!.value.round();
       if (selectedTab != newIndex) {
@@ -141,6 +152,7 @@ class _ExploreScreensState extends ConsumerState<IpoExploreScreens>
 
   @override
   void dispose() {
+    _tabSub?.close();
     _searchController.removeListener(_onSearchTextChanged);
     _upcomingSearchController.removeListener(_onUpcomingSearchChanged);
     _upcomingSearchController.dispose();

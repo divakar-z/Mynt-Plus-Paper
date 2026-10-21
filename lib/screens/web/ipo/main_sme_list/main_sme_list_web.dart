@@ -774,7 +774,8 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                     //   ipo.ipoType ?? "IPO",
                     // API sends "MAIN_IPO"; show "IPO" like the open rows.
                     Text(
-                      _ipoTypeLabel(ipo) == "SME" ? "SME" : "IPO",
+                      // _ipoTypeLabel(ipo) == "SME" ? "SME" : "IPO",
+                      _ipoTypeLabel(ipo) == "SME" ? "SME" : "Main",
                       style: MyntWebTextStyles.bodySmall(
                         context,
                         color: resolveThemeColor(context,
@@ -938,7 +939,11 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     if (_isNavigating) return;
     _isNavigating = true;
     try {
-      await ipoProvider.getIpoSinglePage(ipoName: "${ipo.companyName}");
+      // await ipoProvider.getIpoSinglePage(ipoName: "${ipo.companyName}");
+      // Bug fix: a failed request returns null but keeps the previous IPO's
+      // details in the provider; tell the sheet so it doesn't show them.
+      final details =
+          await ipoProvider.getIpoSinglePage(ipoName: "${ipo.companyName}");
 
       if (!context.mounted) return;
 
@@ -960,7 +965,11 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                 ),
               ],
             ),
-            child: IpoDetailsSheetWeb(ipo: ipo, parentContext: context),
+            // child: IpoDetailsSheetWeb(ipo: ipo, parentContext: context),
+            child: IpoDetailsSheetWeb(
+                ipo: ipo,
+                parentContext: context,
+                detailsLoaded: details != null),
           );
         },
       );
@@ -1106,7 +1115,8 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                               const SizedBox(width: 6),
                             ],
                             Text(
-                              ipo is SMEIPO ? "SME" : "IPO",
+                              // ipo is SMEIPO ? "SME" : "IPO",
+                              ipo is SMEIPO ? "SME" : "Main",
                               style: MyntWebTextStyles.bodySmall(
                                 context,
                                 color: resolveThemeColor(context,
@@ -1469,7 +1479,11 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     _isNavigating = true;
 
     try {
-     await ipoProvider.getIpoSinglePage(ipoName: "${ipo.name}");
+     // await ipoProvider.getIpoSinglePage(ipoName: "${ipo.name}");
+     // Bug fix: a failed request returns null but keeps the previous IPO's
+     // details in the provider; tell the sheet so it doesn't show them.
+     final details =
+         await ipoProvider.getIpoSinglePage(ipoName: "${ipo.name}");
 
     if (context.mounted) {
       shadcn.openSheet(
@@ -1490,7 +1504,11 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                 ),
               ],
             ),
-            child: IpoDetailsSheetWeb(ipo: ipo, parentContext: context),
+            // child: IpoDetailsSheetWeb(ipo: ipo, parentContext: context),
+            child: IpoDetailsSheetWeb(
+                ipo: ipo,
+                parentContext: context,
+                detailsLoaded: details != null),
           );
         },
       );

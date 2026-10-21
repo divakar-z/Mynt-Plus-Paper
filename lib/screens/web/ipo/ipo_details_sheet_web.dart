@@ -19,17 +19,24 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
   final dynamic ipo;
   final BuildContext parentContext;
 
+  /// False when the details request for this IPO failed. The provider then
+  /// still holds the previously opened IPO's details, which must not be shown.
+  final bool detailsLoaded;
+
   const IpoDetailsSheetWeb({
     super.key,
     required this.ipo,
     required this.parentContext,
+    this.detailsLoaded = true,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ipoProvider = ref.watch(ipoProvide);
     final upiProvider = ref.watch(transcationProvider);
-    final singlePageData = ipoProvider.iposinglepage?.data;
+    // final singlePageData = ipoProvider.iposinglepage?.data;
+    final singlePageData =
+        detailsLoaded ? ipoProvider.iposinglepage?.data : null;
 
     final bool isClosed = ipo is Msg;
 
@@ -37,9 +44,17 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
         ? ((ipo as Msg).companyName ?? ipo.name ?? '')
         : (ipo.name ?? '');
     String? imageLink;
+    // String ipoType = isClosed
+    //     ? ((ipo as Msg).ipoType ?? "IPO")
+    //     : (ipo is SMEIPO ? "SME" : "IPO");
+    // Bug fix: closed IPOs carry the backend value ("MAIN_IPO" / "SME");
+    // show "IPO" / "SME" as the table does.
+    // Mainboard issues read "Main" on every IPO screen.
     String ipoType = isClosed
-        ? ((ipo as Msg).ipoType ?? "IPO")
-        : (ipo is SMEIPO ? "SME" : "IPO");
+        ? (((ipo as Msg).ipoType ?? "").toUpperCase() == "SME"
+            ? "SME"
+            : "Main")
+        : (ipo is SMEIPO ? "SME" : "Main");
 
     if (singlePageData != null && singlePageData is Map) {
       if (singlePageData['Company Name'] != null) {
@@ -137,10 +152,11 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
                           "Min amount",
                           isClosed
                               ? _closedMinAmount(ipo as Msg)
-                              : convertCurrencyINRStandard(mininv(
+                              // Bug fix: ₹ sign, as in the table.
+                              : "₹${convertCurrencyINRStandard(mininv(
                                   double.parse(ipo.minPrice ?? "0").toDouble(),
                                   int.parse(ipo.minBidQuantity ?? "0").toInt())
-                              .toInt())),
+                              .toInt())}"),
                       _buildDetailRow(
                           context,
                           "Lot size",
@@ -151,7 +167,9 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
                           "Price range",
                           isClosed
                               ? _closedPriceRange(ipo as Msg)
-                              : "₹${double.parse(ipo.minPrice ?? "0").toInt()} - ₹${double.parse(ipo.maxPrice ?? "0").toInt()}"),
+                              // : "₹${double.parse(ipo.minPrice ?? "0").toInt()} - ₹${double.parse(ipo.maxPrice ?? "0").toInt()}"),
+                              // Bug fix: keep paise, as the table does.
+                              : "₹${_price(ipo.minPrice)} - ₹${_price(ipo.maxPrice)}"),
                       _buildDetailRow(
                           context,
                           "Date",
@@ -373,7 +391,14 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
     if (minPrice == null || minQty == null || minPrice <= 0 || minQty <= 0) {
       return "--";
     }
-    return convertCurrencyINRStandard((minPrice * minQty).toInt());
+    // return convertCurrencyINRStandard((minPrice * minQty).toInt());
+    return "₹${convertCurrencyINRStandard((minPrice * minQty).toInt())}";
+  }
+
+  // Whole prices without decimals, prices with paise to two decimals.
+  String _price(String? value) {
+    final v = double.tryParse(value ?? "") ?? 0;
+    return v == v.toInt() ? v.toInt().toString() : v.toStringAsFixed(2);
   }
 
   String _closedPriceRange(Msg ipo) {

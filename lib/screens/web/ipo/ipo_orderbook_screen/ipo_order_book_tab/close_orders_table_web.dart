@@ -731,15 +731,26 @@ class _CloseOrdersTableState extends ConsumerState<CloseOrdersTable> {
       return "0";
     }
 
-    return order.type == "BSE"
-        ? getFormatter(
-            noDecimal: true,
-            v4d: false,
-            value: double.parse(order.bidDetail![0].rate ?? "0") *
-                double.parse(order.bidDetail![0].quantity ?? "0"))
-        : getFormatter(
-            noDecimal: true,
-            v4d: false,
-            value: double.parse(order.bidDetail![0].amount?.toString() ?? "0"));
+    // return order.type == "BSE"
+    //     ? getFormatter(
+    //         noDecimal: true,
+    //         v4d: false,
+    //         value: double.parse(order.bidDetail![0].rate ?? "0") *
+    //             double.parse(order.bidDetail![0].quantity ?? "0"))
+    //     : getFormatter(
+    //         noDecimal: true,
+    //         v4d: false,
+    //         value: double.parse(order.bidDetail![0].amount?.toString() ?? "0"));
+    // Bug fix: show the largest bid's amount, as Open orders does; it used
+    // only the first bid, so an application changed amount once it moved here.
+    double maxAmount = 0;
+    for (final bid in order.bidDetail!) {
+      final amount = order.type == "BSE"
+          ? (double.tryParse(bid.rate ?? "0") ?? 0) *
+              (double.tryParse(bid.quantity ?? "0") ?? 0)
+          : double.tryParse(bid.amount?.toString() ?? "0") ?? 0;
+      if (amount > maxAmount) maxAmount = amount;
+    }
+    return getFormatter(noDecimal: true, v4d: false, value: maxAmount);
   }
 }
