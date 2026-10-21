@@ -93,6 +93,7 @@ class Chart {
 
     // Data
     this.candles = [];           // aggregated target-timeframe candles
+    this._synthFromSec = null;   // first bucket the empty-candle fill may create (live time only)
     this.tickState = { lp: null, v: null, ft: null, bid: null, ask: null, oi: null };
     this.aggState = { prevCumVol: null, prevPrice: null, prevMs: null };
 
@@ -315,7 +316,8 @@ class Chart {
 
     // Bucket advancement — thinly-traded options/commodities don't tick
     // every bar window, so the aggregator (which only fires on tick) leaves
-    // the chart frozen on the last filled bar. Every 2s we check if the
+    // the chart frozen on the last filled bar. Every 1s (second timeframes
+    // need it; otherwise it is an early return) we check if the
     // current wall-clock bucket has moved past the last candle and, if so,
     // synthesise flat continuation bars (O=H=L=C=lastClose, V=0) up to the
     // current bucket. Real ticks arriving later still update C/H/L of the
@@ -323,7 +325,7 @@ class Chart {
     this._advanceBarsTicker = setInterval(() => {
       this._advanceEmptyBarsIfNeeded();
       this._updateSecondTimer();
-    }, 2000);
+    }, 1000);
 
     this._updateSecondTimer();
 
@@ -1129,6 +1131,23 @@ class Chart {
     if (lp != null) this.tickState.lp = lp;
     if (v != null) this.tickState.v = v;
     if (ft != null) this.tickState.ft = ft;
+    // A packet without `ft` (depth frames) keeps the LAST trade's time, so only
+    // a packet that carried its own `ft` may be placed into an earlier second
+    // bar (aggregator late-tick path).
+    this.tickState._ftFresh = ft != null;
+    // Has this scrip ever reported traded volume? If so, a frame without
+    // volume is a depth update, not a trade (indices never report any).
+    if (v != null && v > 0) this.tickState._volSeen = true;
+    if (ft != null) {
+      // Offset of the exchange clock from ours. Each sample is at most the
+      // true offset (a trade is stamped before it reaches us), so keep the
+      // largest; ignore anything wild - a snapshot's `ft` can be the time of
+      // a trade minutes old.
+      const skew = ft - Date.now() / 1000;
+      if (Math.abs(skew) < 30 && (this._ftSkew == null || skew > this._ftSkew)) {
+        this._ftSkew = skew;
+      }
+    }
     // Day OHLC (today's session open/high/low) from the touchline feed — the
     // aggregator uses these to seed today's daily/weekly/monthly bar with the
     // real session open instead of the LTP-at-open. Keep the last known value.
@@ -1208,7 +1227,16 @@ class Chart {
     // not formed live.
     const _ftSec = this.tickState.ft;
     if (!this._isSessionWindow(_ftSec)) return;
-    const targetMs = this.timeframeMinutes * 60_000;
+    // Seconds: a trade two or more seconds past the newest bar would append
+    // its own bar and leave the empty seconds in between as a permanent hole
+    // (the filler only ever appends after the newest bar, and at 1s it races
+    // the ticks). Fill them first — same rules as the filler.
+    if (this._isSecondsTf()) {
+      const tfSec = this._tfSec();
+      this._advanceEmptyBarsIfNeeded(_intradayBucketStart(
+          _ftSec, tfSec, _sessionOpenMinFor(this.scrip.exch)) - tfSec);
+    }
+    const targetMs = this._tfSec() * 1000;
     const result = ingestTickIntoBucket(
         this.candles, this.tickState, this.aggState, targetMs,
         this.scrip && this.scrip.exch);
@@ -1252,6 +1280,7 @@ class Chart {
       for (const c of this.candles) byTs.set(c.ts, c);
       for (const c of fresh) byTs.set(c.ts, c);
       this.candles = Array.from(byTs.values()).sort((a, b) => a.ts - b.ts);
+      this._markLiveFrom(this._refreshEndSec);
       this._noMoreHistory = false;
       if (this.candleStyle === 'renko') {
         this._rebuildRenko();
@@ -1302,6 +1331,15 @@ class Chart {
     }
     if (requestId !== this._pendingRequestId) return; // stale reply
     this._pendingRequestId = null;
+    // Seconds: nothing for this session (holiday, or a scrip that did not
+    // trade) - try the trading day before, up to a week back.
+    if (this._isSecondsTf() && (this._secDayBack || 0) < 7) {
+      const kept = Array.isArray(candles) ? this._sessionFilterIntraday(candles) : [];
+      if (kept.length === 0) {
+        this._loadHistoryNow((this._secDayBack || 0) + 1);
+        return;
+      }
+    }
     // _hideOverlay() redraws, and every redraw runs _maybeExtendHistory. Hide
     // it only once the new candles are in: hiding it here, while this.candles
     // still held just the live tick candle, made the extend re-download the
@@ -1316,6 +1354,7 @@ class Chart {
       // A later _refreshRecent (tab-return / reconnect) backfills real bars once
       // at least one live candle exists. Still subscribe so ticks arrive.
       this.candles = [];
+      this._markLiveFrom(this._requestEndSec);
       this._noMoreHistory = true; // nothing older to fetch
       this._hideOverlay();
       this.scheduleRedraw();
@@ -1329,6 +1368,7 @@ class Chart {
     // Bucketing then collapses any same-bucket candles correctly.
     this.candles = bucketCandles(
         this._sessionFilterIntraday(candles), this.timeframeMinutes, this.scrip && this.scrip.exch);
+    this._markLiveFrom(this._requestEndSec);
     this._noMoreHistory = false;  // fresh series — extend is allowed again
     if (this.candleStyle === 'renko') {
       this._rebuildRenko();
@@ -1349,6 +1389,7 @@ class Chart {
   _maybeExtendHistory() {
     if (!this.scrip) return;
     if (this._noMoreHistory) return;
+    if (this._isSecondsTf()) return;   // one session of second bars only
     if (this._pendingExtendId != null) return;
     if (this._pendingRequestId != null) return;
     if (this._historyLoadFailed) return;  // full reload pending, see _refreshRecent
@@ -1410,7 +1451,7 @@ class Chart {
     while (i > 0 && this.candles[i]._synth) i--;
     let startTs = this.candles[i].ts;
     const nowSec = Math.floor(Date.now() / 1000);
-    const bucketSec = this.timeframeMinutes * 60;
+    const bucketSec = this._tfSec();
     // Healing a hidden-tab / reconnect gap: while away, bars are missed (and a
     // partial refetch left holes). Re-pull the ENTIRE current trading day so the
     // union merge refills everything. If we were away since before today's open
@@ -1429,6 +1470,7 @@ class Chart {
     if (nowSec - startTs < bucketSec) return; // nothing new yet
     this._pendingRefreshId = _newRequestId();
     this._refreshBlockedUntil = Date.now() + 3000;
+    this._refreshEndSec = nowSec;
     this.requestHistory({
       requestId: this._pendingRefreshId,
       exch: this.scrip.exch,
@@ -1531,14 +1573,21 @@ class Chart {
     }, 0);
   }
 
-  _loadHistoryNow() {
+  _loadHistoryNow(dayBack = 0) {
     if (!this.scrip) return;
     this._historyLoadFailed = false;
     this._showOverlay('Loading ' + this.scrip.dispName + '…');
     const minutes = this.timeframeMinutes;
     const interval = SOURCE_INTERVAL_FOR_MINUTES(minutes);
-    const endEpoch = Math.floor(Date.now() / 1000);
-    const startEpoch = endEpoch - _windowSecondsFor(minutes);
+    let endEpoch = Math.floor(Date.now() / 1000);
+    let startEpoch = endEpoch - _windowSecondsFor(minutes);
+    this._secDayBack = dayBack;
+    if (this._isSecondsTf()) {
+      const w = this._secondsWindow(endEpoch, dayBack);
+      startEpoch = w.start;
+      endEpoch = w.end;
+    }
+    this._requestEndSec = endEpoch;
     this._pendingRequestId = _newRequestId();
     this.requestHistory({
       requestId: this._pendingRequestId,
@@ -1550,6 +1599,30 @@ class Chart {
       end: endEpoch,
       targetMinutes: minutes,
     });
+  }
+
+  // Second bars cover one trading session at a time: today's session from the
+  // open (live ticks carry on from there), or - before the open, on a weekend
+  // or a holiday - the most recent session that has data. `dayBack` steps back
+  // one more trading day each time a window comes back empty.
+  _secondsWindow(nowSec, dayBack) {
+    const open = this._sessionOpenTodaySec(nowSec);
+    if (open == null) return { start: nowSec - 6 * 3600, end: nowSec };
+    const isWeekend = (t) => { const d = _istParts(t).dow; return d === 0 || d === 6; };
+    let start = open;
+    let back = dayBack + (nowSec < open ? 1 : 0);
+    let past = back > 0;
+    while (back > 0) {
+      start -= 86400;
+      if (!isWeekend(start)) back--;
+    }
+    while (isWeekend(start)) { start -= 86400; past = true; }
+    const b = _sessionBoundsFor(this.scrip.exch, start);
+    const sessionEnd = start + (b.closeMin - b.openMin) * 60 - 1;
+    // Today: up to now, but never past the close — the time after it has no
+    // candles and only counts against the endpoint's 30,000-candle range cap.
+    if (!past) return { start, end: Math.min(nowSec, sessionEnd) };
+    return { start, end: sessionEnd };
   }
 
   _showOverlay(title, detail) {
@@ -1803,7 +1876,7 @@ class Chart {
             if (!src) return;
             // Offset clone — 5 candles right + 0.5% price down so the copy
             // doesn't sit exactly on top of the original.
-            const tsShift = (this.timeframeMinutes || 1) * 60 * 5;
+            const tsShift = this._tfSec() * 5;
             const priceShift = (src.points[0] && src.points[0].price)
                 ? src.points[0].price * 0.005
                 : 0;
@@ -2532,7 +2605,7 @@ class Chart {
         const dPrice = (curPrice != null && startPrice != null)
             ? (curPrice - startPrice)
             : 0;
-        const dtSec = this.timeframeMinutes * 60;
+        const dtSec = this._tfSec();
         const cellW = this.view.cellW || 1;
         const dTs = Math.round((dxPx / cellW) * dtSec);
         const d = this._drawings.find(
@@ -3575,7 +3648,9 @@ class Chart {
     }
     const hh = String(ist.getUTCHours()).padStart(2, '0');
     const mm = String(ist.getUTCMinutes()).padStart(2, '0');
-    return ist.getUTCDate() + ' ' + months[ist.getUTCMonth()] + ' ' + hh + ':' + mm;
+    const ss = this._isSecondsTf()
+        ? ':' + String(ist.getUTCSeconds()).padStart(2, '0') : '';
+    return ist.getUTCDate() + ' ' + months[ist.getUTCMonth()] + ' ' + hh + ':' + mm + ss;
   }
 
   _roundedRect(x, y, w, h, r) {
@@ -3976,7 +4051,26 @@ class Chart {
     return null;
   }
 
+  // Bar width in whole seconds. Second timeframes are fractional minutes
+  // (5s = 5/60), so never multiply timeframeMinutes by 60 directly.
+  _tfSec() {
+    return Math.max(1, Math.round((this.timeframeMinutes || 1) * 60));
+  }
+
+  _isSecondsTf() {
+    return this.timeframeMinutes > 0 && this.timeframeMinutes < 1;
+  }
+
+  // The exchange's clock, estimated from the trade times (`ft`) in the feed.
+  // Second bars are bucketed by `ft`, so the empty-bar filler must run on the
+  // same clock: on the local clock, a PC a few seconds fast would draw empty
+  // bars ahead of the live one. Minute timeframes keep the local clock.
+  _feedNowSec() {
+    return Math.floor(Date.now() / 1000 + (this._ftSkew || 0));
+  }
+
   _formatTimeframeLabel(m) {
+    if (m > 0 && m < 1) return Math.round(m * 60) + 's';
     if (m % 1440 === 0) return (m / 1440) + 'D';
     if (m % 60 === 0) return (m / 60) + 'h';
     return m + 'm';
@@ -4557,7 +4651,7 @@ class Chart {
     const iFloat = N - 0.5 - (plotRight + this.view.offsetX - x) / this.view.cellW;
     const idxFloor = Math.floor(iFloat);
     if (idxFloor >= 0 && idxFloor < N) return this.candles[idxFloor].ts;
-    const dtSec = Math.max(1, this.timeframeMinutes * 60);
+    const dtSec = this._tfSec();
     if (idxFloor < 0) {
       return this.candles[0].ts + Math.round(idxFloor * dtSec);
     }
@@ -4574,7 +4668,7 @@ class Chart {
   _tsToX(ts, plot) {
     const bars = this.candles;
     if (bars.length === 0) return plot.left;
-    const dtSec = Math.max(1, this.timeframeMinutes * 60);
+    const dtSec = this._tfSec();
     // Before-the-first-bar extrapolation.
     if (ts <= bars[0].ts) {
       const delta = (ts - bars[0].ts) / dtSec;
@@ -4811,19 +4905,51 @@ class Chart {
   // append flat continuation bars (O=H=L=C=lastClose, V=0) up to the
   // current wall-clock bucket. Skips daily+ timeframes (calendar-bucketed,
   // not modular) and out-of-session time so nothing forms overnight.
-  _advanceEmptyBarsIfNeeded() {
+  // Called whenever API history lands (initial load, empty result, refresh):
+  // the first bucket the empty-candle fill may create is the one AFTER the
+  // bucket that is current right now. Everything up to here came from the API.
+  // `endSec` is the end of the window that was REQUESTED. Measuring from the
+  // reply's arrival instead left the time the request was in flight unfilled:
+  // a full-day 1s refetch takes 2-3 s, so every heal left a hole of a second
+  // or two just before the live bars (and a minute chart did the same when a
+  // reply crossed a minute boundary).
+  _markLiveFrom(endSec) {
+    if (!this.scrip || this.timeframeMinutes >= 1440) { this._synthFromSec = null; return; }
+    const nowSec = Number.isFinite(endSec) ? endSec
+        : this._isSecondsTf() ? this._feedNowSec() : Math.floor(Date.now() / 1000);
+    const targetSec = this._tfSec();
+    this._synthFromSec = _intradayBucketStart(
+        nowSec, targetSec, _sessionOpenMinFor(this.scrip.exch)) + targetSec;
+  }
+
+  // `uptoBucket` (optional): fill through this bucket instead of the current
+  // one — the tick path uses it to fill the seconds before a trade.
+  _advanceEmptyBarsIfNeeded(uptoBucket) {
     if (!this.scrip) return;
     if (this.timeframeMinutes >= 1440) return; // daily/weekly/monthly
     if (this.candles.length === 0) return;
     if (!this._isSessionLive()) return;        // closed/holiday → never fabricate
-    const nowSec = Math.floor(Date.now() / 1000);
-    const targetSec = this.timeframeMinutes * 60;
-    const currentBucket = nowSec - (nowSec % targetSec);
+    const nowSec = this._isSecondsTf() ? this._feedNowSec() : Math.floor(Date.now() / 1000);
+    const targetSec = this._tfSec();
+    // Anchor to the session open exactly like the tick path (aggregator.js
+    // ingestTickIntoBucket). A plain `nowSec % targetSec` is the UTC-epoch grid,
+    // which sits 15-45 min off the 09:15 NSE grid for 30m/60m/120m (IST is
+    // UTC+5:30): the loop below steps from a session-aligned last.ts but stopped
+    // at an epoch-aligned bucket, so an idle chart only got its next empty
+    // candle up to 45 min late (NSE 60m) and looked frozen in the meantime.
+    const currentBucket = uptoBucket != null ? uptoBucket : _intradayBucketStart(
+        nowSec, targetSec, _sessionOpenMinFor(this.scrip.exch));
     const last = this.candles[this.candles.length - 1];
     if (last.ts >= currentBucket) return;
     // Cap synthesis at 200 bars per call so a long-idle session doesn't
     // create thousands of empty bars in one tick.
-    let nextBucket = last.ts + targetSec;
+    // Fill only time the chart has watched live. Gaps in API history are real
+    // (no trades in those buckets) and must stay gaps: starting from the last
+    // API candle filled every minute since a scrip last traded — a deep
+    // out-of-the-money option got 2,400 invented flat bars in six seconds,
+    // spanning days, with indicators computed over them.
+    if (this._synthFromSec == null) return;       // no history has landed yet
+    let nextBucket = Math.max(last.ts + targetSec, this._synthFromSec);
     let appended = 0;
     let lastClose = last.c;
     while (nextBucket <= currentBucket && appended < 200) {
@@ -4970,9 +5096,8 @@ class Chart {
       if (i1 >= 0 && i2 >= 0) {
         bars = Math.abs(i2 - i1);
       } else {
-        const minutes = Math.max(1, this.timeframeMinutes || 1);
         bars = Math.max(0,
-            Math.round(Math.abs(endTs - p1.ts) / (minutes * 60)));
+            Math.round(Math.abs(endTs - p1.ts) / this._tfSec()));
       }
     }
     const pct = p1.price !== 0 ? (dPrice / p1.price) * 100 : 0;
@@ -5253,7 +5378,7 @@ class Chart {
     const _cdLeft = cdEnabled
         ? (this.timeframeMinutes >= 1440
             ? _calendarBucketEnd(_cdLastTs, this.timeframeMinutes)
-            : _cdLastTs + this.timeframeMinutes * 60) - Math.floor(Date.now() / 1000)
+            : _cdLastTs + this._tfSec()) - Math.floor(Date.now() / 1000)
         : 0;
     if (cdEnabled && _cdLeft > 0) {
       const left = _cdLeft;
@@ -5380,6 +5505,9 @@ class Chart {
         const hh = String(ist.getUTCHours()).padStart(2, '0');
         const mm = String(ist.getUTCMinutes()).padStart(2, '0');
         label = hh + ':' + mm;
+        if (this._isSecondsTf()) {
+          label += ':' + String(ist.getUTCSeconds()).padStart(2, '0');
+        }
         // Day prefix on candles that cross a midnight boundary in the
         // absolute series — checking absIdx-1 keeps the decision stable
         // across pans (independent of which candle happens to be visible[0]).

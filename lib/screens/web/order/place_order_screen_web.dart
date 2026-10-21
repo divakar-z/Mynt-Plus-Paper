@@ -687,6 +687,21 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   @override
   void initState() {
+    // Own this window's scrip from the start, whatever opened it (watchlist,
+    // scrip page, option chain, order book, basket, positions, holdings,
+    // search, chart). It used to subscribe only NSE/BSE stocks — an F&O, MCX
+    // or currency ticket relied on some other screen having subscribed the
+    // contract, and showed a frozen LTP / order value / protection price
+    // when none had. Released when the window closes.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final exch = widget.scripInfo.exch ?? '';
+      final token = widget.scripInfo.token ?? '';
+      if (exch.isNotEmpty && token.isNotEmpty) {
+        _ws = ref.read(websocketProvider);
+        _ws!.setOwnedTouchline(_ticketOwner, ['$exch|$token'], context);
+      }
+    });
     // Clear stale GTT/OCO state from any previous order session so the
     // trigger price, qty, and price fields don't carry over old values.
     ref.read(ordInputProvider).clearTextField();
@@ -1225,6 +1240,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
 
   @override
   void dispose() {
+    try { _ws?.releaseAllTouchline(_ticketOwner); } catch (_) {}
     _warningDebounceTimer?.cancel();
     _marginUpdateDebounceTimer?.cancel();
     anibuildctrl.dispose();
@@ -1257,12 +1273,22 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
     return currentMinutes >= marketCloseTime;
   }
 
+  // Cached while mounted — ref.read throws in dispose (Riverpod 3).
+  WebSocketProvider? _ws;
+  // Per window: opening a new ticket while the old one closes must not let
+  // the old one's release drop the new one's scrip.
+  late final String _ticketOwner = 'place-order:${identityHashCode(this)}';
+
   void _subscribeSelectedStock(BuildContext context) {
     if ((stockExchangeSelected.token?.isNotEmpty ?? false) && (stockExchangeSelected.exch?.isNotEmpty ?? false)) {
-      ref.read(websocketProvider).establishConnection(
-          channelInput: '${stockExchangeSelected.exch}|${stockExchangeSelected.token}',
-          task: 't',
-          context: context);
+      // Owned touchline for the ticket's scrip (replaced on an exchange
+      // toggle, released when the ticket closes). It was a raw "t": a
+      // watchlist tab switch could cut it while the ticket was open, and
+      // nothing restored it after a reconnect — the ticket's LTP, order value
+      // and market-protection price then used a frozen price.
+      _ws = ref.read(websocketProvider);
+      _ws!.setOwnedTouchline(_ticketOwner,
+          ['${stockExchangeSelected.exch}|${stockExchangeSelected.token}'], context);
     }
   }
 
@@ -2933,7 +2959,7 @@ class _PlaceOrderScreenWebState extends ConsumerState<PlaceOrderScreenWeb>
                                                                 var number = (_isStock)
                                                                   ? (!_isQtyToAmount
                                                                     ? int.tryParse(newValue) ?? 0
-                                                                    : ((double.tryParse(newValue) ?? 0.0) ~/ ltp))
+                                                                    : (ltp > 0 ? (double.tryParse(newValue) ?? 0.0) ~/ ltp : 0))
                                                                   : (!_isGTTLotToQty
                                                                     ? int.tryParse(newValue) ?? 0
                                                                     : ((int.tryParse(newValue) ?? 0) ~/ lotSize));
@@ -3773,7 +3799,7 @@ if (widget.scripInfo.exch == "MCX" ||
                                                                   var number = (_isStock)
                                                                     ? (!_isQtyToAmount
                                                                       ? int.tryParse(newValue) ?? 0
-                                                                      : ((double.tryParse(newValue) ?? 0.0) ~/ ltp))
+                                                                      : (ltp > 0 ? (double.tryParse(newValue) ?? 0.0) ~/ ltp : 0))
                                                                     : (!_isGTTLotToQty
                                                                       ? int.tryParse(newValue) ?? 0
                                                                       : ((int.tryParse(newValue) ?? 0) ~/ lotSize));
@@ -9709,7 +9735,8 @@ if (widget.scripInfo.exch == "MCX" ||
       final wl = SafeParse.toDouble(wsD['lp']);
       if (wl > 0) ltp = wl;
     }
-    return ((double.tryParse(value) ?? 0.0) ~/ ltp).toString();
+    // ltp 0 (no price yet): `double ~/ 0` throws in Dart.
+    return (ltp > 0 ? (double.tryParse(value) ?? 0.0) ~/ ltp : 0).toString();
   }
 
   String convertLotOrQtyValue(String value, bool isLotToQty) {

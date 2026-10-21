@@ -143,14 +143,23 @@ class _GttOrderBookDetailScreenWebState
             final chng = data['chng']?.toString();
 
             if (_isValidValue(lp)) _gttOrder.ltp = lp;
-            if (_isValidValue(pc)) _gttOrder.perChange = pc;
-            if (_isValidValue(chng)) _gttOrder.change = chng;
+            if (_isPresent(pc)) _gttOrder.perChange = pc;
+            if (_isPresent(chng)) _gttOrder.change = chng;
           });
         }
       });
     } catch (e) {
     }
   }
+
+  // Change / % change may legitimately be 0.00 (back to flat); only a zero
+
+  // LTP is a placeholder. Rejecting "0.00" left the last non-zero change.
+
+  bool _isPresent(String? value) =>
+
+      value != null && value != "null" && value.isNotEmpty;
+
 
   bool _isValidValue(String? value) {
     return value != null &&

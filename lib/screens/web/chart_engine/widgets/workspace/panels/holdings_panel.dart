@@ -82,7 +82,9 @@ class HoldingsPanel extends ConsumerWidget {
 
     for (final h in rows) {
       final ex = h.exchTsym![0];
-      final qty = double.tryParse(h.holdqty ?? '0') ?? 0;
+      // currentQty (provider): demat + pool + T1 − traded. `holdqty` alone
+      // missed shares held in demat, understating qty / invested / value.
+      final qty = (h.currentQty ?? int.tryParse(h.holdqty ?? '0') ?? 0).toDouble();
       final upld = double.tryParse(h.upldprc ?? '0') ?? 0;
       final inv = upld * qty;
 
@@ -337,7 +339,7 @@ class _HoldingTileState extends State<_HoldingTile> {
     final h = widget.holding;
     final ex = h.exchTsym![0];
 
-    final qty = double.tryParse(h.holdqty ?? '0') ?? 0;
+    final qty = (h.currentQty ?? int.tryParse(h.holdqty ?? '0') ?? 0).toDouble();
     final avg = double.tryParse(h.avgPrc ?? '') ??
         double.tryParse(h.upldprc ?? '0') ??
         0;

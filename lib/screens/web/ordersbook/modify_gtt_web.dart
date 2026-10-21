@@ -370,8 +370,28 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
     return KeyEventResult.handled;
   }
 
+  // Owned touchline for the GTT's scrip (per window; released on close).
+  // This window read live prices but subscribed nothing.
+  WebSocketProvider? _ws;
+  late final String _owner = 'modify-gtt:${identityHashCode(this)}';
+
+  @override
+  void dispose() {
+    try { _ws?.releaseAllTouchline(_owner); } catch (_) {}
+    super.dispose();
+  }
+
   @override
   void initState() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final exch = widget.gttOrderBook.exch ?? '';
+      final token = widget.gttOrderBook.token ?? '';
+      if (exch.isNotEmpty && token.isNotEmpty) {
+        _ws = ref.read(websocketProvider);
+        _ws!.acquireTouchline(_owner, ['$exch|$token'], context);
+      }
+    });
     final int initialLotSize = int.tryParse("${widget.scripInfo.ls ?? 0}") ?? 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(ordInputProvider).getModifyData(widget.gttOrderBook, lotSize: initialLotSize);
@@ -438,7 +458,8 @@ class _ModifyGttWebState extends ConsumerState<ModifyGttWeb> {
               updatedLtp = lp;
             }
             
-            if (pc != null && pc != "null" && pc != "0" && pc != "0.00") {
+            // % change may legitimately be 0.00 (back to flat).
+            if (pc != null && pc != "null") {
               updatedPerChange = pc;
             }
             

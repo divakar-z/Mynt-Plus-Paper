@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
-import 'package:mynt_plus/provider/web_subscription_manager.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
 
 /// InstaOptions' live-tick layer over the existing Noren socket
@@ -93,23 +92,25 @@ class InstaLiveTicks extends ChangeNotifier {
     _subscribed.clear();
   }
 
+  // InstaOptions subscribes its option prices as DEPTH ("d"). It used to
+  // release them through WebSubscriptionManager.unsubscribeTokens, which sends
+  // a TOUCHLINE unsubscribe ("u") for every source except 'depth' — so the
+  // depth feeds were never released, and a "u" went out for touchline
+  // subscriptions that did not exist. It also had no reconnect handling, so
+  // after a socket drop the option prices froze. The depth-owner registry
+  // releases correctly (only when no other owner needs the scrip) and restores
+  // every owned scrip on reconnect.
+  static const String _depthOwner = 'insta-options';
+
   void _subscribe(Set<String> keys, BuildContext context) {
     try {
-      ref
-          .read(websocketProvider)
-          .connectTouchLine(task: 'd', input: keys.join('#'), context: context);
+      ref.read(websocketProvider).acquireDepth(_depthOwner, keys, context);
     } catch (_) {}
   }
 
   void _unsubscribe(Set<String> keys, BuildContext context) {
     try {
-      // Protected-symbol-aware: won't unsubscribe tokens the watchlist /
-      // positions / ticker / index header still need.
-      ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
-            tokensToCheck: keys,
-            context: context,
-            source: 'instaOptions',
-          );
+      ref.read(websocketProvider).releaseDepth(_depthOwner, keys, context);
     } catch (_) {}
   }
 

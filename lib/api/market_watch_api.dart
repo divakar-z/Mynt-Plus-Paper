@@ -105,6 +105,118 @@ mixin MarketWatchApi on ApiCore {
     }
   }
 
+  /// Fetch the single in-progress candle for [interval] (minutes).
+  ///
+  /// [tpseries] returns only CLOSED candles, so a chart opened mid-candle is
+  /// missing the seconds already elapsed in it — the chart shows a gap until
+  /// the next tick, and that tick can only set the close (the elapsed
+  /// open/high/low are lost). This hits [tpseriesLive] with
+  /// `st` = [candleStartEpoch] and no `et`, which returns the forming candle.
+  ///
+  /// Returns null on ANY failure, so callers fall back to closed-candle
+  /// history — the pre-existing behaviour.
+  Future<Data?> getLiveCandle({
+    required String exchange,
+    required String token,
+    required String interval,
+    required int candleStartEpoch,
+  }) async {
+    try {
+      final uri = Uri.parse(apiLinks.tpseriesLive);
+      // Hard timeout: an erroring endpoint is caught below, but a HANGING one
+      // would stall the whole history response and leave the chart empty.
+      // Timing out returns null, i.e. closed-candle history exactly as before.
+      final res = await apiClient
+          .post(
+            uri,
+            headers: defaultHeaders,
+            body:
+                '''jData={"uid":"${prefs.clientId}","exch":"$exchange","token":"$token","st":"$candleStartEpoch","intrv":"$interval"}&jKey=${prefs.clientSession}''',
+          )
+          .timeout(const Duration(seconds: 3));
+      final json = jsonDecode(res.body);
+      if (json is! List || json.isEmpty) return null;
+      // Newest-first; the in-progress candle is the first row.
+      final row = Data.fromJson(json.first as Map<String, dynamic>);
+      if (row.stat == 'Not_Ok' || row.ssboe == null) return null;
+      // Only accept the candle we asked for — if the feed rolled over
+      // mid-request the stale one would land in the wrong slot.
+      if (int.tryParse(row.ssboe!) != candleStartEpoch) return null;
+      return row;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Second candles ([interval] like `1s`, `5s`, `30s`) for
+  /// [startEpoch]..[endEpoch]. Only [tpseriesLive] serves seconds (valid:
+  /// 1s,3s,5s,10s,30s,45s); rows come newest-first. A full 1s session is
+  /// 22,500 rows (~4.4 MB), so the timeout is generous — on expiry it throws
+  /// and the chart shows its "click to retry" overlay instead of hanging.
+  ///
+  /// The endpoint rejects a request spanning more than 30,000 candles of
+  /// CLOCK time ("range too large for 1s (max 30000 candles)") — it counts
+  /// et−st, not the rows it returns. At 1s that is 8h20m: a full MCX session
+  /// (09:00–23:30), or NSE "open → now" after ~17:35, is over it. So the range
+  /// is fetched in parts of at most [_secondsMaxCandles] candles, aligned to
+  /// the interval, in parallel, and merged.
+  Future<TpSeries> getSecondsSeries({
+    required String exchange,
+    required String token,
+    required String interval,
+    required int startEpoch,
+    required int endEpoch,
+  }) async {
+    final step = int.tryParse(interval.replaceAll('s', '')) ?? 1;
+    final parts = <Future<TpSeries>>[];
+    var from = startEpoch;
+    while (from <= endEpoch && parts.length < 10) {
+      // Part boundaries sit on the interval grid so no candle is split
+      // between two parts; each part spans at most max-candles × step − 1.
+      final next = ((from ~/ step) + _secondsMaxCandles) * step;
+      final to = next - 1 < endEpoch ? next - 1 : endEpoch;
+      parts.add(_getSecondsPart(exchange, token, interval, from, to));
+      from = next;
+    }
+    final results = await Future.wait(parts);
+    final seen = <String>{};
+    final rows = <Data>[];
+    for (final r in results) {
+      for (final d in r.data ?? const <Data>[]) {
+        final ts = d.ssboe;
+        if (ts != null && seen.add(ts)) rows.add(d);
+      }
+    }
+    return TpSeries()..data = rows;
+  }
+
+  static const _secondsMaxCandles = 30000;
+
+  Future<TpSeries> _getSecondsPart(String exchange, String token,
+      String interval, int startEpoch, int endEpoch) async {
+    final uri = Uri.parse(apiLinks.tpseriesLive);
+    final res = await apiClient
+        .post(
+          uri,
+          headers: defaultHeaders,
+          body:
+              '''jData={"uid":"${prefs.clientId}","exch":"$exchange","token":"$token","st":"$startEpoch","et":"$endEpoch","intrv":"$interval"}&jKey=${prefs.clientSession}''',
+        )
+        .timeout(const Duration(seconds: 30));
+    final json = jsonDecode(res.body);
+    if (json is List) return TpSeries.fromJson({"data": json});
+    if (json is Map) {
+      if (json['stat'] == 'Not_Ok') {
+        // An empty window (holiday, pre-open, a scrip that did not trade) is
+        // "no data" — return empty so the chart steps back a trading day.
+        if (json['emsg'] == 'no data') return TpSeries.fromJson({"data": []});
+        throw Exception(json['emsg'] ?? 'Seconds data unavailable');
+      }
+      return TpSeries.fromJson(json as Map<String, dynamic>);
+    }
+    throw Exception("Unexpected JSON type: ${json.runtimeType}");
+  }
+
 // Edit watchlist name from kambala
 
   Future<WatchlistRenameModel> getWatchListRename(

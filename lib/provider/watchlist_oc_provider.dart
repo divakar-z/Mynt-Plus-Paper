@@ -378,11 +378,8 @@ class WatchlistOCProvider extends ChangeNotifier {
     final indexToken = _selectedSymbol.token;
 
     // Subscribe to index token (touchline feed — option chain only needs LTP)
-    websocket.establishConnection(
-      channelInput: "${_selectedSymbol.exch}|$indexToken",
-      task: "t",
-      context: context,
-    );
+    websocket.acquireTouchline(
+        'watchlist-oc', ["${_selectedSymbol.exch}|$indexToken"], context);
 
     // Listen for index LTP updates to keep the blue line position in sync
     _indexLtpSubscription?.cancel();
@@ -410,11 +407,7 @@ class WatchlistOCProvider extends ChangeNotifier {
 
     if (tokens.isNotEmpty) {
       _subscribedOptionTokens = tokens;
-      websocket.establishConnection(
-        channelInput: tokens.join('#'),
-        task: "t",
-        context: context,
-      );
+      websocket.acquireTouchline('watchlist-oc', tokens, context);
     }
   }
 
@@ -422,14 +415,9 @@ class WatchlistOCProvider extends ChangeNotifier {
     _indexLtpSubscription?.cancel();
     _indexLtpSubscription = null;
 
-    if (_subscribedOptionTokens.isEmpty) return;
-
     final websocket = ref.read(websocketProvider);
-    websocket.establishConnection(
-      channelInput: _subscribedOptionTokens.join('#'),
-      task: "u",
-      context: context,
-    );
+    // Index and options alike; anything still shown elsewhere stays live.
+    websocket.releaseAllTouchline('watchlist-oc', context);
     _subscribedOptionTokens.clear();
   }
 

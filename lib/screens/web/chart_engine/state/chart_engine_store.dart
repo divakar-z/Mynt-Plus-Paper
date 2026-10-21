@@ -427,7 +427,9 @@ class IndicatorConfig {
 /// Per-pane state.
 class PaneState {
   final ChartScrip? scrip;
-  final int timeframeMinutes;
+  /// Bar width in minutes. Second timeframes are fractional (5s = 5/60) —
+  /// the engine's topbar sends them that way — so this is a [num].
+  final num timeframeMinutes;
   final ChartOverlays overlays;
   final int qty;
   final List<IndicatorConfig> indicators;
@@ -482,7 +484,7 @@ class PaneState {
 
   PaneState copyWith({
     Object? scrip = _sentinel,
-    int? timeframeMinutes,
+    num? timeframeMinutes,
     ChartOverlays? overlays,
     int? qty,
     List<IndicatorConfig>? indicators,
@@ -574,7 +576,7 @@ class PaneState {
       scrip: j['scrip'] is Map
           ? ChartScrip.fromJson(j['scrip'] as Map<String, dynamic>)
           : null,
-      timeframeMinutes: (j['timeframeMinutes'] as num?)?.toInt() ?? 5,
+      timeframeMinutes: (j['timeframeMinutes'] as num?) ?? 5,
       overlays: j['overlays'] is Map
           ? ChartOverlays.fromJson(j['overlays'] as Map<String, dynamic>)
           : const ChartOverlays(),
@@ -968,7 +970,7 @@ class ChartEngineSessionNotifier extends Notifier<ChartEngineSession> {
     _schedulePersist();
   }
 
-  void setPaneTimeframe(int index, int minutes) {
+  void setPaneTimeframe(int index, num minutes) {
     if (index < 0 || index >= state.panes.length) return;
     state = state.copyWithPane(
         index, state.panes[index].copyWith(timeframeMinutes: minutes));

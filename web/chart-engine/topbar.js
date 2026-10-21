@@ -302,13 +302,12 @@
   // opens a popover grouped by pane count showing all layouts in the
   // catalog Flutter pushed via `setLayoutCatalog`. Picking one posts
   // `setActiveLayoutId` back to Flutter which routes through the existing
-  // setLayout pipeline (catalog stays Flutter-owned). The catalog is
-  // Flutter-pushed and the popout has no Flutter host, so this control is
-  // hidden entirely in popout mode (same guard pattern as the INSTANT
-  // badge/Order-Defaults button). `layoutBtn` stays `undefined` and the
-  // ORDER array's `.filter(Boolean)` skips it.
+  // setLayout pipeline (catalog stays Flutter-owned). Shown in popout mode
+  // too: the popout window runs the real Flutter host, which pushes the
+  // catalog and applies the pick to its own throwaway session (never the
+  // main window's saved layout).
   let layoutBtn;
-  if (!IS_POPOUT) {
+  {
   let layoutCatalog = [];                // [{id, paneCount, areas, ...}]
   let activeLayoutId = null;
   layoutBtn = document.createElement('button');
@@ -660,7 +659,15 @@
   root.appendChild(symWrap);
 
   // ── Timeframe dropdown ──────────────────────────────────────────────────
+  // Second timeframes are fractional minutes (5s = 5/60) so every consumer of
+  // `minutes` keeps working; the engine converts back with _tfSec().
   const TIMEFRAMES = [
+    { label: '1s', minutes: 1 / 60 },
+    { label: '5s', minutes: 5 / 60 },
+    { label: '10s', minutes: 10 / 60 },
+    { label: '15s', minutes: 15 / 60 },
+    { label: '30s', minutes: 30 / 60 },
+    { label: '45s', minutes: 45 / 60 },
     { label: '1m', minutes: 1 },
     { label: '2m', minutes: 2 },
     { label: '3m', minutes: 3 },
@@ -677,6 +684,7 @@
   ];
   function timeframeLabel(min) {
     for (const t of TIMEFRAMES) if (t.minutes === min) return t.label;
+    if (min > 0 && min < 1) return Math.round(min * 60) + 's';
     if (min % 1440 === 0) return (min / 1440) + 'D';
     if (min % 60 === 0) return (min / 60) + 'h';
     return min + 'm';
@@ -700,6 +708,10 @@
   activePaneSubs.push(repaintTimeframe);
 
   function longTimeframeLabel(min) {
+    if (min < 1) {
+      const s = Math.round(min * 60);
+      return s + (s === 1 ? ' second' : ' seconds');
+    }
     if (min < 60) return min + (min === 1 ? ' minute' : ' minutes');
     if (min < 1440) {
       const h = Math.floor(min / 60);
@@ -711,13 +723,15 @@
     return d + (d === 1 ? ' day' : ' days');
   }
   const TF_GROUPS = [
-    { title: 'MINUTES', items: TIMEFRAMES.filter(t => t.minutes < 60) },
+    { title: 'SECONDS', items: TIMEFRAMES.filter(t => t.minutes < 1) },
+    { title: 'MINUTES',
+      items: TIMEFRAMES.filter(t => t.minutes >= 1 && t.minutes < 60) },
     { title: 'HOURS',
       items: TIMEFRAMES.filter(t => t.minutes >= 60 && t.minutes < 1440) },
     { title: 'DAYS', items: TIMEFRAMES.filter(t => t.minutes >= 1440) },
   ];
   const tfSectionExpanded = {
-    MINUTES: true, HOURS: true, DAYS: true,
+    SECONDS: true, MINUTES: true, HOURS: true, DAYS: true,
   };
 
   tfBtn.addEventListener('click', () => {
@@ -3257,12 +3271,11 @@
     symWrap, tfBtn, styleBtn, fxBtn,
     layoutBtn, labBtn, badge, odBtn, popBtn, snapBtn, settingsBtn,
   ].filter(Boolean);
-  // Move the right-anchor class — Layout is normally the first right-group
-  // button instead of the INSTANT badge. In popout mode `layoutBtn`,
-  // `badge`, `odBtn` and `popBtn` are all omitted (view-only, no Flutter
-  // host/catalog), and `labBtn` is permanently `display:none`, so the
-  // actual first VISIBLE right-group control there is `snapBtn` — walk the
-  // same candidates in ORDER and anchor whichever is first present.
+  // Move the right-anchor class — Layout is the first right-group button
+  // instead of the INSTANT badge. In popout mode `badge`, `odBtn` and
+  // `popBtn` are omitted (view-only) and `labBtn` is permanently
+  // `display:none`; walk the same candidates in ORDER and anchor whichever
+  // is first present.
   if (badge) badge.classList.remove('tb-right-start');
   const rightAnchorBtn = layoutBtn || badge || odBtn || popBtn || snapBtn;
   if (rightAnchorBtn) rightAnchorBtn.classList.add('tb-right-start');

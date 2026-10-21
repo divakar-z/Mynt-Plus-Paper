@@ -532,16 +532,14 @@ class OrderProvider extends DefaultChangeNotifier {
         break;
     }
 
-    if (tokens.isEmpty) return;
+    if (tokens.isEmpty && !kIsWeb) return;
 
 
     if (kIsWeb) {
-      // On web, use WebSubscriptionManager for smart unsubscription with token protection
-      ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
-        tokensToCheck: tokens,
-        context: context,
-        source: 'orderBook',
-      );
+      // The order book owns its tab's touchline; releasing the owner
+      // unsubscribes only what no other screen still shows. (This used to
+      // send "u" for a feed subscribed as "d", so nothing was ever released.)
+      ref.read(websocketProvider).releaseAllTouchline('orderbook', context);
     } else {
       // On mobile, use direct unsubscription
       requestWSOrderBook(isSubscribe: false, context: context);
@@ -643,6 +641,15 @@ class OrderProvider extends DefaultChangeNotifier {
         }
       });
 
+      if (kIsWeb) {
+        // Owned touchline for the selected basket's legs. The old path sent a
+        // raw "d" once per scrip and remembered it locally, so after any
+        // reconnect the basket LTPs never came back.
+        ref.read(websocketProvider).setOwnedTouchline('basket', [
+          for (final script in _bsktScripList) "${script['exch']}|${script['token']}"
+        ], context);
+      }
+
       // Create input string for WebSocket subscription - only for symbols not already subscribed
       Set<String> symbolsToSubscribe = {};
 
@@ -654,11 +661,11 @@ class OrderProvider extends DefaultChangeNotifier {
         }
       }
 
-      // Only establish new connections if needed
-      if (symbolsToSubscribe.isNotEmpty) {
+      // Only establish new connections if needed (mobile)
+      if (!kIsWeb && symbolsToSubscribe.isNotEmpty) {
         input = symbolsToSubscribe.join("#");
         ref.read(websocketProvider).establishConnection(
-            channelInput: input, task: kIsWeb ? "d" : "t", context: context);
+            channelInput: input, task: "t", context: context);
       }
 
       // Update basket with latest values from socket data
@@ -1804,8 +1811,11 @@ class OrderProvider extends DefaultChangeNotifier {
       if (_gttOrderBookModel!.isNotEmpty) {
         if (_gttOrderBookModel![0].stat == "Ok") {
           ConstantName.sessCheck = true;
-          if (initLoad != "initLoad") {
-            _selectedTab = 3;
+          // Only re-subscribe when the GTT tab is the one showing. This used to
+          // force `_selectedTab = 3`, and it runs on every order message and
+          // reconnect: the order book's search filter and its subscription
+          // jumped to GTT while the user was on Open or Executed orders.
+          if (initLoad != "initLoad" && _selectedTab == 3) {
             requestWSOrderBook(isSubscribe: true, context: context);
           }
 
@@ -2279,10 +2289,16 @@ class OrderProvider extends DefaultChangeNotifier {
         }
       }
 
-      if (input.isNotEmpty) {
+      if (kIsWeb) {
+        // Owned touchline: tracked, protected from other screens' "u",
+        // restored on every new socket, and replaced as the list changes.
+        // The current tab's LTP column; was a raw "d" released with "u" (never released).
+        ref.read(websocketProvider).setOwnedTouchline(
+            'orderbook', input.split('#'), context);
+      } else if (input.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            task: isSubscribe ? "t" : "u",
             context: context);
       }
     } catch (e) {

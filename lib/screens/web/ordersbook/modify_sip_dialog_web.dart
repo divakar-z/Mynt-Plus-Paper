@@ -31,6 +31,12 @@ class ModifySipDialogWeb extends ConsumerStatefulWidget {
 }
 
 class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
+  // Owned touchline for the dialog's scrips, released when it closes
+  // (raw "t" here was never released or restored). Cached while mounted —
+  // ref.read throws in dispose (Riverpod 3).
+  WebSocketProvider? _ws;
+  late final String _owner = 'sip-modify:${identityHashCode(this)}';
+
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _noOfSipsController = TextEditingController();
   final LayerLink _searchLayerLink = LayerLink();
@@ -65,11 +71,8 @@ class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       for (var item in _addedScrips) {
-        ref.read(websocketProvider).establishConnection(
-          channelInput: '${item.exch}|${item.token}',
-          task: 't',
-          context: context,
-        );
+        (_ws = ref.read(websocketProvider))!.acquireTouchline(
+          _owner, ['${item.exch}|${item.token}'], context);
       }
     });
   }
@@ -123,6 +126,7 @@ class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
 
   @override
   void dispose() {
+    try { _ws?.releaseAllTouchline(_owner); } catch (_) {}
     _debounceTimer?.cancel();
     _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
@@ -389,11 +393,8 @@ class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
     });
 
     // Subscribe to WebSocket touchline for LTP
-    ref.read(websocketProvider).establishConnection(
-      channelInput: '${scrip.exch}|${scrip.token}',
-      task: 't',
-      context: context,
-    );
+    (_ws = ref.read(websocketProvider))!.acquireTouchline(
+          _owner, ['${scrip.exch}|${scrip.token}'], context);
 
     _searchController.clear();
     ref.read(marketWatchProvider).searchClear();
