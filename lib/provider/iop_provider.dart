@@ -1607,8 +1607,9 @@ class IPOProvider extends DefaultChangeNotifier {
     try {
       togglefundLoadingOn(true);
       _ipoSinglePage = await api.fetchiposinglepage(ipoName);
-      if (iposinglepage!.scripdata != null) {
-        iposinglepage!.scripdata!["IPO_Timeline"].removeLast();
+      final timeline = iposinglepage!.scripdata?["IPO_Timeline"];
+      if (timeline is List && timeline.isNotEmpty) {
+        timeline.removeLast();
       }
 
       // print("object :::: ${_ipoSinglePage!.data}");
