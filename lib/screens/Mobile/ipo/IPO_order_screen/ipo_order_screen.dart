@@ -138,6 +138,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
           final theme = ref.watch(themeProvider);
           final status = ipostartdate(biddingStartDate, biddingEndDate);
           final isOpen = status == "Open";
+          // Open green, Pre-open grey, Closed red (same on every IPO screen).
+          final isPreOpen = status == "Pre-open";
 
           var chips =
               ipo.ipoCategory.map((e) => e['subCatCode']).toSet().toList();
@@ -208,6 +210,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 ? theme.isDarkMode
                                     ? colors.profitDark.withOpacity(0.2)
                                     : colors.profitLight.withOpacity(0.2)
+                                : isPreOpen
+                                    ? (theme.isDarkMode
+                                        ? colors.textSecondaryDark.withOpacity(0.2)
+                                        : colors.textSecondaryLight.withOpacity(0.2))
                                 : theme.isDarkMode
                                     ? colors.lossDark.withOpacity(0.2)
                                     : colors.lossLight.withOpacity(0.2),
@@ -221,6 +227,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 ? theme.isDarkMode
                                     ? colors.profitDark
                                     : colors.profitLight
+                                : isPreOpen
+                                    ? (theme.isDarkMode
+                                        ? colors.textSecondaryDark
+                                        : colors.textSecondaryLight)
                                 : theme.isDarkMode
                                     ? colors.lossDark
                                     : colors.lossLight,

@@ -372,8 +372,11 @@ class IPOProvider extends DefaultChangeNotifier {
     // notifyListeners();
   }
 
-  searchCommonIpo(String value, BuildContext context) {
-    if (value.length > 1) {
+  // TC_29: web passes minChars 1 so filtering starts from the first letter;
+  // mobile and global search keep the old two-letter default.
+  searchCommonIpo(String value, BuildContext context, {int minChars = 2}) {
+    // if (value.length > 1) {
+    if (value.length >= minChars) {
       _ipoCommonSearchList = [];
       // ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
@@ -1604,8 +1607,9 @@ class IPOProvider extends DefaultChangeNotifier {
     try {
       togglefundLoadingOn(true);
       _ipoSinglePage = await api.fetchiposinglepage(ipoName);
-      if (iposinglepage!.scripdata != null) {
-        iposinglepage!.scripdata!["IPO_Timeline"].removeLast();
+      final timeline = iposinglepage!.scripdata?["IPO_Timeline"];
+      if (timeline is List && timeline.isNotEmpty) {
+        timeline.removeLast();
       }
 
       // print("object :::: ${_ipoSinglePage!.data}");

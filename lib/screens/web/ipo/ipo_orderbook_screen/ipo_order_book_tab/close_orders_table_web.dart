@@ -185,13 +185,19 @@ class _CloseOrdersTableState extends ConsumerState<CloseOrdersTable> {
           comparison = dateA.compareTo(dateB);
           break;
         case 1: // Company Name
-          final nameA = a.companyName?.toString() ?? '';
-          final nameB = b.companyName?.toString() ?? '';
+          // final nameA = a.companyName?.toString() ?? '';
+          // final nameB = b.companyName?.toString() ?? '';
+          final nameA = (a.companyName?.toString() ?? '').trim().toLowerCase();
+          final nameB = (b.companyName?.toString() ?? '').trim().toLowerCase();
           comparison = nameA.compareTo(nameB);
           break;
         case 2: // Amount
-          final amountA = _getInvestedAmount(a);
-          final amountB = _getInvestedAmount(b);
+          // Amount is a formatted string ("1,50,000"); text compare put
+          // "9,000" above "15,000". Compare the number instead.
+          // final amountA = _getInvestedAmount(a);
+          // final amountB = _getInvestedAmount(b);
+          final amountA = _amountValue(_getInvestedAmount(a));
+          final amountB = _amountValue(_getInvestedAmount(b));
           comparison = amountA.compareTo(amountB);
           break;
         case 3: // Status
@@ -215,6 +221,11 @@ class _CloseOrdersTableState extends ConsumerState<CloseOrdersTable> {
       lightColor: color ?? MyntColors.textSecondary,
       fontWeight: MyntFonts.semiBold,
     );
+  }
+
+  double _amountValue(String formatted) {
+    return double.tryParse(formatted.replaceAll(RegExp(r'[^0-9.\-]'), '')) ??
+        0.0;
   }
 
   void _onSortTable(int columnIndex, bool ascending) {
@@ -244,6 +255,15 @@ class _CloseOrdersTableState extends ConsumerState<CloseOrdersTable> {
   //   }
   // }
 
+  Widget _buildSortArrow() {
+    return Icon(
+      _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+      size: 16,
+      color: resolveThemeColor(context,
+          dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary),
+    );
+  }
+
   shadcn.TableCell _buildHeaderCell(
       String text, int sortIndex, ThemesProvider theme,
       {bool alignRight = false, bool centered = false, EdgeInsets? padding}) {
@@ -266,19 +286,33 @@ class _CloseOrdersTableState extends ConsumerState<CloseOrdersTable> {
         ),
       ),
       child: GestureDetector(
-        onTap: sortIndex >= 0
-            ? () => _onSortTable(sortIndex, !_sortAscending)
-            : null,
+        // Whole header cell is tappable, not just the label text.
+        behavior: HitTestBehavior.opaque,
+        // onTap: sortIndex >= 0
+        //     ? () => _onSortTable(sortIndex, !_sortAscending)
+        //     : null,
+        // A new column always starts ascending; same column again reverses.
+        onTap: sortIndex >= 0 ? () => _onSortTable(sortIndex, true) : null,
         child: Container(
           alignment: alignment,
           padding: padding ?? const EdgeInsets.symmetric(horizontal: 8.0),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Sort arrow on the sorted column, as in the Bonds table:
+              // before the label when right-aligned, after it otherwise.
+              if (alignRight && sortIndex >= 0 && _sortColumnIndex == sortIndex) ...[
+                _buildSortArrow(),
+                const SizedBox(width: 4),
+              ],
               Text(
                 text,
                 style: _getHeaderStyle(context),
               ),
+              if (!alignRight && sortIndex >= 0 && _sortColumnIndex == sortIndex) ...[
+                const SizedBox(width: 4),
+                _buildSortArrow(),
+              ],
               // if (sortIndex >= 0) ...[
               //   const SizedBox(width: 4),
               //   _buildSortIcon(sortIndex, theme),
@@ -697,15 +731,26 @@ class _CloseOrdersTableState extends ConsumerState<CloseOrdersTable> {
       return "0";
     }
 
-    return order.type == "BSE"
-        ? getFormatter(
-            noDecimal: true,
-            v4d: false,
-            value: double.parse(order.bidDetail![0].rate ?? "0") *
-                double.parse(order.bidDetail![0].quantity ?? "0"))
-        : getFormatter(
-            noDecimal: true,
-            v4d: false,
-            value: double.parse(order.bidDetail![0].amount?.toString() ?? "0"));
+    // return order.type == "BSE"
+    //     ? getFormatter(
+    //         noDecimal: true,
+    //         v4d: false,
+    //         value: double.parse(order.bidDetail![0].rate ?? "0") *
+    //             double.parse(order.bidDetail![0].quantity ?? "0"))
+    //     : getFormatter(
+    //         noDecimal: true,
+    //         v4d: false,
+    //         value: double.parse(order.bidDetail![0].amount?.toString() ?? "0"));
+    // Bug fix: show the largest bid's amount, as Open orders does; it used
+    // only the first bid, so an application changed amount once it moved here.
+    double maxAmount = 0;
+    for (final bid in order.bidDetail!) {
+      final amount = order.type == "BSE"
+          ? (double.tryParse(bid.rate ?? "0") ?? 0) *
+              (double.tryParse(bid.quantity ?? "0") ?? 0)
+          : double.tryParse(bid.amount?.toString() ?? "0") ?? 0;
+      if (amount > maxAmount) maxAmount = amount;
+    }
+    return getFormatter(noDecimal: true, v4d: false, value: maxAmount);
   }
 }

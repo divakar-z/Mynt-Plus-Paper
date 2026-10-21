@@ -51,6 +51,14 @@ class IpoOrderDetailsSheetWeb extends ConsumerWidget {
     // Payment status comes from the order book response (`upiPaymentStatus`).
     // The field is parsed with `.toString()`, so a missing value arrives as the
     // literal "null" rather than null — treat that as "not yet reported".
+    // The bid with the largest amount — the one the tables show.
+    BidDetail? largestBid;
+    for (final bid in order.bidDetail ?? <BidDetail>[]) {
+      if (largestBid == null || _bidAmount(bid) > _bidAmount(largestBid)) {
+        largestBid = bid;
+      }
+    }
+
     final String upiPayment = order.upiPaymentStatus?.trim() ?? "";
     final bool hasPaymentStatus =
         upiPayment.isNotEmpty && upiPayment.toLowerCase() != "null";
@@ -137,31 +145,54 @@ class IpoOrderDetailsSheetWeb extends ConsumerWidget {
                               ? order.respBid![0].bidReferenceNumber.toString()
                               : "-",
                     ),
+                    // _buildDetailRow(
+                    //   context,
+                    //   "Qty",
+                    //   (order.respBid != null && order.respBid!.isNotEmpty)
+                    //       ? order.respBid![0].quantity.toString()
+                    //       : "-",
+                    // ),
+                    // _buildDetailRow(
+                    //   context,
+                    //   "Price",
+                    //   (order.bidDetail != null && order.bidDetail!.isNotEmpty)
+                    //       ? order.type == "BSE"
+                    //           ? "₹${order.bidDetail![0].rate}"
+                    //           : "₹${double.tryParse(order.bidDetail![0].price.toString())?.toInt() ?? "-"}"
+                    //       : "-",
+                    // ),
+                    // _buildDetailRow(
+                    //   context,
+                    //   "Total amount",
+                    //   order.type == "BSE"
+                    //       ? "₹${getFormatter(noDecimal: true, v4d: false, value: double.parse(order.bidDetail![0].rate!) * double.parse(order.bidDetail![0].quantity!))}"
+                    //       : (order.bidDetail != null &&
+                    //               order.bidDetail!.isNotEmpty)
+                    //           ? "₹${getFormatter(noDecimal: true, v4d: false, value: double.parse(order.bidDetail![0].amount!).toDouble())}"
+                    //           : "0",
+                    // ),
+                    // Bug fix: Qty / Price / Total amount showed the first bid;
+                    // show the largest bid, the amount the tables show.
                     _buildDetailRow(
                       context,
                       "Qty",
-                      (order.respBid != null && order.respBid!.isNotEmpty)
-                          ? order.respBid![0].quantity.toString()
-                          : "-",
+                      largestBid?.quantity?.toString() ?? "-",
                     ),
                     _buildDetailRow(
                       context,
                       "Price",
-                      (order.bidDetail != null && order.bidDetail!.isNotEmpty)
-                          ? order.type == "BSE"
-                              ? "₹${order.bidDetail![0].rate}"
-                              : "₹${double.tryParse(order.bidDetail![0].price.toString())?.toInt() ?? "-"}"
-                          : "-",
+                      largestBid == null
+                          ? "-"
+                          : order.type == "BSE"
+                              ? "₹${largestBid.rate}"
+                              : "₹${double.tryParse(largestBid.price.toString())?.toInt() ?? "-"}",
                     ),
                     _buildDetailRow(
                       context,
                       "Total amount",
-                      order.type == "BSE"
-                          ? "₹${getFormatter(noDecimal: true, v4d: false, value: double.parse(order.bidDetail![0].rate!) * double.parse(order.bidDetail![0].quantity!))}"
-                          : (order.bidDetail != null &&
-                                  order.bidDetail!.isNotEmpty)
-                              ? "₹${getFormatter(noDecimal: true, v4d: false, value: double.parse(order.bidDetail![0].amount!).toDouble())}"
-                              : "0",
+                      largestBid == null
+                          ? "0"
+                          : "₹${getFormatter(noDecimal: true, v4d: false, value: _bidAmount(largestBid))}",
                     ),
                     _buildDetailRow(
                       context,
@@ -201,6 +232,14 @@ class IpoOrderDetailsSheetWeb extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  // BSE bids carry rate x quantity; NSE bids carry the amount.
+  double _bidAmount(BidDetail bid) {
+    return order.type == "BSE"
+        ? (double.tryParse(bid.rate ?? "0") ?? 0) *
+            (double.tryParse(bid.quantity ?? "0") ?? 0)
+        : double.tryParse(bid.amount?.toString() ?? "0") ?? 0;
   }
 
   Widget _buildHeader(BuildContext context) {

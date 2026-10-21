@@ -102,6 +102,20 @@ class _WebHookTradingViewScreenState
   final TextEditingController _targetController = TextEditingController();
   List<ScripValue> _searchResults = [];
   Timer? _debounceTimer;
+  String _lastSearchText = '';
+
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Run the clear here when the box goes from text to empty.
+  void _onSearchTextChanged() {
+    final text = _searchController.text;
+    final wasNotEmpty = _lastSearchText.isNotEmpty;
+    _lastSearchText = text;
+    if (text.isEmpty && wasNotEmpty) {
+      _debounceTimer?.cancel();
+      _clearSelectedScrip();
+      _removeSearchOverlay();
+    }
+  }
 
   String get _clientId => _pref.clientId ?? '';
   String get _apiToken => _pref.clientSession ?? '';
@@ -113,6 +127,7 @@ class _WebHookTradingViewScreenState
     _priceController.text = _limitPrice;
     _stoplossController.text = _stoploss;
     _targetController.text = _target;
+    _searchController.addListener(_onSearchTextChanged);
     _fetchWebhookList();
   }
 
@@ -159,6 +174,7 @@ class _WebHookTradingViewScreenState
   @override
   void dispose() {
     _removeSearchOverlay();
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     _qtyController.dispose();
     _priceController.dispose();
