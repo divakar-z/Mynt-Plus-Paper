@@ -354,14 +354,14 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
   final Map<IpoDetails, List<int>> _userBid = {}; // [qty, price] the user chose
   final Map<IpoDetails, List<int>> _fittedBid = {}; // [qty, price] written here
 
-  void _fitBidsToCategory(IPOProvider ipo) {
+  void _fitBidsToCategory(IPOProvider ipo, {IpoDetails? only}) {
     final minAmt = selectedChip == "HNI" ? 200000 : 0;
     final maxAmt = ipo.maxUPIAmt.toInt();
     final lowPrice = double.tryParse(minPrice)?.toInt() ?? 0;
     final highPrice = double.tryParse(maxPrice)?.toInt() ?? 0;
     final minQty = int.tryParse(minBidQuantity) ?? 0;
 
-    for (final bid in addIpo) {
+    for (final bid in only != null ? [only] : addIpo) {
       final lot = bid.lotsize > 0 ? bid.lotsize : 1;
       // Smallest allowed quantity: a whole number of lots, at least minQty.
       final lowQty = ((minQty > lot ? minQty : lot) + lot - 1) ~/ lot * lot;
@@ -725,6 +725,12 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                             //     ipo.maxUPIAmt,
                                             //     _getButtonActiveState(ipo),
                                             //     selectedChip);
+                                            // The new bid starts at the
+                                            // Individual minimum; fit it to the
+                                            // selected category (e.g. HNI
+                                            // ₹2,00,000) like a category change.
+                                            _fitBidsToCategory(ipo,
+                                                only: addIpo.last);
                                             _revalidateAllQty(ipo);
                                           },
                                     child: Padding(
