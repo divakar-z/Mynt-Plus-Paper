@@ -550,6 +550,20 @@ class PaperOrderEngine {
     return anyFilled;
   }
 
+  /// Token-based variant for real WebSocket ticks. No-op unless a PENDING
+  /// order exists for the token.
+  Future<bool> onLtpUpdateByToken(String token, double ltp) async {
+    String? tsym;
+    for (final o in _orders) {
+      if (o.status == 'PENDING' && o.token == token) {
+        tsym = o.tsym;
+        break;
+      }
+    }
+    if (tsym == null) return false;
+    return onLtpUpdate(tsym, ltp);
+  }
+
   // ── Exit SNO Order ──────────────────────────────────────────────
 
   Future<CancelOrderModel> exitSNOOrder(String orderNo, String prd) async {

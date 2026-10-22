@@ -20,6 +20,7 @@ import 'package:mynt_plus/sharedWidget/snack_bar.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../api/core/api_link.dart';
+import '../api/paper/paper_ltp_service.dart';
 import '../locator/constant.dart';
 import '../locator/locator.dart';
 import '../locator/preference.dart';
@@ -1429,6 +1430,7 @@ class WebSocketProvider extends ChangeNotifier {
         // Cache LTP value for future use during refresh
         if (field == 'lp') {
           _ltpCache[key] = value.toString();
+          if (isPaperTrading) PaperLtpService.instance.feedLive(key, value.toString());
         }
       }
     }
@@ -1508,6 +1510,7 @@ class WebSocketProvider extends ChangeNotifier {
     // Cache initial LTP value (only when present after sanitisation).
     if (res["lp"] != null) {
       _ltpCache[key] = res["lp"].toString();
+      if (isPaperTrading) PaperLtpService.instance.feedLive(key, res["lp"].toString());
     }
     
     data["v"] = res["v"] ?? "0.00";

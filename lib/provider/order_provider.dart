@@ -1306,6 +1306,12 @@ class OrderProvider extends DefaultChangeNotifier {
 
       if (_placeOrderModel!.stat == "Ok") {
         ConstantName.sessCheck = true;
+        // PAPER TRADING ONLY: there is no exchange order feed, so refresh
+        // books and positions ourselves after every placed order.
+        if (isPaperTrading && context.mounted) {
+          fetchOrderBook(context, true);
+          ref.read(portfolioProvider).fetchPositionBook(context, false, isRefresh: true);
+        }
         // _orderBookModel = await fetchOrderBook(context, true);
         // if (_orderBookModel!.isNotEmpty) {
         //   if (_orderBookModel![0].stat != "Not_Ok") {

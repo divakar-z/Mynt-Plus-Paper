@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../locator/locator.dart' show isPaperTrading;
 import '../models/auth_model/mobile_login_model.dart';
 import '../models/auth_model/mobile_otp_model.dart';
 import '../utils/responsive_snackbar.dart';
@@ -449,6 +450,8 @@ class WebAuthApi {
     required String name,
     required BuildContext context,
   }) async {
+    // Paper trading: webhooks fire real orders server-side — never register one.
+    if (isPaperTrading) return null;
     try {
       final uri = Uri.parse('$_loginBaseUrlWH/webhook/create');
 
@@ -512,6 +515,8 @@ class WebAuthApi {
     required String clientId,
     required String token,
   }) async {
+    // Paper trading: webhooks fire real orders server-side — never enable one.
+    if (isPaperTrading) return null;
     try {
       final uri = Uri.parse('$_loginBaseUrlWH/webhook/enable/$webhookId');
 

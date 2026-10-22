@@ -6492,6 +6492,7 @@ const Map<ScreenType, String> paperUnavailableFeatures = {
   ScreenType.pledgeUnpledge: 'Pledge & Unpledge',
   ScreenType.corporateActions: 'Corporate Actions',
   ScreenType.caBuyback: 'Corporate Actions',
+  ScreenType.tradingViewWebHook: 'TradingView Webhook',
 };
 
 // Hoverable navigation item widget

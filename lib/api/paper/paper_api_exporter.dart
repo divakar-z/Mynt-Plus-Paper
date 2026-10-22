@@ -110,9 +110,12 @@ class PaperApiExporter extends ApiExporter with PaperSafetyGuard {
             currentLtp = simLtp;
           }
         }
-        // If still 0, use a nominal price so the order doesn't fill at 0
+        // No live price: reject rather than filling at a made-up price
         if (currentLtp == '0' || currentLtp == '0.00' || currentLtp.isEmpty) {
-          currentLtp = '100.00';
+          return PlaceOrderModel.fromJson({
+            'stat': 'Not_Ok',
+            'emsg': 'Live price not available. Please try again.',
+          });
         }
       }
     }

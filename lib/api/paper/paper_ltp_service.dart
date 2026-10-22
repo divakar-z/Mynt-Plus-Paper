@@ -37,9 +37,22 @@ class PaperLtpService {
   Map<String, Map<String, dynamic>> get currentData =>
       Map.unmodifiable(_socketDatas);
 
+  /// Last real WebSocket LTP per token (fed by WebSocketProvider).
+  final Map<String, String> _liveLtp = {};
+
   /// Get the current LTP for a token, or null if not tracked.
+  /// Real market data wins over the random-walk simulation.
   String? getLtp(String token) {
-    return _socketDatas[token]?['lp']?.toString();
+    return _liveLtp[token] ?? _socketDatas[token]?['lp']?.toString();
+  }
+
+  /// Called for every real tick so market orders fill at the live price and
+  /// pending LIMIT / SL orders can trigger against it.
+  void feedLive(String token, String lp) {
+    final price = double.tryParse(lp) ?? 0;
+    if (price <= 0) return;
+    _liveLtp[token] = lp;
+    PaperOrderEngine.instance.onLtpUpdateByToken(token, price);
   }
 
   // ── Subscription Management ─────────────────────────────────────
