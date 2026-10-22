@@ -1272,11 +1272,8 @@ class ScalperProvider extends ChangeNotifier {
     final index = selectedIndex;
 
     // Subscribe to index token
-    websocket.establishConnection(
-      channelInput: "${index.exch}|${index.token}",
-      task: "t",
-      context: context,
-    );
+    websocket.acquireTouchline(
+        'scalper', ["${index.exch}|${index.token}"], context);
 
     // Build option tokens string
     final optionTokens = <String>{};
@@ -1301,29 +1298,19 @@ class ScalperProvider extends ChangeNotifier {
       // re-create the limit overflow this screen switched to touchline to avoid.
       // Restoring right after the call is enough: the write is synchronous.
       final savedLastSubscribe = ConstantName.lastSubscribe;
-      websocket.establishConnection(
-        channelInput: optionTokens.join('#'),
-        task: "t",
-        context: context,
-      );
+      websocket.acquireTouchline('scalper', optionTokens, context);
       ConstantName.lastSubscribe = savedLastSubscribe;
     }
   }
 
   /// Unsubscribe option tokens from WebSocket
   void unsubscribeFromWebSocket(BuildContext context) {
-    if (_subscribedOptionTokens.isEmpty) return;
-
     final websocket = ref.read(websocketProvider);
-    // Send unsubscribe touchline command for all option tokens. Must stay "u"
-    // (not "ud") to match the "t" subscribe above — the websocket provider
-    // tracks sent subscriptions per task type, and "ud" would tear down the
-    // depth subscriptions WebSubscriptionManager holds for open positions.
-    websocket.establishConnection(
-      channelInput: _subscribedOptionTokens.join('#'),
-      task: "u",
-      context: context,
-    );
+    // Release the index and every option through the touchline owner registry
+    // ("u", never "ud" — this screen subscribes touchline only). A raw "u"
+    // here used to cut any of these scrips the watchlist or a chart still
+    // showed; the registry only unsubscribes what nothing else needs.
+    websocket.releaseAllTouchline('scalper', context);
     _subscribedOptionTokens.clear();
   }
 

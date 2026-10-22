@@ -31,6 +31,12 @@ class ModifySipDialogWeb extends ConsumerStatefulWidget {
 }
 
 class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
+  // Owned touchline for the dialog's scrips, released when it closes
+  // (raw "t" here was never released or restored). Cached while mounted —
+  // ref.read throws in dispose (Riverpod 3).
+  WebSocketProvider? _ws;
+  late final String _owner = 'sip-modify:${identityHashCode(this)}';
+
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _noOfSipsController = TextEditingController();
   final LayerLink _searchLayerLink = LayerLink();
@@ -58,17 +64,15 @@ class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
     super.initState();
     _populateFromSipDetails();
     _subscribeExistingScrips();
+    _searchController.addListener(_onSearchTextChanged);
   }
 
   void _subscribeExistingScrips() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       for (var item in _addedScrips) {
-        ref.read(websocketProvider).establishConnection(
-          channelInput: '${item.exch}|${item.token}',
-          task: 't',
-          context: context,
-        );
+        (_ws = ref.read(websocketProvider))!.acquireTouchline(
+          _owner, ['${item.exch}|${item.token}'], context);
       }
     });
   }
@@ -122,7 +126,9 @@ class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
 
   @override
   void dispose() {
+    try { _ws?.releaseAllTouchline(_owner); } catch (_) {}
     _debounceTimer?.cancel();
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     _noOfSipsController.dispose();
     for (var item in _addedScrips) {
@@ -308,6 +314,24 @@ class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
 
   List<ScripNewValue> _searchResults = [];
 
+  String _lastSearchText = '';
+
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Run the clear here when the box goes from text to empty.
+  void _onSearchTextChanged() {
+    final text = _searchController.text;
+    final wasNotEmpty = _lastSearchText.isNotEmpty;
+    _lastSearchText = text;
+    if (text.isEmpty && wasNotEmpty) {
+      _debounceTimer?.cancel();
+      ref.read(marketWatchProvider).searchClear();
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+    }
+  }
+
   void _onSearchChanged(String query) {
     _debounceTimer?.cancel();
 
@@ -369,11 +393,8 @@ class _ModifySipDialogWebState extends ConsumerState<ModifySipDialogWeb> {
     });
 
     // Subscribe to WebSocket touchline for LTP
-    ref.read(websocketProvider).establishConnection(
-      channelInput: '${scrip.exch}|${scrip.token}',
-      task: 't',
-      context: context,
-    );
+    (_ws = ref.read(websocketProvider))!.acquireTouchline(
+          _owner, ['${scrip.exch}|${scrip.token}'], context);
 
     _searchController.clear();
     ref.read(marketWatchProvider).searchClear();

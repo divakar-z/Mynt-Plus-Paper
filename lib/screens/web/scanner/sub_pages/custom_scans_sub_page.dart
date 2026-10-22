@@ -108,8 +108,23 @@ class _CustomScansSubPageState extends ConsumerState<CustomScansSubPage> {
   // serve and fetches on its own. Invalidating here as well would throw that
   // in-flight fetch away and start a second identical request on every open.
 
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Reset the query here when the box goes empty.
+  void _onSearchTextChanged() {
+    if (_search.text.isEmpty && _query.isNotEmpty) {
+      setState(() => _query = '');
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _search.addListener(_onSearchTextChanged);
+  }
+
   @override
   void dispose() {
+    _search.removeListener(_onSearchTextChanged);
     _search.dispose();
     super.dispose();
   }

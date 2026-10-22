@@ -876,6 +876,7 @@ class MarketWatchProvider extends DefaultChangeNotifier {
   bool get isDepthVisible => _isDepthVisible;
   bool _depthDataLoaded = false; // Track if depth data has been loaded
   String? _currentDepthSymbol; // Track current depth subscription (exch|token)
+  static const String _depthOwner = 'depth-panel'; // WebSocketProvider depth-owner id
   String? get currentDepthSymbol => _currentDepthSymbol; // Public getter for WebSubscriptionManager
 
   /// Lazy load market depth data when user opens depth panel
@@ -937,10 +938,11 @@ class MarketWatchProvider extends DefaultChangeNotifier {
       // sent-subscription tracking while these provider flags stay set — leaving
       // us "loaded" in state but with no "d" on the wire. Gating on the socket's
       // actual state is what makes returning to Overview re-send the "d".
-      final depthLiveOnSocket =
-          ref.read(websocketProvider).hasDepthSubscription(depthSymbol);
+      final ws = ref.read(websocketProvider);
+      final depthLiveOnSocket = ws.hasDepthSubscription(depthSymbol);
       if (_currentDepthSymbol == depthSymbol &&
           _depthDataLoaded &&
+          ws.ownsDepth(_depthOwner, depthSymbol) &&
           depthLiveOnSocket) {
         debugPrint('[DEPTH_TRACK] SKIPPED: depth already live on socket for $depthSymbol');
         return;
@@ -948,11 +950,9 @@ class MarketWatchProvider extends DefaultChangeNotifier {
 
 
       debugPrint('[DEPTH_TRACK] SUBSCRIBING depth "d" for $depthSymbol');
-      await ref.read(websocketProvider).establishConnection(
-            channelInput: depthSymbol,
-            task: "d",
-            context: context,
-          );
+      // Through the depth-owner registry: the chart may already hold depth for
+      // this scrip, and releasing it later must not cut the chart's feed.
+      ws.acquireDepth(_depthOwner, [depthSymbol], context);
 
       _currentDepthSymbol = depthSymbol;
       _depthDataLoaded = true;
@@ -988,24 +988,16 @@ class MarketWatchProvider extends DefaultChangeNotifier {
       _currentDepthSymbol = null;
       _depthDataLoaded = false;
 
-      // On a forced (page-dispose) teardown the context is usually already
-      // unmounted, so don't gate on context.mounted — the ud send needs the
-      // live WS channel, not a mounted widget.
-      if (context != null && (force || context.mounted)) {
-        try {
-          // Route through WebSubscriptionManager so the ud is skipped when the
-          // symbol is still needed by the watchlist / holdings / positions /
-          // indices / ticker (touchline). [force] bypasses that protection when
-          // the page is closing so the depth feed is actually released.
-          await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
-                tokensToCheck: {depthSymbol},
-                context: context,
-                source: 'depth',
-                bypassProtection: force,
-              );
-        } catch (e) {
-          // If unsubscribe fails, it's okay - we've already cleared tracking
-        }
+      // Release only the panel's claim. The registry sends "ud" when no other
+      // owner (an in-house chart on the same scrip, Insta Options) still needs
+      // the depth feed. Touchline is untouched: a depth release must never
+      // remove the scrip from the touchline restore list — doing that froze
+      // the watchlist row and header ticker of every scrip the user had opened
+      // and left, from the next reconnect on.
+      try {
+        ref.read(websocketProvider).releaseDepth(_depthOwner, [depthSymbol], context);
+      } catch (e) {
+        // If unsubscribe fails, it's okay - we've already cleared tracking
       }
     } catch (e) {
       _currentDepthSymbol = null;
@@ -1655,14 +1647,19 @@ getOptionawait(String exch, String token) {
       }
 
       // STEP 4: Establish WebSocket connection for underlying
-      await ref.read(websocketProvider).establishConnection(
-          channelInput: (_getQuotes.exch == "BFO" ||
-                  _getQuotes.exch == "NFO" ||
-                  (_getQuotes.exch == "MCX" && _getQuotes.instname == "OPTFUT"))
-              ? '${_getQuotes.undExch}|${_getQuotes.undTk!}'
-              : '${_getQuotes.exch}|${_getQuotes.token!}',
-          task: kIsWeb ? "d" : "t",
-          context: context);
+      final underlyingKey = (_getQuotes.exch == "BFO" ||
+              _getQuotes.exch == "NFO" ||
+              (_getQuotes.exch == "MCX" && _getQuotes.instname == "OPTFUT"))
+          ? '${_getQuotes.undExch}|${_getQuotes.undTk!}'
+          : '${_getQuotes.exch}|${_getQuotes.token!}';
+      if (kIsWeb) {
+        // Owned touchline (was an untracked "d": never restored or released).
+        ref.read(websocketProvider)
+            .setOwnedTouchline('option-underlying', [underlyingKey], context);
+      } else {
+        await ref.read(websocketProvider).establishConnection(
+            channelInput: underlyingKey, task: "t", context: context);
+      }
 
       // STEP 5: Fetch linked scripts which will set optionExch and selectedTradeSym
       await fetchLinkeScrip(token, exch, context);
@@ -2426,10 +2423,16 @@ getOptionawait(String exch, String token) {
                 _getStikePrc!.instname == "FUTCOM")) {
           _optionStrPrc = "${_getStikePrc!.lp}";
         }
-        await ref.read(websocketProvider).establishConnection(
-            channelInput: '${_getStikePrc!.exch}|${_getStikePrc!.token!}',
-            task: kIsWeb ? "d" : "t",
-            context: context);
+        if (kIsWeb) {
+          // Owned touchline (was an untracked "d": never restored or released).
+          ref.read(websocketProvider).setOwnedTouchline(
+              'option-spot', ['${_getStikePrc!.exch}|${_getStikePrc!.token!}'], context);
+        } else {
+          await ref.read(websocketProvider).establishConnection(
+              channelInput: '${_getStikePrc!.exch}|${_getStikePrc!.token!}',
+              task: "t",
+              context: context);
+        }
       }
       if (_getStikePrc!.emsg == "Session Expired :  Invalid Session Key" &&
           _getStikePrc!.stat == "Not_Ok") {
@@ -3395,18 +3398,15 @@ getOptionawait(String exch, String token) {
       if (!isSubscribe) {
         // On web, use WebSubscriptionManager to smart-unsubscribe
         // This protects symbols used by watchlist, depth, futures, etc.
-        await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
-          tokensToCheck: optionTokens,
-          context: context,
-          source: 'optionChain',
-        );
+        // Release the option chain's own claim; anything another screen shows
+        // stays live. ('optionChain' exempts this list from the on-screen check.)
+        ref.read(websocketProvider)
+            .releaseAllTouchline('option-chain', context, 'optionChain');
       } else {
         // Subscribe using touchline task for web (option chain only needs LTP)
-        final input = optionTokens.join('#');
-        await ref.read(websocketProvider).establishConnection(
-            channelInput: input,
-            task: "t",
-            context: context);
+        // Owned touchline: restored on every reconnect (a silent drop used to
+        // bring the option chain back only if a panel happened to list it).
+        ref.read(websocketProvider).setOwnedTouchline('option-chain', optionTokens, context);
       }
     } else {
       // Mobile: use original logic
@@ -3438,18 +3438,15 @@ getOptionawait(String exch, String token) {
       if (!isSubscribe) {
         // On web, use WebSubscriptionManager to smart-unsubscribe
         // This protects symbols used by watchlist, depth, option chain, etc.
-        await ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
-          tokensToCheck: futuresTokens,
-          context: context,
-          source: 'futures',
-        );
+        // Release the futures list's own claim; anything another screen shows
+        // stays live. ('futures' exempts this list from the on-screen check.)
+        ref.read(websocketProvider)
+            .releaseAllTouchline('futures', context, 'futures');
       } else {
         // Subscribe using touchline task for web (futures list only needs LTP)
-        final input = futuresTokens.join('#');
-        await ref.read(websocketProvider).establishConnection(
-            channelInput: input,
-            task: "t",
-            context: context);
+        // Owned touchline: restored on every reconnect (a silent drop used to
+        // bring the futures list back only if a panel happened to list it).
+        ref.read(websocketProvider).setOwnedTouchline('futures', futuresTokens, context);
       }
     } else {
       // Mobile: use original logic
@@ -4096,9 +4093,15 @@ getOptionawait(String exch, String token) {
 
       // Only attempt subscription if we have valid tokens
       if (input.isNotEmpty) {
+        // Touchline on web too. On web this legacy path only runs when the
+        // WebSubscriptionManager route above throws, and it used to subscribe
+        // the watchlist AND every index token on the DEPTH feed — the stray
+        // "d NSE|26000" / "d NSE|26017" (NIFTY 50 / INDIA VIX) seen in the
+        // feed audit: unowned depth on indices that never release. Touchline
+        // carries what the watchlist shows (lp, change, bp1/sp1).
         await ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            task: isSubscribe ? "t" : "u",
             context: context);
 
         // For predefined watchlists, ensure data wasn't accidentally cleared during subscription

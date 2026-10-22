@@ -316,12 +316,21 @@ class NetworkStateProvider extends ChangeNotifier {
     }
   }
   
-  /// Restore legacy subscriptions for backward compatibility
+  /// Restore legacy subscriptions for backward compatibility (mobile only).
+  ///
+  /// Web is skipped: WebSubscriptionManager owns web restoration (its master
+  /// list plus the tracked depth symbol), as WebSocketProvider's own restore
+  /// path already notes. Replaying the legacy globals here on web did harm:
+  /// `lastSubscribe` holds only the most recent single TOUCHLINE request, and it
+  /// was replayed as DEPTH ("d") — so every connectivity event subscribed depth
+  /// for whatever scrip was requested last (an option-chain key, the top
+  /// watchlist row), a depth feed no screen tracked and nothing ever released.
   Future<void> _restoreLegacySubscriptions() async {
+    if (kIsWeb) return;
     if (ConstantName.lastSubscribe.isNotEmpty) {
       ref.read(websocketProvider).establishConnection(
           channelInput: ConstantName.lastSubscribe,
-          task: kIsWeb ? "d" : "t",
+          task: "t",
           context: _globbcontext!);
     }
     if (ConstantName.lastSubscribeDepth.isNotEmpty) {

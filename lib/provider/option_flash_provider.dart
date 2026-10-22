@@ -1150,11 +1150,8 @@ class OptionFlashProvider extends DefaultChangeNotifier {
     }
 
     if (subscriptionKeys.isNotEmpty) {
-      websocketProv.connectTouchLine(
-        input: subscriptionKeys.join('#'),
-        task: 't',
-        context: WidgetsBinding.instance.rootElement!,
-      );
+      websocketProv.acquireTouchline(
+          'option-flash', subscriptionKeys, WidgetsBinding.instance.rootElement!);
     }
   }
 
@@ -1167,11 +1164,8 @@ class OptionFlashProvider extends DefaultChangeNotifier {
         .map((pos) => '${pos['exch']}|${pos['token']}')
         .join('#');
 
-    websocketProv.connectTouchLine(
-      input: subscriptionKeys,
-      task: 'u',
-      context: WidgetsBinding.instance.rootElement!,
-    );
+    websocketProv.releaseTouchline(
+        'option-flash', subscriptionKeys.split('#'), WidgetsBinding.instance.rootElement!);
 
     _subscribedPositions.clear();
   }
@@ -1284,11 +1278,8 @@ class OptionFlashProvider extends DefaultChangeNotifier {
     final websocketProv = ref.read(websocketProvider);
     final subscriptionKey = '${_selectedSymbol!.exch}|${_selectedSymbol!.token}';
 
-    websocketProv.connectTouchLine(
-      input: subscriptionKey,
-      task: 't',
-      context: WidgetsBinding.instance.rootElement!,
-    );
+    websocketProv.acquireTouchline(
+        'option-flash', [subscriptionKey], WidgetsBinding.instance.rootElement!);
 
     _subscribedIndex = {
       'exch': _selectedSymbol!.exch,
@@ -1303,11 +1294,8 @@ class OptionFlashProvider extends DefaultChangeNotifier {
     final websocketProv = ref.read(websocketProvider);
     final subscriptionKey = '${_subscribedIndex!['exch']}|${_subscribedIndex!['token']}';
 
-    websocketProv.connectTouchLine(
-      input: subscriptionKey,
-      task: 'u',
-      context: WidgetsBinding.instance.rootElement!,
-    );
+    websocketProv.releaseTouchline(
+        'option-flash', [subscriptionKey], WidgetsBinding.instance.rootElement!);
 
     _subscribedIndex = null;
   }
@@ -1333,11 +1321,8 @@ class OptionFlashProvider extends DefaultChangeNotifier {
     }
 
     if (subscriptionKeys.isNotEmpty) {
-      websocketProv.connectTouchLine(
-        input: subscriptionKeys.join('#'),
-        task: 't',
-        context: WidgetsBinding.instance.rootElement!,
-      );
+      websocketProv.acquireTouchline(
+          'option-flash', subscriptionKeys, WidgetsBinding.instance.rootElement!);
     }
   }
 
@@ -1375,11 +1360,8 @@ class OptionFlashProvider extends DefaultChangeNotifier {
         .map((opt) => '${opt['exch']}|${opt['token']}')
         .join('#');
 
-    websocketProv.connectTouchLine(
-      input: subscriptionKeys,
-      task: 'u',
-      context: WidgetsBinding.instance.rootElement!,
-    );
+    websocketProv.releaseTouchline(
+        'option-flash', subscriptionKeys.split('#'), WidgetsBinding.instance.rootElement!);
 
     _subscribedOptions.clear();
   }

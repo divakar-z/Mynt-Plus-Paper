@@ -1585,12 +1585,15 @@ class _PositionScreenWebState extends ConsumerState<PositionScreenWeb> {
           ),
           const SizedBox(width: 16),
           // Refresh Button - triggers manual refresh
-          MyntIconButton(
+          Tooltip(
+            message: 'Refresh',
+            child: MyntIconButton(
             icon: Icons.refresh,
             onPressed: () {
               _handleManualRefresh();
             },
             size: MyntButtonSize.medium,
+           ),
           ),
         ],
       ),

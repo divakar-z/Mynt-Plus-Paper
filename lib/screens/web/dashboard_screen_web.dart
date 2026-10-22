@@ -184,8 +184,32 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     });
   }
 
+  // The five tiles shown per trade-action list are owned by the dashboard.
+  // They used to depend on the subscription manager knowing the dashboard
+  // was the active screen; when it didn't (e.g. Home drawn as the default
+  // panel), a tab return re-subscribed none of them and the tiles froze.
+  WebSocketProvider? _ws;
+  String _tileKey = '';
+
+  void _claimTradeActionTiles(List<List<dynamic>> lists) {
+    final keys = <String>[
+      for (final list in lists)
+        for (final stock in list.take(5))
+          if (stock.exch != null && stock.token != null) '${stock.exch}|${stock.token}'
+    ];
+    final key = keys.join('#');
+    if (key == _tileKey) return;
+    _tileKey = key;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ws = ref.read(websocketProvider);
+      _ws!.setOwnedTouchline('dashboard-tiles', keys, context);
+    });
+  }
+
   @override
   void dispose() {
+    try { _ws?.releaseAllTouchline('dashboard-tiles'); } catch (_) {}
     // Set disposed flag FIRST to prevent stream callbacks from accessing ref
     _isDisposed = true;
     // Cancel WebSocket subscriptions
@@ -1993,6 +2017,7 @@ class _DashboardScreenWebState extends ConsumerState<DashboardScreenWeb> {
     final topLosers = stocksProvider.topLosers;
     final byVolume = stocksProvider.byVolume;
     final byValue = stocksProvider.byValue;
+    _claimTradeActionTiles([topGainers, topLosers, byVolume, byValue]);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2749,6 +2774,16 @@ class _DashboardStockCardState extends ConsumerState<_DashboardStockCard> {
   bool _isInitialized = false;
   bool _isHovered = false;
 
+  // `_change` holds `c`, which in the top-stocks API and on the touchline is
+  // the PREVIOUS CLOSE, not the change — it was printed as the day change.
+  // The change is lp − close, as _TradeActionStockItem computes it.
+  String get _dayChange {
+    final lp = double.tryParse(_ltp);
+    final close = double.tryParse(_change);
+    if (lp == null || close == null || close == 0) return "0.00";
+    return (lp - close).toStringAsFixed(2);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -2825,10 +2860,10 @@ class _DashboardStockCardState extends ConsumerState<_DashboardStockCard> {
   }
 
   Color _getChangeColor(BuildContext context) {
-    if (_change.startsWith("-") || _perChange.startsWith('-')) {
+    if (_dayChange.startsWith("-") || _perChange.startsWith('-')) {
       return resolveThemeColor(context,
           dark: MyntColors.lossDark, light: MyntColors.loss);
-    } else if (_change == "0.00" || _perChange == "0.00") {
+    } else if (_dayChange == "0.00" || _perChange == "0.00") {
       return resolveThemeColor(context,
           dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
     } else {
@@ -2938,7 +2973,7 @@ class _DashboardStockCardState extends ConsumerState<_DashboardStockCard> {
                   Row(
                     children: [
                       Text(
-                        _change.startsWith("-") ? _change : "+$_change ",
+                        _dayChange.startsWith("-") ? _dayChange : "+$_dayChange ",
                         style: MyntWebTextStyles.para(
                           context,
                           darkColor: MyntColors.textPrimaryDark,

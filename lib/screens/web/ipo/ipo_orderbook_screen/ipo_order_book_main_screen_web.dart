@@ -33,6 +33,12 @@ class _IpoOrderbookMainScreenState extends ConsumerState<IpoOrderbookMainScreen>
     _tabControllerListener = () {
       if (_tabController.indexIsChanging ||
           _tabController.index != _selectedTabIndex) {
+        // Switching Open / Close orders clears the My Bids search
+        // (as switching tabs does in Holdings).
+        if (_tabController.index != _selectedTabIndex &&
+            ref.read(ipoProvide).ipocommonsearchcontroller.text.isNotEmpty) {
+          ref.read(ipoProvide).setIpoSearchQuery("");
+        }
         setState(() {
           _selectedTabIndex = _tabController.index;
         });

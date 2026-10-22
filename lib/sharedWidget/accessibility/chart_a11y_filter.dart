@@ -42,14 +42,16 @@ class ChartA11yFilter {
 
   /// CSS selectors matching every chart host element in the app. Keyed on the
   /// stable id prefixes each chart manager assigns:
-  ///   * `web-chart-iframe-*`          → WebChartManager (TradingView portal)
+  ///   * `web-chart-*`                 → WebChartManager (TradingView div)
   ///   * `chart-engine-chart-iframe-*` → ChartEngineShellScreen (in-house)
+  ///   * `orderflow-chart-iframe-*`    → OrderflowShellScreen
   ///   * `lite-chart-engine-iframe-*`  → LiteChartIframeHost (scan explain)
   ///   * `flutter_inappwebview-*`      → ChartScreenWebView (mobile-path chart)
   ///   * `scalper-*`                   → ScalperChartManager (TradingView divs)
   static const List<String> _selectors = <String>[
-    'iframe[id^="web-chart-iframe-"]',
+    'div[id^="web-chart-"]',
     'iframe[id^="chart-engine-chart-iframe-"]',
+    'iframe[id^="orderflow-chart-iframe-"]',
     'iframe[id^="lite-chart-engine-iframe-"]',
     'iframe[id^="flutter_inappwebview-"]',
     'div[id^="scalper-"]',

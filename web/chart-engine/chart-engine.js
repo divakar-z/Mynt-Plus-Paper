@@ -484,7 +484,20 @@ function _attachPaneControls(container, paneId) {
 // shell screen for the rationale (Dart Map ↔ JS Object round-trip is
 // unreliable through dart:html postMessage).
 // ---------------------------------------------------------------------------
+// Id of the <iframe> element hosting this page. Every chart shell in the app
+// listens on the same parent window, so without it each mounted shell (and
+// the lite hosts) answered every other iframe's fetchHistory too — one chart
+// load became several identical TPSeries downloads. The shell compares this
+// with its own iframe id. Empty when there is no frame element (then the
+// shell falls back to accepting the message, as before).
+const FRAME_ID = (() => {
+  try { return (window.frameElement && window.frameElement.id) || ''; } catch (_) { return ''; }
+})();
+
 function postToParent(message) {
+  if (FRAME_ID && message && typeof message === 'object') {
+    message = Object.assign({}, message, { frameId: FRAME_ID });
+  }
   try { parent.postMessage(JSON.stringify(message), '*'); } catch (_) {}
 }
 

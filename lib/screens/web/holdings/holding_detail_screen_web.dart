@@ -118,8 +118,8 @@ class _HoldingDetailScreenWebState
       final c = socketData['c']?.toString();
 
       if (_isValidValue(lp)) _exchTsym.lp = lp;
-      if (_isValidValue(pc)) _exchTsym.perChange = pc;
-      if (_isValidValue(chng)) _exchTsym.change = chng;
+      if (_isPresent(pc)) _exchTsym.perChange = pc;
+      if (_isPresent(chng)) _exchTsym.change = chng;
       if (_isValidValue(c)) _exchTsym.close = c;
 
       _updateProfitLossValues();
@@ -153,8 +153,8 @@ class _HoldingDetailScreenWebState
             final chng = data['chng']?.toString();
 
             if (_isValidValue(lp)) _exchTsym.lp = lp;
-            if (_isValidValue(pc)) _exchTsym.perChange = pc;
-            if (_isValidValue(chng)) _exchTsym.change = chng;
+            if (_isPresent(pc)) _exchTsym.perChange = pc;
+            if (_isPresent(chng)) _exchTsym.change = chng;
 
             _updateProfitLossValues();
           });
@@ -165,6 +165,11 @@ class _HoldingDetailScreenWebState
   }
 
   // Helper method to check if a value is valid
+  // Change / % change may legitimately be 0.00 (back to flat); only a zero
+  // LTP is a placeholder. Rejecting "0.00" left the last non-zero change.
+  bool _isPresent(String? value) =>
+      value != null && value != "null" && value.isNotEmpty;
+
   bool _isValidValue(String? value) {
     return value != null &&
         value != "null" &&
@@ -175,14 +180,26 @@ class _HoldingDetailScreenWebState
 
   // Calculate profit and loss values
   void _updateProfitLossValues() {
+    // P&L and P&L %: the provider's figures for this holding — the ones the
+    // holdings table, the depth card and the top strip's Equity P&L use
+    // (they include realised P&L and sells). `_holdingData` IS the
+    // provider's holding object, which the provider updates on every tick;
+    // this screen used to write its own simpler formula into it.
+    try {
+      final exch = (_holdingData.exchTsym as List?) ?? const [];
+      if (exch.isNotEmpty && exch[0].profitNloss != null) {
+        _exchTsym.profitNloss = exch[0].profitNloss;
+        _exchTsym.pNlChng = exch[0].pNlChng;
+        return;
+      }
+    } catch (_) {}
+    // Fallback (no provider figures yet): simple price × qty, kept local.
     final ltp = double.tryParse(_exchTsym.lp ?? "0.0") ?? 0.0;
     // currentQty already includes T1 (max of btstqty/npoadt1qty) from the provider.
     final int totalQty = _holdingData.currentQty ?? 0;
     final avgPrice = double.tryParse(_holdingData.upldprc ?? "0.0") ?? 0.0;
 
     if (ltp > 0 && totalQty > 0 && avgPrice > 0) {
-      // Current value
-      _holdingData.currentValue = (ltp * totalQty).toStringAsFixed(2);
 
       // Profit/Loss
       final pnl = (ltp - avgPrice) * totalQty;

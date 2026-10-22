@@ -118,7 +118,10 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
         }
       }
       
-      ref.read(websocketProvider).socketDataStream.listen((socketData) {
+      // Stored and cancelled in dispose — it used to be left running, so every
+      // opened report kept a live listener after it closed.
+      _socketSub?.cancel();
+      _socketSub = ref.read(websocketProvider).socketDataStream.listen((socketData) {
         if (mounted && socketData.containsKey(widget.wlValue.token)) {
           final newData = socketData[widget.wlValue.token];
           if (newData != null) {
@@ -200,8 +203,11 @@ class _NewFundamentalScreenState extends ConsumerState<NewFundamentalScreen> {
     });
   }
 
+  StreamSubscription? _socketSub;
+
   @override
   void dispose() {
+    _socketSub?.cancel();
     _hideTooltipTimer?.cancel();
     super.dispose();
   }

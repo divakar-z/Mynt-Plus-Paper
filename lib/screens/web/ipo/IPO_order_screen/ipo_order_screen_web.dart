@@ -135,6 +135,13 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
   String selectedChip = "Individual";
   List<IpoDetails> addIpo = [];
   bool _isTermsAccepted = false;
+  String _termsErrorText = "";
+  // Bug fix: the bank-verification error ("Invalid UPI ID") lives in the
+  // shared provider and is only reset after a successful application, so it
+  // stuck under the field while typing and showed in every later window.
+  // Hide it until this window's own Continue runs a verification.
+  // Retired by the #11 fix (bank error now shows as a toast only).
+  // bool _hideServerUpiError = true;
 
   // Helper getters to determine IPO type and access data
   bool get isSME => widget.ipoData is SMEIPO;
@@ -142,7 +149,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
 
   dynamic get ipoData => widget.ipoData;
   String get ipoName => isSME ? (ipoData.name ?? "") : (ipoData.name ?? "");
-  String get ipoKey => isSME ? "SME" : "IPO";
+  // String get ipoKey => isSME ? "SME" : "IPO";
+  String get ipoKey => isSME ? "SME" : "Main";
   String get ipoSymbol =>
       isSME ? (ipoData.symbol ?? "") : (ipoData.symbol ?? "");
   String get ipoType => isSME ? (ipoData.type ?? "") : (ipoData.type ?? "");
@@ -223,6 +231,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
 
   void removeItem(int index) {
     setState(() {
+      _userBid.remove(addIpo[index]);
+      _fittedBid.remove(addIpo[index]);
       addIpo.removeAt(index);
     });
   }
@@ -240,6 +250,51 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
       }
       ipo.setMainIPOPlaceOrderRequiredMaxPrice = addIpo;
     }
+  }
+
+  // TC_154: handles the +/- cases the provider step functions can't.
+  // Empty quantity -> start at the minimum bid quantity. Empty / invalid bid
+  // price -> step the quantity here (same lot rules) since the provider step
+  // parses the price strictly. Validation then runs through the quantity
+  // onChange path, which updates the field's error text.
+  // Returns false when the normal provider step should run.
+  bool _stepQtyFallback(IPOProvider ipo, int index, {required bool up}) {
+    final bid = addIpo[index];
+    final qtyText = bid.qualityController.text.trim();
+    final priceOk = double.tryParse(bid.bidpricecontroller.text) != null;
+    final minQty =
+        int.tryParse(ipoData.minBidQuantity?.toString() ?? "") ?? bid.lotsize;
+    final lot = bid.lotsize;
+
+    int newQty;
+    if (qtyText.isEmpty || (int.tryParse(qtyText) ?? 0) <= 0) {
+      newQty = minQty;
+    } else if (!priceOk) {
+      final current = int.parse(qtyText);
+      if (up) {
+        newQty = (lot > 0 && current % lot != 0)
+            ? (current / lot).ceil() * lot
+            : current + lot;
+      } else {
+        newQty = (lot > 0 && current % lot != 0)
+            ? (current / lot).floor() * lot
+            : current - lot;
+        if (newQty < minQty) newQty = minQty;
+      }
+    } else {
+      return false;
+    }
+
+    final value = newQty.toString();
+    bid.qualityController.text = value;
+    if (isSME) {
+      ipo.smequantityOnchange(value, bid, ipoData, _getButtonActiveState(ipo),
+          ipo.maxUPIAmt, selectedChip);
+    } else {
+      ipo.quantityOnchange(bid, _getButtonActiveState(ipo), ipo, value,
+          ipoData, selectedChip);
+    }
+    return true;
   }
 
   // Helper method to get button active state
@@ -265,6 +320,156 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
     }
   }
 
+  // Bug fix: the shared categoryOnChange cleared every quantity message it
+  // doesn't check itself (minimum bid, lot multiple), so an invalid quantity
+  // passed Continue after a category change or "Add another bid". Re-run the
+  // normal quantity check on every bid instead; it covers empty, 0, HNI,
+  // maximum, minimum and lot rules with the same messages as typing.
+  void _revalidateAllQty(IPOProvider ipo) {
+    for (final bid in addIpo) {
+      final value = bid.qualityController.text;
+      if (isSME) {
+        ipo.smequantityOnchange(value, bid, ipoData,
+            _getButtonActiveState(ipo), ipo.maxUPIAmt, selectedChip);
+      } else {
+        ipo.quantityOnchange(bid, _getButtonActiveState(ipo), ipo, value,
+            ipoData, selectedChip);
+      }
+    }
+  }
+
+  // On a category change, move each bid into the new category's allowed
+  // amount instead of leaving a "minimum / maximum investment" error under
+  // Qty. The quantity moves first, in whole lots (never below the minimum bid
+  // quantity). The bid price moves only when no quantity can fit, and not at
+  // all while Cut-off is ticked, because that price is fixed. A bid that is
+  // already inside the limits is left alone. Empty fields keep their normal
+  // "required" message.
+  //
+  // Each bid is fitted from the quantity and price the user chose, not from the
+  // last adjusted values, so switching back (HNI -> Individual) returns the
+  // original 12 instead of whatever HNI raised it to. A value that differs from
+  // what this method last wrote was typed or stepped by the user, and becomes
+  // the new one to return to.
+  final Map<IpoDetails, List<int>> _userBid = {}; // [qty, price] the user chose
+  final Map<IpoDetails, List<int>> _fittedBid = {}; // [qty, price] written here
+
+  void _fitBidsToCategory(IPOProvider ipo) {
+    final minAmt = selectedChip == "HNI" ? 200000 : 0;
+    final maxAmt = ipo.maxUPIAmt.toInt();
+    final lowPrice = double.tryParse(minPrice)?.toInt() ?? 0;
+    final highPrice = double.tryParse(maxPrice)?.toInt() ?? 0;
+    final minQty = int.tryParse(minBidQuantity) ?? 0;
+
+    for (final bid in addIpo) {
+      final lot = bid.lotsize > 0 ? bid.lotsize : 1;
+      // Smallest allowed quantity: a whole number of lots, at least minQty.
+      final lowQty = ((minQty > lot ? minQty : lot) + lot - 1) ~/ lot * lot;
+      final nowQty = int.tryParse(bid.qualityController.text) ?? 0;
+      final nowPrice = int.tryParse(bid.bidpricecontroller.text) ?? 0;
+      final written = _fittedBid[bid];
+      if (written == null || written[0] != nowQty || written[1] != nowPrice) {
+        // First time, or the user changed it since: this is their choice.
+        if (nowQty > 0 && nowPrice > 0) _userBid[bid] = [nowQty, nowPrice];
+      }
+      final chosen = _userBid[bid];
+      if (chosen == null) continue;
+      var qty = chosen[0];
+      var price = bid.isChecked ? highPrice : chosen[1];
+      if (price <= 0 || qty <= 0) continue;
+
+      if (maxAmt > 0 && price * qty > maxAmt) {
+        // Too much: take the most lots that fit.
+        final fit = (maxAmt ~/ price) ~/ lot * lot;
+        if (fit >= lowQty) {
+          qty = fit;
+        } else {
+          // Even the smallest quantity is too much: lower the price.
+          qty = lowQty;
+          if (!bid.isChecked) {
+            price = maxAmt ~/ lowQty;
+            if (price < lowPrice) price = lowPrice;
+          }
+        }
+      } else if (price * qty < minAmt) {
+        // Too little: take the fewest lots that reach the minimum.
+        int lotsFor(int p) => ((minAmt + p - 1) ~/ p + lot - 1) ~/ lot * lot;
+        qty = lotsFor(price);
+        if (maxAmt > 0 && price * qty > maxAmt && !bid.isChecked) {
+          // That overshoots the maximum: raise the price instead.
+          price = highPrice;
+          qty = lotsFor(price);
+        }
+      }
+
+      if (qty.toString() != bid.qualityController.text) {
+        bid.qualityController.text = qty.toString();
+      }
+      if (!bid.isChecked && price.toString() != bid.bidpricecontroller.text) {
+        bid.bidpricecontroller.text = price.toString();
+        // Re-run the price check so an old price message is cleared.
+        if (isSME) {
+          ipo.smebidpriceOnChange(
+              price.toString(), bid, _getButtonActiveState(ipo), ipoData);
+        } else {
+          ipo.bidpricefunction(
+              bid, ipoData, price.toString(), _getButtonActiveState(ipo));
+        }
+      }
+      _fittedBid[bid] = [
+        int.tryParse(bid.qualityController.text) ?? 0,
+        int.tryParse(bid.bidpricecontroller.text) ?? 0,
+      ];
+    }
+  }
+
+  // Why a + / - step is not allowed, or null when it is. A step is not allowed
+  // when it would leave the quantity range this category allows: at least the
+  // minimum bid quantity (for HNI, also the quantity that reaches ₹2,00,000),
+  // at most the lots that fit the category's investment limit. The button is
+  // dimmed and tapping it shows this message instead of stepping.
+  // A quantity already outside the range can still step back towards it.
+  // Empty or invalid fields are never blocked (the step fallback handles them).
+  String? _stepBlockMessage(IPOProvider ipo, IpoDetails bid,
+      {required bool up}) {
+    final cur = int.tryParse(bid.qualityController.text) ?? 0;
+    final price = bid.isChecked
+        ? (double.tryParse(maxPrice)?.toInt() ?? 0)
+        : (int.tryParse(bid.bidpricecontroller.text) ?? 0);
+    if (cur <= 0 || price <= 0) return null;
+    final lot = bid.lotsize > 0 ? bid.lotsize : 1;
+    final minQty = int.tryParse(minBidQuantity) ?? 0;
+
+    if (up) {
+      final maxAmt = ipo.maxUPIAmt.toInt();
+      if (maxAmt <= 0) return null;
+      final hi = (maxAmt ~/ price) ~/ lot * lot;
+      final next = cur % lot != 0 ? (cur + lot - 1) ~/ lot * lot : cur + lot;
+      if (hi >= lot && next > hi) {
+        return "Maximum investment upto ₹$maxAmt only. "
+            "Quantity can't go above $hi.";
+      }
+      return null;
+    }
+    var lo = ((minQty > lot ? minQty : lot) + lot - 1) ~/ lot * lot;
+    var hni = false;
+    if (selectedChip == "HNI") {
+      final byAmount = ((200000 + price - 1) ~/ price + lot - 1) ~/ lot * lot;
+      if (byAmount > lo) {
+        lo = byAmount;
+        hni = true;
+      }
+    }
+    final next = cur % lot != 0 ? cur ~/ lot * lot : cur - lot;
+    if (next < lo) {
+      return hni
+          ? "Minimum investment for HNI is ₹200000. "
+              "Quantity can't go below $lo."
+          : "Minimum bid quantity is $lo. Quantity can't go below it.";
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -276,6 +481,8 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
           final upiProvider = ref.watch(transcationProvider);
           final status = ipostartdate(biddingStartDate, biddingEndDate);
           final isOpen = status == "Open";
+          // Open green, Pre-open grey, Closed red (same on every IPO screen).
+          final isPreOpen = status == "Pre-open";
 
           final screenSize = MediaQuery.of(context).size;
           // Scale factor based on screen width for responsive text sizing
@@ -347,6 +554,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 ? (theme.isDarkMode
                                     ? MyntColors.profitDark.withValues(alpha: 0.15)
                                     : const Color(0xffE6F4EA))
+                                : isPreOpen
+                                    ? (theme.isDarkMode
+                                        ? MyntColors.textSecondaryDark.withValues(alpha: 0.15)
+                                        : MyntColors.textSecondary.withValues(alpha: 0.12))
                                 : (theme.isDarkMode
                                     ? MyntColors.lossDark.withValues(alpha: 0.15)
                                     : const Color(0xffFCE8E6)),
@@ -361,6 +572,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                   ? (theme.isDarkMode
                                       ? MyntColors.profitDark
                                       : const Color(0xff1E8E3E))
+                                  : isPreOpen
+                                      ? (theme.isDarkMode
+                                          ? MyntColors.textSecondaryDark
+                                          : MyntColors.textSecondary)
                                   : (theme.isDarkMode
                                       ? MyntColors.lossDark
                                       : const Color(0xffD93025)),
@@ -451,12 +666,15 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                       }
                                     }
                                   }
-                                  await ipo.categoryOnChange(
-                                    addIpo,
-                                    ipo.maxUPIAmt,
-                                    _getButtonActiveState(ipo),
-                                    selectedChip,
-                                  );
+                                  // await ipo.categoryOnChange(
+                                  //   addIpo,
+                                  //   ipo.maxUPIAmt,
+                                  //   _getButtonActiveState(ipo),
+                                  //   selectedChip,
+                                  // );
+                                  _fitBidsToCategory(ipo);
+                                  _revalidateAllQty(ipo);
+                                  setState(() {});
                                 }
                               },
                               decoration: InputDecoration(
@@ -502,11 +720,12 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                         ? null
                                         : () {
                                             addNewItem();
-                                            ipo.categoryOnChange(
-                                                addIpo,
-                                                ipo.maxUPIAmt,
-                                                _getButtonActiveState(ipo),
-                                                selectedChip);
+                                            // ipo.categoryOnChange(
+                                            //     addIpo,
+                                            //     ipo.maxUPIAmt,
+                                            //     _getButtonActiveState(ipo),
+                                            //     selectedChip);
+                                            _revalidateAllQty(ipo);
                                           },
                                     child: Padding(
                                       padding: const EdgeInsets.all(8.0),
@@ -537,61 +756,63 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                               ),
                             const SizedBox(height: 16),
 
-                            // Global Validation Error Messages
-                            ...(() {
-                              final List<String> errorMessages = [];
-                              for (var e in addIpo) {
-                                if (e.qualityerrortext.isNotEmpty &&
-                                    !errorMessages
-                                        .contains(e.qualityerrortext.trim())) {
-                                  errorMessages.add(e.qualityerrortext.trim());
-                                }
-                                if (e.biderrortext.isNotEmpty &&
-                                    !errorMessages
-                                        .contains(e.biderrortext.trim())) {
-                                  errorMessages.add(e.biderrortext.trim());
-                                }
-                              }
+                            // Removed: orange summary box repeated the red error text already
+                            // shown under each bid field (client validation = inline only).
+                            // // Global Validation Error Messages
+                            // ...(() {
+                              // final List<String> errorMessages = [];
+                              // for (var e in addIpo) {
+                                // if (e.qualityerrortext.isNotEmpty &&
+                                    // !errorMessages
+                                        // .contains(e.qualityerrortext.trim())) {
+                                  // errorMessages.add(e.qualityerrortext.trim());
+                                // }
+                                // if (e.biderrortext.isNotEmpty &&
+                                    // !errorMessages
+                                        // .contains(e.biderrortext.trim())) {
+                                  // errorMessages.add(e.biderrortext.trim());
+                                // }
+                              // }
 
-                              return errorMessages.map((msg) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 8),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 10),
-                                      decoration: BoxDecoration(
-                                        color: theme.isDarkMode
-                                            ? MyntColors.warningDark.withValues(alpha: 0.15)
-                                            : const Color(0xFFFFF4E5),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Icon(
-                                            Icons.info_outline,
-                                            color: theme.isDarkMode
-                                                ? MyntColors.warningDark
-                                                : const Color(0xFFFF8C00),
-                                            size: 18,
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              msg,
-                                              style:
-                                                  MyntWebTextStyles.bodySmall(
-                                                context,
-                                                color: theme.isDarkMode
-                                                    ? MyntColors.warningDark
-                                                    : const Color(0xFFFF8C00),
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ));
-                            })(),
+                              // return errorMessages.map((msg) => Padding(
+                                    // padding: const EdgeInsets.only(bottom: 8),
+                                    // child: Container(
+                                      // padding: const EdgeInsets.symmetric(
+                                          // horizontal: 12, vertical: 10),
+                                      // decoration: BoxDecoration(
+                                        // color: theme.isDarkMode
+                                            // ? MyntColors.warningDark.withValues(alpha: 0.15)
+                                            // : const Color(0xFFFFF4E5),
+                                        // borderRadius: BorderRadius.circular(8),
+                                      // ),
+                                      // child: Row(
+                                        // children: [
+                                          // Icon(
+                                            // Icons.info_outline,
+                                            // color: theme.isDarkMode
+                                                // ? MyntColors.warningDark
+                                                // : const Color(0xFFFF8C00),
+                                            // size: 18,
+                                          // ),
+                                          // const SizedBox(width: 8),
+                                          // Expanded(
+                                            // child: Text(
+                                              // msg,
+                                              // style:
+                                                  // MyntWebTextStyles.bodySmall(
+                                                // context,
+                                                // color: theme.isDarkMode
+                                                    // ? MyntColors.warningDark
+                                                    // : const Color(0xFFFF8C00),
+                                                // fontWeight: FontWeight.w500,
+                                              // ),
+                                            // ),
+                                          // ),
+                                        // ],
+                                      // ),
+                                    // ),
+                                  // ));
+                            // })(),
 
                             const SizedBox(height: 24),
 
@@ -628,18 +849,42 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 contentPadding: const EdgeInsets.all(13),
                               ),
                               style: MyntWebTextStyles.body(context),
-                              onChanged: (value) => setState(() {}),
+                              // onChanged: (value) => setState(() {}),
+                              onChanged: (value) => setState(() {
+                                _upiErrorText = "";
+                                // _hideServerUpiError = true;
+                              }),
                             ),
-                             if (ipo.upierror.isNotEmpty)
+                            //  if (ipo.upierror.isNotEmpty)
+                            // TC_190: Continue's own UPI check sets
+                            // _upiErrorText, which was never shown.
+                            // if (_upiErrorText.isNotEmpty ||
+                            //     ipo.upierror.isNotEmpty)
+                            // if (_upiErrorText.isNotEmpty ||
+                            //     (!_hideServerUpiError &&
+                            //         !ipo.ipoOrderLoading &&
+                            //         ipo.upierror.isNotEmpty))
+                            // Bug fix: the bank's "Invalid UPI ID" is a server
+                            // reply and already shows as a toast; only the
+                            // field's own checks show here.
+                            if (_upiErrorText.isNotEmpty)
                               Padding(
                                 padding: const EdgeInsets.only(top: 6, left: 4),
                                 child: Text(
-                                  ipo.upierror,
+                                  // ipo.upierror,
+                                  // _upiErrorText.isNotEmpty
+                                  //     ? _upiErrorText
+                                  //     : _noAsterisk(ipo.upierror),
+                                  _upiErrorText,
                                   style: MyntWebTextStyles.bodySmall(
                                     context,
-                                    color: theme.isDarkMode
-                                        ? MyntColors.lossDark
-                                        : const Color(0xffD93025),
+                                    // Same red as the bid-field errors.
+                                    color: resolveThemeColor(context,
+                                        dark: MyntColors.lossDark,
+                                        light: MyntColors.loss),
+                                    // color: theme.isDarkMode
+                                    //     ? MyntColors.lossDark
+                                    //     : const Color(0xffD93025),
                                   ),
                                 ),
                               ),
@@ -655,6 +900,7 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                   onChanged: (val) {
                                     setState(() {
                                       _isTermsAccepted = val ?? false;
+                                      if (_isTermsAccepted) _termsErrorText = "";
                                     });
                                   },
                                   activeColor: theme.isDarkMode
@@ -678,6 +924,23 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 ),
                               ],
                             ),
+                            if (_termsErrorText.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6, left: 4),
+                                child: Text(
+                                  _termsErrorText,
+                                  style: MyntWebTextStyles.bodySmall(
+                                    context,
+                                    // Same red as the bid-field errors.
+                                    color: resolveThemeColor(context,
+                                        dark: MyntColors.lossDark,
+                                        light: MyntColors.loss),
+                                    // color: theme.isDarkMode
+                                    //     ? MyntColors.lossDark
+                                    //     : const Color(0xffD93025),
+                                  ),
+                                ),
+                              ),
                             const SizedBox(height: 20),
                           ],
                         ),
@@ -721,37 +984,85 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                           width: double.infinity,
                           height: 42,
                           child: ElevatedButton(
-                            onPressed: (!ipo.ipoOrderLoading &&
-                                    _getButtonActiveState(ipo) &&
-                                    _isTermsAccepted &&
-                                    upiProvider.upiid.text.isNotEmpty)
+                            // Continue stays clickable (blocked only while the
+                            // order is in flight). The click validates and
+                            // shows input errors under the field; API errors
+                            // stay as toasts.
+                            // onPressed: (!ipo.ipoOrderLoading &&
+                            //         _getButtonActiveState(ipo) &&
+                            //         _isTermsAccepted &&
+                            //         upiProvider.upiid.text.isNotEmpty)
+                            onPressed: !ipo.ipoOrderLoading
                                 ? () {
-                                    final lastBid = addIpo[addIpo.length - 1];
-                                    if (lastBid.requriedprice > ipo.maxUPIAmt) {
+                                    // final lastBid = addIpo[addIpo.length - 1];
+                                    // TC_186-189: empty / 0 bid price and
+                                    // quantity, checked on every bid row.
+                                    bool hasEmptyField = false;
+                                    for (final bid in addIpo) {
+                                      final price = bid.bidpricecontroller.text;
+                                      final qty = bid.qualityController.text;
+                                      if (price.isEmpty || price == "0") {
+                                        bid.biderrortext = price == "0"
+                                            ? "Bid Price Value cannot be 0"
+                                            : "Bid Price Value is required";
+                                        hasEmptyField = true;
+                                      }
+                                      if (qty.isEmpty || qty == "0") {
+                                        bid.qualityerrortext = qty == "0"
+                                            ? "Quantity cannot be 0"
+                                            : "Quantity cannot be empty";
+                                        hasEmptyField = true;
+                                      }
+                                    }
+                                    final upi = upiProvider.upiid.text.trim();
+                                    // if (lastBid.requriedprice > ipo.maxUPIAmt) {
+                                    // Bug fix: check every bid, not only the
+                                    // last one, against the category limit.
+                                    if (addIpo.any((b) =>
+                                        b.requriedprice > ipo.maxUPIAmt)) {
                                       showResponsiveWarning(context,
                                           "Maximum investment upto ₹${double.parse(ipo.maxUPIAmt.toString()).toInt()} only ");
                                       _setButtonActiveState(ipo, false);
-                                    } else if (lastBid.bidpricecontroller.text.isEmpty ||
-                                        lastBid.bidpricecontroller.text == "0") {
-                                      showResponsiveWarning(
-                                          context,
-                                          lastBid.bidpricecontroller.text == "0"
-                                              ? "Bid Price Value cannot be 0"
-                                              : "* Bid Price Value is required");
-                                    } else if (lastBid.qualityController.text.isEmpty ||
-                                        lastBid.qualityController.text == "0") {
-                                      showResponsiveWarning(
-                                          context,
-                                          lastBid.qualityController.text == "0"
-                                              ? "* Quantity cannot be 0"
-                                              : "* Quantity cannot be empty");
+                                    } else if (hasEmptyField) {
+                                      setState(() {});
+                                    // } else if (lastBid.bidpricecontroller.text.isEmpty ||
+                                    //     lastBid.bidpricecontroller.text == "0") {
+                                    //   showResponsiveWarning(
+                                    //       context,
+                                    //       lastBid.bidpricecontroller.text == "0"
+                                    //           ? "Bid Price Value cannot be 0"
+                                    //           : "* Bid Price Value is required");
+                                    // } else if (lastBid.qualityController.text.isEmpty ||
+                                    //     lastBid.qualityController.text == "0") {
+                                    //   showResponsiveWarning(
+                                    //       context,
+                                    //       lastBid.qualityController.text == "0"
+                                    //           ? "* Quantity cannot be 0"
+                                    //           : "* Quantity cannot be empty");
+                                    } else if (!ipo
+                                        .checkForErrorsInSMEPlaceOrder(addIpo)) {
+                                      // Range / lot / HNI errors are already
+                                      // shown under the bid fields.
+                                      setState(() {});
+                                    } else if (upi.isEmpty) {
+                                      setState(() {
+                                        _upiErrorText = "UPI ID cannot be empty";
+                                      });
                                     } else if (!RegExp(r'^[\w.-]+@[\w]+$')
                                         .hasMatch(upiProvider.upiid.text)) {
                                       setState(() {
                                         _upiErrorText = "Invalid UPI ID format";
                                       });
+                                    } else if (!_isTermsAccepted) {
+                                      setState(() {
+                                        _termsErrorText =
+                                            "Please accept the declaration to continue";
+                                      });
                                     } else if (ipo.checkForErrorsInSMEPlaceOrder(addIpo)) {
                                       _setButtonActiveState(ipo, true);
+                                      // Show the bank's verdict for this
+                                      // attempt only.
+                                      // setState(() => _hideServerUpiError = false);
                                       ipoplaceorder(upiProvider, ipo);
                                     } else {
                                       showResponsiveWarning(context,
@@ -794,7 +1105,16 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
     );
   }
 
+  // Validation text from the shared IPO provider starts with "* "
+  // (mobile still uses it); web shows it without the asterisk.
+  String _noAsterisk(String text) =>
+      text.replaceFirst(RegExp(r'^\*\s*'), '');
+
   Widget _buildBidRow(int index, IPOProvider ipo, ThemesProvider theme) {
+    final minusMessage = _stepBlockMessage(ipo, addIpo[index], up: false);
+    final plusMessage = _stepBlockMessage(ipo, addIpo[index], up: true);
+    final minusBlocked = minusMessage != null;
+    final plusBlocked = plusMessage != null;
     return Column(
       children: [
         // Headers Row
@@ -899,6 +1219,18 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                       onPressed: ipo.loading
                           ? null
                           : () {
+                              if (minusMessage != null) {
+                                showResponsiveWarning(context, minusMessage);
+                                return;
+                              }
+                              // TC_154: the provider step does nothing on an
+                              // empty quantity and throws on an empty price.
+                              if (_stepQtyFallback(ipo, index, up: false)) {
+                                setState(() {
+                                  _updateProviderState(ipo);
+                                });
+                                return;
+                              }
                               if (isSME) {
                                 ipo.smequantityminusfunction(
                                     addIpo[index],
@@ -918,7 +1250,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 _updateProviderState(ipo);
                               });
                             },
-                      icon: Icon(Icons.remove, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      icon: Opacity(
+                        opacity: minusBlocked ? 0.35 : 1,
+                        child: Icon(Icons.remove, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      ),
                     ),
                     Expanded(
                       child: TextFormField(
@@ -965,6 +1300,18 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                       onPressed: ipo.loading
                           ? null
                           : () {
+                              if (plusMessage != null) {
+                                showResponsiveWarning(context, plusMessage);
+                                return;
+                              }
+                              // TC_154: the provider step does nothing on an
+                              // empty quantity and throws on an empty price.
+                              if (_stepQtyFallback(ipo, index, up: true)) {
+                                setState(() {
+                                  _updateProviderState(ipo);
+                                });
+                                return;
+                              }
                               if (isSME) {
                                 ipo.smequalityplusefunction(
                                     addIpo[index],
@@ -984,7 +1331,10 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                                 _updateProviderState(ipo);
                               });
                             },
-                      icon: Icon(Icons.add, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      icon: Opacity(
+                        opacity: plusBlocked ? 0.35 : 1,
+                        child: Icon(Icons.add, size: 18, color: theme.isDarkMode ? MyntColors.primaryDark : MyntColors.primary),
+                      ),
                     ),
                   ],
                 ),
@@ -1000,6 +1350,18 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                   readOnly: addIpo[index].isChecked,
                   decoration: InputDecoration(
                     prefixText: "₹ ",
+                    // ₹ follows the value colour (was default hint grey).
+                    prefixStyle: MyntWebTextStyles.body(
+                      context,
+                      color: addIpo[index].isChecked
+                          ? (theme.isDarkMode
+                              ? colors.textPrimaryDark.withOpacity(0.4)
+                              : colors.textPrimaryLight.withOpacity(0.4))
+                          : (theme.isDarkMode
+                              ? colors.textPrimaryDark
+                              : colors.textPrimaryLight),
+                      fontWeight: MyntFonts.medium,
+                    ),
                     fillColor: addIpo[index].isChecked
                         ? (theme.isDarkMode
                             ? MyntColors.inputBgDark.withValues(alpha: 0.5)
@@ -1026,6 +1388,7 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                         borderRadius: BorderRadius.circular(5)),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                   ),
+                  // Medium weight, same as the Place Order price box.
                   style: MyntWebTextStyles.body(
                     context,
                     color: addIpo[index].isChecked
@@ -1035,10 +1398,18 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
                         : (theme.isDarkMode
                             ? colors.textPrimaryDark
                             : colors.textPrimaryLight),
+                    fontWeight: MyntFonts.medium,
                   ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  // keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  // inputFormatters: [
+                  //   FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
+                  // ],
+                  // Bug fix: IPO bids are in whole rupees and every check and
+                  // total used only the rupee part, so paise were silently
+                  // dropped (1119.90 passed a 1119 cap). Accept digits only.
+                  keyboardType: TextInputType.number,
                   inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
+                    FilteringTextInputFormatter.digitsOnly,
                   ],
                   onChanged: (value) {
                     if (isSME) {
@@ -1065,7 +1436,7 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
               child: addIpo[index].qualityerrortext.isNotEmpty
                   ? TextWidget.captionText(
                       theme: false,
-                      text: addIpo[index].qualityerrortext,
+                      text: _noAsterisk(addIpo[index].qualityerrortext),
                       color: resolveThemeColor(context,
                       dark: MyntColors.lossDark, light: MyntColors.loss),
                       fw: 0,
@@ -1077,7 +1448,7 @@ class _UnifiedIpoOrderScreenState extends ConsumerState<UnifiedIpoOrderScreen> {
               child: addIpo[index].biderrortext.isNotEmpty
                   ? TextWidget.captionText(
                       theme: false,
-                      text: addIpo[index].biderrortext,
+                      text: _noAsterisk(addIpo[index].biderrortext),
                       color: resolveThemeColor(context,
                       dark: MyntColors.lossDark, light: MyntColors.loss),
                       fw: 0,

@@ -67,24 +67,52 @@ class _SetAlertWebState extends State<SetAlertWeb> {
   // Process depth data with socket updates
   void _processDepthData(Map<String, dynamic> socketData) {
     if (!mounted) return;
+    // Price fields are nullable post-sanitisation (null when broker emits
+    // "0"/"0.00" defaults for illiquid contracts). Fall back to "0.00" so
+    // downstream double.parse() doesn't see "null".
+    final next = <String, String>{
+      'ap': "${socketData['ap']}",
+      'lp': socketData['lp']?.toString() ?? "0.00",
+      'pc': socketData['pc']?.toString() ?? "0.00",
+      'o': socketData['o']?.toString() ?? "0.00",
+      'l': socketData['l']?.toString() ?? "0.00",
+      'c': socketData['c']?.toString() ?? "0.00",
+      'chng': socketData['chng']?.toString() ?? "0.00",
+      'h': socketData['h']?.toString() ?? "0.00",
+      'poi': "${socketData['poi']}",
+      'v': "${socketData['v']}",
+      'toi': "${socketData['toi']}",
+    };
+    // Called from a StreamBuilder's builder: repainting unconditionally made
+    // the builder run again with the same snapshot, which repainted again —
+    // a rebuild every frame for as long as the dialog was open.
+    final unchanged = depthdata.ap == next['ap'] &&
+        depthdata.lp == next['lp'] &&
+        depthdata.pc == next['pc'] &&
+        depthdata.o == next['o'] &&
+        depthdata.l == next['l'] &&
+        depthdata.c == next['c'] &&
+        depthdata.chng == next['chng'] &&
+        depthdata.h == next['h'] &&
+        depthdata.poi == next['poi'] &&
+        depthdata.v == next['v'] &&
+        depthdata.toi == next['toi'];
+    if (unchanged) return;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         setState(() {
-          // Price fields are nullable post-sanitisation (null when broker
-          // emits "0"/"0.00" defaults for illiquid contracts). Fall back
-          // to "0.00" so downstream double.parse() doesn't see "null".
-          depthdata.ap = "${socketData['ap']}";
-          depthdata.lp = socketData['lp']?.toString() ?? "0.00";
-          depthdata.pc = socketData['pc']?.toString() ?? "0.00";
-          depthdata.o = socketData['o']?.toString() ?? "0.00";
-          depthdata.l = socketData['l']?.toString() ?? "0.00";
-          depthdata.c = socketData['c']?.toString() ?? "0.00";
-          depthdata.chng = socketData['chng']?.toString() ?? "0.00";
-          depthdata.h = socketData['h']?.toString() ?? "0.00";
-          depthdata.poi = "${socketData['poi']}";
-          depthdata.v = "${socketData['v']}";
-          depthdata.toi = "${socketData['toi']}";
+          depthdata.ap = next['ap'];
+          depthdata.lp = next['lp'];
+          depthdata.pc = next['pc'];
+          depthdata.o = next['o'];
+          depthdata.l = next['l'];
+          depthdata.c = next['c'];
+          depthdata.chng = next['chng'];
+          depthdata.h = next['h'];
+          depthdata.poi = next['poi'];
+          depthdata.v = next['v'];
+          depthdata.toi = next['toi'];
         });
       }
     });

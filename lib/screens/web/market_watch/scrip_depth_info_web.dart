@@ -805,12 +805,12 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
                 .read(marketWatchProvider)
                 .requestWSOptChain(context: context, isSubscribe: false);
 
-            await ref.read(websocketProvider).establishConnection(
-                  channelInput:
-                      "${widget.wlValue.exch}|${widget.wlValue.token}",
-                  task: "ud",
-                  context: context,
-                );
+            // Release the depth panel's claim through the owner registry. A
+            // raw "ud" here bypassed it and cut the depth feed a chart or
+            // Insta Options still showed for the same scrip.
+            await ref
+                .read(marketWatchProvider)
+                .unsubscribeFromDepthData(context: context);
 
             if (ref.read(marketWatchProvider).actDeptBtn == "Chart") {
               // Additional logic if needed

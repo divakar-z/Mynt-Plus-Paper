@@ -87,6 +87,12 @@ class ApiLinks {
 
   String get watchList => '$goMyntURL/MWList';
   String get tpseries => '$goMyntURL/TPSeries';
+
+  /// In-progress ("live") candle. [tpseries] returns only CLOSED candles, so
+  /// a chart opened at 10:10:10 is missing the 10 seconds already elapsed in
+  /// the 10:10 candle. Called with `st` = that candle's start and no `et`,
+  /// this returns the candle currently forming. Same jData/jKey body shape.
+  String get tpseriesLive => 'https://ws.mynt.in/chart/TPSeries';
   String get preDefinedMWList => '$goMyntURL/PreDefinedMWList';
   String get marketWatchScrip => '$goMyntURL/MarketWatch';
   String get securityInfo => '$goMyntURL/GetSecurityInfo';

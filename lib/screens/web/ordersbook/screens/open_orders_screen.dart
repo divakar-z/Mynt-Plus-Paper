@@ -753,7 +753,12 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                             final order = sortedOrders[i];
                             final uniqueId = order.norenordno?.toString() ?? order.token?.toString() ?? '';
                             final isPending = order.status == "PENDING" || order.status == "OPEN" || order.status == "TRIGGER_PENDING";
-                            final actionHandler = OrderActionHandler(ref: ref, context: context);
+                            // TC_224: the row's context dies when the table rebuilds on
+                            // resize, while the Order Details sheet opened from it stays
+                            // up and keeps reading theme through it -> grey screen.
+                            // Use the screen's context, as Trade Book does.
+                            // final actionHandler = OrderActionHandler(ref: ref, context: context);
+                            final actionHandler = OrderActionHandler(ref: ref, context: this.context);
                             return shadcn.Table(
                               columnWidths: {
                                 0: shadcn.FixedTableSize(selectWidth),

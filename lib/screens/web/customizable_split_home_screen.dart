@@ -1304,15 +1304,25 @@ class _CustomizableSplitHomeScreenState
         subscriptionManager.refreshTickerSubscriptions(context);
       }
     });
-    portfolio.fetchHoldings(context, "");
+    // A reconnect through websocketProvider.reconnect() (tab return, network
+    // recovery) has already re-fetched holdings, order book and funds just
+    // before the socket came back; calling them again sent every one twice.
+    // Only skip when that happened moments ago — an internal auto-reconnect
+    // doesn't refresh, so this remains its only refresh.
+    final lastRefresh = ref.read(websocketProvider).lastDataRefreshAt;
+    final alreadyRefreshed = lastRefresh != null &&
+        DateTime.now().difference(lastRefresh) < const Duration(seconds: 10);
+    if (!alreadyRefreshed) {
+      portfolio.fetchHoldings(context, "");
 
-    // Refresh order book data
-    final orders = ref.read(orderProvider);
-    orders.fetchOrderBook(context, true); // websocCon = true since we're reconnecting
+      // Refresh order book data
+      final orders = ref.read(orderProvider);
+      orders.fetchOrderBook(context, true); // websocCon = true since we're reconnecting
 
-    // Refresh fund data
-    final fund = ref.read(fundProvider);
-    fund.fetchFunds(context);
+      // Refresh fund data
+      final fund = ref.read(fundProvider);
+      fund.fetchFunds(context);
+    }
 
     // Re-establish WebSocket subscriptions for active screens
     _updateSubscriptionManagerForPanels(forceRefresh: true);
@@ -4481,6 +4491,21 @@ class _CustomizableSplitHomeScreenState
       // Protect current depth symbol token
       if (_currentDepthArgs != null) {
         protectedTokens.add(_currentDepthArgs!.token);
+      }
+
+      // Protect every scrip a feature still owns on the socket (holdings and
+      // positions feed the top strip's P&L from any screen; charts, tools, the
+      // order ticket, …). Their ticks keep arriving, and touchline only sends
+      // changed fields — clearing the cache rebuilt entries without previous
+      // close / change / %, which then read as 0.00 (and looked like missing
+      // data, prompting needless re-subscribes).
+      for (final key in websocket.touchlineScripsInUse) {
+        final bar = key.indexOf('|');
+        if (bar > 0) protectedTokens.add(key.substring(bar + 1));
+      }
+      for (final key in websocket.depthScripsInUse) {
+        final bar = key.indexOf('|');
+        if (bar > 0) protectedTokens.add(key.substring(bar + 1));
       }
 
       // Protect holdings tokens if holdings panel is active elsewhere

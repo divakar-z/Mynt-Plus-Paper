@@ -28,6 +28,12 @@ class CreateSipDialogWeb extends ConsumerStatefulWidget {
 }
 
 class _CreateSipDialogWebState extends ConsumerState<CreateSipDialogWeb> {
+  // Owned touchline for the dialog's scrips, released when it closes
+  // (raw "t" here was never released or restored). Cached while mounted —
+  // ref.read throws in dispose (Riverpod 3).
+  WebSocketProvider? _ws;
+  late final String _owner = 'sip-create:${identityHashCode(this)}';
+
   final TextEditingController _sipNameController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _noOfSipsController =
@@ -51,9 +57,17 @@ class _CreateSipDialogWebState extends ConsumerState<CreateSipDialogWeb> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_onSearchTextChanged);
+  }
+
+  @override
   void dispose() {
+    try { _ws?.releaseAllTouchline(_owner); } catch (_) {}
     _debounceTimer?.cancel();
     _sipNameController.dispose();
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     _noOfSipsController.dispose();
     for (var item in _addedScrips) {
@@ -229,6 +243,24 @@ class _CreateSipDialogWebState extends ConsumerState<CreateSipDialogWeb> {
 
   List<ScripNewValue> _searchResults = [];
 
+  String _lastSearchText = '';
+
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Run the clear here when the box goes from text to empty.
+  void _onSearchTextChanged() {
+    final text = _searchController.text;
+    final wasNotEmpty = _lastSearchText.isNotEmpty;
+    _lastSearchText = text;
+    if (text.isEmpty && wasNotEmpty) {
+      _debounceTimer?.cancel();
+      ref.read(marketWatchProvider).searchClear();
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+    }
+  }
+
   void _onSearchChanged(String query) {
     // Cancel previous timer
     _debounceTimer?.cancel();
@@ -292,11 +324,8 @@ class _CreateSipDialogWebState extends ConsumerState<CreateSipDialogWeb> {
     });
 
     // Subscribe to WebSocket touchline for LTP
-    ref.read(websocketProvider).establishConnection(
-          channelInput: '${scrip.exch}|${scrip.token}',
-          task: 't',
-          context: context,
-        );
+    (_ws = ref.read(websocketProvider))!.acquireTouchline(
+          _owner, ['${scrip.exch}|${scrip.token}'], context);
 
     // Clear search field and provider
     _searchController.clear();
