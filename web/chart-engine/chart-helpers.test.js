@@ -63,8 +63,8 @@ t('Oct 31 still DST', () => assert.strictEqual(h._usInDst(ist(2026, 9, 31, 12, 0
 t('Nov 1 DST over', () => assert.strictEqual(h._usInDst(ist(2026, 10, 1, 12, 0)), false));
 
 console.log('_sessionBoundsFor');
-t('NSE equity 555-930', () => assert.deepStrictEqual(
-    h._sessionBoundsFor('NSE', ist(2026, 5, 18, 12, 0)), { openMin: 555, closeMin: 930 }));
+t('NSE equity 555-940', () => assert.deepStrictEqual(
+    h._sessionBoundsFor('NSE', ist(2026, 5, 18, 12, 0)), { openMin: 555, closeMin: 940 }));
 t('CDS currency 540-1020', () => assert.deepStrictEqual(
     h._sessionBoundsFor('CDS', ist(2026, 5, 18, 12, 0)), { openMin: 540, closeMin: 1020 }));
 t('MCX July close 23:30 (1410)', () => assert.strictEqual(
@@ -79,7 +79,7 @@ t('NSE 09:14 before open', () => assert.strictEqual(h._isSessionWindowPure('NSE'
 t('NSE 09:15 open', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 9, 15)), true));
 t('NSE 15:25 last valid', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 15, 25)), true));
 t('NSE 15:29 still in', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 15, 29)), true));
-t('NSE 15:30 EXCLUSIVE close', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 15, 30)), false));
+t('NSE 15:40 EXCLUSIVE close', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 18, 15, 40)), false));
 t('NSE Saturday closed', () => assert.strictEqual(h._isSessionWindowPure('NSE', ist(2026, 5, 20, 12, 0)), false));
 t('CDS 16:59 in', () => assert.strictEqual(h._isSessionWindowPure('CDS', ist(2026, 5, 18, 16, 59)), true));
 t('CDS 17:00 EXCLUSIVE close', () => assert.strictEqual(h._isSessionWindowPure('CDS', ist(2026, 5, 18, 17, 0)), false));

@@ -4954,7 +4954,7 @@ class Chart {
     let lastClose = last.c;
     while (nextBucket <= currentBucket && appended < 200) {
       // EXCLUSIVE close: _isSessionWindow blocks the post-close bucket
-      // (e.g. the 15:30 bucket on NSE), so no stale bar forms after close.
+      // (e.g. the 15:40 bucket on NSE), so no stale bar forms after close.
       if (this._isSessionWindow(nextBucket)) {
         this.candles.push({
           ts: nextBucket,
