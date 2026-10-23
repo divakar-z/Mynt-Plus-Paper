@@ -406,7 +406,7 @@ function _usInDst(tsSec) {
 // nulls => unmapped exchange => always-on (never gated, never "closed").
 function _sessionBoundsFor(exch, tsSec) {
   if (exch === 'NSE' || exch === 'NFO' || exch === 'BSE' || exch === 'BFO') {
-    return { openMin: 555, closeMin: 930 };              // 09:15–15:30
+    return { openMin: 555, closeMin: 940 };              // 09:15–15:40 (matches TradingView chart)
   }
   if (exch === 'CDS' || exch === 'BCD') {
     return { openMin: 540, closeMin: 1020 };             // 09:00–17:00
