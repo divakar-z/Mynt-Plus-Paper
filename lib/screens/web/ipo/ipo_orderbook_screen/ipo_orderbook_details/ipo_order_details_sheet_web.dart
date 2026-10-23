@@ -5,6 +5,7 @@ import '../../../../../res/mynt_web_text_styles.dart';
 import '../../../../../res/mynt_web_color_styles.dart';
 import '../../../../../models/ipo_model/ipo_order_book_model.dart';
 import '../../../../../sharedWidget/functions.dart';
+import '../../../../../provider/iop_provider.dart';
 
 class IpoOrderDetailsSheetWeb extends ConsumerWidget {
   final IpoOrderBookModel order;
@@ -15,6 +16,29 @@ class IpoOrderDetailsSheetWeb extends ConsumerWidget {
 
   const IpoOrderDetailsSheetWeb({
     super.key,
+    required this.order,
+    this.isCloseOrder = false,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // The sheet can be opened before the exchange has replied (date empty,
+    // status pending). Show the latest copy of the same application from the
+    // order book so the sheet updates when My Bids refreshes.
+    final appNo = order.applicationNumber;
+    final latest = ref.watch(ipoProvide.select((p) => p.ipoOrderBookModel))
+            ?.where((o) => appNo != null && o.applicationNumber == appNo)
+            .firstOrNull ??
+        order;
+    return _IpoOrderDetailsSheetBody(order: latest, isCloseOrder: isCloseOrder);
+  }
+}
+
+class _IpoOrderDetailsSheetBody extends ConsumerWidget {
+  final IpoOrderBookModel order;
+  final bool isCloseOrder;
+
+  const _IpoOrderDetailsSheetBody({
     required this.order,
     this.isCloseOrder = false,
   });
