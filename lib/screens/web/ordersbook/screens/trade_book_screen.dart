@@ -9,6 +9,9 @@ import 'package:mynt_plus/models/order_book_model/trade_book_model.dart';
 import 'package:mynt_plus/provider/order_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
+import 'package:mynt_plus/provider/market_watch_provider.dart';
+import 'package:mynt_plus/utils/responsive_navigation.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import '../refactored/utils/cell_formatters.dart';
@@ -1271,6 +1274,9 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
                 onPressed: (ctx) {
                   _closePopover();
                   // TODO: Implement repeat trade functionality
+                  // Was a no-op; now opens the order window like Repeat
+                  // on the Open and Executed tabs.
+                  _repeatTrade(trade);
                 },
               ),
             );
@@ -1384,6 +1390,40 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
   //     ),
   //   );
   // }
+
+  // Repeat a trade: same flow as Repeat on the Open / Executed tabs.
+  Future<void> _repeatTrade(TradeBookModel trade) async {
+    try {
+      await ref.read(marketWatchProvider).fetchScripInfo(
+            "${trade.token}",
+            "${trade.exch}",
+            context,
+            true,
+          );
+
+      if (!mounted) return;
+
+      final scripInfo = ref.read(marketWatchProvider).scripInfoModel;
+      if (scripInfo == null) {
+        ResponsiveSnackBar.showError(
+            context, 'Unable to fetch scrip information');
+        return;
+      }
+
+      await ResponsiveNavigation.toPlaceOrderScreen(
+        context: context,
+        arguments: {
+          "orderArg": tradeRepeatOrderArgs(trade),
+          "scripInfo": scripInfo,
+          "isBskt": "",
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        ResponsiveSnackBar.showError(context, 'Failed to open place order');
+      }
+    }
+  }
 
   // Show trade detail using shadcn sheet
   void _showTradeDetail(TradeBookModel trade) {

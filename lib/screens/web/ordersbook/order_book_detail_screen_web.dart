@@ -17,6 +17,7 @@ import '../../../utils/responsive_snackbar.dart';
 import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../main.dart' show getNavigatorContext;
 import '../order/modify_place_order_web_screen.dart';
+import 'refactored/services/order_action_handler.dart';
 
 class OrderBookDetailScreenWeb extends ConsumerStatefulWidget {
   final OrderBookModel orderBookData;
@@ -277,9 +278,18 @@ class _OrderBookDetailScreenWebState
                         ],
 
                         // Order History Header & Section
+                        // The history list is shared, so it could still hold
+                        // the previously opened order (briefly, or for good if
+                        // this order's fetch failed). Show it only when it
+                        // belongs to this order.
+                        // if (orderHistory != null &&
+                        //     orderHistory.isNotEmpty &&
+                        //     orderHistory[0].stat != "Not_Ok") ...[
                         if (orderHistory != null &&
                             orderHistory.isNotEmpty &&
-                            orderHistory[0].stat != "Not_Ok") ...[
+                            orderHistory[0].stat != "Not_Ok" &&
+                            orderHistory[0].norenordno ==
+                                widget.orderBookData.norenordno) ...[
                           const SizedBox(height: 24),
                           // Center(
                           //     child: TextButton.icon(
@@ -516,7 +526,9 @@ class _OrderBookDetailScreenWebState
               "Market Protection", _orderData.mktProtection ?? "-", theme),
           _rowOfInfoData("AMO", _orderData.amo ?? "-", theme),
           _rowOfInfoData("Order Id", _orderData.norenordno ?? "-", theme),
-          _rowOfInfoData("Exchange", _orderData.exchordid ?? "-", theme),
+          // The Exchange row showed the exchange order number, not the exchange.
+          // _rowOfInfoData("Exchange", _orderData.exchordid ?? "-", theme),
+          _rowOfInfoData("Exchange", _orderData.exch ?? "-", theme),
           _rowOfInfoData("Date & Time",
               formatDateTime(value: _orderData.norentm ?? "-"), theme),
         ],
@@ -885,11 +897,22 @@ class _OrderBookDetailScreenWebState
       }
 
       // Use saved provider reference instead of ref.read()
-      await orderProviderRef.fetchOrderCancel(
+      // await orderProviderRef.fetchOrderCancel(
+      //       "$orderNo",
+      //       targetContext,
+      //       true,
+      //     );
+      final result = await orderProviderRef.fetchOrderCancel(
             "$orderNo",
             targetContext,
             true,
           );
+      // A refused cancel used to close silently; show the exchange's reason.
+      final refusal =
+          OrderActionHandler.refusalMessage(result, 'Failed to cancel order');
+      if (refusal != null && targetContext.mounted) {
+        ResponsiveSnackBar.showError(targetContext, refusal);
+      }
     } catch (e) {
       final rootCtx = getNavigatorContext();
       if (rootCtx != null && rootCtx.mounted) {
@@ -950,12 +973,24 @@ class _OrderBookDetailScreenWebState
       }
 
       // Use saved provider reference instead of ref.read()
-      await orderProviderRef.fetchExitSNOOrd(
+      // await orderProviderRef.fetchExitSNOOrd(
+      //   "$snonum",
+      //   "$prd",
+      //   targetContext,
+      //   true,
+      // );
+      final result = await orderProviderRef.fetchExitSNOOrd(
         "$snonum",
         "$prd",
         targetContext,
         true,
       );
+      // A refused exit used to close silently; show the exchange's reason.
+      final refusal =
+          OrderActionHandler.refusalMessage(result, 'Failed to exit order');
+      if (refusal != null && targetContext.mounted) {
+        ResponsiveSnackBar.showError(targetContext, refusal);
+      }
     } catch (e) {
       final rootCtx = getNavigatorContext();
       if (rootCtx != null && rootCtx.mounted) {
