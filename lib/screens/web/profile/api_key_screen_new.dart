@@ -257,7 +257,7 @@ class _ApiKeyScreenNewState extends ConsumerState<ApiKeyScreenNew>
           "Its secret code stops working right away, and anything logged in with this app is disconnected. You can't undo this.",
       actionLabel: 'Delete app',
       actionColor: resolveThemeColor(context,
-          dark: MyntColors.lossDark, light: MyntColors.loss),
+          dark: MyntColors.errorDark, light: MyntColors.tertiary),
       onConfirm: () async {
         final err = await ref.read(apikeyprovider).deleteOauthApp(context);
         if (!mounted) return;
@@ -301,7 +301,7 @@ class _ApiKeyScreenNewState extends ConsumerState<ApiKeyScreenNew>
   // ---- UI helpers ----
   Color get _primary => isDarkMode(context) ? MyntColors.primaryDark : MyntColors.primary;
   Color get _loss => resolveThemeColor(context,
-      dark: MyntColors.lossDark, light: MyntColors.loss);
+      dark: MyntColors.errorDark, light: MyntColors.tertiary);
   Color get _textPrimary => resolveThemeColor(context,
       dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
   Color get _textSecondary => resolveThemeColor(context,
