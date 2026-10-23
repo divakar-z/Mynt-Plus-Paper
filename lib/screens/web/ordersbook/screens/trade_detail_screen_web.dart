@@ -595,7 +595,13 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
     }
   }
 
-  OrderScreenArgs _createOrderArgs(TradeBookModel tradeData) {
+  OrderScreenArgs _createOrderArgs(TradeBookModel tradeData) =>
+      tradeRepeatOrderArgs(tradeData);
+}
+
+/// Order window arguments for repeating a trade. Shared by the Trade Details
+/// sheet's Repeat Order button and the Trade table's row menu.
+OrderScreenArgs tradeRepeatOrderArgs(TradeBookModel tradeData) {
     // Get LTP, fallback to trade info if available or "0.00"
     String ltpValue = "0.00";
     if (tradeData.ltp != null && tradeData.ltp.toString() != "null") {
@@ -611,7 +617,14 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
       isExit: false,
       token: tradeData.token ?? '',
       transType: tradeData.trantype == 'B' ? true : false,
-      prd: tradeData.prd ?? tradeData.sPrdtAli ?? 'CNC',
+      // TC_64.1 (as on Open/Executed): the place-order screen maps a passed
+      // prd only to Delivery/Intraday/MTF, so a CO/BO trade repeated as
+      // Delivery. Leave prd empty for H/B so the screen reads the raw trade,
+      // which maps H/B to CO - BO.
+      // prd: tradeData.prd ?? tradeData.sPrdtAli ?? 'CNC',
+      prd: (tradeData.prd == 'H' || tradeData.prd == 'B')
+          ? ''
+          : tradeData.prd ?? tradeData.sPrdtAli ?? 'CNC',
       lotSize: tradeData.ls ?? '1',
       ltp: ltpValue,
       perChange: tradeData.change ?? "0.00",
@@ -620,5 +633,4 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
       isModify: false,
       raw: tradeData.toJson(),
     );
-  }
 }
