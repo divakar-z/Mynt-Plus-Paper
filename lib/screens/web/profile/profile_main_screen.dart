@@ -31,7 +31,6 @@ import 'package:mynt_plus/screens/web/customizable_split_home_screen.dart' show 
 import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:mynt_plus/sharedWidget/enums.dart';
-import 'Api_key_screen.dart';
 import 'api_key_screen_new.dart';
 
 /// Callback type for screen navigation from profile dropdown
@@ -818,13 +817,18 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   }
 
   Widget _buildApiKeyContent(ThemesProvider theme) {
-    // Use ConstrainedBox to allow content to grow while maintaining reasonable bounds
-    return ConstrainedBox(
-      constraints: const BoxConstraints(
-        minHeight: 300,
-        maxHeight: 500,
-      ),
-      child: const ApiKeyBottomTabs(),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('OAuth Keys',
+            style: MyntWebTextStyles.title(context,
+                color: resolveThemeColor(context,
+                    dark: MyntColors.textPrimaryDark,
+                    light: MyntColors.textPrimary),
+                fontWeight: MyntFonts.semiBold)),
+        const ApiKeyScreenNew(),
+      ],
     );
   }
 
@@ -4727,68 +4731,6 @@ class _ProfileDetailsSectionState extends ConsumerState<_ProfileDetailsSection> 
 // -----------------------------------------------------------------------------
 // API KEY COMPONENT (Re-used)
 // -----------------------------------------------------------------------------
-class ApiKeyBottomTabs extends ConsumerStatefulWidget {
-  const ApiKeyBottomTabs({super.key});
-
-  @override
-  ConsumerState<ApiKeyBottomTabs> createState() => _ApiKeyBottomTabsState();
-}
-
-class _ApiKeyBottomTabsState extends ConsumerState<ApiKeyBottomTabs>
-    with TickerProviderStateMixin {
-  late TabController _tabController;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        TabBar(
-          controller: _tabController,
-          labelColor: isDarkMode(context) ? MyntColors.primaryDark : MyntColors.primary,
-          unselectedLabelColor: resolveThemeColor(context,
-              dark: MyntColors.textPrimaryDark,
-              light: MyntColors.textPrimary),
-          indicatorColor: isDarkMode(context) ? MyntColors.primaryDark : MyntColors.primary,
-          labelStyle: MyntWebTextStyles.bodySmall(context,
-              fontWeight: MyntFonts.semiBold),
-          unselectedLabelStyle: MyntWebTextStyles.bodySmall(context,
-              fontWeight: MyntFonts.medium),
-          dividerColor: Colors.transparent,
-          labelPadding: EdgeInsets.all(0),
-          // indicatorPadding: EdgeInsets.all(0),
-          indicatorSize: TabBarIndicatorSize.tab,
-          tabs: const [
-            Tab(text: "Base Key"),
-            Tab(text: "OAuth Key"),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Expanded(
-          child: TabBarView(
-            controller: _tabController,
-            children: const [
-              ApiKeyScreen(),
-              ApiKeyScreenNew(),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 // -----------------------------------------------------------------------------
 // TOTP INLINE WIDGET
 // -----------------------------------------------------------------------------

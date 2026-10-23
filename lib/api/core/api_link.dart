@@ -69,6 +69,7 @@ class ApiLinks {
   String get generateapiKeynewuser => '$goMyntURL/GetUserApiKey';
   String get getapikeynew => '$goMyntURL/GetAppKeyData';
   String get appkeystore => '$goMyntURL/AppKeyStore';
+  String get oauthAppsBase => '$oauthBase/oauth-apps';
   String get gettotp => "$goMyntURL/GetSecretKey";
   String get gentotp => "$goMyntURL/GenSecretKey";
 
