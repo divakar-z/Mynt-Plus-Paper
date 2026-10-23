@@ -1445,7 +1445,18 @@ class IPOProvider extends DefaultChangeNotifier {
       _myBidsload = false;
     } finally {
       _myBidsload = false;
+      // TC_426: the notifies above run while the loader flag is still on, so
+      // a client with no bids (e.g. "client details not found") kept seeing
+      // the loader until something else rebuilt the screen.
+      notifyListeners();
     }
+  }
+
+  Future<void> _refreshIpoOrderBookSilently() async {
+    try {
+      _ipoOrderBookModel = await api.fetchipoorderbook();
+      ordersplit();
+    } catch (e) {}
   }
 
   bool _singlepageapply = false;
@@ -1509,12 +1520,23 @@ class IPOProvider extends DefaultChangeNotifier {
       // ipotab();
 
       setSelectedTab(2); // "My Bids" tab
-      showResponsiveSuccess(
-          context,
-          (_ipoOrderResponcesModel?.msg != null &&
-                  _ipoOrderResponcesModel!.msg!.isNotEmpty)
-              ? _ipoOrderResponcesModel!.msg!
-              : 'Order placed successfully');
+      // The backend answers failures with HTTP 200 and only a msg (e.g.
+      // "Server Error " on a second cancel, "client details not found"), so
+      // only a msg that says success is shown as a green success toast.
+      final msg = (_ipoOrderResponcesModel?.msg ?? '').trim();
+      if (msg.isEmpty) {
+        showResponsiveSuccess(context, 'Order placed successfully');
+      } else if (msg.toLowerCase().contains('success')) {
+        showResponsiveSuccess(context, msg);
+      } else {
+        showResponsiveError(context, msg);
+      }
+
+      // The exchange replies a few seconds after the order is accepted, so the
+      // first refetch above still sees the bid as pending with no date. Fetch
+      // once more without the loader so the date, status and Open/Close split
+      // catch up on their own.
+      Future.delayed(const Duration(seconds: 5), _refreshIpoOrderBookSilently);
 
       return _ipoOrderResponcesModel;
     } catch (e) {
