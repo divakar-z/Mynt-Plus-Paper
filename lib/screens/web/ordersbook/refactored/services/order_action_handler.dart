@@ -4,6 +4,7 @@ import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/models/order_book_model/order_book_model.dart';
 import 'package:mynt_plus/models/order_book_model/gtt_order_book.dart';
+import 'package:mynt_plus/models/order_book_model/cancel_order_model.dart';
 import 'package:mynt_plus/provider/order_provider.dart';
 import 'package:mynt_plus/provider/market_watch_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
@@ -155,11 +156,22 @@ class OrderActionHandler {
       }
 
       // Proceed with cancel
-      await ref.read(orderProvider).fetchOrderCancel(
+      // await ref.read(orderProvider).fetchOrderCancel(
+      //       "${orderData.norenordno}",
+      //       context,
+      //       true,
+      //     );
+      final result = await ref.read(orderProvider).fetchOrderCancel(
             "${orderData.norenordno}",
             context,
             true,
           );
+      // A refused cancel used to close silently; show the exchange's reason.
+      final refusal = refusalMessage(result, 'Failed to cancel order');
+      if (refusal != null && context.mounted) {
+        ResponsiveSnackBar.showError(context, refusal);
+        return false;
+      }
 
      return true;
     } catch (e) {
@@ -257,12 +269,24 @@ class OrderActionHandler {
       }
 
       // Proceed with exit - pass false to handle result manually
-      await ref.read(orderProvider).fetchExitSNOOrd(
+      // await ref.read(orderProvider).fetchExitSNOOrd(
+      //       "${orderData.snonum}",
+      //       "${orderData.prd}",
+      //       context,
+      //       true,
+      //     );
+      final result = await ref.read(orderProvider).fetchExitSNOOrd(
             "${orderData.snonum}",
             "${orderData.prd}",
             context,
             true,
           );
+      // A refused exit used to close silently; show the exchange's reason.
+      final refusal = refusalMessage(result, 'Failed to exit order');
+      if (refusal != null && context.mounted) {
+        ResponsiveSnackBar.showError(context, refusal);
+        return false;
+      }
 
       return true;
     } catch (e) {
@@ -391,6 +415,17 @@ class OrderActionHandler {
   }
 
   // Private helper methods
+
+  /// Message to show when a cancel / exit call was not accepted, or null when
+  /// it went through. A session-expired reply is left alone: the provider
+  /// already handles it by sending the user to log in.
+  static String? refusalMessage(dynamic result, String fallback) {
+    if (result is! CancelOrderModel) return fallback;
+    if (result.stat == "Ok") return null;
+    final emsg = result.emsg?.trim() ?? '';
+    if (emsg.contains('Session Expired')) return null;
+    return emsg.isNotEmpty ? emsg : fallback;
+  }
 
   Future<bool?> _showCancelOrderDialog(OrderBookModel orderData) async {
     final symbol = orderData.displayName.trim();

@@ -523,6 +523,10 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
   //   return textPainter.width;
   // }
 
+  // The instrument text exactly as the Instrument cell shows it.
+  String _instrumentSortText(OrderBookModel order) =>
+      (order.masterName ?? (order.tsym ?? '')).replaceAll("-EQ", "").trim();
+
   // Sort orders based on 8 columns: Time, Type, Instrument, Product, Qty., LTP, Price, Status
   List<OrderBookModel> _getSortedOrders(List<OrderBookModel> orders) {
     if (_sortColumnIndex == null) return orders;
@@ -550,7 +554,10 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
           comparison = (a.trantype ?? '').compareTo(b.trantype ?? '');
           break;
         case 3: // Instrument
-          comparison = (a.tsym ?? '').compareTo(b.tsym ?? '');
+          // Sorted on the raw trading symbol, so F&O rows (shown by their
+          // display name) did not come out alphabetical. Sort on the shown name.
+          // comparison = (a.tsym ?? '').compareTo(b.tsym ?? '');
+          comparison = _instrumentSortText(a).compareTo(_instrumentSortText(b));
           break;
         case 4: // Product
           comparison =
@@ -1395,14 +1402,42 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
       child: ClipRect(
         child: Consumer(
           builder: (context, ref, child) {
-            final isExitAllOrder =
-                ref.watch(orderProvider.select((p) => p.isExitAllOrder));
+            // final isExitAllOrder =
+            //     ref.watch(orderProvider.select((p) => p.isExitAllOrder));
             final hasPendingOrders = filteredOrders.any((o) {
               final status = o.status?.toUpperCase() ?? '';
               return status == 'PENDING' ||
                   status == 'OPEN' ||
                   status == 'TRIGGER_PENDING';
             });
+            // Select-all ticked every open order, including the ones a search
+            // hides, so "Cancel (n)" cancelled orders the user could not see.
+            // It now works on the rows on screen that can be cancelled.
+            final liveOrders = ref.watch(orderProvider).openOrder ?? [];
+            bool isTicked(OrderBookModel o) {
+              final i =
+                  liveOrders.indexWhere((x) => x.norenordno == o.norenordno);
+              return i >= 0
+                  ? (liveOrders[i].isExitSelection ?? false)
+                  : (o.isExitSelection ?? false);
+            }
+
+            final visiblePending = filteredOrders.where((o) {
+              final status = o.status?.toUpperCase() ?? '';
+              return status == 'PENDING' ||
+                  status == 'OPEN' ||
+                  status == 'TRIGGER_PENDING';
+            }).toList();
+            final allVisibleTicked =
+                visiblePending.isNotEmpty && visiblePending.every(isTicked);
+            void setVisibleTicks(bool tick) {
+              for (final o in visiblePending) {
+                if (isTicked(o) == tick) continue;
+                final i =
+                    liveOrders.indexWhere((x) => x.norenordno == o.norenordno);
+                if (i >= 0) orderBook.selectExitOrder(i);
+              }
+            }
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               alignment: Alignment.centerLeft,
@@ -1424,14 +1459,20 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                   },
                 ),
                 child: shadcn.Checkbox(
-                  state: isExitAllOrder
+                  // state: isExitAllOrder
+                  //     ? shadcn.CheckboxState.checked
+                  //     : shadcn.CheckboxState.unchecked,
+                  // onChanged: hasPendingOrders
+                  //     ? (state) {
+                  //         orderBook.selectExitAllOrders(
+                  //             state == shadcn.CheckboxState.checked);
+                  //       }
+                  //     : null,
+                  state: allVisibleTicked
                       ? shadcn.CheckboxState.checked
                       : shadcn.CheckboxState.unchecked,
                   onChanged: hasPendingOrders
-                      ? (state) {
-                          orderBook.selectExitAllOrders(
-                              state == shadcn.CheckboxState.checked);
-                        }
+                      ? (state) => setVisibleTicks(!allVisibleTicked)
                       : null,
                   enabled: hasPendingOrders,
                   activeColor: resolveThemeColor(
