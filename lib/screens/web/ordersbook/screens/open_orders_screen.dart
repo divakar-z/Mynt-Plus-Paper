@@ -995,6 +995,11 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     // derivatives, else the tsym; remove "-EQ" and don't include exchange.
     final symbol = order.masterName ?? (order.tsym ?? '');
     final displayText = symbol.replaceAll("-EQ", "").trim();
+    // TC_58: AMO orders come back as OPEN / PENDING with amo = "Yes"; tag them
+    // next to the exchange so the Status badge keeps the real status.
+    final isAmo = (order.amo ?? '').toUpperCase() == 'YES';
+    final amoColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
 
     return GestureDetector(
       onTap: () => actionHandler.openOrderDetail(order),
@@ -1010,7 +1015,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               alignment: Alignment.centerLeft,
               child: Tooltip(
                 message:
-                    '$displayText${order.exch != null && order.exch!.isNotEmpty ? ' ${order.exch}' : ''}',
+                    '$displayText${order.exch != null && order.exch!.isNotEmpty ? ' ${order.exch}' : ''}${isAmo ? ' AMO' : ''}',
                 child: Padding(
                   padding: EdgeInsets.only(right: isHovered ? 105.0 : 0.0),
                   child: RichText(
@@ -1034,6 +1039,28 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                               lightColor: MyntColors.textSecondary,
                               fontWeight: MyntFonts.medium,
                             ).copyWith(fontSize: 10),
+                          ),
+                        // AMO tag (TC_58)
+                        if (isAmo)
+                          WidgetSpan(
+                            alignment: PlaceholderAlignment.middle,
+                            child: Container(
+                              margin: const EdgeInsets.only(left: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 4, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: amoColor.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                'AMO',
+                                style: MyntWebTextStyles.para(
+                                  context,
+                                  color: amoColor,
+                                  fontWeight: MyntFonts.medium,
+                                ).copyWith(fontSize: 10),
+                              ),
+                            ),
                           ),
                       ],
                     ),
