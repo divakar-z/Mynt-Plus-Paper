@@ -20,6 +20,18 @@ class OrdersDownloadHelper {
   static double _toDouble(String? val) => double.tryParse(val ?? '0') ?? 0;
   static String _fmt(double val) => val.toStringAsFixed(2);
 
+  // TC_44: MCX Qty in lots (raw units / lot size), same as the Open and
+  // Executed tables. Other exchanges use lot size 1.
+  static double _qtyInLots(OrderBookModel o) {
+    final rawQty = int.tryParse(o.qty ?? '0') ?? 0;
+    final lotSize = o.exch == 'MCX' ? (int.tryParse(o.ls ?? '1') ?? 1) : 1;
+    return (rawQty ~/ (lotSize > 0 ? lotSize : 1)).toDouble();
+  }
+
+  // TC_44: market orders show MKT for Price, same as the Open table.
+  static bool _isMarket(OrderBookModel o) =>
+      o.prctyp == 'MKT' || o.prctyp == 'MARKET';
+
   /// Resolve LTP from WebSocket data first, then model ltp, then model close price.
   static String _resolveLtp(String? token, String? modelLtp, String? closePrice, Map? socketData) {
     // 1. Try WebSocket live data
@@ -59,9 +71,11 @@ class OrdersDownloadHelper {
       (o.tsym ?? o.symbol ?? '').replaceAll('-EQ', '').trim(),
       o.exch ?? '',
       o.sPrdtAli ?? o.prd ?? '',
-      o.qty ?? '0',
+      // o.qty ?? '0',
+      _qtyInLots(o).toStringAsFixed(0),
       _fmt(_toDouble(_resolveLtp(o.token, o.ltp, o.c, socketData))),
-      _fmt(_toDouble(o.prc)),
+      // _fmt(_toDouble(o.prc)),
+      _isMarket(o) ? 'MKT' : _fmt(_toDouble(o.prc)),
       o.status ?? '',
     ]).toList();
 
@@ -109,9 +123,11 @@ class OrdersDownloadHelper {
           (o.tsym ?? o.symbol ?? '').replaceAll('-EQ', '').trim(),
           o.exch ?? '',
           o.sPrdtAli ?? o.prd ?? '',
-          _toDouble(o.qty),
+          // _toDouble(o.qty),
+          _qtyInLots(o),
           _toDouble(_resolveLtp(o.token, o.ltp, o.c, socketData)),
-          _toDouble(o.prc),
+          // _toDouble(o.prc),
+          _isMarket(o) ? 'MKT' : _toDouble(o.prc),
           o.status ?? '',
         ];
       },
@@ -135,7 +151,8 @@ class OrdersDownloadHelper {
       (o.tsym ?? o.symbol ?? '').replaceAll('-EQ', '').trim(),
       o.exch ?? '',
       o.sPrdtAli ?? o.prd ?? '',
-      o.qty ?? '0',
+      // o.qty ?? '0',
+      _qtyInLots(o).toStringAsFixed(0),
       _fmt(_toDouble(_resolveLtp(o.token, o.ltp, o.c, socketData))),
       _fmt(_toDouble(o.avgprc)),
       o.status ?? '',
@@ -185,7 +202,8 @@ class OrdersDownloadHelper {
           (o.tsym ?? o.symbol ?? '').replaceAll('-EQ', '').trim(),
           o.exch ?? '',
           o.sPrdtAli ?? o.prd ?? '',
-          _toDouble(o.qty),
+          // _toDouble(o.qty),
+          _qtyInLots(o),
           _toDouble(_resolveLtp(o.token, o.ltp, o.c, socketData)),
           _toDouble(o.avgprc),
           o.status ?? '',
@@ -530,7 +548,9 @@ class OrdersDownloadHelper {
         if (values[c] is double) {
           setNumCell(c, row, values[c] as double, numStyle);
         } else {
-          setTextCell(c, row, values[c].toString(), textStyle);
+          // MKT sits in the right-aligned Price column (TC_44).
+          setTextCell(c, row, values[c].toString(),
+              values[c] == 'MKT' ? rightStyle : textStyle);
         }
       }
     }

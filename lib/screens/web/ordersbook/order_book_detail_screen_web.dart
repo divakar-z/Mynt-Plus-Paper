@@ -521,7 +521,14 @@ class _OrderBookDetailScreenWebState
           _rowOfInfoData(
               "Type", _orderData.trantype == "B" ? "Buy" : "Sell", theme),
           _rowOfInfoData("Qty", _getQuantityDisplay(_orderData), theme),
-          _rowOfInfoData("Price", _orderData.prc ?? "-", theme),
+          // _rowOfInfoData("Price", _orderData.prc ?? "-", theme),
+          // Market orders show MKT, same as the Open table and download.
+          _rowOfInfoData(
+              "Price",
+              (_orderData.prctyp == "MKT" || _orderData.prctyp == "MARKET")
+                  ? "MKT"
+                  : (_orderData.prc ?? "-"),
+              theme),
           _rowOfInfoData("Avg Price", _orderData.avgprc ?? "0.00", theme),
           _rowOfInfoData("Trigger Price", _orderData.trgprc ?? "0.00", theme),
           _rowOfInfoData("Product / Type",
