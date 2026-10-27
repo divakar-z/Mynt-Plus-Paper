@@ -225,13 +225,21 @@ class _IpoOrderDetailsSheetBody extends ConsumerWidget {
                           ? "-"
                           : ipodateres(order.responseDatetime.toString()),
                     ),
-                    _buildDetailRow(
-                      context,
-                      "Reason",
-                      order.failReason == "" || order.failReason == null
-                          ? "Order placed successfully"
-                          : order.failReason.toString(),
-                    ),
+                    // _buildDetailRow(
+                    //   context,
+                    //   "Reason",
+                    //   order.failReason == "" || order.failReason == null
+                    //       ? "Order placed successfully"
+                    //       : order.failReason.toString(),
+                    // ),
+                    // TC_472: no fixed fallback text — the Reason row shows
+                    // only when the backend sends a reason.
+                    if ((order.failReason ?? "").trim().isNotEmpty)
+                      _buildDetailRow(
+                        context,
+                        "Reason",
+                        order.failReason.toString(),
+                      ),
 
                     const SizedBox(height: 32),
 
