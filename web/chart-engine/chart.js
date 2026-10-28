@@ -4209,6 +4209,7 @@ class Chart {
     // CPR's params are its per-line style settings, not inputs.
     if (ind.kind === 'cpr') return '';
     if (ind.kind === 'tcheck') return this._tcInputsLabel(ind);
+    if (ind.kind === 'ftcheck') return '';
     const parts = [];
     const p = ind.params || {};
     for (const key of Object.keys(p)) {
@@ -4229,6 +4230,7 @@ class Chart {
     // CPR: every visible level at the newest bar (TradingView's status line).
     if (ind.kind === 'cpr') return this._cprLegendValues(ind);
     if (ind.kind === 'tcheck') return this._tcLegendValues(ind);
+    if (ind.kind === 'ftcheck') return this._ftLegendValues(ind);
     if (ind.kind !== 'ichi' || !this.candles.length) return null;
     const ic = this._computeIchimoku(ind);
     const i = this.candles.length - 1;
@@ -4356,7 +4358,8 @@ class Chart {
     ctx.font = '500 11px Geist, sans-serif';
 
     for (const ind of this._indicators) {
-      const kindLabel = ind.kind === 'tcheck' ? 'Trend Checker by GP' : (ind.kind || '').toUpperCase();
+      const kindLabel = ind.kind === 'tcheck' ? 'Trend Checker by GP'
+          : ind.kind === 'ftcheck' ? 'Future Trend Checker by GP' : (ind.kind || '').toUpperCase();
       const multi = this._indicatorLastValues(ind);
       // Multi-line indicators list their inputs (Ichimoku: 9 26 52 26), not
       // the single `period` the store gives every indicator.
@@ -5410,6 +5413,13 @@ class Chart {
       // Trend Checker's pane labels sit in empty room right of the newest bar.
       if (ind.kind === 'tcheck') {
         if (!((ind.params || {}).labelsOn < 1) && n < 8) n = 8;
+        continue;
+      }
+      // Future Trend Checker draws the next period's CPR there, with its
+      // names and prices (~200 px) after it.
+      if (ind.kind === 'ftcheck') {
+        const want = _FT_SPAN + 1 + Math.ceil(200 / Math.max(2, this.view.cellW || 8));
+        if (n < want) n = Math.min(160, want);
         continue;
       }
       if (ind.kind !== 'ichi') continue;

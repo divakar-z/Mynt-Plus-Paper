@@ -3650,12 +3650,14 @@ class _IndicatorSettingsDialogState
           widget.indicatorId,
           // CPR and Trend Checker have no length input — keep the period.
           period: (cfg.kind.toLowerCase() == 'cpr' ||
-                  cfg.kind.toLowerCase() == 'tcheck')
+                  cfg.kind.toLowerCase() == 'tcheck' ||
+                  cfg.kind.toLowerCase() == 'ftcheck')
               ? cfg.period
               : nextPeriod.clamp(1, 999),
           color: _color,
           thickness: _thickness,
-          params: cfg.kind.toLowerCase() == 'tcheck'
+          params: (cfg.kind.toLowerCase() == 'tcheck' ||
+                  cfg.kind.toLowerCase() == 'ftcheck')
               ? _changedParams(cfg.kind)
               : Map<String, num>.from(_values),
         );
@@ -3732,12 +3734,18 @@ class _IndicatorSettingsDialogState
     final params = schema?.params ?? const <IndicatorParam>[];
     final isCpr = cfg.kind.toLowerCase() == 'cpr';
     final isTc = cfg.kind.toLowerCase() == 'tcheck';
+    final isFt = cfg.kind.toLowerCase() == 'ftcheck';
     final useGenericPeriod = schema == null &&
         _kKindsWithPeriod.contains(cfg.kind.toLowerCase());
-    final kindLabel =
-        isTc ? 'Trend Checker by GP' : cfg.kind.toUpperCase();
+    final kindLabel = isTc
+        ? 'Trend Checker by GP'
+        : isFt
+            ? 'Future Trend Checker by GP'
+            : cfg.kind.toUpperCase();
     final humanLabel = isTc
         ? 'CPR levels and moving averages'
+        : isFt
+            ? 'Next day, week and month CPR'
         : (schema?.displayName ?? _humanKind(cfg.kind.toLowerCase()));
     // Header value chip: single-param kinds (or legacy ones with a single
     // period) show the value next to the kind label; multi-param kinds drop
@@ -3752,7 +3760,8 @@ class _IndicatorSettingsDialogState
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: isTc ? 640 : isCpr ? 580 : 460),
+        constraints: BoxConstraints(
+            maxWidth: isTc || isFt ? 640 : isCpr ? 580 : 460),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: surface,
@@ -3846,6 +3855,15 @@ class _IndicatorSettingsDialogState
                     onChanged: (k, v) => setState(() => _values[k] = v),
                   ),
                 )
+              else if (isFt)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(context).height * 0.62),
+                  child: _FtSettings(
+                    values: _values,
+                    onChanged: (k, v) => setState(() => _values[k] = v),
+                  ),
+                )
               else if (schema != null)
                 for (final p in params) ...[
                   _SettingsRow(
@@ -3870,7 +3888,7 @@ class _IndicatorSettingsDialogState
                 ),
               ],
 
-              if (!isCpr && !isTc) ...[
+              if (!isCpr && !isTc && !isFt) ...[
               _SettingsRow(
                 label: 'Color',
                 description: 'Line color for this indicator',
@@ -4236,6 +4254,10 @@ class _TcSettingsState extends State<_TcSettings> {
         group('Daily CPR', 'dOn', 'pdOn', 'PDH / PDL'),
         group('Weekly CPR', 'wOn', 'pwOn', 'PWH / PWL'),
         group('Monthly CPR', 'mOn', 'pmOn', 'PMH / PML'),
+        ..._tcExtraInputs(
+            _GpRows(context, 'tcheck', widget.values, widget.onChanged, _open,
+                (k) => setState(() => _open = k)),
+            accent),
         _section('MOVING AVERAGES'),
         for (var i = 1; i <= 5; i++) _maInputRow(i, accent),
         const SizedBox(height: 14),
@@ -4590,10 +4612,14 @@ class _ParamStepperState extends State<_ParamStepper> {
     return (v * stepInv).round() / stepInv;
   }
 
+  // As many decimals as the step has (0.005 -> 3), trailing zeros dropped.
   String _format(num v) {
     if (widget.param.isInt) return v.toInt().toString();
-    final fixed = v.toStringAsFixed(1);
-    return fixed.endsWith('.0') ? fixed.substring(0, fixed.length - 2) : fixed;
+    final step = widget.param.step.toString();
+    final dp = step.contains('.') ? step.split('.').last.length : 1;
+    final fixed = v.toStringAsFixed(dp < 1 ? 1 : dp)
+        .replaceFirst(RegExp(r'0+$'), '');
+    return fixed.endsWith('.') ? fixed.substring(0, fixed.length - 1) : fixed;
   }
 
   void _commit(String raw) {
@@ -5068,6 +5094,213 @@ class _GradientPrimaryButtonState extends State<_GradientPrimaryButton> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── Trend Checker extras + Future Trend Checker settings ───────────────────
+// Rows for the schema params of the two Trend Checker studies: a label with
+// a dropdown / stepper / colour button from the param's own definition.
+class _GpRows {
+  final BuildContext context;
+  final String kind;
+  final Map<String, num> values;
+  final void Function(String key, num value) onChanged;
+  final String? openColor;
+  final void Function(String? key) onOpenColor;
+  _GpRows(this.context, this.kind, this.values, this.onChanged,
+      this.openColor, this.onOpenColor);
+
+  IndicatorParam param(String key) =>
+      schemaFor(kind)!.params.firstWhere((p) => p.key == key);
+  num v(String key) => values[key] ?? param(key).defaultValue;
+
+  Widget section(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
+        child: Text(text,
+            style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textSecondaryDark,
+                lightColor: MyntColors.textSecondary)),
+      );
+
+  Widget check(String key, String label, Color accent) {
+    final on = v(key) >= 1;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 20, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: InkWell(
+          onTap: () => onChanged(key, on ? 0 : 1),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Checkbox(
+                value: on,
+                activeColor: accent,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: (x) => onChanged(key, (x ?? false) ? 1 : 0),
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(label,
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.body(context)),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Two switches on one line (a level group and its high / low).
+  Widget checkPair(String a, String aLabel, String b, String bLabel,
+          Color accent) =>
+      Row(children: [
+        SizedBox(width: 230, child: check(a, aLabel, accent)),
+        Expanded(child: check(b, bLabel, accent)),
+      ]);
+
+  Widget row(String key, {String? label}) {
+    final p = param(key);
+    final Widget control = p.isEnum
+        ? _ParamDropdown(
+            param: p, value: v(key), onChanged: (x) => onChanged(key, x))
+        : _ParamStepper(
+            param: p, value: v(key), onChanged: (x) => onChanged(key, x));
+    return _SettingsRow(
+        label: label ?? p.label, description: '', control: control);
+  }
+
+  Widget colorRow(String key, String label) {
+    final hex =
+        '#${(v(key).toInt() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+    final open = openColor == key;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SettingsRow(
+          label: label,
+          description: '',
+          control: _ColorButton(
+              color: hex, open: open, onTap: () => onOpenColor(open ? null : key)),
+        ),
+        if (open)
+          _ColorPaletteRow(
+            selected: hex,
+            palette: _kCprPalette,
+            onPick: (h) => onChanged(
+                key, int.parse(h.replaceFirst('#', ''), radix: 16) & 0xFFFFFF),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> atr(Color accent, String includeLabel) => [
+        section('ATR PHASE'),
+        row('atrLen'),
+        row('atrAvg'),
+        check('atrInc', includeLabel, accent),
+        row('atrLo'),
+        row('atrHi'),
+      ];
+
+  List<Widget> widths(String heading) => [
+        section(heading),
+        for (final g in const [('d', 'Daily'), ('w', 'Weekly'), ('m', 'Monthly')]) ...[
+          row('${g.$1}Un', label: '${g.$2} · Ultra Narrow ≤ %'),
+          row('${g.$1}N', label: '${g.$2} · Narrow ≤ %'),
+          row('${g.$1}M', label: '${g.$2} · Medium ≤ %'),
+        ],
+      ];
+}
+
+/// The Trend Checker's 27 Oct inputs, shown under its CPR settings.
+List<Widget> _tcExtraInputs(_GpRows r, Color accent) => [
+      r.section('CPR SUMMARY (RIGHT EDGE)'),
+      r.check('sumOn', 'Show CPR summary under the pivot label', accent),
+      r.section('BACKTEST TAGS'),
+      r.check('tagOn', 'Show CPR tag at start of each period (backtest mode)',
+          accent),
+      r.check('tagW', 'Add CPR width to tag', accent),
+      r.check('tagA', 'Add ATR phase to tag', accent),
+      r.row('tagPos'),
+      r.row('tagStyle'),
+      r.section('VIRGIN CPR'),
+      r.check('virginOn', 'Show Virgin CPR zone (extends one period)', accent),
+      ...r.atr(accent, 'Include yesterday in the 14-day average'),
+      r.section('MARKET PULSE PANEL'),
+      r.check('pulseOn', 'Show Market Pulse panel', accent),
+      r.row('pulsePos'),
+      r.row('pulseSize'),
+      r.colorRow('pulseBg', 'Panel background'),
+      r.colorRow('pulseTx', 'Text'),
+      r.check('pulseType', 'CPR Type', accent),
+      r.check('pulseWidth', 'Width', accent),
+      r.check('pulseAtr', 'ATR Phase', accent),
+      r.check('pulseRead', 'Read', accent),
+      ...r.widths('CPR WIDTH (% OF PIVOT)'),
+    ];
+
+class _FtSettings extends StatefulWidget {
+  final Map<String, num> values;
+  final void Function(String key, num value) onChanged;
+  const _FtSettings({required this.values, required this.onChanged});
+
+  @override
+  State<_FtSettings> createState() => _FtSettingsState();
+}
+
+class _FtSettingsState extends State<_FtSettings> {
+  String? _open;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    final r = _GpRows(context, 'ftcheck', widget.values, widget.onChanged,
+        _open, (k) => setState(() => _open = k));
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          r.section('CPR LEVELS'),
+          r.row('mode'),
+          r.check('autoHl', 'Auto: show previous high / low', accent),
+          r.checkPair('dOn', 'Manual: Day CPR', 'pdOn', 'PDH / PDL', accent),
+          r.checkPair('wOn', 'Manual: Week CPR', 'pwOn', 'PWH / PWL', accent),
+          r.checkPair('mOn', 'Manual: Month CPR', 'pmOn', 'PMH / PML', accent),
+          r.row('todayW'),
+          r.row('nextW'),
+          r.section('NEXT CPR PLACEMENT'),
+          r.check('nextOn', 'Draw next CPR on its next trading date', accent),
+          r.check('namesOn', 'Show level names and prices', accent),
+          r.section('TREND TABLE'),
+          r.check('tableOn', 'Show Trend Table', accent),
+          r.row('tablePos'),
+          r.row('tableSize'),
+          r.check('pctOn', 'Show % values in table', accent),
+          ...r.atr(accent, 'Include the latest period in the average'),
+          for (final g in const [('d', 'DAILY'), ('w', 'WEEKLY'), ('m', 'MONTHLY')]) ...[
+            r.section('${g.$2} LEVELS (%)'),
+            r.row('${g.$1}Un', label: 'Width: Ultra Narrow ≤'),
+            r.row('${g.$1}N', label: 'Narrow ≤'),
+            r.row('${g.$1}M', label: 'Width: Medium ≤'),
+            r.row('${g.$1}Zn', label: 'CPR → Zone: Narrow ≤'),
+            r.row('${g.$1}Zm', label: 'Normal ≤'),
+            r.row('${g.$1}Gn', label: g.$1 == 'd'
+                ? 'R1↔PDH / S1↔PDL: Narrow ≤'
+                : g.$1 == 'w'
+                    ? 'R1↔PWH / S1↔PWL: Narrow ≤'
+                    : 'R1↔PMH / S1↔PML: Narrow ≤'),
+            r.row('${g.$1}Gm', label: 'Normal ≤'),
+          ],
+          const SizedBox(height: 14),
+        ],
       ),
     );
   }
