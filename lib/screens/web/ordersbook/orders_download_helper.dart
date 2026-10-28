@@ -124,7 +124,9 @@ class OrdersDownloadHelper {
           o.exch ?? '',
           o.sPrdtAli ?? o.prd ?? '',
           // _toDouble(o.qty),
-          _qtyInLots(o),
+          // _qtyInLots(o),
+          // TC_133: whole number so the Excel shows 1, not 1.00.
+          _WholeNum(_qtyInLots(o).toInt()),
           _toDouble(_resolveLtp(o.token, o.ltp, o.c, socketData)),
           // _toDouble(o.prc),
           _isMarket(o) ? 'MKT' : _toDouble(o.prc),
@@ -203,7 +205,9 @@ class OrdersDownloadHelper {
           o.exch ?? '',
           o.sPrdtAli ?? o.prd ?? '',
           // _toDouble(o.qty),
-          _qtyInLots(o),
+          // _qtyInLots(o),
+          // TC_133: whole number so the Excel shows 1, not 1.00.
+          _WholeNum(_qtyInLots(o).toInt()),
           _toDouble(_resolveLtp(o.token, o.ltp, o.c, socketData)),
           _toDouble(o.avgprc),
           o.status ?? '',
@@ -280,7 +284,9 @@ class OrdersDownloadHelper {
           (t.tsym ?? t.symbol ?? '').replaceAll('-EQ', '').trim(),
           t.exch ?? '',
           t.sPrdtAli ?? t.prd ?? '',
-          _toDouble(t.flqty ?? t.qty),
+          // _toDouble(t.flqty ?? t.qty),
+          // TC_133: whole number so the Excel shows 1, not 1.00.
+          _WholeNum(_toDouble(t.flqty ?? t.qty).toInt()),
           _toDouble(_resolveLtp(t.token, t.ltp, null, socketData)),
           _toDouble(t.flprc),
         ];
@@ -487,6 +493,12 @@ class OrdersDownloadHelper {
     numStyle.numberFormat = numberFormat;
     addBorders(numStyle);
 
+    // TC_133: Qty is a whole number - no decimals, still a number cell.
+    final intStyle = workbook.styles.add('intStyle');
+    intStyle.hAlign = xlsio.HAlignType.right;
+    intStyle.numberFormat = '#,##0';
+    addBorders(intStyle);
+
     // -- Helpers (col/row stay 0-based to match the previous version) --
     void setTextCell(int col, int row, String value, xlsio.Style style) {
       if (value.isEmpty) return;
@@ -501,6 +513,13 @@ class OrdersDownloadHelper {
         ..setNumber(value)
         ..cellStyle = style;
       trackWidth(col, value.toStringAsFixed(2));
+    }
+
+    void setIntCell(int col, int row, int value, xlsio.Style style) {
+      sheet.getRangeByIndex(row + 1, col + 1)
+        ..setNumber(value.toDouble())
+        ..cellStyle = style;
+      trackWidth(col, value.toString());
     }
 
     // ============================================================
@@ -545,7 +564,11 @@ class OrdersDownloadHelper {
       final values = rowBuilder(r);
       final row = 5 + r;
       for (int c = 0; c < values.length; c++) {
-        if (values[c] is double) {
+        // Checked first: on web an int is also `is double`, so a plain int
+        // would fall into the 2-decimal branch below.
+        if (values[c] is _WholeNum) {
+          setIntCell(c, row, (values[c] as _WholeNum).value, intStyle);
+        } else if (values[c] is double) {
           setNumCell(c, row, values[c] as double, numStyle);
         } else {
           // MKT sits in the right-aligned Price column (TC_44).
@@ -770,4 +793,11 @@ class OrdersDownloadHelper {
       ..click();
     html.Url.revokeObjectUrl(url);
   }
+}
+
+/// TC_133: marks an Excel value as a whole number (Qty). On web, ints and
+/// doubles are the same JS number, so a type check can't tell them apart.
+class _WholeNum {
+  final int value;
+  const _WholeNum(this.value);
 }

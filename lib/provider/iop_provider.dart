@@ -1524,12 +1524,28 @@ class IPOProvider extends DefaultChangeNotifier {
       // "Server Error " on a second cancel, "client details not found"), so
       // only a msg that says success is shown as a green success toast.
       final msg = (_ipoOrderResponcesModel?.msg ?? '').trim();
-      if (msg.isEmpty) {
-        showResponsiveSuccess(context, 'Order placed successfully');
-      } else if (msg.toLowerCase().contains('success')) {
-        showResponsiveSuccess(context, msg);
+      // if (msg.isEmpty) {
+      //   showResponsiveSuccess(context, 'Order placed successfully');
+      // } else if (msg.toLowerCase().contains('success')) {
+      //   showResponsiveSuccess(context, msg);
+      // } else {
+      //   showResponsiveError(context, msg);
+      // }
+      // The backend now sends a separate status ("order initiated success")
+      // with a longer msg that no longer says "success", so a successful
+      // place/cancel showed a red Error toast. Colour by status when present;
+      // replies without it keep the msg check.
+      final status =
+          (_ipoOrderResponcesModel?.status ?? '').trim().toLowerCase();
+      final bool isSuccess = status.isNotEmpty
+          ? status.contains('success')
+          : (msg.isEmpty || msg.toLowerCase().contains('success'));
+      if (isSuccess) {
+        showResponsiveSuccess(
+            context, msg.isEmpty ? 'Order placed successfully' : msg);
       } else {
-        showResponsiveError(context, msg);
+        showResponsiveError(context,
+            msg.isNotEmpty ? msg : (_ipoOrderResponcesModel?.status ?? ''));
       }
 
       // The exchange replies a few seconds after the order is accepted, so the

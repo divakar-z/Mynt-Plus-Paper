@@ -93,11 +93,33 @@ mixin IPOApi on ApiCore {
     }
 
     if (menudata.flow == 'can') {
-      data['BID'] = [
-        menudata.type == 'NSE'
-            ? {"activityType": "cancel"}
-            : {"actioncode": "d"}
-      ];
+      // data['BID'] = [
+      //   menudata.type == 'NSE'
+      //       ? {"activityType": "cancel"}
+      //       : {"actioncode": "d"}
+      // ];
+      // BSE cancel needs the full bid (same shape as a new bid, actioncode
+      // "d"); the bare {"actioncode": "d"} was rejected by the backend.
+      // NSE is unchanged. No bids on hand keeps the old short form.
+      String clean(String? v) => (v == null || v == 'null') ? '' : v;
+      data['BID'] = menudata.type == 'NSE'
+          ? [
+              {"activityType": "cancel"}
+            ]
+          : menudata.cancelBids.isEmpty
+              ? [
+                  {"actioncode": "d"}
+                ]
+              : menudata.cancelBids
+                  .map((b) => {
+                        "actioncode": "d",
+                        "quantity": clean(b.quantity),
+                        "cuttoffflag": b.isCutOffFor(menudata.type),
+                        "rate": clean(b.rate),
+                        "bidid": clean(b.bidid),
+                        "orderno": clean(b.orderno),
+                      })
+                  .toList();
       data.remove('UPI');
       data.remove('company_name');
     }

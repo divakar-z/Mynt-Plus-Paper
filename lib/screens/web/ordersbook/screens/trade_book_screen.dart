@@ -1075,6 +1075,21 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
   // }
 
   // Sort trades based on 8 columns: Trade ID, Fill time, Type, Instrument, Product, Qty., Avg. Price, LTP
+  // The LTP exactly as _TradeLTPCell shows it: socket price, else avgprc.
+  double _shownLtp(TradeBookModel trade) {
+    final socketLtp = ref
+        .read(websocketProvider)
+        .socketDatas[trade.token ?? '']?['lp']
+        ?.toString();
+    final ltp = (socketLtp == null ||
+            socketLtp == 'null' ||
+            socketLtp.isEmpty ||
+            (double.tryParse(socketLtp) ?? 0) == 0)
+        ? (trade.avgprc ?? '0.00')
+        : socketLtp;
+    return double.tryParse(ltp) ?? 0;
+  }
+
   List<TradeBookModel> _getSortedTrades(List<TradeBookModel> trades) {
     if (_sortColumnIndex == null) return trades;
 
@@ -1115,9 +1130,11 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
           comparison = (int.tryParse(a.qty ?? '0') ?? 0)
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
-        case 6: // LTP (using avgprc as fallback since LTP comes from websocket)
-          comparison = (double.tryParse(a.avgprc ?? '0') ?? 0)
-              .compareTo(double.tryParse(b.avgprc ?? '0') ?? 0);
+        case 6: // LTP
+          // Sorted on avgprc, not the LTP the cell shows. Sort on the shown LTP.
+          // comparison = (double.tryParse(a.avgprc ?? '0') ?? 0)
+          //     .compareTo(double.tryParse(b.avgprc ?? '0') ?? 0);
+          comparison = _shownLtp(a).compareTo(_shownLtp(b));
           break;
         case 7: // Avg. Price
           comparison = (double.tryParse(a.avgprc ?? '0') ?? 0)
@@ -1413,7 +1430,9 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
       await ResponsiveNavigation.toPlaceOrderScreen(
         context: context,
         arguments: {
-          "orderArg": tradeRepeatOrderArgs(trade),
+          // "orderArg": tradeRepeatOrderArgs(trade),
+          "orderArg": tradeRepeatOrderArgs(trade,
+              orders: ref.read(orderProvider).allOrder),
           "scripInfo": scripInfo,
           "isBskt": "",
         },

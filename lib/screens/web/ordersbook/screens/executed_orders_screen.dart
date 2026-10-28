@@ -1044,8 +1044,11 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
         case 5: // LTP
-          comparison = (double.tryParse(a.ltp ?? '0') ?? 0.0)
-              .compareTo(double.tryParse(b.ltp ?? '0') ?? 0.0);
+          // order.ltp is never filled on web (the cell shows the socket
+          // price), so every row compared as 0. Sort on the shown LTP.
+          // comparison = (double.tryParse(a.ltp ?? '0') ?? 0.0)
+          //     .compareTo(double.tryParse(b.ltp ?? '0') ?? 0.0);
+          comparison = _shownLtp(a).compareTo(_shownLtp(b));
           break;
         case 6: // Avg price
           comparison = (double.tryParse(a.avgprc ?? '0') ?? 0.0)
@@ -1085,6 +1088,22 @@ class _ExecutedOrdersScreenState extends ConsumerState<ExecutedOrdersScreen> {
     final filledQty = rawFilled ~/ lotSize;
     final totalQty = rawQty ~/ lotSize;
     return '$filledQty / $totalQty';
+  }
+
+  // The LTP exactly as _OrderBookLTPCell shows it: socket price, else
+  // _getValidLTP.
+  double _shownLtp(OrderBookModel order) {
+    final socketLtp = ref
+        .read(websocketProvider)
+        .socketDatas[order.token ?? '']?['lp']
+        ?.toString();
+    final ltp = (socketLtp == null ||
+            socketLtp == 'null' ||
+            socketLtp.isEmpty ||
+            (double.tryParse(socketLtp) ?? 0) == 0)
+        ? _getValidLTP(order)
+        : socketLtp;
+    return double.tryParse(ltp) ?? 0;
   }
 
   String _getValidLTP(OrderBookModel order) {

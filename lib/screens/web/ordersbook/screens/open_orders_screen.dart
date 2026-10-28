@@ -527,6 +527,22 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
   String _instrumentSortText(OrderBookModel order) =>
       (order.masterName ?? (order.tsym ?? '')).replaceAll("-EQ", "").trim();
 
+  // The LTP exactly as _OrderLTPCell shows it: socket price, else the
+  // order's LTP / close fallback.
+  double _shownLtp(OrderBookModel order) {
+    final socketLtp = ref
+        .read(websocketProvider)
+        .socketDatas[order.token ?? '']?['lp']
+        ?.toString();
+    final ltp = (socketLtp == null ||
+            socketLtp == 'null' ||
+            socketLtp.isEmpty ||
+            (double.tryParse(socketLtp) ?? 0) == 0)
+        ? CellFormatters.getValidLTP(order)
+        : socketLtp;
+    return double.tryParse(ltp) ?? 0;
+  }
+
   // Sort orders based on 8 columns: Time, Type, Instrument, Product, Qty., LTP, Price, Status
   List<OrderBookModel> _getSortedOrders(List<OrderBookModel> orders) {
     if (_sortColumnIndex == null) return orders;
@@ -568,8 +584,11 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
         case 6: // LTP
-          comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
-              .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
+          // order.ltp is never filled on web (the cell shows the socket
+          // price), so every row compared as 0. Sort on the shown LTP.
+          // comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
+          //     .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
+          comparison = _shownLtp(a).compareTo(_shownLtp(b));
           break;
         case 7: // Price
           comparison = (double.tryParse(a.prc ?? '0') ?? 0)
@@ -713,7 +732,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                             buildHeaderCell('Type', 2),
                             buildHeaderCell('Instrument', 3),
                             buildHeaderCell('Product', 4, true),
-                            buildHeaderCell('Qty.', 5, true),
+                            buildHeaderCell('Qty', 5, true),
                             buildHeaderCell('LTP', 6, true),
                             buildHeaderCell('Price', 7, true),
                             buildHeaderCell('Status', 8, true),
