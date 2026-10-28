@@ -2362,6 +2362,7 @@
     { kind: 'pivots',   label: 'PIV',    fullName: 'Pivot Points',                category: 'trend' },
     { kind: 'cpr',      label: 'CPR',    fullName: 'CPR with Pivot Level Daily',  category: 'trend' },
     { kind: 'tcheck',   label: 'Trend Checker by GP', fullName: 'CPR levels + moving averages', category: 'trend' },
+    { kind: 'ftcheck',  label: 'Future Trend Checker by GP', fullName: 'Next day / week / month CPR', category: 'trend' },
   ];
   const INDICATOR_CATEGORIES = [
     { value: 'all',        label: 'All' },
@@ -2410,7 +2411,7 @@
         row.className = 'tb-fx-active-row';
         row.innerHTML = '<span class="tb-fx-swatch" style="background:'
             + (ind.color || '#3B82F6') + '"></span>'
-            + '<span class="tb-fx-active-name">' + (ind.kind === 'tcheck' ? 'Trend Checker by GP' : (ind.kind || '').toUpperCase()) + '</span>'
+            + '<span class="tb-fx-active-name">' + (ind.kind === 'tcheck' ? 'Trend Checker by GP' : ind.kind === 'ftcheck' ? 'Future Trend Checker by GP' : (ind.kind || '').toUpperCase()) + '</span>'
             + (ind.period > 0
                 ? '<span class="tb-fx-active-period">' + ind.period + '</span>'
                 : '')

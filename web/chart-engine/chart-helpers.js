@@ -556,9 +556,9 @@ function cprDecimals(params) {
 // Missing keys mean "default", so a saved indicator only needs the values the
 // user changed. Option orders MUST match indicator_schema.dart.
 const TC_GROUPS = [
-  { id: 'd', pre: 'Daily',   hl: ['PDH', 'PDL'], short: 'D', color: '#2962FF', hlColor: '#0D3CFF' },
-  { id: 'w', pre: 'Weekly',  hl: ['PWH', 'PWL'], short: 'W', color: '#C41D9D', hlColor: '#C41D9D' },
-  { id: 'm', pre: 'Monthly', hl: ['PMH', 'PML'], short: 'M', color: '#F58FD8', hlColor: '#F58FD8' },
+  { id: 'd', pre: 'Daily',   hl: ['PDH', 'PDL'], short: 'D', color: '#2962FF', hlColor: '#000000' },
+  { id: 'w', pre: 'Weekly',  hl: ['PWH', 'PWL'], short: 'W', color: '#C41D9D', hlColor: '#000000' },
+  { id: 'm', pre: 'Monthly', hl: ['PMH', 'PML'], short: 'M', color: '#F58FD8', hlColor: '#000000' },
 ];
 // Study order per group: PDH, PDL, CPR, BC, TC, R1, S1, R2, S2, R3, S3, R4, S4.
 const TC_LINES = (() => {
@@ -585,11 +585,11 @@ const TC_BANDS = TC_GROUPS.map((g) => ({
 const TC_MA_TYPES = ['SMA', 'EMA', 'WMA', 'RMA', 'HMA', 'VWMA'];
 const TC_MA_SOURCES = ['close', 'open', 'high', 'low', 'hl2', 'hlc3', 'ohlc4'];
 const TC_MA_DEFAULTS = [
-  { on: 1, len: 10,  color: '#F5BF00' },
-  { on: 0, len: 20,  color: '#178A17' },
-  { on: 0, len: 50,  color: '#FF2222' },
-  { on: 0, len: 100, color: '#1A0000' },
-  { on: 0, len: 200, color: '#1E7FFF' },
+  { on: 0, len: 10,  color: '#F6C309' },
+  { on: 0, len: 20,  color: '#157A11' },
+  { on: 0, len: 50,  color: '#FC1A1A' },
+  { on: 0, len: 100, color: '#160101' },
+  { on: 0, len: 200, color: '#0C7DF6' },
 ];
 const _TC_DEF_WIDTH = 1;
 const _TC_DEF_TYPE = 10;     // circles
@@ -833,6 +833,272 @@ function tcMa(candles, typeIdx, srcIdx, len) {
   }
 }
 
+// ── Trend Checker analytics + Future Trend Checker ───────────────────────────
+// CPR type (relationship to the CPR before it), width class, ATR phase and the
+// "read" of the two, as the TradingView studies of this kind show them in
+// their tables and tags. The ATR phase compares a period's true range (high-low
+// widened to the previous period's close) with the average true range of the
+// last `len` periods of the same kind.
+// Both studies are closed-source: the rules below were measured off them
+// (docs/TREND_CHECKER_GP_SPEC.md) and the tests pin the measured values.
+
+// Relationship ids: index into GP_RELATIONS.
+const GP_RELATIONS = [
+  { key: 'asc',  full: 'Ascending CPR',      short: 'ASC',       sym: '▲', next: 'Ascending',      bias: 'Bullish',      color: '#22AB94', soft: '#A5D6A7' },
+  { key: 'desc', full: 'Descending CPR',     short: 'DESC',      sym: '▼', next: 'Descending',     bias: 'Bearish',      color: '#F05454', soft: '#EF9A9A' },
+  { key: 'olh',  full: 'Overlapping Higher', short: 'OL Higher', sym: '△', next: 'Overlap Higher', bias: 'Mild Bullish', color: '#66C29A', soft: '#DCEDC8' },
+  { key: 'oll',  full: 'Overlapping Lower',  short: 'OL Lower',  sym: '▽', next: 'Overlap Lower',  bias: 'Mild Bearish', color: '#F28C8C', soft: '#FFCDD2' },
+  { key: 'out',  full: 'Outside CPR',        short: 'Outside',   sym: '⊙', next: 'Outside',        bias: 'Sideways',     color: '#C462D6', soft: '#E0E0E0' },
+  { key: 'in',   full: 'Inside CPR',         short: 'Inside',    sym: '◆', next: 'Inside',         bias: 'Compression (wait for breakout)', color: '#7E8AA8', soft: '#E0E0E0' },
+];
+const GP_WIDTHS = ['Ultra Narrow', 'Narrow', 'Medium', 'Wide'];
+const GP_PHASES = [
+  { name: 'Contraction', arrow: '↓', color: '#BBDEFB' },
+  { name: 'Normal',      arrow: '•', color: '#FFFFFF' },
+  { name: 'Expansion',   arrow: '↑', color: '#FFCC80' },
+];
+// Read = GP_READS[width class][phase].
+const GP_READS = [
+  ['Strong Compression', 'Breakout watch',          'Stretched'],
+  ['Strong Compression', 'Breakout watch',          'Stretched'],
+  ['Compressed',         'Balanced - follow price', 'Stretched'],
+  ['Compressed',         'Range day likely',        'Overstretched'],
+];
+const GP_READ_COLORS = {
+  'Strong Compression': '#A5D6A7', 'Breakout watch': '#E0E0E0', 'Stretched': '#FFCC80',
+  'Compressed': '#BBDEFB', 'Balanced - follow price': '#E0E0E0', 'Range day likely': '#E0E0E0',
+  'Overstretched': '#FFA726',
+};
+// Width thresholds (% of pivot): Ultra Narrow <=, Narrow <=, Medium <=, per
+// group, and the param keys that override them.
+const GP_WIDTH_DEFAULTS = { d: [0.05, 0.1, 0.2], w: [0.125, 0.25, 0.5], m: [0.25, 0.5, 1] };
+
+function _gpNum(p, key, def) {
+  const v = p ? p[key] : undefined;
+  return (typeof v === 'number' && isFinite(v)) ? v : def;
+}
+
+// Relationship of a CPR to the one before it ({ bc, tc, pivot } each).
+function gpRelation(cur, prev) {
+  const top = Math.max(cur.bc, cur.tc), bot = Math.min(cur.bc, cur.tc);
+  const pt = Math.max(prev.bc, prev.tc), pb = Math.min(prev.bc, prev.tc);
+  if (bot > pt) return 0;
+  if (top < pb) return 1;
+  if (top > pt && bot < pb) return 4;
+  if (top < pt && bot > pb) return 5;
+  return cur.pivot >= prev.pivot ? 2 : 3;
+}
+
+function gpWidthPct(lv) { return Math.abs(lv.tc - lv.bc) / lv.pivot * 100; }
+
+// 0 Ultra Narrow .. 3 Wide; th = [ultra, narrow, medium] (inclusive limits).
+function gpWidthClass(pct, th) {
+  if (pct <= th[0]) return 0;
+  if (pct <= th[1]) return 1;
+  if (pct <= th[2]) return 2;
+  return 3;
+}
+
+// 0 Contraction, 1 Normal, 2 Expansion.
+function gpPhase(ratio, lo, hi) {
+  if (!isFinite(ratio)) return 1;
+  if (ratio < lo) return 0;
+  if (ratio > hi) return 2;
+  return 1;
+}
+
+// True range of each period: high-low, widened to the previous period's close.
+function gpTrueRanges(list) {
+  return list.map((q, j) => {
+    const r = q.h - q.l;
+    if (j === 0) return r;
+    const pc = list[j - 1].c;
+    return Math.max(r, Math.abs(q.h - pc), Math.abs(q.l - pc));
+  });
+}
+
+// Average range ending at each index: SMA or Wilder (RMA, SMA-seeded) of the
+// last `len` ranges, including the index itself (`include`) or ending one
+// before it. NaN until there is enough history.
+function gpAvgRanges(ranges, len, wilder, include) {
+  const n = ranges.length;
+  const L = Math.max(1, len | 0);
+  const base = new Array(n).fill(NaN);
+  if (wilder) {
+    let prev = NaN;
+    for (let i = 0; i < n; i++) {
+      if (i + 1 < L) continue;
+      if (isNaN(prev)) {
+        let s = 0;
+        for (let k = i - L + 1; k <= i; k++) s += ranges[k];
+        prev = s / L;
+      } else {
+        prev = (prev * (L - 1) + ranges[i]) / L;
+      }
+      base[i] = prev;
+    }
+  } else {
+    let s = 0;
+    for (let i = 0; i < n; i++) {
+      s += ranges[i];
+      if (i >= L) s -= ranges[i - L];
+      if (i + 1 >= L) base[i] = s / L;
+    }
+  }
+  if (include) return base;
+  const out = new Array(n).fill(NaN);
+  for (let i = 1; i < n; i++) out[i] = base[i - 1];
+  return out;
+}
+
+// Pine's "#.##": at most two decimals, no trailing zeros, no leading zero
+// (".58", "1.1", "2").
+function gpFmtRatio(x) {
+  if (!isFinite(x)) return '';
+  let s = (Math.round(x * 100) / 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  if (s.startsWith('0.')) s = s.slice(1);
+  return s;
+}
+// "0.###" / "0.##" percentages: up to `dp` decimals, trailing zeros dropped.
+function gpFmtPct(x, dp) {
+  if (!isFinite(x)) return '';
+  return (+x.toFixed(dp)).toString();
+}
+
+// Per-period analysis for the d / w / m groups. Entry j describes the CPR
+// built from period j (shown during period j+1):
+//   lv, widthPct, rel (vs the CPR from period j-1, -1 when unknown),
+//   range (period j's true range), avg, ratio (range / avg), phase, streak
+//   (consecutive contraction periods ending at j), virgin (the CPR from period
+//   j-1 was never traded through during period j — its zone shows in j+1).
+function gpAnalyse(dailyBars, params) {
+  const p = params || {};
+  const per = _tcPeriods(dailyBars);
+  const len = _gpNum(p, 'atrLen', 14);
+  const wilder = _gpNum(p, 'atrAvg', 0) >= 1;
+  const include = _gpNum(p, 'atrInc', 1) >= 1;
+  const lo = _gpNum(p, 'atrLo', 0.7), hi = _gpNum(p, 'atrHi', 1.3);
+  const out = {};
+  for (const g of TC_GROUPS) {
+    const list = per[g.id];
+    const th = gpThresholds(p, g.id);
+    const ranges = gpTrueRanges(list);
+    const avg = gpAvgRanges(ranges, len, wilder, include);
+    let streak = 0;
+    out[g.id] = list.map((q, j) => {
+      const ratio = avg[j] > 0 ? ranges[j] / avg[j] : NaN;
+      const phase = gpPhase(ratio, lo, hi);
+      streak = phase === 0 ? streak + 1 : 0;
+      const widthPct = gpWidthPct(q.lv);
+      const prevLv = j > 0 ? list[j - 1].lv : null;
+      let virgin = false;
+      if (prevLv) {
+        const top = Math.max(prevLv.bc, prevLv.tc), bot = Math.min(prevLv.bc, prevLv.tc);
+        virgin = q.h < bot || q.l > top;
+      }
+      return {
+        idx: q.idx, h: q.h, l: q.l, c: q.c, lv: q.lv,
+        widthPct, widthClass: gpWidthClass(widthPct, th),
+        rel: prevLv ? gpRelation(q.lv, prevLv) : -1,
+        range: ranges[j], avg: avg[j], ratio, phase, streak, virgin,
+      };
+    });
+  }
+  return out;
+}
+
+function gpThresholds(params, group) {
+  const d = GP_WIDTH_DEFAULTS[group];
+  return [_gpNum(params, group + 'Un', d[0]), _gpNum(params, group + 'N', d[1]),
+    _gpNum(params, group + 'M', d[2])];
+}
+
+function gpRead(widthClass, phase) { return GP_READS[widthClass][phase]; }
+
+// Index of the analysis entry whose CPR is shown during the period holding
+// `tsSec` (the latest period strictly before it), or -1.
+function gpEntryFor(list, group, tsSec) {
+  const di = _tcDayIdx(tsSec);
+  const key = group === 'd' ? di : group === 'w' ? _tcWeekIdx(di) : _tcMonthIdx(di);
+  let j = -1;
+  for (let k = 0; k < list.length; k++) { if (list[k].idx < key) j = k; else break; }
+  return j;
+}
+
+// ── Future Trend Checker ──
+// NSE trading holidays the next-CPR date skips (TradingView study's default
+// list; weekends are skipped too).
+const GP_NSE_HOLIDAYS = [
+  '2026-01-15', '2026-01-26', '2026-03-03', '2026-03-26', '2026-03-31', '2026-04-03',
+  '2026-04-14', '2026-05-01', '2026-05-28', '2026-06-26', '2026-09-14', '2026-10-02',
+  '2026-10-20', '2026-11-10', '2026-11-24', '2026-12-25',
+];
+const GP_ZONE_DEFAULTS = { d: [0.3, 0.5], w: [0.7, 1], m: [2, 3] };
+const GP_GAP_DEFAULTS = { d: [0.1, 0.3], w: [0.25, 0.5], m: [0.5, 1] };
+const GP_BAND_NAMES = ['Narrow', 'Normal', 'Wide'];
+// Bars the next period's CPR spans right of the newest candle.
+const _FT_SPAN = 16;
+
+function _gpYmd(dayIdx) { return new Date(dayIdx * 86400000).toISOString().slice(0, 10); }
+function gpIsTradingDay(dayIdx) {
+  const wd = new Date(dayIdx * 86400000).getUTCDay();
+  return wd !== 0 && wd !== 6 && GP_NSE_HOLIDAYS.indexOf(_gpYmd(dayIdx)) < 0;
+}
+// First trading day of the period after the one holding `dayIdx`.
+function gpNextTradingDay(group, dayIdx) {
+  let d = dayIdx + 1;
+  if (group === 'w') { while (_tcWeekIdx(d) === _tcWeekIdx(dayIdx)) d++; }
+  if (group === 'm') { while (_tcMonthIdx(d) === _tcMonthIdx(dayIdx)) d++; }
+  for (let k = 0; k < 40 && !gpIsTradingDay(d); k++) d++;
+  return d;
+}
+function gpFmtDay(dayIdx) {
+  const d = new Date(dayIdx * 86400000);
+  return d.getUTCDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
+    'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+}
+
+function _gpBand(pct, lim) { return pct <= lim[0] ? 0 : pct <= lim[1] ? 1 : 2; }
+
+// Next-period CPR for one group from the CURRENT period's high / low / close.
+// `cur` = { h, l, c, dayIdx }: the live period (today / this week / this
+// month so far); `list` = gpAnalyse(...)[group] (its last entries give the
+// current CPR and the range history). Returns null without enough data.
+function gpFuture(group, list, cur, params) {
+  if (!cur || !isFinite(cur.h) || !isFinite(cur.l) || !isFinite(cur.c)) return null;
+  const p = params || {};
+  const lv = tcLevels(cur.h, cur.l, cur.c);
+  const di = cur.dayIdx;
+  const key = group === 'd' ? di : group === 'w' ? _tcWeekIdx(di) : _tcMonthIdx(di);
+  // History strictly before the current period, then the current one.
+  const hist = list.filter((q) => q.idx < key);
+  const nowCpr = hist.length ? hist[hist.length - 1].lv : null;
+  const ranges = gpTrueRanges(hist.concat([{ h: cur.h, l: cur.l, c: cur.c }]));
+  const avg = gpAvgRanges(ranges, _gpNum(p, 'atrLen', 14), _gpNum(p, 'atrAvg', 0) >= 1,
+      _gpNum(p, 'atrInc', 1) >= 1);
+  const a = avg[avg.length - 1];
+  const ratio = a > 0 ? ranges[ranges.length - 1] / a : NaN;
+  const P = lv.pivot;
+  const top = Math.max(lv.bc, lv.tc), bot = Math.min(lv.bc, lv.tc);
+  const widthPct = gpWidthPct(lv);
+  const zone = [_gpNum(p, group + 'Zn', GP_ZONE_DEFAULTS[group][0]),
+    _gpNum(p, group + 'Zm', GP_ZONE_DEFAULTS[group][1])];
+  const gap = [_gpNum(p, group + 'Gn', GP_GAP_DEFAULTS[group][0]),
+    _gpNum(p, group + 'Gm', GP_GAP_DEFAULTS[group][1])];
+  const upPct = (Math.max(lv.r1, lv.high) - top) / P * 100;
+  const dnPct = (bot - Math.min(lv.s1, lv.low)) / P * 100;
+  const r1Gap = Math.abs(lv.r1 - lv.high) / P * 100;
+  const s1Gap = Math.abs(lv.s1 - lv.low) / P * 100;
+  return {
+    lv, widthPct, widthClass: gpWidthClass(widthPct, gpThresholds(p, group)),
+    upPct, upBand: _gpBand(upPct, zone), dnPct, dnBand: _gpBand(dnPct, zone),
+    r1Gap, r1Band: _gpBand(r1Gap, gap), s1Gap, s1Band: _gpBand(s1Gap, gap),
+    rel: nowCpr ? gpRelation(lv, nowCpr) : -1,
+    ratio, phase: gpPhase(ratio, _gpNum(p, 'atrLo', 0.7), _gpNum(p, 'atrHi', 1.3)),
+    nextDay: gpNextTradingDay(group, di),
+  };
+}
+
 // Dual-mode export — browser global (script tag) AND node require() for tests.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -848,5 +1114,9 @@ if (typeof module !== 'undefined' && module.exports) {
     cprPlotStyle, cprDecimals,
     TC_GROUPS, TC_LINES, TC_BANDS, TC_MA_TYPES, TC_MA_SOURCES, TC_MA_DEFAULTS,
     tcLevels, computeTcSeries, tcActiveGroups, tcLineStyle, tcBandStyle, tcMaConfig, tcMa,
+    GP_RELATIONS, GP_WIDTHS, GP_PHASES, GP_READS, GP_READ_COLORS, GP_WIDTH_DEFAULTS,
+    GP_NSE_HOLIDAYS, GP_ZONE_DEFAULTS, GP_GAP_DEFAULTS, GP_BAND_NAMES,
+    gpRelation, gpWidthPct, gpWidthClass, gpPhase, gpTrueRanges, gpAvgRanges, gpFmtRatio, gpFmtPct,
+    gpAnalyse, gpThresholds, gpRead, gpEntryFor, gpIsTradingDay, gpNextTradingDay, gpFmtDay, gpFuture,
   };
 }

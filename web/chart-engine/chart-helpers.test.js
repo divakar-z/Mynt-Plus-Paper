@@ -305,11 +305,11 @@ t('line style reads params; opacity builds an rgba colour', () => {
   assert.strictEqual(st.css, 'rgba(17,34,51,0.5)');
 });
 
-t('moving average defaults: only MA #1 (SMA close 10) is on', () => {
+t('moving average defaults: all off (27 Oct version), TradingView colours', () => {
   const m1 = h.tcMaConfig({}, 1), m2 = h.tcMaConfig({}, 2), m5 = h.tcMaConfig({}, 5);
-  assert.deepStrictEqual([m1.on, m1.type, m1.src, m1.len, m1.color], [true, 'SMA', 'close', 10, '#F5BF00']);
-  assert.deepStrictEqual([m2.on, m2.len, m2.color], [false, 20, '#178A17']);
-  assert.deepStrictEqual([m5.on, m5.len, m5.color], [false, 200, '#1E7FFF']);
+  assert.deepStrictEqual([m1.on, m1.type, m1.src, m1.len, m1.color], [false, 'SMA', 'close', 10, '#F6C309']);
+  assert.deepStrictEqual([m2.on, m2.len, m2.color], [false, 20, '#157A11']);
+  assert.deepStrictEqual([m5.on, m5.len, m5.color], [false, 200, '#0C7DF6']);
   const c = h.tcMaConfig({ ma3On: 1, ma3Type: 1, ma3Src: 5, ma3Len: 34, ma3C: 0xAABBCC }, 3);
   assert.deepStrictEqual([c.on, c.type, c.src, c.len, c.color], [true, 'EMA', 'hlc3', 34, '#AABBCC']);
 });
@@ -349,6 +349,162 @@ t('price sources', () => {
   const at = (src) => h.tcMa(bar, 0, src, 1)[0];
   assert.deepStrictEqual([at(0), at(1), at(2), at(3), at(4), at(5), at(6)],
       [16, 10, 20, 4, 12, (20 + 4 + 16) / 3, (10 + 20 + 4 + 16) / 4]);
+});
+
+
+// ── Trend Checker analytics + Future Trend Checker ─────────────────────────
+// NIFTY 50 daily bars 29 Sep – 27 Oct 2026 as TradingView's Data Window gave
+// them (high / low from PDH / PDL, close = 3 x pivot - high - low; 15 and 27
+// Oct closes are the official ones). 26 Sep is a stand-in whose close gives
+// 29 Sep the true range TradingView showed (210.60).
+console.log('GP analytics (TradingView values, 27 Oct 2026)');
+const gpDay = (y, m, d) => Date.UTC(y, m - 1, d, 3, 45) / 1000;
+const GP_BARS = [
+  [9, 26, 22800.00, 22700.00, 22780.25],
+  [9, 29, 22753.25, 22569.65, 22716.20], [9, 30, 22809.35, 22595.20, 22620.45],
+  [10, 1, 22610.60, 22217.30, 22421.96], [10, 5, 22621.80, 22397.10, 22555.74],
+  [10, 6, 22776.10, 22561.60, 22776.10], [10, 7, 22717.65, 22546.30, 22603.04],
+  [10, 8, 22599.05, 22179.90, 22231.81], [10, 9, 22580.75, 22294.75, 22520.46],
+  [10, 12, 22651.10, 22304.45, 22363.34], [10, 13, 22721.95, 22288.45, 22721.95],
+  [10, 14, 22757.95, 22558.95, 22622.69], [10, 15, 23056.40, 22637.40, 22997.35],
+  [10, 16, 23149.85, 22913.80, 23146.14], [10, 19, 23175.25, 22845.00, 22888.94],
+  [10, 21, 23120.90, 22649.90, 22811.36], [10, 22, 22785.00, 22554.85, 22687.64],
+  [10, 23, 22787.25, 22372.00, 22600.01], [10, 26, 22753.20, 22387.35, 22753.20],
+  [10, 27, 22829.75, 22636.85, 22749.75],
+].map(([m, d, hh, ll, cc]) => ({ ts: gpDay(2026, m, d), h: hh, l: ll, c: cc }));
+const gpA = h.gpAnalyse(GP_BARS, {});
+const gpOn = (m, d) => gpA.d[h.gpEntryFor(gpA.d, 'd', gpDay(2026, m, d))];
+const gpNear = (a, b, eps) => Math.abs(a - b) <= (eps || 0.01);
+
+t('true range: 5 Oct shows 1 Oct\'s 403.15 (low to 30 Sep close), not high-low 393.30', () => {
+  assert.ok(gpNear(gpOn(10, 5).range, 403.15));
+  assert.ok(gpNear(gpOn(10, 9).range, 423.15, 0.02));   // closes rebuilt from rounded pivots
+});
+t('27 Oct: ATR 365.85 / 336.43 = 1.09, Normal; Wide 0.539%; Outside; Range day likely', () => {
+  const e = gpOn(10, 27);
+  assert.ok(gpNear(e.range, 365.85));
+  assert.ok(gpNear(e.avg, 336.43));
+  assert.strictEqual(h.gpFmtRatio(e.ratio), '1.09');
+  assert.strictEqual(e.phase, 1);
+  assert.strictEqual(h.gpFmtPct(e.widthPct, 3), '0.539');
+  assert.strictEqual(h.GP_WIDTHS[e.widthClass], 'Wide');
+  assert.strictEqual(h.GP_RELATIONS[e.rel].short, 'Outside');
+  assert.strictEqual(h.gpRead(e.widthClass, e.phase), 'Range day likely');
+});
+t('ATR ratios TradingView showed for 21–26 Oct', () => {
+  const want = { 21: '1.09', 22: '1.46', 23: '.79', 26: '1.27' };
+  for (const d of Object.keys(want)) {
+    assert.strictEqual(h.gpFmtRatio(gpOn(10, +d).ratio), want[d], 'day ' + d);
+  }
+  assert.ok(gpNear(gpOn(10, 21).avg, 303.86));
+  assert.ok(gpNear(gpOn(10, 26).avg, 326.35));
+});
+t('backtest tags 9–27 Oct: CPR type and width', () => {
+  const want = {
+    9: ['DESC', 'Wide'], 12: ['ASC', 'Wide'], 13: ['OL Lower', 'Wide'], 14: ['ASC', 'Wide'],
+    15: ['OL Higher', 'Medium'], 16: ['ASC', 'Wide'], 19: ['ASC', 'Wide'], 21: ['DESC', 'Wide'],
+    22: ['DESC', 'Wide'], 23: ['DESC', 'Narrow'], 26: ['DESC', 'Narrow'], 27: ['Outside', 'Wide'],
+  };
+  for (const d of Object.keys(want)) {
+    const e = gpOn(10, +d);
+    assert.deepStrictEqual([h.GP_RELATIONS[e.rel].short, h.GP_WIDTHS[e.widthClass]], want[d], 'day ' + d);
+  }
+});
+t('relationship covers all six cases', () => {
+  const cpr = (bc, tc) => ({ bc, tc, pivot: (bc + tc) / 2 });
+  const prev = cpr(100, 110);
+  assert.strictEqual(h.gpRelation(cpr(111, 120), prev), 0);
+  assert.strictEqual(h.gpRelation(cpr(90, 99), prev), 1);
+  assert.strictEqual(h.gpRelation(cpr(105, 115), prev), 2);
+  assert.strictEqual(h.gpRelation(cpr(95, 105), prev), 3);
+  assert.strictEqual(h.gpRelation(cpr(95, 115), prev), 4);
+  assert.strictEqual(h.gpRelation(cpr(102, 108), prev), 5);
+  assert.strictEqual(h.gpRelation(cpr(110, 100), prev), h.gpRelation(cpr(100, 110), prev));
+});
+t('read table: width x ATR phase as TradingView shows it', () => {
+  assert.strictEqual(h.gpRead(0, 0), 'Strong Compression');
+  assert.strictEqual(h.gpRead(0, 1), 'Breakout watch');
+  assert.strictEqual(h.gpRead(1, 2), 'Stretched');
+  assert.strictEqual(h.gpRead(2, 0), 'Compressed');
+  assert.strictEqual(h.gpRead(2, 1), 'Balanced - follow price');
+  assert.strictEqual(h.gpRead(3, 1), 'Range day likely');
+  assert.strictEqual(h.gpRead(3, 2), 'Overstretched');
+});
+t('width classes use each timeframe\'s own limits', () => {
+  assert.strictEqual(h.gpWidthClass(0.05, h.gpThresholds({}, 'd')), 0);
+  assert.strictEqual(h.gpWidthClass(0.51, h.gpThresholds({}, 'w')), 3);
+  assert.strictEqual(h.gpWidthClass(0.9, h.gpThresholds({}, 'm')), 2);
+  assert.strictEqual(h.gpWidthClass(0.539, h.gpThresholds({ dM: 1 }, 'd')), 2);
+});
+t('ATR averaging: Wilder seeds with the SMA; "include" shifts the window', () => {
+  const r = [1, 2, 3, 4, 5];
+  assert.deepStrictEqual(h.gpAvgRanges(r, 3, false, true).slice(2), [2, 3, 4]);
+  assert.deepStrictEqual(h.gpAvgRanges(r, 3, false, false).slice(3), [2, 3]);
+  const w = h.gpAvgRanges(r, 3, true, true);
+  assert.ok(gpNear(w[2], 2) && gpNear(w[3], (2 * 2 + 4) / 3) && gpNear(w[4], (w[3] * 2 + 5) / 3));
+});
+t('contraction streak counts consecutive contraction periods', () => {
+  const bars = [];
+  for (let i = 0; i < 20; i++) {
+    const big = i < 17;
+    bars.push({ ts: gpDay(2026, 1, 5) + i * 86400, h: big ? 110 : 101, l: 100, c: 100.5 });
+  }
+  const a = h.gpAnalyse(bars, { atrLen: 5 });
+  assert.strictEqual(a.d[a.d.length - 1].phase, 0);
+  assert.ok(a.d[a.d.length - 1].streak >= 3);
+});
+t('virgin: a CPR never traded through flags the next period', () => {
+  const a = h.gpAnalyse([
+    { ts: gpDay(2026, 10, 5), h: 110, l: 90, c: 100 },   // CPR ~ 100
+    { ts: gpDay(2026, 10, 6), h: 130, l: 120, c: 125 },  // never reaches 100
+    { ts: gpDay(2026, 10, 7), h: 126, l: 99, c: 101 },
+  ], {});
+  assert.strictEqual(a.d[1].virgin, true);
+  assert.strictEqual(a.d[2].virgin, false);
+});
+t('number formats: ".58", "1.1", "0.539", "0.51"', () => {
+  assert.strictEqual(h.gpFmtRatio(0.5767), '.58');
+  assert.strictEqual(h.gpFmtRatio(1.1), '1.1');
+  assert.strictEqual(h.gpFmtPct(0.53886, 3), '0.539');
+  assert.strictEqual(h.gpFmtPct(0.5100, 3), '0.51');
+});
+
+console.log('Future Trend Checker (TradingView values, next day 28 Oct 2026)');
+const gpCur = { h: 22829.75, l: 22636.85, c: 22749.75, dayIdx: Math.floor((gpDay(2026, 10, 27) + 19800) / 86400) };
+const gpF = h.gpFuture('d', gpA.d, gpCur, {});
+t('next CPR levels match the TradingView labels (rounded to the 0.05 tick)', () => {
+  const tick = (v) => Math.round(v / 0.05) * 0.05;
+  const lv = gpF.lv;
+  assert.ok(gpNear(tick(lv.pivot), 22738.80));
+  assert.ok(gpNear(tick(lv.r4), 23135.55) && gpNear(tick(lv.r3), 23033.60) && gpNear(tick(lv.r2), 22931.70));
+  assert.ok(gpNear(tick(lv.s2), 22545.90) && gpNear(tick(lv.s3), 22454.90) && gpNear(tick(lv.s4), 22363.95));
+});
+t('trend table: Ultra Narrow 0.05%, zones Normal 0.42%, gaps Narrow 0.05%, Ascending, Bullish', () => {
+  assert.strictEqual(h.GP_WIDTHS[gpF.widthClass], 'Ultra Narrow');
+  assert.strictEqual(h.gpFmtPct(gpF.widthPct, 2), '0.05');
+  assert.strictEqual(h.gpFmtPct(gpF.upPct, 2), '0.42');
+  assert.strictEqual(h.gpFmtPct(gpF.dnPct, 2), '0.42');
+  assert.strictEqual(h.GP_BAND_NAMES[gpF.upBand], 'Normal');
+  assert.strictEqual(h.GP_BAND_NAMES[gpF.r1Band], 'Narrow');
+  assert.strictEqual(h.gpFmtPct(gpF.r1Gap, 2), '0.05');
+  assert.strictEqual(h.GP_RELATIONS[gpF.rel].next, 'Ascending');
+  assert.strictEqual(h.GP_RELATIONS[gpF.rel].bias, 'Bullish');
+});
+t('ATR phase: today 192.90 / 334.47 = .58x Contraction', () => {
+  assert.strictEqual(h.gpFmtRatio(gpF.ratio), '.58');
+  assert.strictEqual(gpF.phase, 0);
+});
+t('next trading date skips weekends and NSE holidays', () => {
+  const di = (m, d) => Math.floor((gpDay(2026, m, d) + 19800) / 86400);
+  assert.strictEqual(h.gpFmtDay(gpF.nextDay), '28 Oct');
+  assert.strictEqual(h.gpFmtDay(h.gpNextTradingDay('d', di(10, 19))), '21 Oct');
+  assert.strictEqual(h.gpFmtDay(h.gpNextTradingDay('d', di(10, 23))), '26 Oct');
+  assert.strictEqual(h.gpFmtDay(h.gpNextTradingDay('w', di(10, 27))), '2 Nov');
+  assert.strictEqual(h.gpFmtDay(h.gpNextTradingDay('m', di(10, 27))), '2 Nov');
+});
+t('bias for every relationship', () => {
+  assert.deepStrictEqual(h.GP_RELATIONS.map((r) => r.bias), ['Bullish', 'Bearish', 'Mild Bullish',
+    'Mild Bearish', 'Sideways', 'Compression (wait for breakout)']);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

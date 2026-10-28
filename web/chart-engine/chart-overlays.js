@@ -679,15 +679,25 @@ class _ChartOverlaysMixin {
   // IST day through the normal history request (interval '1D'); the reply is
   // routed by its own request id in onHistoryResult.
   // Calendar days of daily bars the active indicators need: CPR 60 (30 days of
-  // levels plus the day before), Trend Checker 160 (the previous full month and
-  // the weeks in it, with a partial month dropped at the start). 0 = none.
+  // levels plus the day before), the Trend Checkers 520 (the monthly ATR phase
+  // averages 14 full months, with a partial month dropped at the start).
+  // 0 = none.
   _levelsDailyDays() {
     let need = 0;
     for (const i of this._indicators) {
       if (i.kind === 'cpr') need = Math.max(need, 60);
-      else if (i.kind === 'tcheck') need = Math.max(need, 160);
+      else if (i.kind === 'tcheck' || i.kind === 'ftcheck') need = Math.max(need, 520);
     }
     return need;
+  }
+
+  // 1 once the session has closed (plus a few minutes for the official close
+  // to settle), else 0 — the daily bars are fetched again then, so today's
+  // bar carries the official close.
+  _levelsPhase(nowSec) {
+    const b = _sessionBoundsFor(this.scrip.exch, nowSec);
+    if (b.closeMin == null) return 0;
+    return _istParts(nowSec).minuteOfDay >= b.closeMin + 5 ? 1 : 0;
   }
 
   _ensureCprDaily() {
@@ -698,7 +708,9 @@ class _ChartOverlaysMixin {
     const nowSec = Math.floor(Date.now() / 1000);
     const today = _cprIstDay(nowSec);
     const d = this._cprDaily;
-    if (d && d.key === key && d.day === today && (d.days || 60) >= need) return;
+    const phase = this._levelsPhase(nowSec);
+    if (d && d.key === key && d.day === today && (d.days || 60) >= need
+        && (d.phase || 0) >= phase) return;
     if (this._pendingCprDailyId && this._pendingCprDailyKey === key) return;
     if (this._cprDailyRetryKey === key && Date.now() < this._cprDailyRetryAt) return;
     this._pendingCprDailyId = _newRequestId();
@@ -725,10 +737,13 @@ class _ChartOverlaysMixin {
     const bars = Array.isArray(candles)
         ? candles.filter((c) => c && isFinite(c.ts) && isFinite(c.h) && isFinite(c.l) && isFinite(c.c))
         : [];
-    this._cprDaily = { key, day: _cprIstDay(Math.floor(Date.now() / 1000)),
-        stamp: Date.now(), bars, days: this._pendingCprDailyDays || 60 };
+    const nowSec = Math.floor(Date.now() / 1000);
+    const phase = this.scrip ? this._levelsPhase(nowSec) : 0;
+    this._cprDaily = { key, day: _cprIstDay(nowSec), stamp: Date.now(), bars,
+        days: this._pendingCprDailyDays || 60, phase, afterClose: phase === 1 };
     this._cprCache = null;
     this._tcCache = null;
+    this._gpCache = null;
     this.scheduleRedraw();
   }
 
@@ -776,7 +791,7 @@ class _ChartOverlaysMixin {
   // candles, so autoscale keeps them on screen (TradingView's autoscale
   // includes study plots).
   _cprFitRange(visible, lo, hi) {
-    const uses = (i) => (i.kind === 'cpr' || i.kind === 'tcheck') && !i.hidden;
+    const uses = (i) => (i.kind === 'cpr' || i.kind === 'tcheck' || i.kind === 'ftcheck') && !i.hidden;
     if (!visible.length || !this._indicators.some(uses)) {
       return { lo, hi };
     }
@@ -785,7 +800,8 @@ class _ChartOverlaysMixin {
     const b = a + visible.length - 1;
     for (const ind of this._indicators) {
       if (!uses(ind)) continue;
-      const r = ind.kind === 'cpr' ? this._cprRange(ind, a, b) : this._tcRange(ind, a, b);
+      const r = ind.kind === 'cpr' ? this._cprRange(ind, a, b)
+          : ind.kind === 'ftcheck' ? this._ftRange(ind, a, b) : this._tcRange(ind, a, b);
       if (r) { if (r.lo < lo) lo = r.lo; if (r.hi > hi) hi = r.hi; }
     }
     return { lo, hi };
@@ -1204,6 +1220,9 @@ class _ChartOverlaysMixin {
     }
     ctx.restore();
 
+    // Tags, Virgin CPR zones, the CPR summary and the Market Pulse table.
+    this._drawTcExtras(ind, plot, lo, hi, priceToY, i0, i1, segsOf, series, groups);
+
     // 5. Price-scale labels, highest first and each pushed below the previous
     // one so levels a few points apart stay in price order.
     if (!(typeof p.axisOn === 'number' && p.axisOn < 1)) {
@@ -1224,6 +1243,524 @@ class _ChartOverlaysMixin {
         const drawn = this._drawIndicatorAxisChip(plot, priceToY, c.v, c.color, dp, y);
         if (drawn != null) prevY = drawn;
       }
+    }
+  }
+
+
+  // ── Trend Checker analytics + Future Trend Checker ──────────────────────
+  // CPR type / width / ATR phase per period (gpAnalyse on the official daily
+  // bars), drawn as Trend Checker's tags, Virgin CPR zones, the summary under
+  // the pivot label and the Market Pulse table; Future Trend Checker projects
+  // the NEXT period's CPR from the current one and shows its trend table.
+
+  // Analysis per group, cached per daily data and the settings it reads.
+  _gpAnalysis(params) {
+    const d = this._cprDaily;
+    const scripKey = this.scrip ? this.scrip.exch + '|' + this.scrip.token : '';
+    const daily = (d && d.key === scripKey) ? d.bars : null;
+    if (!daily) return null;
+    const p = params || {};
+    const keys = ['atrLen', 'atrAvg', 'atrInc', 'atrLo', 'atrHi', 'dUn', 'dN', 'dM',
+      'wUn', 'wN', 'wM', 'mUn', 'mN', 'mM'];
+    const key = d.stamp + '|' + keys.map((k) => p[k]).join(',');
+    this._gpCache = this._gpCache || {};
+    const hit = this._gpCache[key];
+    if (hit) return hit;
+    const a = gpAnalyse(daily, p);
+    this._gpCache = { [key]: a };
+    return a;
+  }
+
+  // Black lines and text are invisible on the dark theme: draw them in the
+  // axis text colour there instead.
+  _gpInk(color) {
+    if (color !== '#000000') return color;
+    const bg = (this.palette && this.palette.bg) || '#FFFFFF';
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(bg);
+    const dark = m && (parseInt(m[1], 16) + parseInt(m[2], 16) + parseInt(m[3], 16)) < 3 * 96;
+    return dark ? ((this.palette && this.palette.axisText) || '#D1D4DC') : color;
+  }
+
+  // Table in a corner of the plot. rows: arrays of { t, bg, fg, bold }; the
+  // first row is the header. Positions: 0 top right, 1 top left, 2 bottom
+  // right, 3 bottom left, 4 middle right. size: 0 tiny, 1 small, 2 normal.
+  _gpTable(plot, rows, pos, size, title) {
+    if (!rows.length) return;
+    const ctx = this.ctx;
+    const fs = [8, 9.5, 11][Math.max(0, Math.min(2, size | 0))];
+    const rowH = Math.round(fs * 1.75);
+    const padX = Math.round(fs * 0.6);
+    ctx.save();
+    ctx.font = '500 ' + fs + 'px Geist, sans-serif';
+    const cols = rows.reduce((m, r) => Math.max(m, r.length), 0);
+    const colW = new Array(cols).fill(0);
+    for (const r of rows) {
+      r.forEach((c, k) => {
+        ctx.font = (c.bold ? '700 ' : '500 ') + fs + 'px Geist, sans-serif';
+        colW[k] = Math.max(colW[k], ctx.measureText(c.t || '').width + padX * 2);
+      });
+    }
+    const tableW = colW.reduce((s, w) => s + w, 0);
+    const titleH = title ? rowH : 0;
+    const tableH = titleH + rows.length * rowH;
+    const m = 8;
+    const p = pos | 0;
+    const x0 = (p === 1 || p === 3) ? plot.left + m : plot.right - m - tableW;
+    // Top positions start below the chart's status badges ("Market closed").
+    const y0 = p === 4 ? (plot.top + plot.bottom - tableH) / 2
+        : (p === 2 || p === 3) ? plot.bottom - m - tableH : plot.top + m + 18;
+    ctx.textBaseline = 'middle';
+    if (title) {
+      ctx.fillStyle = '#E8E8E8';
+      ctx.fillRect(x0, y0, tableW, rowH);
+      ctx.fillStyle = '#131722';
+      ctx.font = '600 ' + fs + 'px Geist, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(title, x0 + padX, y0 + rowH / 2);
+    }
+    rows.forEach((r, ri) => {
+      let x = x0;
+      const y = y0 + titleH + ri * rowH;
+      r.forEach((c, k) => {
+        ctx.fillStyle = c.bg || '#FFFFFF';
+        ctx.fillRect(x, y, colW[k], rowH);
+        ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, colW[k] - 1, rowH - 1);
+        ctx.fillStyle = c.fg || '#131722';
+        ctx.font = (c.bold ? '700 ' : '500 ') + fs + 'px Geist, sans-serif';
+        ctx.textAlign = k === 0 ? 'left' : 'center';
+        ctx.fillText(c.t || '', k === 0 ? x + padX : x + colW[k] / 2, y + rowH / 2);
+        x += colW[k];
+      });
+    });
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.strokeRect(x0 + 0.5, y0 + 0.5, tableW - 1, tableH - 1);
+    ctx.restore();
+  }
+
+  // Rounded label box (tags, the next CPR's pill). Returns its height.
+  _gpPill(x, y, lines, bg, fg, align) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = '500 9px Geist, sans-serif';
+    const w = lines.reduce((m, s) => Math.max(m, ctx.measureText(s).width), 0) + 10;
+    const h = lines.length * 11 + 4;
+    const x0 = align === 'right' ? x - w : x;
+    ctx.fillStyle = bg;
+    _roundRectPath(ctx, x0, y, w, h, 3);
+    ctx.fill();
+    ctx.fillStyle = fg;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    lines.forEach((s, k) => ctx.fillText(s, x0 + 5, y + 3 + k * 11));
+    ctx.restore();
+    return h;
+  }
+
+  // The analysis entry behind each candle of one group, and the period id.
+  _gpEntryIndex(list, group, i) {
+    return gpEntryFor(list, group, this.candles[i].ts);
+  }
+
+  // Trend Checker extras, drawn after its levels: Virgin CPR zones, backtest
+  // tags, then the CPR summary and the Market Pulse table.
+  _drawTcExtras(ind, plot, lo, hi, priceToY, i0, i1, segsOf, series, groups) {
+    const p = ind.params || {};
+    const an = this._gpAnalysis(p);
+    if (!an) return;
+    const ctx = this.ctx;
+    const n = this.candles.length;
+    const X = (i) => this._candleXCenter(i, plot);
+    const half = this.view.cellW / 2;
+    const on = (k, def) => (typeof p[k] === 'number' ? p[k] >= 1 : def);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.left, plot.top, plot.right - plot.left, plot.bottom - plot.top);
+    ctx.clip();
+    for (const g of TC_GROUPS) {
+      if (!groups[g.id].cpr) continue;
+      const list = an[g.id];
+      for (const [a, z] of segsOf(series[g.id].seg)) {
+        const j = this._gpEntryIndex(list, g.id, a);
+        if (j < 0) continue;
+        const e = list[j];
+        // Virgin CPR: the CPR before this one was never traded through, so it
+        // stays a zone for this whole period.
+        if (on('virginOn', true) && e.virgin && j > 0) {
+          const v = list[j - 1].lv;
+          const yTop = priceToY(Math.max(v.bc, v.tc)), yBot = priceToY(Math.min(v.bc, v.tc));
+          const x0 = X(a) - half, x1 = X(z) + half;
+          const hgt = Math.max(6, yBot - yTop);
+          ctx.fillStyle = _tcCss(g.color, 0.14);
+          ctx.fillRect(x0, yTop, x1 - x0, hgt);
+          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = _tcCss(g.color, 0.6);
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x0 + 0.5, yTop + 0.5, x1 - x0 - 1, hgt - 1);
+          ctx.setLineDash([]);
+          ctx.fillStyle = g.color;
+          ctx.font = '500 9px Geist, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('Virgin CPR', x1 - 4, yTop + hgt / 2);
+        }
+        // Backtest tag at the start of the period.
+        if (on('tagOn', false) && isFinite(e.lv.pivot) && e.rel >= 0) {
+          const r = GP_RELATIONS[e.rel];
+          const ph = GP_PHASES[e.phase];
+          const lines = [];
+          if ((p.tagStyle | 0) === 1) {
+            let s = r.sym + ' ' + r.short;
+            if (on('tagW', true)) s += ' · ' + GP_WIDTHS[e.widthClass];
+            if (on('tagA', true)) s += ' · ATR ' + ph.arrow;
+            lines.push(s);
+          } else {
+            lines.push(r.sym + ' ' + r.full + (on('tagW', true) ? ' · ' + GP_WIDTHS[e.widthClass] : ''));
+            if (on('tagA', true)) lines.push('ATR ' + ph.name);
+          }
+          const top = Math.max(e.lv.bc, e.lv.tc), bot = Math.min(e.lv.bc, e.lv.tc);
+          const pos = p.tagPos | 0;
+          const above = pos === 1 || (pos === 0 && this.candles[a].c < e.lv.pivot);
+          const h = lines.length * 11 + 4;
+          const y = above ? priceToY(top) - h - 4 : priceToY(bot) + 4;
+          this._gpPill(X(a) - half + 2, y, lines, 'rgba(255,236,204,0.92)', '#3A2E1A');
+        }
+      }
+    }
+    ctx.restore();
+
+    // CPR summary under the newest pivot label: width, ATR phase, CPR type.
+    const labelsOn = !(typeof p.labelsOn === 'number' && p.labelsOn < 1);
+    if (labelsOn && on('sumOn', true)) {
+      const room = typeof this._futureBars === 'function';
+      const lx = room ? X(n - 1) + this.view.cellW * 1.4 : plot.right - 4;
+      ctx.save();
+      ctx.font = '600 9px Geist, sans-serif';
+      ctx.textAlign = room ? 'left' : 'right';
+      ctx.textBaseline = 'middle';
+      for (const g of TC_GROUPS) {
+        if (!groups[g.id].cpr) continue;
+        const list = an[g.id];
+        const j = this._gpEntryIndex(list, g.id, n - 1);
+        const v = series[g.id].pivot[n - 1];
+        if (j < 0 || !isFinite(v) || v < lo || v > hi) continue;
+        const e = list[j];
+        const pline = TC_LINES.find((l) => l.key === g.id + 'cpr');
+        const st = tcLineStyle(p, pline);
+        if (!st.visible) continue;
+        const lines = [GP_WIDTHS[e.widthClass] + ' CPR', 'ATR ' + GP_PHASES[e.phase].name];
+        if (e.rel >= 0) lines.push(GP_RELATIONS[e.rel].full);
+        ctx.fillStyle = st.color;
+        lines.forEach((s, k) => ctx.fillText(s, lx, priceToY(v) + 10 * (k + 1)));
+      }
+      ctx.restore();
+    }
+
+    // Market Pulse: one row per level group shown.
+    if (on('pulseOn', true)) {
+      const cols = [on('pulseType', true), on('pulseWidth', true), on('pulseAtr', true),
+        on('pulseRead', true)];
+      const rowsData = [];
+      let anyVirgin = false;
+      for (const g of TC_GROUPS) {
+        if (!groups[g.id].cpr) continue;
+        const list = an[g.id];
+        const j = this._gpEntryIndex(list, g.id, n - 1);
+        if (j < 0) continue;
+        const e = list[j];
+        if (e.virgin) anyVirgin = true;
+        rowsData.push({ g, e });
+      }
+      if (rowsData.length) {
+        const head = [{ t: 'TF', bg: '#F0F0F0' }];
+        if (cols[0]) head.push({ t: 'CPR Type', bg: '#F0F0F0' });
+        if (cols[1]) head.push({ t: 'Width', bg: '#F0F0F0' });
+        if (cols[2]) head.push({ t: 'ATR Phase', bg: '#F0F0F0' });
+        if (anyVirgin) head.push({ t: 'Virgin CPR', bg: '#F0F0F0' });
+        if (cols[3]) head.push({ t: 'Read', bg: '#F0F0F0' });
+        const bg = _tcHex(_gpNum(p, 'pulseBg', 0xFFFFFF) | 0);
+        const fg = _tcHex(_gpNum(p, 'pulseTx', 0x000000) | 0);
+        const unit = { d: 'days', w: 'weeks', m: 'months' };
+        const rows = [head];
+        for (const { g, e } of rowsData) {
+          const r = e.rel >= 0 ? GP_RELATIONS[e.rel] : null;
+          const ph = GP_PHASES[e.phase];
+          const read = gpRead(e.widthClass, e.phase);
+          const row = [{ t: g.pre, bg, fg }];
+          if (cols[0]) row.push(r ? { t: r.sym + ' ' + r.short, bg: r.color, fg: '#FFFFFF', bold: true } : { t: '—', bg, fg });
+          if (cols[1]) {
+            row.push({ t: GP_WIDTHS[e.widthClass] + ' ' + gpFmtPct(e.widthPct, 3) + '%',
+              bg: ['#C5B3F6', '#D9CCF8', '#ECECEC', '#FFCC80'][e.widthClass], fg: '#131722' });
+          }
+          if (cols[2]) {
+            const streak = e.phase === 0 && e.streak >= 2 ? ' · ' + e.streak + ' ' + unit[g.id] : '';
+            row.push({ t: ph.arrow + ' ' + ph.name + ' ' + gpFmtRatio(e.ratio) + 'x' + streak,
+              bg: e.phase === 1 ? bg : ph.color, fg: e.phase === 1 ? fg : '#131722' });
+          }
+          if (anyVirgin) {
+            row.push(e.virgin ? { t: '✓ Zone live', bg: '#FFF59D', fg: '#131722' } : { t: '—', bg, fg });
+          }
+          if (cols[3]) row.push({ t: read, bg: GP_READ_COLORS[read] || bg, fg: '#131722' });
+          rows.push(row);
+        }
+        this._gpTable(plot, rows, p.pulsePos | 0, _gpNum(p, 'pulseSize', 1),
+            'Trend Checker by GP · Market Pulse');
+      }
+    }
+  }
+
+  // ── Future Trend Checker ──
+  // Which groups are on: Auto picks one from the chart timeframe (intraday:
+  // day, daily chart: week, weekly and above: month), Manual uses the switches.
+  _ftGroups(p, tf) {
+    const sw = (k, def) => (typeof p[k] === 'number' ? p[k] >= 1 : def);
+    if ((p.mode | 0) === 0) {
+      const which = tf >= 10080 ? 'm' : tf >= 1440 ? 'w' : 'd';
+      const hl = sw('autoHl', true);
+      const o = {};
+      for (const g of TC_GROUPS) o[g.id] = { cpr: g.id === which, hl: g.id === which && hl };
+      return o;
+    }
+    return {
+      d: { cpr: sw('dOn', true), hl: sw('pdOn', true) },
+      w: { cpr: sw('wOn', false), hl: sw('pwOn', false) },
+      m: { cpr: sw('mOn', false), hl: sw('pmOn', false) },
+    };
+  }
+
+  // The current period's high / low / close for a group, live: the official
+  // daily bars before the newest candle's day plus today from the chart's own
+  // candles (intraday) or the newest daily candle. After the close the
+  // official daily bar's close wins (NSE's close is not the last trade).
+  _ftCurrent(group) {
+    const n = this.candles.length;
+    const d = this._cprDaily;
+    if (!n || !d) return null;
+    const last = this.candles[n - 1];
+    const di = _tcDayIdx(last.ts);
+    const tf = this.timeframeMinutes;
+    let today = null;
+    if (tf < 1440) {
+      for (let i = n - 1; i >= 0 && _tcDayIdx(this.candles[i].ts) === di; i--) {
+        const c = this.candles[i];
+        if (!today) today = { h: c.h, l: c.l, c: last.c };
+        if (c.h > today.h) today.h = c.h;
+        if (c.l < today.l) today.l = c.l;
+      }
+    } else if (tf === 1440) {
+      today = { h: last.h, l: last.l, c: last.c };
+    }
+    const eod = d.bars.find((b) => _tcDayIdx(b.ts) === di);
+    if (eod) {
+      if (!today) today = { h: eod.h, l: eod.l, c: eod.c };
+      else {
+        today.h = Math.max(today.h, eod.h);
+        today.l = Math.min(today.l, eod.l);
+        if (d.afterClose) today.c = eod.c;
+      }
+    }
+    if (!today) return null;
+    const keyOf = group === 'd' ? (x) => x : group === 'w' ? _tcWeekIdx : _tcMonthIdx;
+    const key = keyOf(di);
+    const cur = { h: today.h, l: today.l, c: today.c, dayIdx: di };
+    for (const b of d.bars) {
+      const bd = _tcDayIdx(b.ts);
+      if (bd >= di || keyOf(bd) !== key) continue;
+      if (b.h > cur.h) cur.h = b.h;
+      if (b.l < cur.l) cur.l = b.l;
+    }
+    return cur;
+  }
+
+  _ftFutureMap(ind) {
+    const p = ind.params || {};
+    const an = this._gpAnalysis(p);
+    if (!an) return {};
+    const groups = this._ftGroups(p, this.timeframeMinutes);
+    const out = {};
+    for (const g of TC_GROUPS) {
+      if (!groups[g.id].cpr) continue;
+      const f = gpFuture(g.id, an[g.id], this._ftCurrent(g.id), p);
+      if (f) out[g.id] = f;
+    }
+    return out;
+  }
+
+  // Today's levels as plotted values (same series as Trend Checker), for the
+  // legend, autoscale and the price-scale labels.
+  _ftShownLines(ind) {
+    const p = ind.params || {};
+    const groups = this._ftGroups(p, this.timeframeMinutes);
+    const series = this._tcSeries();
+    const out = [];
+    for (const line of TC_LINES) {
+      const g = groups[line.group];
+      if (!(line.sw === 'hl' ? g.hl : g.cpr)) continue;
+      out.push({ line, color: line.sw === 'hl' ? '#000000' : line.color,
+        vals: series[line.group][line.field], seg: series[line.group].seg });
+    }
+    return out;
+  }
+
+  _ftLegendValues(ind) {
+    if (!this.candles.length) return [];
+    const i = this.candles.length - 1;
+    const out = [];
+    for (const s of this._ftShownLines(ind)) {
+      const v = s.vals[i];
+      if (isFinite(v)) out.push({ v, color: this._gpInk(s.color), dp: 2 });
+    }
+    return out;
+  }
+
+  _ftRange(ind, a, b) {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of this._ftShownLines(ind)) {
+      for (let i = Math.max(0, a); i <= b && i < s.vals.length; i++) {
+        const v = s.vals[i];
+        if (!isFinite(v)) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    return hi === -Infinity ? null : { lo, hi };
+  }
+
+  _drawFtcheckIndicator(ind, plot, lo, hi, priceToY, firstAbs, lastAbs) {
+    this._ensureCprDaily();
+    const n = this.candles.length;
+    if (!n) return;
+    const p = ind.params || {};
+    const ctx = this.ctx;
+    const X = (i) => this._candleXCenter(i, plot);
+    const baseY = Math.min(plot.bottom, Math.max(plot.top, priceToY(1)));
+    const i0 = Math.max(0, firstAbs - 1);
+    const i1 = Math.min(n - 1, lastAbs + 1);
+    const todayW = Math.max(1, Math.min(4, _gpNum(p, 'todayW', 2) | 0));
+    const nextW = Math.max(1, Math.min(4, _gpNum(p, 'nextW', 2) | 0));
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.left, plot.top, plot.right - plot.left, plot.bottom - plot.top);
+    ctx.clip();
+
+    // 1. Today's levels, one segment per period.
+    for (const s of this._ftShownLines(ind)) {
+      const st = { color: this._gpInk(s.color), width: todayW, lineStyle: 'solid',
+        plotType: 'circles', priceLine: false };
+      let a = i0;
+      for (let i = i0 + 1; i <= i1 + 1; i++) {
+        if (i > i1 || s.seg[i] !== s.seg[a]) {
+          if (isFinite(s.vals[a])) this._drawCprPlot(s.vals, a, i - 1, st, plot, priceToY, baseY);
+          a = i;
+        }
+      }
+    }
+
+    // 2. Next period's CPR in the empty room right of the newest bar, with
+    // level names and prices, and the date it applies to on the pivot.
+    const fut = this._ftFutureMap(ind);
+    const groups = this._ftGroups(p, this.timeframeMinutes);
+    // Engines without that room (no _futureBars) draw against the right edge,
+    // with the names to the left of the lines.
+    const room = typeof this._futureBars === 'function' ? this._futureBars() : 0;
+    const labelLeft = !room;
+    const xa = room ? X(n - 1) + this.view.cellW : plot.right - 64;
+    const xb = room ? X(n - 1) + this.view.cellW * (_FT_SPAN + 1) : plot.right - 4;
+    const names = !(typeof p.namesOn === 'number' && p.namesOn < 1);
+    const nextName = { d: 'Next Day', w: 'Next Week', m: 'Next Month' };
+    for (const g of TC_GROUPS) {
+      const f = fut[g.id];
+      if (!f) continue;
+      const pre = g.short;
+      const levels = [
+        ['r4', '#4CAF50', pre + ' R4'], ['r3', '#4CAF50', pre + ' R3'], ['r2', '#4CAF50', pre + ' R2'],
+        ['r1', '#4CAF50', pre + ' R1'], ['tc', g.color, ''], ['pivot', g.color, pre + ' CPR'],
+        ['bc', g.color, ''], ['s1', '#FF5252', pre + ' S1'], ['s2', '#FF5252', pre + ' S2'],
+        ['s3', '#FF5252', pre + ' S3'], ['s4', '#FF5252', pre + ' S4'],
+      ];
+      if (groups[g.id].hl) {
+        levels.push(['high', '#000000', g.hl[0]], ['low', '#000000', g.hl[1]]);
+      }
+      for (const [k, color, label] of levels) {
+        const v = f.lv[k];
+        if (!isFinite(v)) continue;
+        const y = priceToY(v);
+        const ink = this._gpInk(color);
+        ctx.save();
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = nextW;
+        ctx.lineCap = 'round';
+        ctx.setLineDash([0.1, nextW * 2.5]);
+        ctx.beginPath();
+        ctx.moveTo(xa, y);
+        ctx.lineTo(xb, y);
+        ctx.stroke();
+        ctx.restore();
+        if (!names || !label) continue;
+        // Prices on the label are rounded to the tick, as TradingView prints them.
+        const ti = (this.scrip && this.scrip.ti > 0) ? this.scrip.ti : 0.05;
+        const txt = label + ' ' + (Math.round(v / ti) * ti).toFixed(2);
+        if (k === 'pivot') {
+          const date = (p.nextOn === undefined || p.nextOn >= 1)
+              ? ' · ' + nextName[g.id] + ' · ' + gpFmtDay(f.nextDay) : '';
+          this._gpPill(labelLeft ? xa - 6 : xb + 6, y - 7, [txt + date],
+              'rgba(209,196,233,0.95)', '#1A1A2E', labelLeft ? 'right' : 'left');
+        } else {
+          ctx.save();
+          ctx.fillStyle = ink;
+          ctx.font = '500 9px Geist, sans-serif';
+          ctx.textAlign = labelLeft ? 'right' : 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(txt, labelLeft ? xa - 6 : xb + 6, y);
+          ctx.restore();
+        }
+      }
+    }
+    ctx.restore();
+
+    // 3. Trend table: one column per group shown.
+    if (!(typeof p.tableOn === 'number' && p.tableOn < 1)) {
+      const ids = TC_GROUPS.filter((g) => fut[g.id]).map((g) => g.id);
+      if (ids.length) {
+        const pct = !(typeof p.pctOn === 'number' && p.pctOn < 1);
+        const band = ['#C8E6C9', '#BBDEFB', '#FFE0B2'];
+        const wbg = ['#C8E6C9', '#C8E6C9', '#BBDEFB', '#FFE0B2'];
+        const hl = (g) => ({ d: ['PDH', 'PDL'], w: ['PWH', 'PWL'], m: ['PMH', 'PML'] })[g];
+        const lbl = (base, k) => base + ids.map((g) => hl(g)[k]).join('/');
+        const gap = (k) => (k ? 'S1 ↔ ' : 'R1 ↔ ') + ids.map((g) => hl(g)[k]).join('/');
+        const L = (t) => ({ t, bg: '#C9C9C9', fg: '#131722' });
+        const pc = (x) => (pct ? ' ' + gpFmtPct(x, 2) + '%' : '');
+        const rows = [[L('Next CPR')].concat(ids.map((g) => ({ t: { d: 'Day', w: 'Week', m: 'Month' }[g], bg: '#C9C9C9' })))];
+        const row = (label, cell) => rows.push([L(label)].concat(ids.map((g) => cell(fut[g]))));
+        row('CPR Width', (f) => ({ t: GP_WIDTHS[f.widthClass] + pc(f.widthPct), bg: wbg[f.widthClass] }));
+        row(lbl('CPR → R1/', 0), (f) => ({ t: GP_BAND_NAMES[f.upBand] + pc(f.upPct), bg: band[f.upBand] }));
+        row(lbl('CPR → S1/', 1), (f) => ({ t: GP_BAND_NAMES[f.dnBand] + pc(f.dnPct), bg: band[f.dnBand] }));
+        row(gap(0), (f) => ({ t: GP_BAND_NAMES[f.r1Band] + pc(f.r1Gap), bg: band[f.r1Band] }));
+        row(gap(1), (f) => ({ t: GP_BAND_NAMES[f.s1Band] + pc(f.s1Gap), bg: band[f.s1Band] }));
+        row('Relationship', (f) => (f.rel >= 0
+            ? { t: GP_RELATIONS[f.rel].next, bg: GP_RELATIONS[f.rel].soft } : { t: '—' }));
+        row('Bias', (f) => (f.rel >= 0
+            ? { t: GP_RELATIONS[f.rel].bias, bg: GP_RELATIONS[f.rel].soft } : { t: '—' }));
+        row('ATR Phase', (f) => ({ t: GP_PHASES[f.phase].arrow + ' ' + GP_PHASES[f.phase].name + ' '
+            + gpFmtRatio(f.ratio) + 'x', bg: f.phase === 1 ? '#EEEEEE' : GP_PHASES[f.phase].color }));
+        this._gpTable(plot, rows, p.tablePos | 0, _gpNum(p, 'tableSize', 1), '');
+      }
+    }
+
+    // 4. Price-scale labels for today's levels.
+    const chips = [];
+    for (const s of this._ftShownLines(ind)) {
+      const v = s.vals[n - 1];
+      if (isFinite(v)) chips.push({ v, color: this._gpInk(s.color) });
+    }
+    chips.sort((a, b) => b.v - a.v);
+    let prevY = null;
+    for (const c of chips) {
+      let y = priceToY(c.v);
+      if (prevY != null && y < prevY + 18) y = prevY + 18;
+      const drawn = this._drawIndicatorAxisChip(plot, priceToY, c.v, c.color, 2, y);
+      if (drawn != null) prevY = drawn;
     }
   }
 

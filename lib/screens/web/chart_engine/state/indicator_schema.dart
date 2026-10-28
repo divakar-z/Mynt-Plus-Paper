@@ -76,6 +76,7 @@ IndicatorSchema? schemaFor(String kind) {
   final k = kind.toLowerCase();
   if (k == 'cpr') return _kCprSchema;
   if (k == 'tcheck') return _kTcSchema;
+  if (k == 'ftcheck') return _kFtSchema;
   return _kSchemas[k];
 }
 
@@ -866,9 +867,9 @@ class TcMaDef {
 
 List<TcLineDef> _buildTcLines() {
   const groups = [
-    ('d', 'pd', 'Daily', 'PDH', 'PDL', 0x2962FF, 0x0D3CFF),
-    ('w', 'pw', 'Weekly', 'PWH', 'PWL', 0xC41D9D, 0xC41D9D),
-    ('m', 'pm', 'Monthly', 'PMH', 'PML', 0xF58FD8, 0xF58FD8),
+    ('d', 'pd', 'Daily', 'PDH', 'PDL', 0x2962FF, 0x000000),
+    ('w', 'pw', 'Weekly', 'PWH', 'PWL', 0xC41D9D, 0x000000),
+    ('m', 'pm', 'Monthly', 'PMH', 'PML', 0xF58FD8, 0x000000),
   ];
   final out = <TcLineDef>[];
   for (final g in groups) {
@@ -895,11 +896,11 @@ const List<TcBandDef> kTcBands = [
 ];
 
 const List<TcMaDef> kTcMas = [
-  TcMaDef(10, 0xF5BF00, true),
-  TcMaDef(20, 0x178A17, false),
-  TcMaDef(50, 0xFF2222, false),
-  TcMaDef(100, 0x1A0000, false),
-  TcMaDef(200, 0x1E7FFF, false),
+  TcMaDef(10, 0xF6C309, false),
+  TcMaDef(20, 0x157A11, false),
+  TcMaDef(50, 0xFC1A1A, false),
+  TcMaDef(100, 0x160101, false),
+  TcMaDef(200, 0x0C7DF6, false),
 ];
 
 const int kTcDefaultWidth = 1;
@@ -971,11 +972,142 @@ final IndicatorSchema _kTcSchema = IndicatorSchema(
       IndicatorParam(key: 'ma${i}W', label: 'Width', description: '',
           defaultValue: kTcMaDefaultWidth, min: 1, max: 4),
     ],
+    ..._gpTcExtraParams(),
     _tcBool('labelsOn', true),
     IndicatorParam(key: 'precision', label: 'Precision', description: '',
         defaultValue: 0, options: kCprPrecisionParam.options),
     _tcBool('axisOn', true),
     _tcBool('statusOn', true),
     _tcBool('inputsOn', true),
+  ],
+);
+
+// ── Trend Checker analytics + Future Trend Checker ──────────────────────────
+// Settings the engine reads in chart-helpers.js (gpAnalyse / gpFuture) and
+// chart-overlays.js. Option orders MUST match the engine:
+//   tagPos   Auto (free space) / Above CPR / Below CPR
+//   tagStyle Full / Compact
+//   atrAvg   Simple (SMA) / Wilder (RMA)
+//   *Pos     Top Right / Top Left / Bottom Right / Bottom Left / Middle Right
+//   *Size    Tiny / Small / Normal
+//   mode     Auto / Manual
+const List<IndicatorOption> kGpTagPosOptions = [
+  IndicatorOption('Auto (free space)'), IndicatorOption('Above CPR'),
+  IndicatorOption('Below CPR'),
+];
+const List<IndicatorOption> kGpTagStyleOptions = [
+  IndicatorOption('Full'), IndicatorOption('Compact'),
+];
+const List<IndicatorOption> kGpAtrAvgOptions = [
+  IndicatorOption('Simple (SMA)'), IndicatorOption('Wilder (RMA)'),
+];
+const List<IndicatorOption> kGpPosOptions = [
+  IndicatorOption('Top Right'), IndicatorOption('Top Left'),
+  IndicatorOption('Bottom Right'), IndicatorOption('Bottom Left'),
+  IndicatorOption('Middle Right'),
+];
+const List<IndicatorOption> kGpSizeOptions = [
+  IndicatorOption('Tiny'), IndicatorOption('Small'), IndicatorOption('Normal'),
+];
+const List<IndicatorOption> kGpModeOptions = [
+  IndicatorOption('Auto'), IndicatorOption('Manual'),
+];
+
+/// CPR width limits (% of pivot) per timeframe: Ultra Narrow, Narrow, Medium.
+const Map<String, List<double>> kGpWidthDefaults = {
+  'd': [0.05, 0.1, 0.2],
+  'w': [0.125, 0.25, 0.5],
+  'm': [0.25, 0.5, 1],
+};
+/// Future Trend Checker: CPR -> zone (Narrow, Normal) and R1<->PDH gap
+/// (Narrow, Normal) limits per timeframe.
+const Map<String, List<double>> kGpZoneDefaults = {
+  'd': [0.3, 0.5], 'w': [0.7, 1], 'm': [2, 3],
+};
+const Map<String, List<double>> kGpGapDefaults = {
+  'd': [0.1, 0.3], 'w': [0.25, 0.5], 'm': [0.5, 1],
+};
+
+IndicatorParam _gpPct(String key, String label, double def) => IndicatorParam(
+    key: key, label: label, description: '', defaultValue: def,
+    min: 0, max: 100, step: 0.005, isInt: false);
+
+IndicatorParam _gpEnum(String key, String label, int def,
+        List<IndicatorOption> options) =>
+    IndicatorParam(key: key, label: label, description: '',
+        defaultValue: def, options: options);
+
+List<IndicatorParam> _gpAtrParams() => [
+      IndicatorParam(key: 'atrLen', label: 'ATR length', description: '',
+          defaultValue: 14, min: 1, max: 100),
+      _gpEnum('atrAvg', 'ATR averaging', 0, kGpAtrAvgOptions),
+      _tcBool('atrInc', true),
+      IndicatorParam(key: 'atrLo', label: 'Contraction below x',
+          description: '', defaultValue: 0.7, min: 0, max: 10, step: 0.05,
+          isInt: false),
+      IndicatorParam(key: 'atrHi', label: 'Expansion above x',
+          description: '', defaultValue: 1.3, min: 0, max: 10, step: 0.05,
+          isInt: false),
+    ];
+
+List<IndicatorParam> _gpWidthParams() => [
+      for (final g in ['d', 'w', 'm']) ...[
+        _gpPct('${g}Un', 'Ultra Narrow ≤ %', kGpWidthDefaults[g]![0]),
+        _gpPct('${g}N', 'Narrow ≤ %', kGpWidthDefaults[g]![1]),
+        _gpPct('${g}M', 'Medium ≤ %', kGpWidthDefaults[g]![2]),
+      ],
+    ];
+
+/// The Trend Checker settings added on 27 Oct 2026 (tags, Virgin CPR, ATR
+/// phase, Market Pulse, width limits).
+List<IndicatorParam> _gpTcExtraParams() => [
+      _tcBool('sumOn', true),
+      _tcBool('tagOn', false), _tcBool('tagW', true), _tcBool('tagA', true),
+      _gpEnum('tagPos', 'Tag position', 0, kGpTagPosOptions),
+      _gpEnum('tagStyle', 'Tag style', 0, kGpTagStyleOptions),
+      _tcBool('virginOn', true),
+      ..._gpAtrParams(),
+      _tcBool('pulseOn', true),
+      _gpEnum('pulsePos', 'Position', 0, kGpPosOptions),
+      _gpEnum('pulseSize', 'Text size', 1, kGpSizeOptions),
+      const IndicatorParam(key: 'pulseBg', label: 'Panel background',
+          description: '', defaultValue: 0xFFFFFF, min: 0, max: 0xFFFFFF),
+      const IndicatorParam(key: 'pulseTx', label: 'Text', description: '',
+          defaultValue: 0x000000, min: 0, max: 0xFFFFFF),
+      _tcBool('pulseType', true), _tcBool('pulseWidth', true),
+      _tcBool('pulseAtr', true), _tcBool('pulseRead', true),
+      ..._gpWidthParams(),
+    ];
+
+final IndicatorSchema _kFtSchema = IndicatorSchema(
+  kind: 'ftcheck',
+  displayName: 'Future Trend Checker by GP',
+  shortDescription:
+      'Next day, week and month CPR from the current period, with a trend table.',
+  params: [
+    _gpEnum('mode', 'Mode', 0, kGpModeOptions),
+    _tcBool('autoHl', true),
+    _tcBool('dOn', true), _tcBool('pdOn', true),
+    _tcBool('wOn', false), _tcBool('pwOn', false),
+    _tcBool('mOn', false), _tcBool('pmOn', false),
+    const IndicatorParam(key: 'todayW', label: "Today's CPR dot thickness",
+        description: '', defaultValue: 2, min: 1, max: 4),
+    const IndicatorParam(key: 'nextW', label: 'Next CPR dot thickness',
+        description: '', defaultValue: 2, min: 1, max: 4),
+    _tcBool('nextOn', true),
+    _tcBool('namesOn', true),
+    _tcBool('tableOn', true),
+    _gpEnum('tablePos', 'Table position', 0, kGpPosOptions),
+    _gpEnum('tableSize', 'Text size', 1, kGpSizeOptions),
+    _tcBool('pctOn', true),
+    ..._gpAtrParams(),
+    ..._gpWidthParams(),
+    for (final g in ['d', 'w', 'm']) ...[
+      _gpPct('${g}Zn', 'CPR → Zone: Narrow ≤ %', kGpZoneDefaults[g]![0]),
+      _gpPct('${g}Zm', 'Normal ≤ %', kGpZoneDefaults[g]![1]),
+      _gpPct('${g}Gn', 'R1 ↔ high / S1 ↔ low: Narrow ≤ %',
+          kGpGapDefaults[g]![0]),
+      _gpPct('${g}Gm', 'Normal ≤ %', kGpGapDefaults[g]![1]),
+    ],
   ],
 );
