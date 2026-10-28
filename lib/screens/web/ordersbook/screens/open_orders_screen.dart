@@ -1137,7 +1137,10 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     final isProcessing = _processingOrderToken == uniqueId &&
         (isBOCO ? _isProcessingExit : _isProcessingCancel);
 
-    return GestureDetector(
+    return Tooltip(
+      // X exits CO/BO orders, cancels the rest.
+      message: isBOCO ? 'Exit' : 'Cancel',
+      child: GestureDetector(
       onTap: isProcessing
           ? null
           : () async {
@@ -1193,6 +1196,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               dark: MyntColors.lossDark, light: MyntColors.loss),
         ),
       ),
+      ),
     );
   }
 
@@ -1205,7 +1209,9 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     final isProcessing =
         _processingOrderToken == uniqueId && _isProcessingModify;
 
-    return GestureDetector(
+    return Tooltip(
+      message: 'Modify',
+      child: GestureDetector(
       onTap: isProcessing
           ? null
           : () async {
@@ -1251,6 +1257,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
           color: resolveThemeColor(context,
               dark: MyntColors.primaryDark, light: MyntColors.primary),
         ),
+      ),
       ),
     );
   }
