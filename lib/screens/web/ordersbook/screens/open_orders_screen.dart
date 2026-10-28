@@ -527,6 +527,22 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
   String _instrumentSortText(OrderBookModel order) =>
       (order.masterName ?? (order.tsym ?? '')).replaceAll("-EQ", "").trim();
 
+  // The LTP exactly as _OrderLTPCell shows it: socket price, else the
+  // order's LTP / close fallback.
+  double _shownLtp(OrderBookModel order) {
+    final socketLtp = ref
+        .read(websocketProvider)
+        .socketDatas[order.token ?? '']?['lp']
+        ?.toString();
+    final ltp = (socketLtp == null ||
+            socketLtp == 'null' ||
+            socketLtp.isEmpty ||
+            (double.tryParse(socketLtp) ?? 0) == 0)
+        ? CellFormatters.getValidLTP(order)
+        : socketLtp;
+    return double.tryParse(ltp) ?? 0;
+  }
+
   // Sort orders based on 8 columns: Time, Type, Instrument, Product, Qty., LTP, Price, Status
   List<OrderBookModel> _getSortedOrders(List<OrderBookModel> orders) {
     if (_sortColumnIndex == null) return orders;
@@ -568,8 +584,11 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
         case 6: // LTP
-          comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
-              .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
+          // order.ltp is never filled on web (the cell shows the socket
+          // price), so every row compared as 0. Sort on the shown LTP.
+          // comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
+          //     .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
+          comparison = _shownLtp(a).compareTo(_shownLtp(b));
           break;
         case 7: // Price
           comparison = (double.tryParse(a.prc ?? '0') ?? 0)
@@ -713,7 +732,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                             buildHeaderCell('Type', 2),
                             buildHeaderCell('Instrument', 3),
                             buildHeaderCell('Product', 4, true),
-                            buildHeaderCell('Qty.', 5, true),
+                            buildHeaderCell('Qty', 5, true),
                             buildHeaderCell('LTP', 6, true),
                             buildHeaderCell('Price', 7, true),
                             buildHeaderCell('Status', 8, true),
@@ -998,8 +1017,8 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     // TC_58: AMO orders come back as OPEN / PENDING with amo = "Yes"; tag them
     // next to the exchange so the Status badge keeps the real status.
     final isAmo = (order.amo ?? '').toUpperCase() == 'YES';
-    final amoColor = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    // final amoColor = resolveThemeColor(context,
+    //     dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
 
     return GestureDetector(
       onTap: () => actionHandler.openOrderDetail(order),
@@ -1044,21 +1063,39 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                         if (isAmo)
                           WidgetSpan(
                             alignment: PlaceholderAlignment.middle,
+                            // child: Container(
+                            //   margin: const EdgeInsets.only(left: 6),
+                            //   padding: const EdgeInsets.symmetric(
+                            //       horizontal: 4, vertical: 1),
+                            //   decoration: BoxDecoration(
+                            //     color: amoColor.withValues(alpha: 0.12),
+                            //     borderRadius: BorderRadius.circular(3),
+                            //   ),
+                            //   child: Text(
+                            //     'AMO',
+                            //     style: MyntWebTextStyles.para(
+                            //       context,
+                            //       color: amoColor,
+                            //       fontWeight: MyntFonts.medium,
+                            //     ).copyWith(fontSize: 10),
+                            //   ),
+                            // ),
+                            // Same badge as the place order screen's AMO banner.
                             child: Container(
                               margin: const EdgeInsets.only(left: 6),
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 4, vertical: 1),
+                                  horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
-                                color: amoColor.withValues(alpha: 0.12),
+                                color: const Color(0xFFB7791F),
                                 borderRadius: BorderRadius.circular(3),
                               ),
                               child: Text(
                                 'AMO',
                                 style: MyntWebTextStyles.para(
                                   context,
-                                  color: amoColor,
-                                  fontWeight: MyntFonts.medium,
-                                ).copyWith(fontSize: 10),
+                                  color: MyntColors.textWhite,
+                                  fontWeight: MyntFonts.semiBold,
+                                ),
                               ),
                             ),
                           ),
@@ -1118,7 +1155,10 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     final isProcessing = _processingOrderToken == uniqueId &&
         (isBOCO ? _isProcessingExit : _isProcessingCancel);
 
-    return GestureDetector(
+    return Tooltip(
+      // X exits CO/BO orders, cancels the rest.
+      message: isBOCO ? 'Exit' : 'Cancel',
+      child: GestureDetector(
       onTap: isProcessing
           ? null
           : () async {
@@ -1174,6 +1214,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               dark: MyntColors.lossDark, light: MyntColors.loss),
         ),
       ),
+      ),
     );
   }
 
@@ -1186,7 +1227,9 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     final isProcessing =
         _processingOrderToken == uniqueId && _isProcessingModify;
 
-    return GestureDetector(
+    return Tooltip(
+      message: 'Modify',
+      child: GestureDetector(
       onTap: isProcessing
           ? null
           : () async {
@@ -1232,6 +1275,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
           color: resolveThemeColor(context,
               dark: MyntColors.primaryDark, light: MyntColors.primary),
         ),
+      ),
       ),
     );
   }

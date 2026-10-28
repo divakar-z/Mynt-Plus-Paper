@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../../models/order_book_model/trade_book_model.dart';
 import '../../../../models/order_book_model/order_book_model.dart';
+import '../../../../provider/order_provider.dart';
 import '../../../../provider/thems.dart';
 import '../../../../provider/websocket_provider.dart';
 import '../../../../res/mynt_web_text_styles.dart';
@@ -596,12 +597,47 @@ class _TradeDetailScreenWebState extends ConsumerState<TradeDetailScreenWeb> {
   }
 
   OrderScreenArgs _createOrderArgs(TradeBookModel tradeData) =>
-      tradeRepeatOrderArgs(tradeData);
+      // tradeRepeatOrderArgs(tradeData);
+      tradeRepeatOrderArgs(tradeData,
+          orders: ref.read(orderProvider).allOrder);
 }
 
 /// Order window arguments for repeating a trade. Shared by the Trade Details
 /// sheet's Repeat Order button and the Trade table's row menu.
-OrderScreenArgs tradeRepeatOrderArgs(TradeBookModel tradeData) {
+///
+/// [orders] is the loaded order book. TC_233/234: the trade book API carries
+/// no stoploss/target, so a CO/BO trade repeated with both at 0. They are
+/// copied from the trade's own order (same norenordno) when it is found.
+OrderScreenArgs tradeRepeatOrderArgs(TradeBookModel tradeData,
+    {List<OrderBookModel>? orders}) {
+    final raw = tradeData.toJson();
+    OrderBookModel? order;
+    for (final o in orders ?? <OrderBookModel>[]) {
+      if (o.norenordno != null && o.norenordno == tradeData.norenordno) {
+        order = o;
+        break;
+      }
+    }
+    if (order != null) {
+      if (tradeData.prd == 'H' || tradeData.prd == 'B') {
+        if (order.blprc != null) raw['blprc'] = order.blprc;
+        if (order.bpprc != null) raw['bpprc'] = order.bpprc;
+        if (order.trailprc != null) raw['trailprc'] = order.trailprc;
+      }
+      // TC_171.1 (as on Executed): a triggered SL order is reported as
+      // LMT/MKT but keeps trgprc; the trade carries no trgprc at all. Copy
+      // the trigger and open it as SL so Stoploss comes up ticked.
+      final trigger = double.tryParse(order.trgprc ?? '') ?? 0;
+      // The auto SL/target legs of a CO/BO (snonum set) carry the CO's stop
+      // as trgprc; they are not SL orders the client placed.
+      // if (trigger > 0) {
+      if (trigger > 0 && order.snonum == null) {
+        raw['trgprc'] = order.trgprc;
+        if (raw['prctyp'] == 'LMT') raw['prctyp'] = 'SL-LMT';
+        if (raw['prctyp'] == 'MKT') raw['prctyp'] = 'SL-MKT';
+      }
+    }
+
     // Get LTP, fallback to trade info if available or "0.00"
     String ltpValue = "0.00";
     if (tradeData.ltp != null && tradeData.ltp.toString() != "null") {
@@ -631,6 +667,7 @@ OrderScreenArgs tradeRepeatOrderArgs(TradeBookModel tradeData) {
       orderTpye: '',
       holdQty: '',
       isModify: false,
-      raw: tradeData.toJson(),
+      // raw: tradeData.toJson(),
+      raw: raw,
     );
 }

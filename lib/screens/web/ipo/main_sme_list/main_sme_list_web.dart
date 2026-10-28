@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:mynt_plus/provider/transcation_provider.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
+import 'package:mynt_plus/sharedWidget/snack_bar.dart' show showResponsiveWarning;
 import 'package:mynt_plus/sharedWidget/no_data_found_web.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
@@ -296,6 +297,7 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
       theme: theme,
       onTap: onTap,
       // Every status gets a badge: Open green, Pre-open grey, Closed red.
+      // ("Applied" badge sits next to the IPO name, not here.)
       child: Align(
           alignment: Alignment.centerLeft, child: _buildStatusBadge(status)),
       // child: status == "Closed"
@@ -878,6 +880,26 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
     );
   }
 
+  Widget _buildAppliedBadge() {
+    final color = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        "Applied",
+        style: MyntWebTextStyles.bodySmall(
+          context,
+          color: color,
+          fontWeight: MyntFonts.semiBold,
+        ),
+      ),
+    );
+  }
+
   // Replaced by _buildStatusBadge (all statuses get a badge).
   // Widget _buildClosedBadge() {
   //   final color = resolveThemeColor(context,
@@ -1086,17 +1108,29 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          _toTitleCase(ipo.name ?? ""),
-                          style: MyntWebTextStyles.bodyMedium(
-                            context,
-                            fontWeight: MyntFonts.medium,
-                            color: resolveThemeColor(context,
-                                dark: MyntColors.textPrimaryDark,
-                                light: MyntColors.textPrimary),
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
+                        // Name, then "Applied" badge for already-applied IPOs.
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                _toTitleCase(ipo.name ?? ""),
+                                style: MyntWebTextStyles.bodyMedium(
+                                  context,
+                                  fontWeight: MyntFonts.medium,
+                                  color: resolveThemeColor(context,
+                                      dark: MyntColors.textPrimaryDark,
+                                      light: MyntColors.textPrimary),
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                            ),
+                            if (ipoProvider.isIpoApplied(ipo)) ...[
+                              const SizedBox(width: 6),
+                              _buildAppliedBadge(),
+                            ],
+                          ],
                         ),
                         const SizedBox(height: 4),
                         Row(
@@ -1192,17 +1226,28 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
                 dark: MyntColors.textPrimaryDark,
                 light: MyntColors.textPrimary);
 
-            // Apply option
+            // Apply option (disabled once the client has applied)
+            final isApplied = ipoProvider.isIpoApplied(ipo);
+            final disabledColor = resolveThemeColor(context,
+                dark: MyntColors.textTertiaryDark,
+                light: MyntColors.textTertiary);
             menuItems.add(
               _buildMenuButton(
                 icon: Icons.check_circle_outline,
-                title: isPreOpen ? 'Pre Apply' : 'Apply',
-                iconColor: iconColor,
-                textColor: textColor,
-                onPressed: (ctx) {
-                  _closePopover();
-                  _onApplyPressed(context, ipo, ipoProvider, upiProvider);
-                },
+                title: isApplied
+                    ? 'Applied'
+                    : isPreOpen
+                        ? 'Pre Apply'
+                        : 'Apply',
+                iconColor: isApplied ? disabledColor : iconColor,
+                textColor: isApplied ? disabledColor : textColor,
+                onPressed: isApplied
+                    ? null
+                    : (ctx) {
+                        _closePopover();
+                        _onApplyPressed(
+                            context, ipo, ipoProvider, upiProvider);
+                      },
               ),
             );
 
@@ -1287,7 +1332,8 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
   shadcn.MenuButton _buildMenuButton({
     required IconData icon,
     required String title,
-    required void Function(BuildContext) onPressed,
+    // Null disables the item (e.g. Apply on an already-applied IPO).
+    required void Function(BuildContext)? onPressed,
     required Color iconColor,
     required Color textColor,
   }) {
@@ -1522,6 +1568,16 @@ List<dynamic> _getSortedIPOs(List<dynamic> ipos) {
       IPOProvider ipoProvider, TranctionProvider upiProvider) async {
     ipoProvider.setisSMEPlaceOrderBtnActiveValue = false;
     ipoProvider.setisMainIPOPlaceOrderBtnActiveValue = false;
+
+    // Re-check applied IPOs before opening the order window (catches an
+    // application made in another tab or on mobile).
+    await ipoProvider.getAppliedIpoList();
+    if (ipoProvider.isIpoApplied(ipo)) {
+      if (context.mounted) {
+        showResponsiveWarning(context, "You have already applied for this IPO");
+      }
+      return;
+    }
 
     // Ensure bank details are available
     if (upiProvider.bankdetails == null ||

@@ -818,7 +818,25 @@ class OrderActionHandler {
       orderTpye: '',
       holdQty: '',
       isModify: false,
-      raw: orderData.toJson(),
+      // raw: orderData.toJson(),
+      raw: _repeatRaw(orderData),
     );
+  }
+
+  // TC_171.1: once an SL order triggers, the order book reports it as
+  // LMT (SL-LMT) or MKT (SL-MKT) but keeps trgprc, so Repeat opened it with
+  // Stoploss unticked. A plain LMT/MKT order carries trgprc 0, so a trigger
+  // above 0 marks a triggered SL order.
+  Map<String, dynamic> _repeatRaw(OrderBookModel orderData) {
+    final raw = orderData.toJson();
+    final trigger = double.tryParse(orderData.trgprc ?? '') ?? 0;
+    // The auto SL/target legs of a CO/BO (snonum set) carry the CO's stop as
+    // trgprc; they are not SL orders the client placed.
+    // if (trigger > 0) {
+    if (trigger > 0 && orderData.snonum == null) {
+      if (orderData.prctyp == 'LMT') raw['prctyp'] = 'SL-LMT';
+      if (orderData.prctyp == 'MKT') raw['prctyp'] = 'SL-MKT';
+    }
+    return raw;
   }
 }

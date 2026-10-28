@@ -1459,6 +1459,49 @@ class IPOProvider extends DefaultChangeNotifier {
     } catch (e) {}
   }
 
+  // "SYMBOL|EXCHANGE" for every IPO the backend lists as applied.
+  Set<String> _appliedIpoKeys = {};
+
+  // appliedIPOList statuses that leave the IPO open to apply again.
+  static const _notAppliedStatuses = {'new failed', 'failed', 'cancel success'};
+
+  /// Already-applied IPOs (used to show an "Applied" tag and block Apply).
+  /// A failure keeps the last list so the IPO screen still works.
+  Future<void> getAppliedIpoList() async {
+    try {
+      final res = await api.fetchAppliedIpoList();
+      final list = res is Map ? res['applied'] : null;
+      final keys = <String>{};
+      if (list is List) {
+        for (final e in list) {
+          if (e is Map && e['symbol'] != null) {
+            // Failed or cancelled applications don't count; the client
+            // may apply again.
+            final status =
+                (e['status'] ?? '').toString().trim().toLowerCase();
+            if (_notAppliedStatuses.contains(status)) continue;
+            keys.add(_appliedKey(e['symbol'], e['type']));
+          }
+        }
+      }
+      _appliedIpoKeys = keys;
+      notifyListeners();
+    } catch (e) {
+      log("appliedIPOList failed: $e");
+    }
+  }
+
+  String _appliedKey(dynamic symbol, dynamic type) =>
+      "${symbol.toString().trim().toUpperCase()}|${(type ?? '').toString().trim().toUpperCase()}";
+
+  /// True when the client already has an application for this open IPO.
+  bool isIpoApplied(dynamic ipo) {
+    if (ipo is! MainIPO && ipo is! SMEIPO) return false;
+    final symbol = ipo.symbol;
+    if (symbol == null || symbol.toString().isEmpty) return false;
+    return _appliedIpoKeys.contains(_appliedKey(symbol, ipo.type));
+  }
+
   bool _singlepageapply = false;
   bool get singlepageapply => _singlepageapply;
 
@@ -1524,12 +1567,28 @@ class IPOProvider extends DefaultChangeNotifier {
       // "Server Error " on a second cancel, "client details not found"), so
       // only a msg that says success is shown as a green success toast.
       final msg = (_ipoOrderResponcesModel?.msg ?? '').trim();
-      if (msg.isEmpty) {
-        showResponsiveSuccess(context, 'Order placed successfully');
-      } else if (msg.toLowerCase().contains('success')) {
-        showResponsiveSuccess(context, msg);
+      // if (msg.isEmpty) {
+      //   showResponsiveSuccess(context, 'Order placed successfully');
+      // } else if (msg.toLowerCase().contains('success')) {
+      //   showResponsiveSuccess(context, msg);
+      // } else {
+      //   showResponsiveError(context, msg);
+      // }
+      // The backend now sends a separate status ("order initiated success")
+      // with a longer msg that no longer says "success", so a successful
+      // place/cancel showed a red Error toast. Colour by status when present;
+      // replies without it keep the msg check.
+      final status =
+          (_ipoOrderResponcesModel?.status ?? '').trim().toLowerCase();
+      final bool isSuccess = status.isNotEmpty
+          ? status.contains('success')
+          : (msg.isEmpty || msg.toLowerCase().contains('success'));
+      if (isSuccess) {
+        showResponsiveSuccess(
+            context, msg.isEmpty ? 'Order placed successfully' : msg);
       } else {
-        showResponsiveError(context, msg);
+        showResponsiveError(context,
+            msg.isNotEmpty ? msg : (_ipoOrderResponcesModel?.status ?? ''));
       }
 
       // The exchange replies a few seconds after the order is accepted, so the
@@ -1537,6 +1596,11 @@ class IPOProvider extends DefaultChangeNotifier {
       // once more without the loader so the date, status and Open/Close split
       // catch up on their own.
       Future.delayed(const Duration(seconds: 5), _refreshIpoOrderBookSilently);
+
+      // Place/cancel changes what is applied: refresh now and again once the
+      // exchange has replied.
+      getAppliedIpoList();
+      Future.delayed(const Duration(seconds: 5), getAppliedIpoList);
 
       return _ipoOrderResponcesModel;
     } catch (e) {
@@ -1604,6 +1668,8 @@ class IPOProvider extends DefaultChangeNotifier {
   Future loadIpoScreenData(BuildContext context, int year) async {
     try {
       toggleLoadingOn(true);
+      // Not awaited: must not hold the screen loader.
+      getAppliedIpoList();
       await getSmeIpo(showLoader: false);
       await getmainstreamipo(context, showLoader: false);
       await getUpcomingIpoModel();

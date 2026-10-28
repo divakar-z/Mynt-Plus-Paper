@@ -153,10 +153,19 @@ class _SetAlertWebState extends State<SetAlertWeb> {
             remarks: newRemarks,
           );
       if (!mounted) return;
+      // A broker refusal (Not_Ok) used to show nothing — show its reason,
+      // unless the session expired (the provider logs out then).
+      // if (result?.stat == "OI replaced") {
+      //   Navigator.of(context).pop();
+      // } else if (result?.stat != "Not_Ok") {
+      //   ResponsiveSnackBar.showWarning(context, "Alert not modified");
+      // }
+      final emsg = result?.emsg ?? "";
       if (result?.stat == "OI replaced") {
         Navigator.of(context).pop();
-      } else if (result?.stat != "Not_Ok") {
-        ResponsiveSnackBar.showWarning(context, "Alert not modified");
+      } else if (!emsg.contains("Session Expired")) {
+        ResponsiveSnackBar.showWarning(
+            context, emsg.isNotEmpty ? emsg : "Alert not modified");
       }
     } finally {
       if (mounted) setState(() => _handlesetalert = false);

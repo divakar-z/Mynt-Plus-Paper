@@ -8,6 +8,7 @@ import '../../../../provider/iop_provider.dart';
 import '../../../../provider/transcation_provider.dart';
 import '../../../../sharedWidget/functions.dart';
 import '../../../../sharedWidget/common_buttons_web.dart';
+import 'package:mynt_plus/sharedWidget/snack_bar.dart' show showResponsiveWarning;
 import '../../../../sharedWidget/no_data_found_web.dart';
 import '../../../../models/ipo_model/ipo_pre_close_model.dart';
 import '../../../../models/ipo_model/ipo_sme_model.dart';
@@ -73,6 +74,7 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
     );
     final isOpen = status == "Open";
     final isPreOpen = status == "Pre-open";
+    final isApplied = ipoProvider.isIpoApplied(ipo);
 
     return SizedBox.expand(
       child: Column(
@@ -120,6 +122,10 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
                                   ),
                                   const SizedBox(width: 8),
                                   _buildStatusBadge(context, status, isOpen),
+                                  if (isApplied) ...[
+                                    const SizedBox(width: 6),
+                                    _buildAppliedBadge(context),
+                                  ],
                                 ],
                               ),
                             ],
@@ -133,7 +139,8 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
                     const SizedBox(height: 24),
 
                     // Apply Button (hidden for closed IPOs)
-                    if (!isClosed) ...[
+                    // Also hidden once the client has applied.
+                    if (!isClosed && !isApplied) ...[
                       MyntButton(
                       label: isPreOpen ? "Pre Apply" : "Apply",
                       onPressed: () =>
@@ -294,6 +301,26 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
     );
   }
 
+  Widget _buildAppliedBadge(BuildContext context) {
+    final color = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        "APPLIED",
+        style: MyntWebTextStyles.bodySmall(
+          context,
+          color: color,
+          fontWeight: MyntFonts.semiBold,
+        ),
+      ),
+    );
+  }
+
   Widget _buildCompanyLogo(
       BuildContext context, String? imageLink, String companyName) {
     return ClipOval(
@@ -415,6 +442,16 @@ class IpoDetailsSheetWeb extends ConsumerWidget {
       IPOProvider ipoProvider, TranctionProvider upiProvider) async {
     ipoProvider.setisSMEPlaceOrderBtnActiveValue = false;
     ipoProvider.setisMainIPOPlaceOrderBtnActiveValue = false;
+
+    // Re-check applied IPOs before opening the order window (catches an
+    // application made in another tab or on mobile).
+    await ipoProvider.getAppliedIpoList();
+    if (ipoProvider.isIpoApplied(ipo)) {
+      if (context.mounted) {
+        showResponsiveWarning(context, "You have already applied for this IPO");
+      }
+      return;
+    }
 
     // Ensure bank details are available
     if (upiProvider.bankdetails == null ||

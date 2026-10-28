@@ -5023,6 +5023,8 @@ getOptionawait(String exch, String token) {
   }
 
   Future<bool> fetchCancelAlert(String alid, BuildContext context) async {
+    // Cleared so a failed call never leaves the previous reply's emsg behind.
+    _cancelalert = null;
     try {
       // First make the API call to cancel the alert
       _cancelalert = await api.getCancelAlert(alid);
@@ -5050,7 +5052,12 @@ getOptionawait(String exch, String token) {
         notifyListeners();
         return true;
       } else if (_cancelalert!.stat == "Not_Ok") {
-        ref.read(authProvider).ifSessionExpired(context);
+        // Log out only on a real session expiry — any other refusal used to
+        // log the user out too.
+        // ref.read(authProvider).ifSessionExpired(context);
+        if (_cancelalert!.emsg?.contains("Session Expired") ?? false) {
+          ref.read(authProvider).ifSessionExpired(context);
+        }
         return false;
       }
 
@@ -5083,7 +5090,11 @@ getOptionawait(String exch, String token) {
           successMessage(context, "Alert modified successfully");
         }
       } else if (_modifyalertmodel!.stat == "Not_Ok") {
-        ref.read(authProvider).ifSessionExpired(context);
+        // Log out only on a real session expiry (same as cancel).
+        // ref.read(authProvider).ifSessionExpired(context);
+        if (_modifyalertmodel!.emsg?.contains("Session Expired") ?? false) {
+          ref.read(authProvider).ifSessionExpired(context);
+        }
       }
 
       notifyListeners();
