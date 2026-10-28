@@ -1017,8 +1017,8 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     // TC_58: AMO orders come back as OPEN / PENDING with amo = "Yes"; tag them
     // next to the exchange so the Status badge keeps the real status.
     final isAmo = (order.amo ?? '').toUpperCase() == 'YES';
-    final amoColor = resolveThemeColor(context,
-        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    // final amoColor = resolveThemeColor(context,
+    //     dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
 
     return GestureDetector(
       onTap: () => actionHandler.openOrderDetail(order),
@@ -1063,21 +1063,39 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                         if (isAmo)
                           WidgetSpan(
                             alignment: PlaceholderAlignment.middle,
+                            // child: Container(
+                            //   margin: const EdgeInsets.only(left: 6),
+                            //   padding: const EdgeInsets.symmetric(
+                            //       horizontal: 4, vertical: 1),
+                            //   decoration: BoxDecoration(
+                            //     color: amoColor.withValues(alpha: 0.12),
+                            //     borderRadius: BorderRadius.circular(3),
+                            //   ),
+                            //   child: Text(
+                            //     'AMO',
+                            //     style: MyntWebTextStyles.para(
+                            //       context,
+                            //       color: amoColor,
+                            //       fontWeight: MyntFonts.medium,
+                            //     ).copyWith(fontSize: 10),
+                            //   ),
+                            // ),
+                            // Same badge as the place order screen's AMO banner.
                             child: Container(
                               margin: const EdgeInsets.only(left: 6),
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 4, vertical: 1),
+                                  horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
-                                color: amoColor.withValues(alpha: 0.12),
+                                color: const Color(0xFFB7791F),
                                 borderRadius: BorderRadius.circular(3),
                               ),
                               child: Text(
                                 'AMO',
                                 style: MyntWebTextStyles.para(
                                   context,
-                                  color: amoColor,
-                                  fontWeight: MyntFonts.medium,
-                                ).copyWith(fontSize: 10),
+                                  color: MyntColors.textWhite,
+                                  fontWeight: MyntFonts.semiBold,
+                                ),
                               ),
                             ),
                           ),

@@ -136,6 +136,20 @@ mixin IPOApi on ApiCore {
     }
   }
 
+  /// IPOs the client has already applied for:
+  /// {"applied": [{symbol, type, status, applicationNumber}]}.
+  Future<dynamic> fetchAppliedIpoList() async {
+    try {
+      final uri = Uri.parse(apiLinks.appliedipolist);
+      final res = await apiClient.post(uri,
+          headers: funddefaultHeaders,
+          body: (jsonEncode({"client_id": "${prefs.clientId}"})));
+      return jsonDecode(res.body);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   Future<IpoPerformanceModel> fetchipoperfomance(int year) async {
     try {
       final uri = Uri.parse("https://v3.mynt.in/ipo/ipo_performer?year=$year");

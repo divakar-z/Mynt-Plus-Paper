@@ -272,6 +272,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get iposinglepage => "${ipourlendpoint}get_single_ipo_data_new";
   String get ipoprecloseurl => "${ipourlendpoint}precloseipo";
   String get ipoupcomingurl => "${ipourlendpoint}getupcomingdetails";
+  String get appliedipolist => "${ipourlendpoint}appliedIPOList";
 
 // Mutual Fund
   String get bestMf => "$dashBoardURL/mf/z_data_1";
