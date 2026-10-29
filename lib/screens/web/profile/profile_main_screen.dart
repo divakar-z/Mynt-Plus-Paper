@@ -4766,7 +4766,7 @@ class _ApiKeyBottomTabsState extends ConsumerState<ApiKeyBottomTabs>
           tabs: const [
             Tab(text: "Base Key"),
             Tab(text: "OAuth Key"),
-            Tab(text: "Apps Key"),
+            Tab(text: "App Keys"),
           ],
         ),
         const SizedBox(height: 10),

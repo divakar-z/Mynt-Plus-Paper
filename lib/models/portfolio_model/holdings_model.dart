@@ -126,6 +126,9 @@ class HoldingsModel {
     npoadqty = newModel.npoadqty ?? npoadqty;
     npoadt1qty = newModel.npoadt1qty ?? npoadt1qty;
     benqty = newModel.benqty ?? benqty;
+    // Pledged qty: taken as-is, since the API drops the field once nothing
+    // is pledged, and keeping the old value would show a stale pledge.
+    brkcolqty = newModel.brkcolqty;
     sPrdtAli = newModel.sPrdtAli ?? sPrdtAli;
     prd = newModel.prd ?? prd;
     btstqty = newModel.btstqty ?? btstqty;
