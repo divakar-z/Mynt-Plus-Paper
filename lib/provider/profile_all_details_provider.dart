@@ -438,6 +438,38 @@ class ProfileProvider extends DefaultChangeNotifier {
     }
   }
 
+  /// true / false from CDSL, or null when the check failed or the body was
+  /// unexpected (caller shows "Unable to verify signature").
+  Future<bool?> checkCdslSignature() async {
+    try {
+      final result = await api.signatureCheckApi(pref.clientId ?? '');
+      final signature = result['signature'];
+      if (result['stat'] == 'Ok' && signature is bool) return signature;
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Returns null on success, otherwise the error message to show.
+  Future<String?> uploadCdslSignature({
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    try {
+      final result = await api.signatureUploadApi(
+        clientId: pref.clientId ?? '',
+        signatureBytes: bytes,
+        signatureFileName: fileName,
+      );
+      if (result['stat'] == 'Ok') return null;
+      return (result['msg'] ?? result['emsg'] ?? 'Unable to save signature')
+          .toString();
+    } catch (e) {
+      return 'Unable to save signature, please try again later';
+    }
+  }
+
   Future<void> reportFiledownload({
     required String fileId,
     required String response,
