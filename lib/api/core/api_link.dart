@@ -326,6 +326,17 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get withdrawstatus => 'https://fundapi.mynt.in/withdraw/status';
   String get upiIdUpdate => 'https://fundapi.mynt.in/withdraw/upi_id_update';
 
+  // Withdraw backend (WITHDRAW_SCREEN_FRONTEND.md). This is the address the
+  // backend team handed over for testing; switch it to the production host
+  // before release. Browsers block plain http from an https page.
+  String get withdrawBackendURL => 'http://192.168.5.61:5000';
+  String get withdrawPayment => '$withdrawBackendURL/withdraw/payment';
+  String get withdrawCancel => '$withdrawBackendURL/withdraw/cancel';
+  String get withdrawRequests => '$withdrawBackendURL/withdraw/requests';
+
+  /// Noren: the most the client can withdraw right now.
+  String get getMaxPayoutAmount => '$goMyntURL/GetMaxPayoutAmount';
+
   String fundvalidatetoken = "https://ws.mynt.in/login/validate_session";
 
   /////

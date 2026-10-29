@@ -66,28 +66,10 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
     });
   }
 
-  void _openWithdraw() async {
-    final trancation = ref.read(transcationProvider);
-    // Ensure bank details and client data are fetched
-    if (trancation.bankdetails == null) {
-      trancation.fetchfundbanks(context);
-    }
-    if (trancation.decryptclientcheck == null) {
-      trancation.fetchc(context);
-    }
-    await trancation.fetchValidateToken(context);
-    Future.delayed(
-      const Duration(milliseconds: 100),
-      () async {
-        await trancation.ip();
-        await trancation.fetchupiIdView(
-          trancation.bankdetails!.dATA![trancation.indexss][1],
-          trancation.bankdetails!.dATA![trancation.indexss][2],
-        );
-        await trancation.fetchcwithdraw(context);
-      },
-    );
-    trancation.changebool(false);
+  void _openWithdraw() {
+    // The withdraw screen loads its own balance, limits, requests and IP on
+    // open.
+    ref.read(transcationProvider).changebool(false);
     setState(() {
       _showWithdraw = true;
     });
@@ -156,10 +138,6 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
 
     if (_showWithdraw) {
       return WithdrawScreen(
-        withdarw: trancation,
-        foucs: trancation.focusNode,
-        theme: theme,
-        segment: trancation.textValue,
         onBack: () {
           setState(() {
             _showWithdraw = false;
