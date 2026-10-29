@@ -74,7 +74,7 @@ class BuildUpdateBanner extends ConsumerWidget {
                 children: [
                   Flexible(
                     child: Text(
-                      'A new version of Mynt is available$versionSuffix',
+                      'New Update is available$versionSuffix',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: webText(context,
