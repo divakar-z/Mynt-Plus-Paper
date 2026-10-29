@@ -214,6 +214,12 @@ class ResponsiveSnackBar {
   static void showInfo(BuildContext context, String message, {Duration? duration}) {
     show(context: context, message: message, type: SnackBarType.info, duration: duration ?? const Duration(seconds: 3));
   }
+
+  /// Hides every visible toast / snackbar.
+  static void hideAll() {
+    _ToastManager.instance.clear();
+    rootScaffoldMessengerKey.currentState?.hideCurrentSnackBar();
+  }
 }
 
 enum SnackBarType { info, success, warning, error }
@@ -261,6 +267,12 @@ class _ToastManager extends ChangeNotifier {
 
   void removeToast(String id) {
     _toasts.removeWhere((t) => t.id == id);
+    notifyListeners();
+  }
+
+  void clear() {
+    if (_toasts.isEmpty) return;
+    _toasts.clear();
     notifyListeners();
   }
 }
