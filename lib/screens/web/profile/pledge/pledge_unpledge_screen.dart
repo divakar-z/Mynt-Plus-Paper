@@ -16,6 +16,7 @@ import 'package:mynt_plus/sharedWidget/common_buttons_web.dart';
 import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import '../../../../res/mynt_web_text_styles.dart';
 import '../../../../res/mynt_web_color_styles.dart';
 
@@ -80,10 +81,15 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
       final theme = ref.watch(themeProvider);
       final ledgerprovider = ref.watch(ledgerProvider);
 
-      Future<void> _refresh() async {
-        await Future.delayed(Duration(seconds: 0));
-        ledgerprovider.getCurrentDate("pandu");
-        ledgerprovider.fetchpledgeandunpledge(context);
+      // A failed pledge / unpledge / delete with a reason is shown as a
+      // blocking error dialog (only Ok closes it).
+      if (ledgerprovider.pledgeErrDialog) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final err = ledgerprovider.takePledgeError();
+          if (err != null && mounted) {
+            _showPledgeErrorDialog(err.title, err.reason);
+          }
+        });
       }
 
       // Calculate counts for cards
@@ -534,81 +540,41 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
                                     ),
                                   ),
                                           onPressed: () async {
-                                            // Skip confirmation dialog on
-                                            // Pledge Balance tab (unpledge).
-                                            if (selectedFilterType != '1') {
-                                              final confirmed =
-                                                  await _showPledgeConfirmDialog(
-                                                      context, ledgerprovider);
-                                              if (confirmed != true) return;
-                                              if (!context.mounted) return;
-                                            }
+                                            // The bottom bar is pledge-only:
+                                            // unpledge is sent from its dialog.
+                                            final confirmed =
+                                                await _showPledgeConfirmDialog(
+                                                    context, ledgerprovider);
+                                            if (confirmed != true) return;
+                                            if (!context.mounted) return;
                                             ledgerprovider
                                                 .changesegvaldummy('');
-                                            if (ledgerprovider
-                                                    .pledgeoruppledgedelete ==
-                                                'unpledgedelete') {
-                                              ledgerprovider
-                                                  .unpldgedeletefun(
-                                                      context,
-                                                      ledgerprovider
-                                                          .pledgeandunpledge!
-                                                          .cLIENTCODE
-                                                          .toString(),
-                                                      ledgerprovider
-                                                          .listforpledge);
-                                            } else {
-                                              if (ledgerprovider
-                                                      .pledgeorunpledge ==
-                                                  'unpledge') {
+                                            // Show a temporary dialog so beforecdsl's
+                                            // Navigator.pop closes it, not the main screen
+                                            showDialog(
+                                              context: context,
+                                              barrierDismissible: false,
+                                              barrierColor: Colors.transparent,
+                                              builder: (_) => const SizedBox.shrink(),
+                                            );
+                                            ledgerprovider.beforecdsl(
+                                                context,
                                                 ledgerprovider
-                                                    .sendunpledgerequest(
-                                                        context,
-                                                        ledgerprovider
-                                                            .pledgeandunpledge!
-                                                            .cLIENTCODE
-                                                            .toString(),
-                                                        ledgerprovider
-                                                            .pledgeandunpledge!
-                                                            .bOID
-                                                            .toString(),
-                                                        ledgerprovider
-                                                            .pledgeandunpledge!
-                                                            .cLIENTNAME
-                                                            .toString(),
-                                                        ledgerprovider
-                                                            .listforpledge);
-                                              } else if (ledgerprovider
-                                                      .pledgeorunpledge ==
-                                                  'pledge') {
-                                                // Show a temporary dialog so beforecdsl's
-                                                // Navigator.pop closes it, not the main screen
-                                                showDialog(
-                                                  context: context,
-                                                  barrierDismissible: false,
-                                                  barrierColor: Colors.transparent,
-                                                  builder: (_) => const SizedBox.shrink(),
-                                                );
-                                                ledgerprovider.beforecdsl(
-                                                    context,
-                                                    ledgerprovider
-                                                        .pledgeandunpledge!
-                                                        .cLIENTCODE
-                                                        .toString(),
-                                                    ledgerprovider
-                                                        .pledgeandunpledge!
-                                                        .bOID
-                                                        .toString(),
-                                                    ledgerprovider
-                                                        .pledgeandunpledge!
-                                                        .cLIENTNAME
-                                                        .toString(),
-                                                    ledgerprovider
-                                                        .listforpledge);
-                                              }
-                                            }
+                                                    .pledgeandunpledge!
+                                                    .cLIENTCODE
+                                                    .toString(),
+                                                ledgerprovider
+                                                    .pledgeandunpledge!
+                                                    .bOID
+                                                    .toString(),
+                                                ledgerprovider
+                                                    .pledgeandunpledge!
+                                                    .cLIENTNAME
+                                                    .toString(),
+                                                ledgerprovider
+                                                    .listforpledge);
                                           },
-                                  child: Text("Submit",
+                                  child: Text("Submit Request",
                                       style: MyntWebTextStyles.bodySmall(context,
                                           color: MyntColors.textWhite,
                                           fontWeight: MyntFonts.semiBold)),
@@ -623,6 +589,105 @@ class _PledgenUnpledgeScreenState extends State<PledgenUnpledge> {
               ),
       );
     });
+  }
+
+  // ============================================================
+  // Pledge / Unpledge Error Dialog — only Ok closes it
+  // ============================================================
+
+  void _showPledgeErrorDialog(String title, String reason) {
+    ResponsiveSnackBar.hideAll();
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.3),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screenWidth = MediaQuery.of(dialogContext).size.width;
+        final dialogWidth =
+            screenWidth * 0.9 > 400.0 ? 400.0 : screenWidth * 0.9;
+        final errorColor = resolveThemeColor(dialogContext,
+            dark: MyntColors.lossDark, light: MyntColors.loss);
+
+        return PopScope(
+          canPop: false,
+          child: Center(
+            child: shadcn.Card(
+              borderRadius: BorderRadius.circular(8),
+              padding: EdgeInsets.zero,
+              child: Container(
+                width: dialogWidth,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: resolveThemeColor(dialogContext,
+                      dark: MyntColors.dialogDark, light: MyntColors.dialog),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.warning_amber_rounded,
+                            size: 22, color: errorColor),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: MyntWebTextStyles.title(
+                              dialogContext,
+                              color: resolveThemeColor(dialogContext,
+                                  dark: MyntColors.textPrimaryDark,
+                                  light: MyntColors.textPrimary),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      reason,
+                      style: MyntWebTextStyles.body(
+                        dialogContext,
+                        fontWeight: FontWeight.w500,
+                        color: resolveThemeColor(dialogContext,
+                            dark: MyntColors.textSecondaryDark,
+                            light: MyntColors.textSecondary),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    MyntButton(
+                      type: MyntButtonType.primary,
+                      size: MyntButtonSize.large,
+                      label: 'Ok',
+                      isFullWidth: true,
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curvedAnimation = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOut,
+          reverseCurve: Curves.easeIn,
+        );
+        return FadeTransition(
+          opacity: curvedAnimation,
+          child: ScaleTransition(
+            scale:
+                Tween<double>(begin: 0.95, end: 1.0).animate(curvedAnimation),
+            child: child,
+          ),
+        );
+      },
+    );
   }
 
   // ============================================================

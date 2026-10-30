@@ -73,13 +73,14 @@ class _PledgeDeytails extends State<PledgeDeytails> {
       //       if (val.nSESYMBOL == ) {}}
       //     }
 
+      // Unpledge is capped at the pledged qty of the chosen product.
       int netValue = ledgerdata.screenpledge == 'pledge'
           ? (widget.data.nET is String)
               ? double.parse(widget.data.nET!).toInt()
               : (widget.data.cOLQTY as double).toInt()
-          : (widget.data.cOLQTY is String)
-              ? double.parse(widget.data.cOLQTY!).toInt()
-              : (widget.data.cOLQTY as double).toInt();
+          : widget.data.pledgedQtyFor(ledgerdata.unpledgePrd) as int;
+      final int totalQty =
+          (double.tryParse(widget.data.nET?.toString() ?? '') ?? 0).toInt();
       List<DropdownItem> dropdownItems = [];
 
      final segmentMap = {
@@ -266,8 +267,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
       final bool hasSelectableSegment =
           dropdownItems.any((i) => i.isEnabled);
       // Fully valid → allowed to actually submit.
-      final bool canSubmit =
-          isPledgeMode ? (qtyValid && currentSegmentValid) : qtyValid;
+      final bool canSubmit = isPledgeMode
+          ? (qtyValid && currentSegmentValid)
+          : (qtyValid && !ledgerdata.deployLoading);
       // Keep the button tappable (only to prompt the user) when the single
       // thing missing is the segment choice and a segment can actually be
       // picked. When the qty is invalid or no segment is selectable, the
@@ -311,7 +313,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                     child: SizedBox(
                                       width: widget.data.sERIES == "GR" ? screenWidth * 0.65 : null,
                                       child: Text(
-                                          widget.data.sERIES == "GR" && mfname.isNotEmpty ? mfname : widget.data.nSESYMBOL.toString(),
+                                          ledgerdata.screenpledge != 'pledge'
+                                              ? 'Unpledge Details'
+                                              : widget.data.sERIES == "GR" && mfname.isNotEmpty ? mfname : widget.data.nSESYMBOL.toString(),
                                           maxLines: 2,
                                           style: MyntWebTextStyles.title(context,
                                               color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
@@ -343,6 +347,18 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                               SizedBox(height: 8.0),
                               Row(
                                 children: [
+                                  if (ledgerdata.screenpledge != 'pledge') ...[
+                                    Flexible(
+                                      child: Text(
+                                        widget.data.nSESYMBOL.toString(),
+                                        overflow: TextOverflow.ellipsis,
+                                        style: MyntWebTextStyles.para(context,
+                                            color: resolveThemeColor(context, dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary),
+                                            fontWeight: MyntFonts.semiBold),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                  ],
                                   ledgerdata.screenpledge == 'pledge'
                                       ? Text(
                                           "${double.tryParse(widget.data.estimated.toString())!.toStringAsFixed(2)} (${widget.data.estPercentage}%)",
@@ -358,7 +374,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                         ),
                                   const SizedBox(width: 12),
                                   Text(
-                                      "Qty: $netValue",
+                                      ledgerdata.screenpledge == 'pledge'
+                                          ? "Qty: $netValue"
+                                          : "Total Qty: $totalQty",
                                       overflow: TextOverflow.ellipsis,
                                       style: MyntWebTextStyles.para(context,
                                           color: resolveThemeColor(context, dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary)),
@@ -532,8 +550,9 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                     ledgerdata.screenpledge == 'pledge'
                                         ? ledgerdata.setselectnetpledge(value,
                                             "${(double.parse(widget.data.nSOHQTY.toString()).toInt()) + (double.parse(widget.data.sOHQTY.toString()).toInt())}")
-                                        : ledgerdata.setselectnetpledge(value,
-                                            "${(double.parse(widget.data.cOLQTY.toString()).toInt()) + (double.parse(widget.data.sOHQTY.toString()).toInt())}");
+                                        : ledgerdata.setselectnetpledge(
+                                            value,
+                                            "${widget.data.pledgedQtyFor(ledgerdata.unpledgePrd)}");
                                   })),
                         ),
                         Padding(
@@ -792,31 +811,37 @@ class _PledgeDeytails extends State<PledgeDeytails> {
                                             .data.segmentselect
                                             .toString());
                                       } else {
-                                        ledgerdata.dummypledgeval(
-                                            widget.data,
-                                            ledgerdata.selectnetpledge.text,
-                                            "unpledge");
-                                        ledgerdata.listforpledgefunction(
-                                            context,
-                                            ledgerdata.segmentvalue,
-                                            widget.data.nSESYMBOL.toString(),
-                                            widget.data.iSIN.toString(),
-                                            ((double.tryParse(widget.data.sCRIPVALUE?.toString() ?? '0') ?? 0) *
-                                                    (double.tryParse(ledgerdata.selectnetpledge.text) ?? 0))
-                                                .toStringAsFixed(2),
-                                            ledgerdata.selectnetpledge.text,
-                                            widget.data.nET.toString(),
-                                            "unpledge",
-                                            widget.data);
+                                        // Unpledge goes out directly, one
+                                        // stock at a time; the provider
+                                        // closes this dialog when it is done.
+                                        ledgerdata.sendSingleUnpledge(
+                                          context,
+                                          widget.data,
+                                          int.tryParse(ledgerdata
+                                                  .selectnetpledge.text) ??
+                                              0,
+                                          closeDialog: () {
+                                            if (mounted) Navigator.pop(context);
+                                          },
+                                        );
+                                        return;
                                       }
                                       // ledgerdata.changesegval("");
                                       Navigator.pop(context);
                                     }
                                   },
-                                  child: Text("Submit",
-                                      style: MyntWebTextStyles.bodyMedium(context,
-                                          color: MyntColors.textWhite,
-                                          fontWeight: MyntFonts.semiBold)))),
+                                  child: !isPledgeMode &&
+                                          ledgerdata.deployLoading
+                                      ? MyntLoader.inline(color: Colors.white)
+                                      : Text(
+                                          isPledgeMode
+                                              ? "Submit"
+                                              : "Send Request",
+                                          style: MyntWebTextStyles.bodyMedium(
+                                              context,
+                                              color: MyntColors.textWhite,
+                                              fontWeight:
+                                                  MyntFonts.semiBold)))),
                         ),
                       ],
                     ),

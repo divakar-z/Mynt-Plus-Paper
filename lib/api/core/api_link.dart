@@ -389,6 +389,8 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get fetctfileidURLnominee => '$profileDetailsURL/nom_stat';
   String get nomineeSubmitURL => '$profileDetailsURL/nominee';
   String get addSegmentURL => '${profileDetailsURL}add_segment';
+  String get cdslSignatureCheckURL => '${profileDetailsURL}cdsl/signature_check';
+  String get cdslSignatureUploadURL => '${profileDetailsURL}cdsl/signature_upload';
   String get filedownloadURL => '${profileDetailsURL}filedownload';
 
   // email change

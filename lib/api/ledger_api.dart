@@ -1124,48 +1124,55 @@ mixin LedgerApi on ApiCore {
     }
   }
 
-  Future sendunpledgeapi(
-      String uccid, String boid, String cname, List list) async {
+  /// POSTs to a pledge endpoint and always returns a map. A non-200 reply
+  /// comes back as the server body (marked Not_Ok), a network failure as the
+  /// exception message, so the caller can show the real reason.
+  Future<Map<String, dynamic>> _postPledge(String path, Map body) async {
     try {
-      final uri = Uri.parse('${apiLinks.reportspledge}/unpledge_requested');
+      final uri = Uri.parse('${apiLinks.reportspledge}/$path');
       final res = await apiClient.post(uri,
-          headers: funddefaultHeaders,
-          // headers: testingrameshheader,
-          body: jsonEncode({
-            "boid": boid,
-            "clientid": uccid,
-            "clientname": cname,
-            "unpledge_req_data": list,
-          }));
-      if (res.statusCode == 200) {
-        final json = jsonDecode((res.body));
-        // log("MF Master ==>$json");
-        return json;
-      } else {
-        return {"msg": 'error occurre'};
-      }
+          headers: funddefaultHeaders, body: jsonEncode(body));
+      Map<String, dynamic>? json;
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map) json = Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+      if (res.statusCode == 200 && json != null) return json;
+      return {
+        ...?json,
+        'stat': json?['stat'] ?? 'Not_Ok',
+        if (json == null) 'emsg': 'Network error, please try again.',
+      };
     } catch (e) {
-      return {"msg": 'error occurre'};
+      final msg = e.toString().trim();
+      return {
+        'stat': 'Not_Ok',
+        'emsg': msg.isEmpty ? 'Network error, please try again.' : msg,
+      };
     }
   }
 
-  Future sendunpledgedeleteapi(String uccid, List list) async {
-    try {
-      final uri = Uri.parse('${apiLinks.reportspledge}/del_unpledge');
-      final res = await apiClient.post(uri,
-          headers: funddefaultHeaders,
-          // headers: testingrameshheader,
-          body: jsonEncode({"clientid": uccid, "ISIN": list}));
-      if (res.statusCode == 200) {
-        final json = jsonDecode((res.body));
-        // log("MF Master ==>$json");
-        return json;
-      } else {
-        return {"msg": 'error occurre'};
-      }
-    } catch (e) {
-      return {"msg": 'error occurre'};
-    }
+  Future<Map<String, dynamic>> sendunpledgeapi(
+      String uccid, String boid, String cname, List list) {
+    return _postPledge('unpledge_requested', {
+      "clientid": uccid,
+      "boid": boid,
+      "clientname": cname,
+      "unpledge_req_data": list,
+    });
+  }
+
+  Future<Map<String, dynamic>> sendunpledgedeleteapi(String uccid, List list,
+      {String? prd}) {
+    return _postPledge('del_unpledge', {
+      "clientid": uccid,
+      "ISIN": list,
+      if (prd != null) "prd": prd,
+    });
+  }
+
+  Future<Map<String, dynamic>> sendpledgedeleteapi(String uccid, List list) {
+    return _postPledge('del_pledge', {"clientid": uccid, "ISIN": list});
   }
 
   Future<DercomcurModel> gettaxpnldercomcur(int from) async {

@@ -403,6 +403,42 @@ mixin ProfileAllDetailsApi on ApiCore {
     }
   }
 
+  /// CDSL needs the client's signature on record before Equity is opened for
+  /// the first time. Returns the decoded body, e.g. {"stat":"Ok","signature":true}.
+  Future<Map<String, dynamic>> signatureCheckApi(String clientId) async {
+    try {
+      final uri = Uri.parse('${apiLinks.cdslSignatureCheckURL}/$clientId');
+      final res = await apiClient.get(uri, headers: razorpaytHeaders);
+      return jsonDecode(res.body);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Multipart with ONLY client_id + signature; the encoder sets the boundary.
+  Future<Map<String, dynamic>> signatureUploadApi({
+    required String clientId,
+    required Uint8List signatureBytes,
+    required String signatureFileName,
+  }) async {
+    try {
+      final uri = Uri.parse(apiLinks.cdslSignatureUploadURL);
+      var request = http.MultipartRequest('POST', uri);
+      request.headers.addAll(razorpaytHeaders);
+      request.fields['client_id'] = clientId;
+      request.files.add(http.MultipartFile.fromBytes(
+        'signature',
+        signatureBytes,
+        filename: signatureFileName,
+      ));
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+      return jsonDecode(response.body);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   Future<void> filedownloadApi({
     required String clientId,
     required String fileId,
