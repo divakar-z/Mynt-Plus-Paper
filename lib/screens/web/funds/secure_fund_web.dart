@@ -527,15 +527,12 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
   }
 
   Widget _buildAvailableCashContent(funds, theme) {
-    final filteredCredits = funds.listOfCredits.length > 1
-        ? funds.listOfCredits
-            .sublist(1)
-            .where((item) =>
-                item["name"] != "Collateral" &&
-                item["name"] != "Opening Balance" &&
-                item["name"] != "Payin")
-            .toList()
-        : [];
+    final filteredCredits = funds.listOfCredits
+        .where((item) =>
+            item["name"] != "Collateral" &&
+            item["name"] != "Opening Balance" &&
+            item["name"] != "Payin")
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -544,9 +541,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         _buildInfoRow(
           "Cash Balance",
           getFormatter(
-            value: funds.listOfCredits.isNotEmpty
-                ? double.parse("${funds.listOfCredits[0]["value"]}")
-                : 0.00,
+            value: _safeParseDouble("${funds.fundDetailModel?.cash ?? 0.00}"),
             v4d: false,
             noDecimal: false,
           ),

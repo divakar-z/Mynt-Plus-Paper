@@ -151,7 +151,7 @@ class WithdrawProvider extends DefaultChangeNotifier {
     } catch (_) {}
   }
 
-  /// Limits, GetMaxPayoutAmount and the request list, in parallel.
+  /// Limits, max payout and the request list, in parallel.
   Future<void> loadAll(BuildContext context) async {
     _context = context;
     await Future.wait([
@@ -197,7 +197,7 @@ class WithdrawProvider extends DefaultChangeNotifier {
     } catch (e) {
       _maxPayout = null;
       _maxPayoutError = _maxPayoutErrorText;
-      _logError('GetMaxPayoutAmount', e);
+      _logError('withdraw max_payout', e);
       return null;
     } finally {
       _maxPayoutLoading = false;
@@ -418,7 +418,7 @@ class WithdrawBreakdownPart {
 
 /// Explains the withdrawable balance from the Noren Limits fields
 /// (WITHDRAW_SCREEN_FRONTEND.md section 3). The total is always [withdrawable]
-/// (GetMaxPayoutAmount); any gap the rows don't model shows up as "Other
+/// (`/withdraw/max_payout`); any gap the rows don't model shows up as "Other
 /// adjustments".
 class WithdrawBreakdown {
   final List<WithdrawBreakdownRow> rows;

@@ -1,4 +1,4 @@
-// Models for the withdraw screen: Noren GetMaxPayoutAmount and the backend
+// Models for the withdraw screen: the backend `/withdraw/max_payout`,
 // `/withdraw/payment`, `/withdraw/cancel` and `/withdraw/requests` calls.
 //
 // Every field is parsed defensively: the backend sends numbers as either
@@ -25,7 +25,7 @@ String? _toStr(dynamic v) {
   return s == 'null' ? null : s;
 }
 
-/// Noren `GetMaxPayoutAmount`: the most the client can withdraw right now.
+/// Backend `/withdraw/max_payout`: the most the client can withdraw right now.
 ///
 /// Not to be confused with the Limits `payout` field, which is the amount
 /// already requested today.

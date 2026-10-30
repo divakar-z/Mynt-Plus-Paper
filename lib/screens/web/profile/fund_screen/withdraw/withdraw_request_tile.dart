@@ -101,15 +101,17 @@ class WithdrawRequestTile extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
                       formatDate(r.createdAt),
                       style: MyntWebTextStyles.body(context,
                           color: textPrimary, fontWeight: MyntFonts.medium),
                     ),
-                    if (segment.isNotEmpty) ...[
-                      const SizedBox(width: 8),
+                    if (segment.isNotEmpty)
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
@@ -126,17 +128,17 @@ class WithdrawRequestTile extends ConsumerWidget {
                               fontWeight: MyntFonts.medium),
                         ),
                       ),
-                    ],
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  r.isCompleted
-                      ? 'Processed: ${money(r.amount)}'
-                      : 'Processed: –',
-                  style: MyntWebTextStyles.bodySmall(context,
-                      color: textSecondary, fontWeight: MyntFonts.medium),
-                ),
+                // Processed amount only exists once the payout is done.
+                if (r.isCompleted) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Processed: ${money(r.amount)}',
+                    style: MyntWebTextStyles.bodySmall(context,
+                        color: textSecondary, fontWeight: MyntFonts.medium),
+                  ),
+                ],
                 if (remarks.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(

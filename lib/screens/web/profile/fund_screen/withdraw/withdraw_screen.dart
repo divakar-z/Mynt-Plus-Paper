@@ -105,9 +105,10 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
     return (v == null || !v.isFinite) ? null : v;
   }
 
+  // Non-breaking space keeps ₹ on the same line as the amount when wrapped.
   String _money(double v) => ref.read(privacyProvider).mask(
       getFormatter(value: v, v4d: false, noDecimal: false),
-      prefix: '₹ ');
+      prefix: '₹ ');
 
   /// Null when the amount is fine (or untouched); otherwise the message.
   String? _amountError(double? withdrawable) {
@@ -338,20 +339,26 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
 
   // ---------------------------------------------------------------- widgets
 
-  /// Amber notice banner, same as the old Pending Request card.
-  Widget _banner(String text) {
+  /// Amber warning banner, same as the old Pending Request card. With [info]
+  /// it is a blue info note instead, so it reads apart from the warning.
+  Widget _banner(String text, {bool info = false}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: _c(const Color(0xFF2D2200), const Color(0xFFFFF8E1)),
+        color: info
+            ? _primary.withValues(alpha: 0.08)
+            : _c(const Color(0xFF2D2200), const Color(0xFFFFF8E1)),
         borderRadius: BorderRadius.circular(4),
         border: Border.all(
-            color: _c(const Color(0xFF5C4400), const Color(0xFFFFE082))),
+            color: info
+                ? _primary.withValues(alpha: 0.3)
+                : _c(const Color(0xFF5C4400), const Color(0xFFFFE082))),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.error_outline, size: 18, color: MyntColors.warning),
+          Icon(info ? Icons.info_outline : Icons.error_outline,
+              size: 18, color: info ? _primary : MyntColors.warning),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -554,30 +561,16 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
         if (pending != null) ...[
           const SizedBox(height: 12),
           _banner(
-              'Placing a new request will replace your pending request of ${_money(pending.amount)}'),
+              'Placing a new request will replace your pending request of ${_money(pending.amount)}',
+              info: true),
         ],
-        const SizedBox(height: 16),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: _c(MyntColors.listItemBgDark, MyntColors.listItemBg),
-            borderRadius: BorderRadius.circular(2),
-            border: Border.all(
-                color: _c(MyntColors.borderMutedDark, MyntColors.borderMuted)),
-          ),
-          child: Text(
-            'Payout requests submitted before 8:30 AM on any working day will be processed on the same day. Requests received after 8:30 AM will be processed on the next working day. In case of multiple requests, the latest one will be considered.',
-            style: MyntWebTextStyles.para(context,
-                fontWeight: MyntFonts.medium,
-                darkColor: MyntColors.textSecondaryDark,
-                lightColor: MyntColors.textSecondary),
-          ),
-        ),
       ],
     );
   }
 
   // ── Right column: withdrawable breakdown ───────────────────────
+
+  static const bool _showBreakdown = false;
 
   Widget _buildBreakdown(WithdrawProvider wp) {
     final model = ref.watch(fundProvider).fundDetailModel;
@@ -630,6 +623,31 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
         padding: const EdgeInsets.all(20),
         child: _buildForm(wp, trans),
       );
+      // Breakdown is hidden for now; flip to show it again.
+      // Without it, the form and Active withdrawals share the row on wide
+      // panes and stack on narrow ones.
+      if (!_showBreakdown) {
+        if (constraints.maxWidth < 720) {
+          return Column(
+            children: [
+              _card(child: form),
+              const SizedBox(height: 16),
+              _buildActive(wp),
+            ],
+          );
+        }
+        // Both cards stretch to the taller one so they line up.
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _card(child: form)),
+              const SizedBox(width: 16),
+              Expanded(child: _buildActive(wp)),
+            ],
+          ),
+        );
+      }
       final breakdown = Padding(
         padding: const EdgeInsets.all(20),
         child: _buildBreakdown(wp),
@@ -811,8 +829,13 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
                 _buildTopBar(wp),
                 const SizedBox(height: 16),
                 _buildMainCard(wp, trans),
+                if (_showBreakdown) ...[
+                  const SizedBox(height: 16),
+                  _buildActive(wp),
+                ],
                 const SizedBox(height: 16),
-                _buildActive(wp),
+                _banner(
+                    'Payout requests submitted before 8:00 AM on any working day will be processed in the first batch, and requests submitted before 4:00 PM will be processed in the second batch on the same day. Requests received after 4:00 PM will be processed on the next working day. In case of multiple requests, the latest one will be considered.'),
               ],
             ),
           ),

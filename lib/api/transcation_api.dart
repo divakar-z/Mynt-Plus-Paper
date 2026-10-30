@@ -367,21 +367,20 @@ mixin TranscationApi on ApiCore {
     }
   }
 
-  /// Noren GetMaxPayoutAmount, called with the client's own session like
-  /// Limits. `payout` is the authoritative withdrawable amount.
+  /// Backend `/withdraw/max_payout`: `withdraw_amount` is the authoritative
+  /// withdrawable amount; failures come back as `{"msg":"error"}`.
   Future<MaxPayoutModel> getMaxPayoutAmount() async {
-    final uri = Uri.parse(apiLinks.getMaxPayoutAmount);
-    final res = await apiClient
-        .post(uri,
-            headers: defaultHeaders,
-            body:
-                'jData={"uid":"${prefs.clientId}","actid":"${prefs.clientId}"}&jKey=${prefs.clientSession}')
-        .timeout(const Duration(seconds: 20));
-    final json = jsonDecode(res.body);
-    if (json is! Map<String, dynamic>) {
+    final data = await _withdrawPost(apiLinks.withdrawMaxPayout,
+        {"client_id": "${prefs.clientId}"}, const Duration(seconds: 20));
+    if (data is! Map<String, dynamic>) {
       return const MaxPayoutModel(stat: 'Not_Ok', emsg: 'Invalid response');
     }
-    return MaxPayoutModel.fromJson(json);
+    final amount = data['withdraw_amount'];
+    if (amount != null) {
+      return MaxPayoutModel(stat: 'Ok', payout: amount.toString());
+    }
+    return MaxPayoutModel(
+        stat: 'Not_Ok', emsg: (data['emsg'] ?? data['msg'])?.toString());
   }
 
   /// Posts an encrypted body to the withdraw backend and returns the
