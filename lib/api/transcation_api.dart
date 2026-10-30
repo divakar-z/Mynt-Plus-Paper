@@ -12,6 +12,7 @@ import '../models/fund_model_testing_copy/fund_upi_status_model.dart';
 import '../models/fund_model_testing_copy/fund_validation_token.dart';
 import '../models/fund_model_testing_copy/fund_withdraw_model.dart';
 import '../models/fund_model_testing_copy/fund_withdraw_status_model.dart';
+import '../models/fund_model_testing_copy/withdraw_request_model.dart';
 import '../models/fund_model_testing_copy/secured_bank_detalis_model.dart';
 import '../models/fund_model_testing_copy/secured_client_data_model.dart';
 import '../models/fund_model_testing_copy/view_upi_id.dart';
@@ -365,6 +366,111 @@ mixin TranscationApi on ApiCore {
       rethrow;
     }
   }
+
+  /// Backend `/withdraw/max_payout`: `withdraw_amount` is the authoritative
+  /// withdrawable amount; failures come back as `{"msg":"error"}`.
+  Future<MaxPayoutModel> getMaxPayoutAmount() async {
+    final data = await _withdrawPost(apiLinks.withdrawMaxPayout,
+        {"client_id": "${prefs.clientId}"}, const Duration(seconds: 20));
+    if (data is! Map<String, dynamic>) {
+      return const MaxPayoutModel(stat: 'Not_Ok', emsg: 'Invalid response');
+    }
+    final amount = data['withdraw_amount'];
+    if (amount != null) {
+      return MaxPayoutModel(stat: 'Ok', payout: amount.toString());
+    }
+    return MaxPayoutModel(
+        stat: 'Not_Ok', emsg: (data['emsg'] ?? data['msg'])?.toString());
+  }
+
+  /// Posts an encrypted body to the withdraw backend and returns the
+  /// decrypted JSON. Session errors come back unencrypted (`emsg`, no `str`);
+  /// those are returned as-is with `_httpStatus` added.
+  Future<dynamic> _withdrawPost(
+      String url, Map<String, dynamic> payload, Duration timeout) async {
+    final res = await apiClient
+        .post(Uri.parse(url),
+            headers: funddefaultHeaders,
+            body: jsonEncode({"string": encryptionFunction(jsonEncode(payload))}))
+        .timeout(timeout);
+    final json = jsonDecode(res.body);
+    if (json is Map<String, dynamic>) {
+      final str = json['str'];
+      if (str is String && str.isNotEmpty) {
+        return jsonDecode(decryptionFunction(str));
+      }
+      if (json.containsKey('emsg')) {
+        return {...json, '_httpStatus': res.statusCode};
+      }
+    }
+    throw FormatException('Unexpected withdraw response (${res.statusCode})');
+  }
+
+  /// Places a withdrawal. [ip] is sent only when the lookup succeeded.
+  Future<WithdrawActionResponse> placeWithdraw(
+      {required String amount,
+      required String companyCode,
+      String? ip}) async {
+    final data = await _withdrawPost(
+      apiLinks.withdrawPayment,
+      {
+        "accountcode": "${prefs.clientId}",
+        "company_code": companyCode,
+        "amount": amount,
+        if (ip != null && ip.isNotEmpty) "ip": ip,
+      },
+      // Long enough for Noren + backoffice; a timeout here does not mean the
+      // request failed, so the screen re-reads the list afterwards.
+      const Duration(seconds: 45),
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const FormatException('Unexpected withdraw response');
+    }
+    return WithdrawActionResponse.fromJson(data,
+        httpStatus: _toHttpStatus(data['_httpStatus']));
+  }
+
+  /// Cancels a pending withdrawal by its request id.
+  Future<WithdrawActionResponse> cancelWithdraw(
+      {required int requestId, String? remarks}) async {
+    final data = await _withdrawPost(
+      apiLinks.withdrawCancel,
+      {
+        "request_id": requestId,
+        if (remarks != null && remarks.trim().isNotEmpty)
+          "remarks": remarks.trim(),
+      },
+      const Duration(seconds: 45),
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const FormatException('Unexpected cancel response');
+    }
+    return WithdrawActionResponse.fromJson(data,
+        httpStatus: _toHttpStatus(data['_httpStatus']));
+  }
+
+  /// Recent withdraw requests for the logged-in client, newest first.
+  Future<WithdrawRequestsResult> getWithdrawRequests() async {
+    final data = await _withdrawPost(
+        apiLinks.withdrawRequests, {}, const Duration(seconds: 20));
+    if (data is List) {
+      return WithdrawRequestsResult(
+        requests: [
+          for (final e in data)
+            if (e is Map<String, dynamic>) WithdrawRequest.fromJson(e),
+        ],
+      );
+    }
+    if (data is Map<String, dynamic> && data.containsKey('emsg')) {
+      return WithdrawRequestsResult(
+          emsg: '${data['emsg']}',
+          httpStatus: _toHttpStatus(data['_httpStatus']));
+    }
+    // `{"msg": "error"}` or any other shape is a failure, not an empty list.
+    throw const FormatException('Unexpected withdraw requests response');
+  }
+
+  int? _toHttpStatus(dynamic v) => v is int ? v : null;
 
   /// Initiate UPI QR payment via wrapper API
   Future<IndentUpiResponse> indentUpiRequest({

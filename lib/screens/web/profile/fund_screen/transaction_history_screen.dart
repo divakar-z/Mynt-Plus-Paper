@@ -1,26 +1,46 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:intl/intl.dart';
 import 'package:mynt_plus/api/core/api_export.dart';
 import 'package:mynt_plus/locator/locator.dart';
 import 'package:mynt_plus/models/fund_model_testing_copy/client_history_model.dart';
+import 'package:mynt_plus/models/fund_model_testing_copy/withdraw_request_model.dart';
+import 'package:mynt_plus/provider/privacy_provider.dart';
+import 'package:mynt_plus/provider/withdraw_provider.dart';
 import 'package:mynt_plus/res/assets.dart';
 import 'package:mynt_plus/sharedWidget/common_search_fields_web.dart';
+import 'package:mynt_plus/sharedWidget/functions.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn hide Colors;
 import '../../../../../res/mynt_web_color_styles.dart';
 import '../../../../../res/mynt_web_text_styles.dart';
 import '../../../../../res/responsive_extensions.dart';
+import 'withdraw/withdraw_request_tile.dart';
 
-class TransactionHistoryScreen extends StatefulWidget {
+class TransactionHistoryScreen extends ConsumerStatefulWidget {
   final VoidCallback? onBack;
   const TransactionHistoryScreen({super.key, this.onBack});
 
   @override
-  State<TransactionHistoryScreen> createState() =>
+  ConsumerState<TransactionHistoryScreen> createState() =>
       _TransactionHistoryScreenState();
 }
 
-class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
+class _TransactionHistoryScreenState
+    extends ConsumerState<TransactionHistoryScreen> {
+  /// 0 = Add Fund (pay-in history), 1 = Withdraw (`/withdraw/requests`).
+  int _tab = 0;
+
+  // Withdraw tab filters: display label -> request status groups it includes
+  static const Map<String, List<WithdrawStatusGroup>> _withdrawFilterGroups = {
+    'Pending': [WithdrawStatusGroup.pending],
+    'Processed': [WithdrawStatusGroup.processed],
+    'Cancelled': [WithdrawStatusGroup.cancelled, WithdrawStatusGroup.replaced],
+    'Under review': [WithdrawStatusGroup.review],
+    'Failed': [WithdrawStatusGroup.failed],
+  };
+  final ValueNotifier<String> _withdrawFilter = ValueNotifier<String>('All');
+
   bool _isLoading = true;
   List<ClientHistoryItem> _transactions = [];
   String? _error;
@@ -50,7 +70,61 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     _searchQuery.dispose();
     _searchController.dispose();
     _selectedFilter.dispose();
+    _withdrawFilter.dispose();
     super.dispose();
+  }
+
+  /// On a tab switch the search is cleared (a query typed for one list would
+  /// only empty the other), and withdrawals load the first time their tab
+  /// is shown.
+  void _selectTab(int index) {
+    if (index == _tab) return;
+    _searchController.clear();
+    setState(() => _tab = index);
+    if (index == 1) {
+      final wp = ref.read(withdrawProvider);
+      wp.attachContext(context);
+      if (!wp.requestsLoaded && !wp.requestsLoading) {
+        wp.fetchRequests();
+      }
+    }
+  }
+
+  /// True when [query] is a number found in [amount], however either is
+  /// written: "1500", "1,500", "₹1500.5" and "1500.50" all match 1500.50.
+  static bool _amountMatches(String query, double? amount) {
+    if (amount == null || !amount.isFinite) return false;
+    final q = query.replaceAll(RegExp(r'[₹,\s]'), '');
+    if (q.isEmpty || !RegExp(r'^\d*\.?\d*$').hasMatch(q) || q == '.') {
+      return false;
+    }
+    final fixed = amount.toStringAsFixed(2); // 1500.50
+    final plain = fixed.endsWith('.00')
+        ? fixed.substring(0, fixed.length - 3) // 1500
+        : fixed.endsWith('0')
+            ? fixed.substring(0, fixed.length - 1) // 1500.5
+            : fixed;
+    return fixed.contains(q) || plain.contains(q);
+  }
+
+  List<WithdrawRequest> _getFilteredWithdrawals(List<WithdrawRequest> rows) {
+    final query = _searchQuery.value.toLowerCase().trim();
+    final allowed =
+        _withdrawFilterGroups[_withdrawFilter.value]?.toSet() ?? const {};
+    return rows.where((r) {
+      if (allowed.isNotEmpty && !allowed.contains(r.group)) return false;
+      if (query.isEmpty) return true;
+      if (_amountMatches(query, r.amount)) return true;
+      final fields = [
+        WithdrawRequestTile.formatDate(r.createdAt),
+        r.createdAt ?? '',
+        r.statusLabel,
+        r.companyCode ?? '',
+        r.remarks ?? '',
+        '${r.id ?? ''}',
+      ];
+      return fields.any((f) => f.toLowerCase().contains(query));
+    }).toList();
   }
 
   List<ClientHistoryItem> _getFilteredTransactions() {
@@ -71,7 +145,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         return date.contains(query) ||
             order.contains(query) ||
             type.contains(query) ||
-            amount.contains(query);
+            amount.contains(query) ||
+            _amountMatches(
+                query, double.tryParse((item.amount ?? '').replaceAll(',', '')));
       }
       return true;
     }).toList();
@@ -132,6 +208,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Watched here so the auto-disposed provider lives as long as the screen.
+    final withdraw = ref.watch(withdrawProvider);
+    ref.watch(privacyProvider);
     return Padding(
       padding: const EdgeInsets.only(top: 8.0),
       child: Scaffold(
@@ -190,7 +269,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                 ),
                 child: MyntSearchTextField.withSmartClear(
                   controller: _searchController,
-                  placeholder: 'Search transactions',
+                  placeholder:
+                      _tab == 0 ? 'Search transactions' : 'Search withdrawals',
                   leadingIcon: _assets.searchIcon,
                   onClear: () => _searchController.clear(),
                 ),
@@ -200,7 +280,73 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
             const SizedBox(width: 15)
           ],
         ),
-        body: _isLoading
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildTabs(),
+            Expanded(
+              child: _tab == 0
+                  ? _buildAddFundTab()
+                  : _buildWithdrawTab(withdraw),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Pill tabs: Add Fund / Withdraw.
+  Widget _buildTabs() {
+    Widget tab(String label, int index) {
+      final selected = _tab == index;
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => _selectTab(index),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+              color: selected
+                  ? resolveThemeColor(context,
+                      dark: MyntColors.listItemBgDark,
+                      light: MyntColors.listItemBg)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(5),
+            ),
+            child: Text(
+              label,
+              style: MyntWebTextStyles.body(
+                context,
+                fontWeight: selected ? MyntFonts.semiBold : MyntFonts.medium,
+                color: selected
+                    ? resolveThemeColor(context,
+                        dark: MyntColors.textPrimaryDark,
+                        light: MyntColors.textPrimary)
+                    : resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Row(
+        children: [
+          tab('Add Fund', 0),
+          const SizedBox(width: 8),
+          tab('Withdraw', 1),
+        ],
+      ),
+    );
+  }
+
+  /// Add Fund tab: the pay-in history with search and status filter.
+  Widget _buildAddFundTab() {
+    return _isLoading
             ? Center(
                 child: CircularProgressIndicator(
                   color: resolveThemeColor(context,
@@ -239,7 +385,219 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                       )
                     : LayoutBuilder(builder: (context, constraints) {
                         return _buildTable(constraints);
-                      }),
+                      });
+  }
+
+  Widget _centerText(String text, {Color? color}) => Center(
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: MyntWebTextStyles.body(
+            context,
+            color: color ??
+                resolveThemeColor(context,
+                    dark: MyntColors.textSecondaryDark,
+                    light: MyntColors.textSecondary),
+          ),
+        ),
+      );
+
+  /// Withdraw tab: every request `/withdraw/requests` returns, newest first.
+  Widget _buildWithdrawTab(WithdrawProvider wp) {
+    if (!wp.requestsLoaded && wp.requestsError == null) {
+      return Center(
+        child: CircularProgressIndicator(
+          color: resolveThemeColor(context,
+              dark: MyntColors.primaryDark, light: MyntColors.primary),
+        ),
+      );
+    }
+    if (wp.requestsError != null && wp.requests.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Unable to load withdrawals',
+                style: MyntWebTextStyles.body(context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.errorDark,
+                        light: MyntColors.error))),
+            const SizedBox(height: 4),
+            Text(wp.requestsError!,
+                style: MyntWebTextStyles.bodySmall(context,
+                    color: resolveThemeColor(context,
+                        dark: MyntColors.textSecondaryDark,
+                        light: MyntColors.textSecondary))),
+            const SizedBox(height: 12),
+            TextButton(
+                onPressed: wp.requestsLoading ? null : wp.fetchRequests,
+                child: const Text("Retry")),
+          ],
+        ),
+      );
+    }
+    if (wp.requests.isEmpty) {
+      return _centerText('No withdrawals found');
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) =>
+          _buildWithdrawTable(wp.requests, constraints),
+    );
+  }
+
+  Widget _buildWithdrawTable(
+      List<WithdrawRequest> requests, BoxConstraints constraints) {
+    final totalWidth = constraints.maxWidth;
+    final privacy = ref.read(privacyProvider);
+
+    // Column: Date 20%, Request ID 12%, Segment 13%, Amount 15%, Status 15%, Remarks 25%
+    final columnWidths = <int, shadcn.TableSize>{
+      0: shadcn.FixedTableSize(totalWidth * 0.20),
+      1: shadcn.FixedTableSize(totalWidth * 0.12),
+      2: shadcn.FixedTableSize(totalWidth * 0.13),
+      3: shadcn.FixedTableSize(totalWidth * 0.15),
+      4: shadcn.FixedTableSize(totalWidth * 0.15),
+      5: shadcn.FixedTableSize(totalWidth * 0.25),
+    };
+    final secondary = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Column(
+        children: [
+          const SizedBox(height: 12),
+          shadcn.Table(
+            columnWidths: columnWidths,
+            defaultRowHeight: const shadcn.FixedTableSize(44),
+            rows: [
+              shadcn.TableHeader(
+                cells: [
+                  _buildHeaderCell('Date & Time', isFirst: true),
+                  _buildHeaderCell('Request ID'),
+                  _buildHeaderCell('Segment'),
+                  _buildHeaderCell('Amount', alignRight: true),
+                  _buildHeaderCell('Status'),
+                  _buildHeaderCell('Remarks', isLast: true),
+                ],
+              ),
+            ],
+          ),
+          Expanded(
+            child: ValueListenableBuilder<String>(
+              valueListenable: _withdrawFilter,
+              builder: (context, filter, _) {
+                return ValueListenableBuilder<String>(
+                  valueListenable: _searchQuery,
+                  builder: (context, query, _) {
+                    final rows = _getFilteredWithdrawals(requests);
+                    if (rows.isEmpty) {
+                      return _centerText('No matching withdrawals');
+                    }
+                    return RawScrollbar(
+                      controller: _verticalScrollController,
+                      thumbVisibility: true,
+                      trackVisibility: true,
+                      trackColor: resolveThemeColor(context,
+                          dark: MyntColors.scrollbarTrackDark,
+                          light: MyntColors.scrollbarTrack),
+                      thumbColor: resolveThemeColor(context,
+                          dark: MyntColors.scrollbarThumbDark,
+                          light: MyntColors.scrollbarThumbLight),
+                      thickness: 6,
+                      radius: const Radius.circular(3),
+                      interactive: true,
+                      child: ListView.builder(
+                        controller: _verticalScrollController,
+                        itemCount: rows.length,
+                        itemExtent: 50.0,
+                        itemBuilder: (context, index) {
+                          final r = rows[index];
+                          final remarks = (r.remarks ?? '').trim();
+                          return shadcn.Table(
+                            columnWidths: columnWidths,
+                            defaultRowHeight: const shadcn.FixedTableSize(50),
+                            rows: [
+                              shadcn.TableRow(
+                                cells: [
+                                  _buildCellWithHover(
+                                    rowIndex: index,
+                                    columnIndex: 0,
+                                    isFirst: true,
+                                    child: Text(
+                                        WithdrawRequestTile.formatDate(
+                                            r.createdAt),
+                                        style: _cellStyle(),
+                                        overflow: TextOverflow.ellipsis),
+                                  ),
+                                  _buildCellWithHover(
+                                    rowIndex: index,
+                                    columnIndex: 1,
+                                    child: Text('${r.id ?? '-'}',
+                                        style: _cellStyle(color: secondary),
+                                        overflow: TextOverflow.ellipsis),
+                                  ),
+                                  _buildCellWithHover(
+                                    rowIndex: index,
+                                    columnIndex: 2,
+                                    child: Text(
+                                        (r.companyCode ?? '').isEmpty
+                                            ? '-'
+                                            : r.companyCode!,
+                                        style: _cellStyle(),
+                                        overflow: TextOverflow.ellipsis),
+                                  ),
+                                  _buildCellWithHover(
+                                    rowIndex: index,
+                                    columnIndex: 3,
+                                    alignRight: true,
+                                    child: Text(
+                                        privacy.mask(
+                                            getFormatter(
+                                                value: r.amount,
+                                                v4d: false,
+                                                noDecimal: false),
+                                            prefix: '₹'),
+                                        style: _cellStyle().copyWith(
+                                            fontWeight: MyntFonts.semiBold),
+                                        overflow: TextOverflow.ellipsis),
+                                  ),
+                                  _buildCellWithHover(
+                                    rowIndex: index,
+                                    columnIndex: 4,
+                                    child: WithdrawRequestTile.statusChip(
+                                        context, r),
+                                  ),
+                                  _buildCellWithHover(
+                                    rowIndex: index,
+                                    columnIndex: 5,
+                                    isLast: true,
+                                    child: remarks.isEmpty
+                                        ? Text('-',
+                                            style:
+                                                _cellStyle(color: secondary))
+                                        : Tooltip(
+                                            message: remarks,
+                                            child: Text(remarks,
+                                                style: _cellStyle(
+                                                    color: secondary),
+                                                overflow:
+                                                    TextOverflow.ellipsis),
+                                          ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -491,7 +849,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _availableFilters
+                children: (_tab == 0
+                        ? _availableFilters
+                        : ['All', ..._withdrawFilterGroups.keys])
                     .map((filter) => _buildFilterMenuItem(filter))
                     .toList(),
               ),
@@ -503,15 +863,16 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   }
 
   Widget _buildFilterMenuItem(String value) {
+    final notifier = _tab == 0 ? _selectedFilter : _withdrawFilter;
     return ValueListenableBuilder<String>(
-      valueListenable: _selectedFilter,
+      valueListenable: notifier,
       builder: (context, currentFilter, child) {
         final isSelected = currentFilter == value;
         return Material(
           color: Colors.transparent,
           child: InkWell(
             onTap: () {
-              _selectedFilter.value = value;
+              notifier.value = value;
               shadcn.closeOverlay(context);
             },
             splashColor: resolveThemeColor(

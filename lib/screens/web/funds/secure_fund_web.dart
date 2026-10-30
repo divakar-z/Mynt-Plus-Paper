@@ -66,28 +66,10 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
     });
   }
 
-  void _openWithdraw() async {
-    final trancation = ref.read(transcationProvider);
-    // Ensure bank details and client data are fetched
-    if (trancation.bankdetails == null) {
-      trancation.fetchfundbanks(context);
-    }
-    if (trancation.decryptclientcheck == null) {
-      trancation.fetchc(context);
-    }
-    await trancation.fetchValidateToken(context);
-    Future.delayed(
-      const Duration(milliseconds: 100),
-      () async {
-        await trancation.ip();
-        await trancation.fetchupiIdView(
-          trancation.bankdetails!.dATA![trancation.indexss][1],
-          trancation.bankdetails!.dATA![trancation.indexss][2],
-        );
-        await trancation.fetchcwithdraw(context);
-      },
-    );
-    trancation.changebool(false);
+  void _openWithdraw() {
+    // The withdraw screen loads its own balance, limits, requests and IP on
+    // open.
+    ref.read(transcationProvider).changebool(false);
     setState(() {
       _showWithdraw = true;
     });
@@ -156,10 +138,6 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
 
     if (_showWithdraw) {
       return WithdrawScreen(
-        withdarw: trancation,
-        foucs: trancation.focusNode,
-        theme: theme,
-        segment: trancation.textValue,
         onBack: () {
           setState(() {
             _showWithdraw = false;
@@ -549,15 +527,12 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
   }
 
   Widget _buildAvailableCashContent(funds, theme) {
-    final filteredCredits = funds.listOfCredits.length > 1
-        ? funds.listOfCredits
-            .sublist(1)
-            .where((item) =>
-                item["name"] != "Collateral" &&
-                item["name"] != "Opening Balance" &&
-                item["name"] != "Payin")
-            .toList()
-        : [];
+    final filteredCredits = funds.listOfCredits
+        .where((item) =>
+            item["name"] != "Collateral" &&
+            item["name"] != "Opening Balance" &&
+            item["name"] != "Payin")
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -566,9 +541,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         _buildInfoRow(
           "Cash Balance",
           getFormatter(
-            value: funds.listOfCredits.isNotEmpty
-                ? double.parse("${funds.listOfCredits[0]["value"]}")
-                : 0.00,
+            value: _safeParseDouble("${funds.fundDetailModel?.cash ?? 0.00}"),
             v4d: false,
             noDecimal: false,
           ),
