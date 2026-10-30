@@ -1242,6 +1242,10 @@ class _SegmentChangeRequestDialogState
     final onFile = await _runSignatureCheck();
     if (!mounted || !_sigApplies) return;
     if (onFile == false) _openSignatureDialog();
+    if (_sigCheckFailed) {
+      warningMessage(
+          context, 'Unable to verify signature, please try again later');
+    }
   }
 
   Future<void> _openSignatureDialog() async {
@@ -1293,7 +1297,7 @@ class _SegmentChangeRequestDialogState
       return false;
     }
     if (onFile == false) {
-      warningMessage(context, 'Please save your signature to continue.');
+      warningMessage(context, 'Please upload your signature to continue.');
       _openSignatureDialog();
       return false;
     }
@@ -1340,7 +1344,7 @@ class _SegmentChangeRequestDialogState
       final successColor = resolveThemeColor(context,
           dark: MyntColors.successDark, light: MyntColors.success);
       return line(Icon(Icons.check_circle, size: 16, color: successColor),
-          'Signature saved with the depository.', successColor);
+          'Signature uploaded to the depository.', successColor);
     }
     final errorColor = resolveThemeColor(context,
         dark: MyntColors.errorDark, light: MyntColors.error);
@@ -1577,7 +1581,7 @@ class _SegmentChangeRequestDialogState
                     ),
                     elevation: 0,
                   ),
-                  child: _submitting
+                  child: (_submitting || _sigChecking)
                       ? const SizedBox(
                           width: 20,
                           height: 25,
@@ -1799,7 +1803,7 @@ class _SignatureDialogState extends State<_SignatureDialog> {
     final file = result.files.first;
     final ext = (file.extension ?? file.name.split('.').last).toLowerCase();
     if (!_kSignatureExtensions.contains(ext)) {
-      setState(() => _error = 'Only .jpg, .jpeg or .png files are allowed');
+      setState(() => _error = 'Only JPG, JPEG or PNG format are supported.');
       return;
     }
     final bytes = file.bytes;
@@ -1808,7 +1812,7 @@ class _SignatureDialogState extends State<_SignatureDialog> {
       return;
     }
     if (bytes.length > _kSignatureMaxBytes) {
-      setState(() => _error = 'File size must be 2MB or less');
+      setState(() => _error = 'File size should not exceed 2MB');
       return;
     }
     setState(() {
@@ -2039,7 +2043,7 @@ class _SignatureDialogState extends State<_SignatureDialog> {
 
             const SizedBox(height: 16),
 
-            // Save button with top border
+            // Upload button with top border
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               decoration: BoxDecoration(
@@ -2071,7 +2075,7 @@ class _SignatureDialogState extends State<_SignatureDialog> {
                           ),
                         )
                       : Text(
-                          'Save Signature',
+                          'Upload Signature',
                           style: MyntWebTextStyles.body(context,
                               fontWeight: MyntFonts.semiBold,
                               color: Colors.white),
@@ -2238,7 +2242,7 @@ void _paintSignatureStrokes(
     Canvas canvas, List<List<Offset>> strokes, Color color) {
   final paint = Paint()
     ..color = color
-    ..strokeWidth = 2.5
+    ..strokeWidth = 2.2
     ..strokeCap = StrokeCap.round
     ..strokeJoin = StrokeJoin.round
     ..style = PaintingStyle.stroke;

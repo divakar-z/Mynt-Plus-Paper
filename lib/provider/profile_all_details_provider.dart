@@ -463,10 +463,10 @@ class ProfileProvider extends DefaultChangeNotifier {
         signatureFileName: fileName,
       );
       if (result['stat'] == 'Ok') return null;
-      return (result['msg'] ?? result['emsg'] ?? 'Unable to save signature')
+      return (result['msg'] ?? result['emsg'] ?? 'Unable to upload signature')
           .toString();
     } catch (e) {
-      return 'Unable to save signature, please try again later';
+      return 'Unable to upload signature, please try again later';
     }
   }
 
