@@ -83,6 +83,9 @@ class ClientData {
   
   bool get isIndividual => cATEGORY == 'I';
 
+  /// NRI accounts are allowed to request DDPI like individuals.
+  bool get isNri => cATEGORY == 'NRI';
+
   /// True when BIRTH_DATE shows the holder is under 18.
   /// Accepts yyyy-MM-dd[...], dd/MM/yyyy, dd-MM-yyyy and dd-MMM-yyyy;
   /// an unparseable date is treated as not minor.
