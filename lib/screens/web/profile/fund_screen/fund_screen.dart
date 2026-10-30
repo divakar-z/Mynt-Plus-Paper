@@ -1022,6 +1022,9 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                           ),
                                           onChanged: (value) {
                                             fund.textFiledonChange(value);
+                                            if (value.isEmpty) {
+                                              fund.resetAmountValue();
+                                            }
                                           },
                                         ),
                                       ),
