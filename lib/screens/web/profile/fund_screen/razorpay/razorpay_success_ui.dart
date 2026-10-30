@@ -197,6 +197,7 @@ class _UpiSuccessUiState extends State<UpiSuccessUi> {
         onPressed: () {
           fund.amount.clear();
           fund.textFiledonChange('');
+          fund.resetAmountValue();
           fund.clearPaymentResult();
           Navigator.pop(context);
           FocusScope.of(context).unfocus();
@@ -411,6 +412,7 @@ class _NetBankingSuccessUiState extends State<NetBankingSuccessUi> {
         onPressed: () {
           fund.amount.clear();
           fund.textFiledonChange('');
+          fund.resetAmountValue();
           fund.clearPaymentResult();
           Navigator.pop(context);
           FocusScope.of(context).unfocus();

@@ -14,6 +14,7 @@ import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/res.dart';
 import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../sharedWidget/common_text_fields_web.dart';
+import '../../../sharedWidget/functions.dart';
 import '../../../utils/responsive_snackbar.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
@@ -361,18 +362,60 @@ class _SetAlertWebState extends State<SetAlertWeb> {
                                 return Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(
-                                      "${widget.wlvalue.symbol.toUpperCase()} ${widget.wlvalue.option}",
-                                      style: MyntWebTextStyles.title(
-                                        context,
-                                        fontWeight: MyntFonts.medium,
-                                        color: resolveThemeColor(
-                                          context,
-                                          dark: MyntColors.textPrimaryDark,
-                                          light: MyntColors.textPrimary,
-                                        ),
-                                      ),
+                                    // TC_65.2: exchange shown after the name (muted),
+                                    // like the Alerts table Instrument cell.
+                                    RichText(
                                       overflow: TextOverflow.ellipsis,
+                                      maxLines: 1,
+                                      text: TextSpan(
+                                        children: [
+                                          TextSpan(
+                                            // TC_70: header dropped the expiry ("NIFTY 23000 PE");
+                                            // use the master name like the Alerts table.
+                                            // "${widget.wlvalue.symbol.toUpperCase()} ${widget.wlvalue.option}",
+                                            text: DerivativeMaster.nameFor(
+                                                    widget.wlvalue.exch,
+                                                    widget.wlvalue.token) ??
+                                                [
+                                                  // TC_65.1: NSE showed "TATAGOLD-EQ"; strip like the Alerts table.
+                                                  widget.wlvalue.symbol
+                                                      .replaceAll("-EQ", "")
+                                                      .toUpperCase(),
+                                                  widget.wlvalue.expDate,
+                                                  widget.wlvalue.option,
+                                                ]
+                                                    .where((s) =>
+                                                        s.trim().isNotEmpty)
+                                                    .join(' '),
+                                            style: MyntWebTextStyles.title(
+                                              context,
+                                              fontWeight: MyntFonts.medium,
+                                              color: resolveThemeColor(
+                                                context,
+                                                dark: MyntColors.textPrimaryDark,
+                                                light: MyntColors.textPrimary,
+                                              ),
+                                            ),
+                                          ),
+                                          // Fixed gap: a ' ' in the small exchange style
+                                          // rendered too narrow next to the title.
+                                          if (widget.wlvalue.exch.isNotEmpty)
+                                            const WidgetSpan(
+                                                child: SizedBox(width: 6)),
+                                          if (widget.wlvalue.exch.isNotEmpty)
+                                            TextSpan(
+                                              text: widget.wlvalue.exch,
+                                              style: MyntWebTextStyles.para(
+                                                context,
+                                                darkColor:
+                                                    MyntColors.textSecondaryDark,
+                                                lightColor:
+                                                    MyntColors.textSecondary,
+                                                fontWeight: MyntFonts.medium,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
                                     ),
                                     const SizedBox(height: 8),
                                     Row(

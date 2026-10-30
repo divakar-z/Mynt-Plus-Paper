@@ -178,6 +178,16 @@ class TranctionProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// Web Add Money: textFiledonChange skips an empty field, so clearing the
+  /// whole amount at once kept the last number and left the max-amount error
+  /// and the UPI limit greying in place. Called when the field becomes empty.
+  void resetAmountValue() {
+    _intValue = 0;
+    _funderror = '';
+    _maxfunderror = '';
+    notifyListeners();
+  }
+
   FocusNode _focusNode = FocusNode();
   FocusNode get focusNode => _focusNode;
 
