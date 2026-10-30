@@ -494,7 +494,8 @@ class ProfileProvider extends DefaultChangeNotifier {
       String clientName, String dpcode) async {
     try {
       final response = await api.sendOTPtoChangeEmailApi(
-          newEmail, oldEmail, clientName, dpcode);
+          newEmail, oldEmail, clientName, dpcode,
+          pan: clientAllDetails.clientData?.pANNO ?? '');
       notifyListeners();
       return response?.toString();
     } catch (e) {
@@ -681,7 +682,8 @@ class ProfileProvider extends DefaultChangeNotifier {
   // ─── Web: Email file write ───
   Future<Map<String, dynamic>?> emailFileWriteWeb(String newEmail, String oldEmail, String dpCode) async {
     try {
-      final result = await api.emailFileWriteWebApi(newEmail, oldEmail, dpCode);
+      final result = await api.emailFileWriteWebApi(
+          newEmail, oldEmail, dpCode, clientAllDetails.clientData?.pANNO ?? '');
       if (result != null && result['fileid'] != null) {
         await fetchMobEmailStatus();
       }

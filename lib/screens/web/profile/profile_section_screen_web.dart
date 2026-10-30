@@ -78,7 +78,7 @@ class _ProfileSectionScreenWebState
     if (clientData.isClientClosed) {
       return 'Your trading account is closed.';
     }
-    if (!clientData.isIndividual) {
+    if (!clientData.isIndividual && !clientData.isNri) {
       return "Non-individual accounts can't modify data here. "
           "Please contact support at (+91) 93 8010 8010 for help.";
     }
@@ -1499,7 +1499,9 @@ class _ProfileSectionScreenWebState
     final ddpiStatus = mobStatus?.dDPIStatus ?? '';
     // Account-level gates for the Activate DDPI button.
     final bool isClientClosed = clientData?.isClientClosed ?? false;
-    final bool isIndividual = clientData?.isIndividual ?? true;
+    // DDPI is open to Individual and NRI accounts.
+    final bool isDdpiCategory = (clientData?.isIndividual ?? true) ||
+        (clientData?.isNri ?? false);
     final bool isMinor = clientData?.isMinor ?? false;
     final bool isAccountActive =
         (mobStatus?.accSgtAtveSts ?? '').toLowerCase() == 'active';
@@ -1764,21 +1766,26 @@ class _ProfileSectionScreenWebState
               // inactive, minor.
               final ddpiDisabled = ddpiBusy ||
                   isClientClosed ||
-                  !isIndividual ||
+                  !isDdpiCategory ||
                   !isAccountActive ||
                   isMinor;
-              // Tooltip priority per spec: non-individual → inactive → closed
-              // → minor.
-              final ddpiTooltip = !isIndividual
-                  ? "Non-individual accounts can't modify data here. "
-                      "Please contact support at (+91) 93 8010 8010 for help."
-                  : !isAccountActive
-                      ? "Modification not allowed for inactive client codes. "
-                          "Please reactivate the account."
-                      : isClientClosed
-                          ? "Your trading account is closed."
-                          : isMinor
-                              ? "DDPI activation is not allowed for minor accounts."
+              const nonIndividualMsg =
+                  "Non-individual accounts can't modify data here. "
+                  "Please contact support at (+91) 93 8010 8010 for help.";
+              // Tooltip priority per spec: closed account first (non-individual
+              // message for non-I/NRI, else closed), then minor →
+              // non-individual → inactive.
+              final ddpiTooltip = isClientClosed
+                  ? (!isDdpiCategory
+                      ? nonIndividualMsg
+                      : "Your trading account is closed.")
+                  : isMinor
+                      ? "DDPI activation is not allowed for minor accounts."
+                      : !isDdpiCategory
+                          ? nonIndividualMsg
+                          : !isAccountActive
+                              ? "Modification not allowed for inactive client codes. "
+                                  "Please reactivate the account."
                               : "";
               final ddpiButton = Material(
               color: Colors.transparent,
@@ -1786,6 +1793,17 @@ class _ProfileSectionScreenWebState
                 onTap: ddpiDisabled
                     ? null
                     : () async {
+                        // Re-check minor before opening the confirmation.
+                        if (ref
+                                .read(profileAllDetailsProvider)
+                                .clientAllDetails
+                                .clientData
+                                ?.isMinor ??
+                            false) {
+                          warningMessage(context,
+                              "DDPI activation is not allowed for minor accounts.");
+                          return;
+                        }
                         // Personal-info gates: closed → non-individual →
                         // inactive. Re-KYC is intentionally skipped, and DDPI
                         // is exempt from the 7-day post-activation block.
@@ -2228,22 +2246,30 @@ class _ProfileSectionScreenWebState
                     // Submit button
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: MyntPrimaryButton(
-                        label: 'Confirm & Activate',
-                        size: MyntButtonSize.large,
-                        isFullWidth: true,
-                        isLoading: ddpiSubmitLoading,
-                        onPressed: !acknowledged
-                            ? null
-                            : () async {
-                                setDialogState(() {
-                                  ddpiSubmitLoading = true;
-                                });
-                                await _submitDdpiActivation(ctx);
-                                setDialogState(() {
-                                  ddpiSubmitLoading = false;
-                                });
-                              },
+                      // Looks disabled until the checkbox is ticked; a tap
+                      // before that explains why in a snackbar.
+                      child: Opacity(
+                        opacity: acknowledged ? 1.0 : 0.5,
+                        child: MyntPrimaryButton(
+                          label: 'Confirm & Activate',
+                          size: MyntButtonSize.large,
+                          isFullWidth: true,
+                          isLoading: ddpiSubmitLoading,
+                          onPressed: () async {
+                            if (!acknowledged) {
+                              warningMessage(ctx,
+                                  'Please authorize the ₹250 debit to activate DDPI.');
+                              return;
+                            }
+                            setDialogState(() {
+                              ddpiSubmitLoading = true;
+                            });
+                            await _submitDdpiActivation(ctx);
+                            setDialogState(() {
+                              ddpiSubmitLoading = false;
+                            });
+                          },
+                        ),
                       ),
                     ),
                   ] else ...[
