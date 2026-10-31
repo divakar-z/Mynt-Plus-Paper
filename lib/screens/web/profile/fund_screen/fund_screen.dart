@@ -894,11 +894,28 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                         prefix: "₹ "),
                                     style: MyntWebTextStyles.head(
                                       context,
-                                      color: resolveThemeColor(
-                                        context,
-                                        dark: MyntColors.textPrimaryDark,
-                                        light: MyntColors.textPrimary,
-                                      ),
+                                      // color: resolveThemeColor(
+                                      //   context,
+                                      //   dark: MyntColors.textPrimaryDark,
+                                      //   light: MyntColors.textPrimary,
+                                      // ),
+                                      // TC_14: negative balance in red, same
+                                      // as the Funds page Available Margin card.
+                                      color: !ref.watch(privacyProvider).isPrivate &&
+                                              (double.tryParse(
+                                                          '${funds.fundDetailModel?.avlMrg ?? 0}') ??
+                                                      0) <
+                                                  0
+                                          ? resolveThemeColor(
+                                              context,
+                                              dark: MyntColors.errorDark,
+                                              light: MyntColors.tertiary,
+                                            )
+                                          : resolveThemeColor(
+                                              context,
+                                              dark: MyntColors.textPrimaryDark,
+                                              light: MyntColors.textPrimary,
+                                            ),
                                       fontWeight: MyntFonts.medium,
                                     ),
                                   ),

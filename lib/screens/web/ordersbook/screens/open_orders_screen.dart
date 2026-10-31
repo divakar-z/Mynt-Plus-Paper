@@ -1037,70 +1037,98 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                     '$displayText${order.exch != null && order.exch!.isNotEmpty ? ' ${order.exch}' : ''}${isAmo ? ' AMO' : ''}',
                 child: Padding(
                   padding: EdgeInsets.only(right: isHovered ? 105.0 : 0.0),
-                  child: RichText(
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                    softWrap: false,
-                    text: TextSpan(
-                      children: [
-                        // Symbol (14px, 500)
-                        TextSpan(
-                          text: displayText,
-                          style: _getTextStyle(context),
+                  // TC_250: AMO tag sat inside the RichText, so a long name's
+                  // ellipsis hid it (MCX/F&O). Name now shrinks; tag stays.
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: RichText(
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          softWrap: false,
+                          text: TextSpan(
+                            children: [
+                              // Symbol (14px, 500)
+                              TextSpan(
+                                text: displayText,
+                                style: _getTextStyle(context),
+                              ),
+                              // Exchange (10px, 500, muted color) - matching positions table style
+                              if (order.exch != null && order.exch!.isNotEmpty)
+                                TextSpan(
+                                  text: ' ${order.exch}',
+                                  style: MyntWebTextStyles.para(
+                                    context,
+                                    darkColor: MyntColors.textSecondaryDark,
+                                    lightColor: MyntColors.textSecondary,
+                                    fontWeight: MyntFonts.medium,
+                                  ).copyWith(fontSize: 10),
+                                ),
+                              // AMO tag (TC_58) — moved out of the RichText (TC_250)
+                              // if (isAmo)
+                              //   WidgetSpan(
+                              //     alignment: PlaceholderAlignment.middle,
+                              //     // child: Container(
+                              //     //   margin: const EdgeInsets.only(left: 6),
+                              //     //   padding: const EdgeInsets.symmetric(
+                              //     //       horizontal: 4, vertical: 1),
+                              //     //   decoration: BoxDecoration(
+                              //     //     color: amoColor.withValues(alpha: 0.12),
+                              //     //     borderRadius: BorderRadius.circular(3),
+                              //     //   ),
+                              //     //   child: Text(
+                              //     //     'AMO',
+                              //     //     style: MyntWebTextStyles.para(
+                              //     //       context,
+                              //     //       color: amoColor,
+                              //     //       fontWeight: MyntFonts.medium,
+                              //     //     ).copyWith(fontSize: 10),
+                              //     //   ),
+                              //     // ),
+                              //     child: Container(
+                              //       margin: const EdgeInsets.only(left: 6),
+                              //       padding: const EdgeInsets.symmetric(
+                              //           horizontal: 6, vertical: 2),
+                              //       decoration: BoxDecoration(
+                              //         color: const Color(0xFFB7791F),
+                              //         borderRadius: BorderRadius.circular(3),
+                              //       ),
+                              //       child: Text(
+                              //         'AMO',
+                              //         style: MyntWebTextStyles.para(
+                              //           context,
+                              //           color: MyntColors.textWhite,
+                              //           fontWeight: MyntFonts.semiBold,
+                              //         ),
+                              //       ),
+                              //     ),
+                              //   ),
+                            ],
+                          ),
                         ),
-                        // Exchange (10px, 500, muted color) - matching positions table style
-                        if (order.exch != null && order.exch!.isNotEmpty)
-                          TextSpan(
-                            text: ' ${order.exch}',
+                      ),
+                      // AMO tag (TC_58). Same badge as the place order
+                      // screen's AMO banner.
+                      if (isAmo)
+                        Container(
+                          margin: const EdgeInsets.only(left: 6),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFB7791F),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            'AMO',
                             style: MyntWebTextStyles.para(
                               context,
-                              darkColor: MyntColors.textSecondaryDark,
-                              lightColor: MyntColors.textSecondary,
-                              fontWeight: MyntFonts.medium,
-                            ).copyWith(fontSize: 10),
-                          ),
-                        // AMO tag (TC_58)
-                        if (isAmo)
-                          WidgetSpan(
-                            alignment: PlaceholderAlignment.middle,
-                            // child: Container(
-                            //   margin: const EdgeInsets.only(left: 6),
-                            //   padding: const EdgeInsets.symmetric(
-                            //       horizontal: 4, vertical: 1),
-                            //   decoration: BoxDecoration(
-                            //     color: amoColor.withValues(alpha: 0.12),
-                            //     borderRadius: BorderRadius.circular(3),
-                            //   ),
-                            //   child: Text(
-                            //     'AMO',
-                            //     style: MyntWebTextStyles.para(
-                            //       context,
-                            //       color: amoColor,
-                            //       fontWeight: MyntFonts.medium,
-                            //     ).copyWith(fontSize: 10),
-                            //   ),
-                            // ),
-                            // Same badge as the place order screen's AMO banner.
-                            child: Container(
-                              margin: const EdgeInsets.only(left: 6),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFB7791F),
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                              child: Text(
-                                'AMO',
-                                style: MyntWebTextStyles.para(
-                                  context,
-                                  color: MyntColors.textWhite,
-                                  fontWeight: MyntFonts.semiBold,
-                                ),
-                              ),
+                              color: MyntColors.textWhite,
+                              fontWeight: MyntFonts.semiBold,
                             ),
                           ),
-                      ],
-                    ),
+                        ),
+                    ],
                   ),
                 ),
               ),
