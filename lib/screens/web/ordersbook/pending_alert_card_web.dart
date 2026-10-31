@@ -1230,7 +1230,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
   // alerts open the Set Alert dialog pre-filled; legacy % alerts fall back to
   // the detail sheet's value field.
   Widget _buildModifyButton(dynamic alert) {
-    return GestureDetector(
+    return Tooltip(
+      message: 'Modify',
+      child: GestureDetector(
       onTap: () {
         if (alert is AlertPendingModel &&
             (alert.aiT == "LTP_A" || alert.aiT == "LTP_B")) {
@@ -1263,6 +1265,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
               dark: MyntColors.primaryDark, light: MyntColors.primary),
         ),
       ),
+      ),
     );
   }
 
@@ -1273,7 +1276,9 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
   ) {
     final isProcessing = _processingAlertToken == uniqueId && _isProcessingCancel;
 
-    return GestureDetector(
+    return Tooltip(
+      message: 'Cancel',
+      child: GestureDetector(
       onTap: isProcessing
           ? null
           : () async {
@@ -1315,6 +1320,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
           color: resolveThemeColor(context,
               dark: MyntColors.lossDark, light: MyntColors.loss),
         ),
+      ),
       ),
     );
   }
