@@ -40,7 +40,8 @@ class PopoutFeedClient {
   int _gen = 0; // invalidates stale client callbacks
   bool _up = false; // true once the current socket acked 'ck'
   int _backoffMs = 1000; // doubles per failure, cap 15000
-  int _lastTickAtMs = 0;
+  int _lastFrameAtMs = 0; // any frame from the server (ticks, acks, probe replies)
+  int _probeSentAtMs = 0; // 0 = no liveness probe outstanding
   int _emptyMintCount = 0;
   Timer? _watchdog;
   Timer? _heartbeat;
@@ -51,12 +52,22 @@ class PopoutFeedClient {
 
   void start() {
     _stopped = false;
-    // Stall watchdog: if acked but no tick for >10s, force a reconnect.
+    // Stall watchdog. No ticks for 10 s is normal after hours or on a quiet
+    // scrip, so silence alone is not proof of a dead socket — reconnecting on
+    // it looped every ~12 s (and minted a new session each time) whenever the
+    // market was quiet. Instead re-send the subscription for one scrip: the
+    // server answers with its snapshot, which proves the socket is alive.
+    // Reconnect only if that probe gets no reply within 5 s.
     _watchdog ??= Timer.periodic(const Duration(seconds: 2), (_) {
-      if (_up &&
-          _lastTickAtMs != 0 &&
-          DateTime.now().millisecondsSinceEpoch - _lastTickAtMs > 10000) {
-        _reconnect();
+      if (!_up || _subs.isEmpty || _lastFrameAtMs == 0) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (_probeSentAtMs != 0) {
+        if (now - _probeSentAtMs > 5000) _reconnect();
+        return;
+      }
+      if (now - _lastFrameAtMs > 10000) {
+        _probeSentAtMs = now;
+        _send({'t': 't', 'k': _subs.first});
       }
     });
     _open();
@@ -154,6 +165,8 @@ class PopoutFeedClient {
       if (d is Map) frame = Map<String, dynamic>.from(d);
     } catch (_) {}
     if (frame == null) return;
+    _lastFrameAtMs = DateTime.now().millisecondsSinceEpoch;
+    _probeSentAtMs = 0;
     if (frame['t'] == 'ck') {
       _onAck();
       return;
@@ -180,7 +193,6 @@ class PopoutFeedClient {
     if (frame['pc'] != null) packet['pc'] = _num(frame['pc']);
     final exch = frame['exch'] ?? frame['e'];
     if (exch != null) packet['exch'] = exch;
-    _lastTickAtMs = DateTime.now().millisecondsSinceEpoch;
     onTick?.call(tk.toString(), packet);
   }
 
@@ -203,6 +215,7 @@ class PopoutFeedClient {
       _ws?.close();
     } catch (_) {}
     _up = false;
+    _probeSentAtMs = 0;
     final wait = _backoffMs;
     _backoffMs = (_backoffMs * 2) > 15000 ? 15000 : _backoffMs * 2;
     Timer(Duration(milliseconds: wait), () {

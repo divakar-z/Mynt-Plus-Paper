@@ -31,6 +31,16 @@ class OptionChainPanel extends ConsumerStatefulWidget {
 }
 
 class _OptionChainPanelState extends ConsumerState<OptionChainPanel> {
+  // Cached while mounted — ref.read throws in dispose (Riverpod 3).
+  WebSocketProvider? _ws;
+  late final String _owner = 'chart-oc-panel:${identityHashCode(this)}';
+
+  @override
+  void dispose() {
+    try { _ws?.releaseAllTouchline(_owner); } catch (_) {}
+    super.dispose();
+  }
+
   ChartScrip? _override;        // user-picked underlying (overrides active pane)
   String? _fetchedScripKey;     // 'exch|token' of the scrip getLinkedScrip ran on
   bool _loadingLinked = false;
@@ -109,16 +119,15 @@ class _OptionChainPanelState extends ConsumerState<OptionChainPanel> {
         return;
       }
       // Subscribe each strike to the WS touchline feed so LTP/OI stay live.
-      final ws = ref.read(websocketProvider);
-      for (final v in res.optValue!) {
-        if ((v.token ?? '').isEmpty || (v.exch ?? '').isEmpty) continue;
-        // ignore: discarded_futures
-        ws.establishConnection(
-          channelInput: '${v.exch}|${v.token}',
-          task: 't',
-          context: context,
-        );
-      }
+      // Owned by this panel: replaced on an underlying / expiry change,
+      // restored after a reconnect, released when the panel closes (raw "t"
+      // subscriptions here were never released or restored).
+      _ws = ref.read(websocketProvider);
+      _ws!.setOwnedTouchline(_owner, [
+        for (final v in res.optValue!)
+          if ((v.token ?? '').isNotEmpty && (v.exch ?? '').isNotEmpty)
+            '${v.exch}|${v.token}'
+      ], context);
       setState(() => _strikes = res.optValue!);
     } catch (_) {
       // Silent — row will display snapshot data only.

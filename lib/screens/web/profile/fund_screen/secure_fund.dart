@@ -286,16 +286,12 @@ class _SecureFundState extends ConsumerState<SecureFund> {
   }
 
   Widget _buildAvailableCashContent(funds, theme) {
-    // Only sublist if there is more than one item
-    final filteredCredits = funds.listOfCredits.length > 1
-        ? funds.listOfCredits
-            .sublist(1)
-            .where((item) =>
-                item["name"] != "Collateral" &&
-                item["name"] != "Opening Balance" &&
-                item["name"] != "Payin")
-            .toList()
-        : [];
+    final filteredCredits = funds.listOfCredits
+        .where((item) =>
+            item["name"] != "Collateral" &&
+            item["name"] != "Opening Balance" &&
+            item["name"] != "Payin")
+        .toList();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -316,10 +312,9 @@ class _SecureFundState extends ConsumerState<SecureFund> {
                       fw: 0),
                   TextWidget.subText(
                       text: getFormatter(
-                          value: funds.listOfCredits.isNotEmpty
-                              ? double.parse(
-                                  "${funds.listOfCredits[0]["value"]}")
-                              : 0.00,
+                          value: double.tryParse(
+                                  "${funds.fundDetailModel?.cash}") ??
+                              0.00,
                           v4d: false,
                           noDecimal: false),
                       theme: false,

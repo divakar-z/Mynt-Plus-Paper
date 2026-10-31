@@ -78,6 +78,9 @@ class _HoldingScreenState extends ConsumerState<HoldingScreen> with TickerProvid
   @override
   void initState() {
     super.initState();
+    _holdSearchCtrl = ref.read(portfolioProvider).holdingSearchCtrl;
+    _lastHoldSearchText = _holdSearchCtrl.text;
+    _holdSearchCtrl.addListener(_onHoldSearchTextChanged);
     
     // Initialize scroll controller
     _scrollController = ScrollController();
@@ -165,8 +168,42 @@ class _HoldingScreenState extends ConsumerState<HoldingScreen> with TickerProvid
     });
   }
 
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Run the clear here when the box goes from text to empty.
+  late final TextEditingController _holdSearchCtrl;
+  String _lastHoldSearchText = '';
+
+  void _onHoldSearchTextChanged() {
+    final text = _holdSearchCtrl.text;
+    final wasNotEmpty = _lastHoldSearchText.isNotEmpty;
+    _lastHoldSearchText = text;
+    if (text.isEmpty && wasNotEmpty) {
+      _resetHoldSearch();
+    }
+  }
+
+  void _resetHoldSearch() {
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      final holdingProvider = ref.read(portfolioProvider);
+      holdingProvider.clearHoldSearch();
+      if (holdingProvider.holdingSearchCtrl.text.isEmpty) {
+        holdingProvider.showHoldSearch(false);
+      }
+      // Clear cached widgets when search is cleared
+      setState(() {
+        _cachedSummarySection = null;
+        _cachedActionButtons = null;
+        _cachedEmptyState = null;
+        _cachedActionButtonsKey = null;
+        _cachedSummaryKey = null;
+      });
+    });
+  }
+
   @override
   void dispose() {
+    _holdSearchCtrl.removeListener(_onHoldSearchTextChanged);
     _socketSubscription?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -1308,22 +1345,7 @@ class _HoldingScreenState extends ConsumerState<HoldingScreen> with TickerProvid
                   // Perform the search
                   holdingProvider.holdingSearch(value, context);
               },
-              onClear: () {
-                  Future.delayed(const Duration(milliseconds: 150), () {
-                    holdingProvider.clearHoldSearch();
-                    if (holdingProvider.holdingSearchCtrl.text.isEmpty) {
-                      holdingProvider.showHoldSearch(false);
-                    }
-                    // Clear cached widgets when search is cleared
-                    setState(() {
-                      _cachedSummarySection = null;
-                      _cachedActionButtons = null;
-                      _cachedEmptyState = null;
-                      _cachedActionButtonsKey = null;
-                      _cachedSummaryKey = null;
-                    });
-                  });
-              },
+              onClear: _resetHoldSearch,
             ),
           ),
         ),

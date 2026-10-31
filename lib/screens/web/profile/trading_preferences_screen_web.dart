@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mynt_plus/models/client_profile_all_details/profile_all_details_model.dart';
@@ -1007,10 +1009,22 @@ class _TradingPreferencesScreenWebState
                 (s) => ['MCX', 'BSE_COM', 'NSE_COM'].contains(s.cOMPANYCODE))
             .any((s) => s.exchangeACTIVEINACTIVE == 'A');
 
+    // CDSL signature step applies only when both equity segments were never opened.
+    final equityNotOpen = ['BSE_CASH', 'NSE_CASH'].every((code) =>
+        segmentsData.any((s) =>
+            s.cOMPANYCODE == code && s.exchangeACTIVEINACTIVE == 'NOT OPEN'));
+    final profileProvider = ref.read(profileAllDetailsProvider);
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => _SegmentChangeRequestDialog(
+        equityNotOpen: equityNotOpen,
+        clientId: profileProvider.clientAllDetailsSafe?.clientData?.cLIENTID ??
+            '',
+        onCheckSignature: profileProvider.checkCdslSignature,
+        onUploadSignature: (bytes, fileName) => profileProvider
+            .uploadCdslSignature(bytes: bytes, fileName: fileName),
         equityDisabled: equityDisabled,
         fnoDisabled: fnoDisabled,
         currencyDisabled: currencyDisabled,
@@ -1124,8 +1138,19 @@ class _SegmentChangeRequestDialog extends StatefulWidget {
     Uint8List? proofBytes,
     String? proofFileName,
   ) onSubmit;
+  /// BSE_CASH and NSE_CASH are both "NOT OPEN" → CDSL needs a signature.
+  final bool equityNotOpen;
+  final String clientId;
+  final Future<bool?> Function() onCheckSignature;
+  /// Returns null on success, else the error message.
+  final Future<String?> Function(Uint8List bytes, String fileName)
+      onUploadSignature;
 
   const _SegmentChangeRequestDialog({
+    required this.equityNotOpen,
+    required this.clientId,
+    required this.onCheckSignature,
+    required this.onUploadSignature,
     required this.equityDisabled,
     required this.fnoDisabled,
     required this.currencyDisabled,
@@ -1154,6 +1179,17 @@ class _SegmentChangeRequestDialogState
   String? _proofFileName;
   bool _submitting = false;
 
+  // ── CDSL signature step (lives only as long as this dialog session) ──
+  bool _sigChecking = false;
+  bool? _sigOnFile; // cached signature_check result; null = not known
+  bool _sigCheckFailed = false;
+  bool _sigSaved = false;
+  bool _sigUploading = false;
+  bool _sigDialogOpen = false;
+  BuildContext? _sigDialogContext;
+  int _sigRequestId = 0;
+  final _SignatureDraft _sigDraft = _SignatureDraft();
+
   @override
   void initState() {
     super.initState();
@@ -1165,6 +1201,174 @@ class _SegmentChangeRequestDialogState
 
   // F&O, Currency, or Commodity selected → need income proof
   bool get _needsProof => _fno || _currency || _commodity;
+
+  bool get _sigApplies => widget.equityNotOpen && _equity;
+  bool get _sigRequired => _sigApplies && _sigOnFile == false && !_sigSaved;
+
+  void _onEquityChanged(bool selected) {
+    setState(() => _equity = selected);
+    if (!widget.equityNotOpen) return;
+    if (!selected) {
+      _closeSignatureDialog();
+      return;
+    }
+    if (_sigChecking) return;
+    if (_sigOnFile == null && !_sigCheckFailed) {
+      _checkSignatureAndPrompt();
+    } else if (_sigRequired) {
+      _openSignatureDialog();
+    }
+  }
+
+  /// Returns the check result, or null when it failed or arrived stale
+  /// (dialog closed / a newer request started).
+  Future<bool?> _runSignatureCheck() async {
+    final requestId = ++_sigRequestId;
+    setState(() {
+      _sigChecking = true;
+      _sigCheckFailed = false;
+    });
+    final onFile = await widget.onCheckSignature();
+    if (!mounted || requestId != _sigRequestId) return null;
+    setState(() {
+      _sigChecking = false;
+      _sigOnFile = onFile;
+      _sigCheckFailed = onFile == null;
+    });
+    return onFile;
+  }
+
+  Future<void> _checkSignatureAndPrompt() async {
+    final onFile = await _runSignatureCheck();
+    if (!mounted || !_sigApplies) return;
+    if (onFile == false) _openSignatureDialog();
+    if (_sigCheckFailed) {
+      warningMessage(
+          context, 'Unable to verify signature, please try again later');
+    }
+  }
+
+  Future<void> _openSignatureDialog() async {
+    if (_sigDialogOpen) return;
+    setState(() => _sigDialogOpen = true);
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        _sigDialogContext = ctx;
+        return _SignatureDialog(
+          draft: _sigDraft,
+          clientId: widget.clientId,
+          onSave: _uploadSignature,
+        );
+      },
+    );
+    _sigDialogContext = null;
+    if (!mounted) return;
+    setState(() {
+      _sigDialogOpen = false;
+      if (saved == true) _sigSaved = true;
+    });
+  }
+
+  void _closeSignatureDialog() {
+    final ctx = _sigDialogContext;
+    if (_sigDialogOpen && ctx != null && ctx.mounted) {
+      Navigator.of(ctx).pop(false);
+    }
+  }
+
+  Future<String?> _uploadSignature(Uint8List bytes, String fileName) async {
+    setState(() => _sigUploading = true);
+    final err = await widget.onUploadSignature(bytes, fileName);
+    if (mounted) setState(() => _sigUploading = false);
+    return err;
+  }
+
+  /// true when Submit may go ahead with add_segment.
+  Future<bool> _ensureSignatureBeforeSubmit() async {
+    if (!_sigApplies || _sigSaved || _sigOnFile == true) return true;
+    final onFile = _sigOnFile ?? await _runSignatureCheck();
+    if (!mounted) return false;
+    if (!_sigApplies) return true;
+    if (onFile == null) {
+      warningMessage(
+          context, 'Unable to verify signature, please try again later');
+      return false;
+    }
+    if (onFile == false) {
+      warningMessage(context, 'Please upload your signature to continue.');
+      _openSignatureDialog();
+      return false;
+    }
+    return true;
+  }
+
+  Widget _buildSignatureStatus(BuildContext context) {
+    if (!_sigApplies) return const SizedBox.shrink();
+    final subtitleColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final primaryColor = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+
+    Widget line(Widget leading, String text, Color color, {Widget? action}) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Row(
+          children: [
+            leading,
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(text,
+                  style: MyntWebTextStyles.bodySmall(context,
+                      color: color, fontWeight: MyntFonts.medium)),
+            ),
+            if (action != null) ...[const SizedBox(width: 8), action],
+          ],
+        ),
+      );
+    }
+
+    if (_sigChecking) {
+      return line(
+        SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(strokeWidth: 2, color: primaryColor),
+        ),
+        'Checking your signature with the depository...',
+        subtitleColor,
+      );
+    }
+    if (_sigSaved) {
+      final successColor = resolveThemeColor(context,
+          dark: MyntColors.successDark, light: MyntColors.success);
+      return line(Icon(Icons.check_circle, size: 16, color: successColor),
+          'Signature uploaded to the depository.', successColor);
+    }
+    final errorColor = resolveThemeColor(context,
+        dark: MyntColors.errorDark, light: MyntColors.error);
+    if (_sigCheckFailed) {
+      return line(Icon(Icons.error_outline, size: 16, color: errorColor),
+          'Unable to verify signature, please try again later', errorColor);
+    }
+    if (_sigRequired && !_sigDialogOpen) {
+      final warningColor = resolveThemeColor(context,
+          dark: MyntColors.warningDark, light: MyntColors.warning);
+      return line(
+        Icon(Icons.warning_amber_rounded, size: 16, color: warningColor),
+        'Signature required to activate Equity.',
+        warningColor,
+        action: InkWell(
+          onTap: _openSignatureDialog,
+          child: Text('Add Signature',
+              style: MyntWebTextStyles.bodySmall(context,
+                  color: primaryColor, fontWeight: MyntFonts.semiBold)),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
 
   Future<void> _pickFile() async {
     final result = await FilePicker.platform.pickFiles(
@@ -1186,14 +1390,10 @@ class _SegmentChangeRequestDialogState
         dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
     final subtitleColor = resolveThemeColor(context,
         dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
-    final cardBg = resolveThemeColor(context,
-        dark: MyntColors.cardDark, light: MyntColors.card);
     final dividerColor = resolveThemeColor(context,
         dark: MyntColors.dividerDark, light: MyntColors.divider);
     final primaryColor = resolveThemeColor(context,
         dark: MyntColors.primaryDark, light: MyntColors.primary);
-    final successColor = resolveThemeColor(context,
-        dark: MyntColors.successDark, light: MyntColors.success);
 
     final canSubmit = _equity || _fno || _currency || _commodity;
 
@@ -1267,7 +1467,7 @@ class _SegmentChangeRequestDialogState
                     runSpacing: 10,
                     children: [
                       _buildChip('Equity', _equity, widget.equityDisabled,
-                          (v) => setState(() => _equity = v)),
+                          _onEquityChanged),
                       _buildChip('F&O', _fno, widget.fnoDisabled,
                           (v) => setState(() => _fno = v)),
                       _buildChip('Currency', _currency, widget.currencyDisabled,
@@ -1276,6 +1476,7 @@ class _SegmentChangeRequestDialogState
                           (v) => setState(() => _commodity = v)),
                     ],
                   ),
+                  _buildSignatureStatus(context),
                   const SizedBox(height: 16),
 
                   // Info text
@@ -1307,83 +1508,22 @@ class _SegmentChangeRequestDialogState
                   // File upload section
                   if (_needsProof) ...[
                     const SizedBox(height: 20),
-                    InkWell(
+                    _buildUploadCard(
+                      context,
                       onTap: _pickFile,
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 24, horizontal: 20),
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: borderColor),
-                        ),
-                        child: Column(
-                          children: [
-                            Container(
-                              width: 44,
-                              height: 40,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: primaryColor.withValues(alpha: 0.08),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Icon(Icons.cloud_upload_outlined,
-                                  size: 22, color: primaryColor),
-                            ),
-                            const SizedBox(height: 12),
-                            Text('Upload your Income Proof',
-                                style: MyntWebTextStyles.body(context,
-                                    fontWeight: MyntFonts.semiBold,
-                                    color: textColor)),
-                            const SizedBox(height: 4),
-                            Text(
-                                'Click to browse or drag & drop your file here',
-                                style: MyntWebTextStyles.caption(context,
-                                    color: subtitleColor)),
-                            const SizedBox(height: 6),
-                            Text('PDF only, max 5MB',
-                                style: MyntWebTextStyles.caption(context,
-                                    color: subtitleColor.withValues(
-                                        alpha: 0.6))),
-                          ],
-                        ),
-                      ),
+                      title: 'Upload your Income Proof',
+                      subtitle: 'Click to browse or drag & drop your file here',
+                      formats: 'PDF only, max 5MB',
                     ),
                     if (_proofFileName != null) ...[
                       const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: successColor.withValues(alpha: 0.06),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                              color: successColor.withValues(alpha: 0.2)),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.check_circle,
-                                size: 16, color: successColor),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(_proofFileName!,
-                                  style: MyntWebTextStyles.bodySmall(context,
-                                      color: textColor,
-                                      fontWeight: MyntFonts.medium)),
-                            ),
-                            const Spacer(),
-                            InkWell(
-                              onTap: () => setState(() {
-                                _proofBytes = null;
-                                _proofFileName = null;
-                              }),
-                              child: Icon(Icons.close,
-                                  size: 14, color: subtitleColor),
-                            ),
-                          ],
-                        ),
+                      _buildSelectedFileRow(
+                        context,
+                        fileName: _proofFileName!,
+                        onRemove: () => setState(() {
+                          _proofBytes = null;
+                          _proofFileName = null;
+                        }),
                       ),
                     ],
                   ],
@@ -1403,13 +1543,19 @@ class _SegmentChangeRequestDialogState
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (canSubmit && !_submitting)
+                  onPressed: (canSubmit &&
+                          !_submitting &&
+                          !_sigChecking &&
+                          !_sigUploading &&
+                          !_sigRequired)
                       ? () async {
                           if (_needsProof && _proofBytes == null) {
                             warningMessage(
                                 context, 'Upload your income proof');
                             return;
                           }
+                          if (!await _ensureSignatureBeforeSubmit()) return;
+                          if (!mounted) return;
                           setState(() => _submitting = true);
                           await widget.onSubmit(
                             _equity,
@@ -1435,7 +1581,7 @@ class _SegmentChangeRequestDialogState
                     ),
                     elevation: 0,
                   ),
-                  child: _submitting
+                  child: (_submitting || _sigChecking)
                       ? const SizedBox(
                           width: 20,
                           height: 25,
@@ -1492,5 +1638,670 @@ class _SegmentChangeRequestDialogState
       ),
     );
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  UPLOAD CARD + SELECTED FILE ROW (income proof & signature upload)
+// ═══════════════════════════════════════════════════════════════════════
+
+Widget _buildUploadCard(
+  BuildContext context, {
+  required VoidCallback? onTap,
+  required String title,
+  required String subtitle,
+  required String formats,
+  Widget? action,
+}) {
+  final textColor = resolveThemeColor(context,
+      dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+  final subtitleColor = resolveThemeColor(context,
+      dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+  final cardBg = resolveThemeColor(context,
+      dark: MyntColors.cardDark, light: MyntColors.card);
+  final primaryColor = resolveThemeColor(context,
+      dark: MyntColors.primaryDark, light: MyntColors.primary);
+  final borderColor = resolveThemeColor(context,
+      dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+
+  return InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(8),
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 44,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: primaryColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(Icons.cloud_upload_outlined,
+                size: 22, color: primaryColor),
+          ),
+          const SizedBox(height: 12),
+          Text(title,
+              style: MyntWebTextStyles.body(context,
+                  fontWeight: MyntFonts.semiBold, color: textColor)),
+          const SizedBox(height: 4),
+          Text(subtitle,
+              textAlign: TextAlign.center,
+              style: MyntWebTextStyles.caption(context, color: subtitleColor)),
+          if (action != null) ...[
+            const SizedBox(height: 12),
+            action,
+          ],
+          const SizedBox(height: 6),
+          Text(formats,
+              textAlign: TextAlign.center,
+              style: MyntWebTextStyles.caption(context,
+                  color: subtitleColor.withValues(alpha: 0.6))),
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _buildSelectedFileRow(
+  BuildContext context, {
+  required String fileName,
+  required VoidCallback? onRemove,
+}) {
+  final textColor = resolveThemeColor(context,
+      dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+  final subtitleColor = resolveThemeColor(context,
+      dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+  final successColor = resolveThemeColor(context,
+      dark: MyntColors.successDark, light: MyntColors.success);
+
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: successColor.withValues(alpha: 0.06),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: successColor.withValues(alpha: 0.2)),
+    ),
+    child: Row(
+      children: [
+        Icon(Icons.check_circle, size: 16, color: successColor),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(fileName,
+              style: MyntWebTextStyles.bodySmall(context,
+                  color: textColor, fontWeight: MyntFonts.medium)),
+        ),
+        const Spacer(),
+        InkWell(
+          onTap: onRemove,
+          child: Icon(Icons.close, size: 14, color: subtitleColor),
+        ),
+      ],
+    ),
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ADD YOUR SIGNATURE DIALOG (CDSL)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Drawing / chosen file / tab, owned by the segment dialog so they survive
+/// closing and reopening the signature dialog within one session.
+class _SignatureDraft {
+  final List<List<Offset>> strokes = [];
+  Size padSize = Size.zero;
+  Uint8List? fileBytes;
+  String? fileName;
+  int tab = 0; // 0 = Draw, 1 = Upload
+
+  bool get hasDrawing => strokes.any((s) => s.isNotEmpty);
+}
+
+const double _kSignaturePadHeight = 180;
+const int _kSignatureMaxBytes = 2 * 1024 * 1024;
+const List<String> _kSignatureExtensions = ['jpg', 'jpeg', 'png'];
+
+class _SignatureDialog extends StatefulWidget {
+  final _SignatureDraft draft;
+  final String clientId;
+  /// Returns null on success, else the error message.
+  final Future<String?> Function(Uint8List bytes, String fileName) onSave;
+
+  const _SignatureDialog({
+    required this.draft,
+    required this.clientId,
+    required this.onSave,
+  });
+
+  @override
+  State<_SignatureDialog> createState() => _SignatureDialogState();
+}
+
+class _SignatureDialogState extends State<_SignatureDialog> {
+  bool _saving = false;
+  String? _error;
+
+  _SignatureDraft get _draft => widget.draft;
+
+  bool get _canSave =>
+      _draft.tab == 0 ? _draft.hasDrawing : _draft.fileBytes != null;
+
+  Future<void> _pickSignatureFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: _kSignatureExtensions,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty || !mounted) return;
+    final file = result.files.first;
+    final ext = (file.extension ?? file.name.split('.').last).toLowerCase();
+    if (!_kSignatureExtensions.contains(ext)) {
+      setState(() => _error = 'Only JPG, JPEG or PNG format are supported.');
+      return;
+    }
+    final bytes = file.bytes;
+    if (bytes == null) {
+      setState(() => _error = 'Unable to read the selected file');
+      return;
+    }
+    if (bytes.length > _kSignatureMaxBytes) {
+      setState(() => _error = 'File size should not exceed 2MB');
+      return;
+    }
+    setState(() {
+      _draft.fileBytes = bytes;
+      _draft.fileName = file.name;
+      _error = null;
+    });
+  }
+
+  /// Renders the strokes onto a white background as PNG bytes.
+  Future<Uint8List?> _exportDrawing() async {
+    final size = _draft.padSize;
+    if (size.isEmpty) return null;
+    const scale = 2.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder)..scale(scale);
+    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.white);
+    _paintSignatureStrokes(canvas, _draft.strokes, Colors.black);
+    final image = await recorder.endRecording().toImage(
+        (size.width * scale).ceil(), (size.height * scale).ceil());
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    return data?.buffer.asUint8List();
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final Uint8List? bytes;
+    final String fileName;
+    if (_draft.tab == 0) {
+      bytes = await _exportDrawing();
+      fileName = '${widget.clientId}_signature.png';
+    } else {
+      bytes = _draft.fileBytes;
+      fileName = _draft.fileName ?? '${widget.clientId}_signature.png';
+    }
+    if (!mounted) return;
+    if (bytes == null) {
+      setState(() {
+        _saving = false;
+        _error = 'Unable to read your signature, please try again';
+      });
+      return;
+    }
+    final err = await widget.onSave(bytes, fileName);
+    if (!mounted) return;
+    if (err == null) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _saving = false;
+      _error = err;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textColor = resolveThemeColor(context,
+        dark: MyntColors.textPrimaryDark, light: MyntColors.textPrimary);
+    final subtitleColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+    final dividerColor = resolveThemeColor(context,
+        dark: MyntColors.dividerDark, light: MyntColors.divider);
+    final primaryColor = resolveThemeColor(context,
+        dark: MyntColors.primaryDark, light: MyntColors.primary);
+    final errorColor = resolveThemeColor(context,
+        dark: MyntColors.errorDark, light: MyntColors.error);
+    final bgColor = resolveThemeColor(context,
+        dark: MyntColors.backgroundColorDark,
+        light: MyntColors.backgroundColor);
+    final borderColor = resolveThemeColor(context,
+        dark: MyntColors.cardBorderDark, light: MyntColors.cardBorder);
+
+    return Dialog(
+      backgroundColor: bgColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: borderColor),
+      ),
+      elevation: 0,
+      child: Container(
+        width: 480,
+        padding: const EdgeInsets.all(0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Title row with bottom border
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: dividerColor)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Add Your Signature',
+                      style: MyntWebTextStyles.title(context,
+                          fontWeight: MyntFonts.semiBold, color: textColor),
+                    ),
+                  ),
+                  InkWell(
+                    onTap:
+                        _saving ? null : () => Navigator.of(context).pop(false),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      child: Icon(Icons.close,
+                          size: 16,
+                          color: subtitleColor.withValues(
+                              alpha: _saving ? 0.4 : 1.0)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Body content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'To activate Equity, we need your signature to open your demat account.',
+                      style: MyntWebTextStyles.bodySmall(context,
+                          color: subtitleColor),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      decoration: BoxDecoration(
+                        border:
+                            Border(bottom: BorderSide(color: dividerColor)),
+                      ),
+                      child: Row(
+                        children: [
+                          _buildTab('Draw', 0, primaryColor, subtitleColor),
+                          _buildTab('Upload', 1, primaryColor, subtitleColor),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (_draft.tab == 0) ...[
+                      _SignaturePad(
+                        draft: _draft,
+                        enabled: !_saving,
+                        onChanged: () => setState(() => _error = null),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Use your mouse, finger or stylus to sign inside the box.',
+                              style: MyntWebTextStyles.caption(context,
+                                  color: subtitleColor),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: (_saving || !_draft.hasDrawing)
+                                ? null
+                                : () => setState(() => _draft.strokes.clear()),
+                            child: Text('Clear',
+                                style: MyntWebTextStyles.bodySmall(context,
+                                    color: (_saving || !_draft.hasDrawing)
+                                        ? subtitleColor.withValues(alpha: 0.5)
+                                        : primaryColor,
+                                    fontWeight: MyntFonts.semiBold)),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
+                      _buildUploadCard(
+                        context,
+                        onTap: _saving ? null : _pickSignatureFile,
+                        title: 'Upload your Signature',
+                        subtitle: 'Click to browse your file',
+                        formats:
+                            'Accepted formats: .jpg, .jpeg, .png (Max size: 2MB)',
+                        action: OutlinedButton(
+                          onPressed: _saving ? null : _pickSignatureFile,
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: primaryColor),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 10),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                          child: Text('Choose File',
+                              style: MyntWebTextStyles.bodySmall(context,
+                                  color: primaryColor,
+                                  fontWeight: MyntFonts.semiBold)),
+                        ),
+                      ),
+                      if (_draft.fileName != null) ...[
+                        const SizedBox(height: 12),
+                        _buildSelectedFileRow(
+                          context,
+                          fileName: _draft.fileName!,
+                          onRemove: _saving
+                              ? null
+                              : () => setState(() {
+                                    _draft.fileBytes = null;
+                                    _draft.fileName = null;
+                                  }),
+                        ),
+                      ],
+                    ],
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(_error!,
+                          style: MyntWebTextStyles.bodySmall(context,
+                              color: errorColor,
+                              fontWeight: MyntFonts.medium)),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Upload button with top border
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: dividerColor)),
+              ),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: (_canSave && !_saving) ? _save : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: resolveThemeColor(context,
+                        dark: MyntColors.secondary, light: MyntColors.primary),
+                    disabledBackgroundColor: dividerColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 18),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: _saving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 25,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          'Upload Signature',
+                          style: MyntWebTextStyles.body(context,
+                              fontWeight: MyntFonts.semiBold,
+                              color: Colors.white),
+                        ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTab(
+      String label, int index, Color primaryColor, Color subtitleColor) {
+    final selected = _draft.tab == index;
+    return Expanded(
+      child: InkWell(
+        onTap: _saving
+            ? null
+            : () => setState(() {
+                  _draft.tab = index;
+                  _error = null;
+                }),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                  color: selected ? primaryColor : Colors.transparent,
+                  width: 2),
+            ),
+          ),
+          child: Text(label,
+              style: MyntWebTextStyles.bodySmall(context,
+                  color: selected ? primaryColor : subtitleColor,
+                  fontWeight:
+                      selected ? MyntFonts.semiBold : MyntFonts.medium)),
+        ),
+      ),
+    );
+  }
+}
+
+/// Signature drawing surface. Uses an immediate drag recognizer so it wins
+/// the gesture arena at pointer-down — the dialog never scrolls while the
+/// user is signing with mouse, finger or stylus.
+class _SignaturePad extends StatefulWidget {
+  final _SignatureDraft draft;
+  final bool enabled;
+  final VoidCallback onChanged;
+
+  const _SignaturePad({
+    required this.draft,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  @override
+  State<_SignaturePad> createState() => _SignaturePadState();
+}
+
+class _SignaturePadState extends State<_SignaturePad> {
+  final GlobalKey _padKey = GlobalKey();
+  List<Offset>? _activeStroke;
+
+  Offset _toLocal(Offset global) {
+    final box = _padKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return Offset.zero;
+    final local = box.globalToLocal(global);
+    return Offset(local.dx.clamp(0.0, box.size.width),
+        local.dy.clamp(0.0, box.size.height));
+  }
+
+  Drag? _onStart(Offset globalPosition) {
+    if (!widget.enabled || _activeStroke != null) return null;
+    final stroke = <Offset>[_toLocal(globalPosition)];
+    setState(() {
+      _activeStroke = stroke;
+      widget.draft.strokes.add(stroke);
+    });
+    widget.onChanged();
+    return _SignatureStrokeDrag(
+      onUpdate: (global) => setState(() => stroke.add(_toLocal(global))),
+      onEnd: () {
+        _activeStroke = null;
+        widget.onChanged();
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitleColor = resolveThemeColor(context,
+        dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        widget.draft.padSize =
+            Size(constraints.maxWidth, _kSignaturePadHeight);
+        return CustomPaint(
+          foregroundPainter:
+              _DashedRRectPainter(color: subtitleColor.withValues(alpha: 0.6)),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: MouseRegion(
+              cursor: widget.enabled
+                  ? SystemMouseCursors.precise
+                  : SystemMouseCursors.basic,
+              child: RawGestureDetector(
+                behavior: HitTestBehavior.opaque,
+                gestures: {
+                  ImmediateMultiDragGestureRecognizer:
+                      GestureRecognizerFactoryWithHandlers<
+                          ImmediateMultiDragGestureRecognizer>(
+                    () => ImmediateMultiDragGestureRecognizer(),
+                    (recognizer) => recognizer.onStart = _onStart,
+                  ),
+                },
+                child: Container(
+                  key: _padKey,
+                  height: _kSignaturePadHeight,
+                  width: double.infinity,
+                  color: Colors.white,
+                  child: CustomPaint(
+                    painter: _SignatureStrokesPainter(widget.draft.strokes),
+                    child: widget.draft.hasDrawing
+                        ? null
+                        : Center(
+                            child: Text('Sign here',
+                                style: MyntWebTextStyles.body(context,
+                                    color: MyntColors.textSecondary
+                                        .withValues(alpha: 0.6))),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SignatureStrokeDrag extends Drag {
+  final ValueChanged<Offset> onUpdate;
+  final VoidCallback onEnd;
+
+  _SignatureStrokeDrag({required this.onUpdate, required this.onEnd});
+
+  @override
+  void update(DragUpdateDetails details) => onUpdate(details.globalPosition);
+
+  @override
+  void end(DragEndDetails details) => onEnd();
+
+  @override
+  void cancel() => onEnd();
+}
+
+void _paintSignatureStrokes(
+    Canvas canvas, List<List<Offset>> strokes, Color color) {
+  final paint = Paint()
+    ..color = color
+    ..strokeWidth = 2.2
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..style = PaintingStyle.stroke;
+  for (final stroke in strokes) {
+    if (stroke.isEmpty) continue;
+    if (stroke.length == 1) {
+      canvas.drawCircle(
+          stroke.first, 1.25, Paint()..color = color);
+      continue;
+    }
+    final path = Path()..moveTo(stroke.first.dx, stroke.first.dy);
+    for (final p in stroke.skip(1)) {
+      path.lineTo(p.dx, p.dy);
+    }
+    canvas.drawPath(path, paint);
+  }
+}
+
+class _SignatureStrokesPainter extends CustomPainter {
+  final List<List<Offset>> strokes;
+
+  _SignatureStrokesPainter(this.strokes);
+
+  @override
+  void paint(Canvas canvas, Size size) =>
+      _paintSignatureStrokes(canvas, strokes, Colors.black);
+
+  // Strokes are mutated in place while drawing, so always repaint.
+  @override
+  bool shouldRepaint(covariant _SignatureStrokesPainter oldDelegate) => true;
+}
+
+class _DashedRRectPainter extends CustomPainter {
+  final Color color;
+
+  _DashedRRectPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const dash = 6.0, gap = 4.0;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+          Offset.zero & size, const Radius.circular(8)));
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        canvas.drawPath(
+            metric.extractPath(distance, distance + dash), paint);
+        distance += dash + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedRRectPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 

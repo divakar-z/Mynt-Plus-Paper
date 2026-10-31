@@ -80,8 +80,16 @@ class HoldingsDownloadHelper {
       final ltp = _resolveLtp(token, exchTsym?.lp, socketData);
       final invested = avgPrice * qty;
       final currentValue = ltp * qty;
-      final overallPnl = (ltp - avgPrice) * qty;
-      final dayChange = _resolveDayChange(token, exchTsym?.oneDayChg, socketData);
+      // The provider's figures — the ones the holdings screen shows: P&L
+      // includes realised P&L, and day change is qty × change in rupees.
+      // (This used (ltp − avg) × qty and mixed a per-share socket change with
+      // the qty-multiplied model value.)
+      final overallPnl = exchTsym?.profitNloss != null
+          ? _toDouble(exchTsym!.profitNloss)
+          : (ltp - avgPrice) * qty;
+      final dayChange = exchTsym?.oneDayChg != null
+          ? _toDouble(exchTsym!.oneDayChg)
+          : _resolveDayChange(token, null, socketData) * qty;
 
       return [
         '$symbol $exchange',
@@ -438,9 +446,13 @@ class HoldingsDownloadHelper {
       final ltp = _resolveLtp(token, exchTsym?.lp, socketData);
       final invested = avgPrice * qty;
       final currentValue = ltp * qty;
-      final overallPnl = (ltp - avgPrice) * qty;
-      final dayChange =
-          _resolveDayChange(token, exchTsym?.oneDayChg, socketData);
+      // Provider figures, as on screen (see the PDF builder above).
+      final overallPnl = exchTsym?.profitNloss != null
+          ? _toDouble(exchTsym!.profitNloss)
+          : (ltp - avgPrice) * qty;
+      final dayChange = exchTsym?.oneDayChg != null
+          ? _toDouble(exchTsym!.oneDayChg)
+          : _resolveDayChange(token, null, socketData) * qty;
 
       setTextCell(0, row, symbol, textStyle);
       setTextCell(1, row, exchange, textStyle);
@@ -689,8 +701,16 @@ class HoldingsDownloadHelper {
       final ltp = _resolveLtp(token, exchTsym?.lp, socketData);
       final invested = avgPrice * qty;
       final currentValue = ltp * qty;
-      final overallPnl = (ltp - avgPrice) * qty;
-      final dayChange = _resolveDayChange(token, exchTsym?.oneDayChg, socketData);
+      // The provider's figures — the ones the holdings screen shows: P&L
+      // includes realised P&L, and day change is qty × change in rupees.
+      // (This used (ltp − avg) × qty and mixed a per-share socket change with
+      // the qty-multiplied model value.)
+      final overallPnl = exchTsym?.profitNloss != null
+          ? _toDouble(exchTsym!.profitNloss)
+          : (ltp - avgPrice) * qty;
+      final dayChange = exchTsym?.oneDayChg != null
+          ? _toDouble(exchTsym!.oneDayChg)
+          : _resolveDayChange(token, null, socketData) * qty;
 
       setTextCell(0, row, symbol, textStyle);
       setTextCell(1, row, exchange, textStyle);

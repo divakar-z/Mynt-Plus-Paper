@@ -65,6 +65,9 @@ class _CAEventsScreenWebState extends ConsumerState<CAEventsScreenWeb>
     final now = DateTime.now();
     _rightMonth = DateTime(now.year, now.month);
     _leftMonth = DateTime(now.year, now.month - 1);
+    // The search field's X button only empties the text box; it never fires
+    // onChanged. Reset the filter here when the box goes empty.
+    _searchController.addListener(_onSearchTextChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fetchData();
@@ -76,8 +79,18 @@ class _CAEventsScreenWebState extends ConsumerState<CAEventsScreenWeb>
     disposeScrollToLoad();
     _tableScrollController.dispose();
     _hoveredRowIndex.dispose();
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _onSearchTextChanged() {
+    if (_searchController.text.isEmpty && _searchQuery.isNotEmpty) {
+      setState(() {
+        _searchQuery = '';
+        displayedItemCount = ScrollToLoadMixin.itemsPerPage;
+      });
+    }
   }
 
   void _fetchData({bool force = false}) {

@@ -4,6 +4,7 @@ import 'package:mynt_plus/res/mynt_web_color_styles.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import 'package:mynt_plus/models/order_book_model/order_book_model.dart';
 import 'package:mynt_plus/models/order_book_model/gtt_order_book.dart';
+import 'package:mynt_plus/models/order_book_model/cancel_order_model.dart';
 import 'package:mynt_plus/provider/order_provider.dart';
 import 'package:mynt_plus/provider/market_watch_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
@@ -155,11 +156,22 @@ class OrderActionHandler {
       }
 
       // Proceed with cancel
-      await ref.read(orderProvider).fetchOrderCancel(
+      // await ref.read(orderProvider).fetchOrderCancel(
+      //       "${orderData.norenordno}",
+      //       context,
+      //       true,
+      //     );
+      final result = await ref.read(orderProvider).fetchOrderCancel(
             "${orderData.norenordno}",
             context,
             true,
           );
+      // A refused cancel used to close silently; show the exchange's reason.
+      final refusal = refusalMessage(result, 'Failed to cancel order');
+      if (refusal != null && context.mounted) {
+        ResponsiveSnackBar.showError(context, refusal);
+        return false;
+      }
 
      return true;
     } catch (e) {
@@ -257,12 +269,24 @@ class OrderActionHandler {
       }
 
       // Proceed with exit - pass false to handle result manually
-      await ref.read(orderProvider).fetchExitSNOOrd(
+      // await ref.read(orderProvider).fetchExitSNOOrd(
+      //       "${orderData.snonum}",
+      //       "${orderData.prd}",
+      //       context,
+      //       true,
+      //     );
+      final result = await ref.read(orderProvider).fetchExitSNOOrd(
             "${orderData.snonum}",
             "${orderData.prd}",
             context,
             true,
           );
+      // A refused exit used to close silently; show the exchange's reason.
+      final refusal = refusalMessage(result, 'Failed to exit order');
+      if (refusal != null && context.mounted) {
+        ResponsiveSnackBar.showError(context, refusal);
+        return false;
+      }
 
       return true;
     } catch (e) {
@@ -391,6 +415,17 @@ class OrderActionHandler {
   }
 
   // Private helper methods
+
+  /// Message to show when a cancel / exit call was not accepted, or null when
+  /// it went through. A session-expired reply is left alone: the provider
+  /// already handles it by sending the user to log in.
+  static String? refusalMessage(dynamic result, String fallback) {
+    if (result is! CancelOrderModel) return fallback;
+    if (result.stat == "Ok") return null;
+    final emsg = result.emsg?.trim() ?? '';
+    if (emsg.contains('Session Expired')) return null;
+    return emsg.isNotEmpty ? emsg : fallback;
+  }
 
   Future<bool?> _showCancelOrderDialog(OrderBookModel orderData) async {
     final symbol = orderData.displayName.trim();
@@ -783,7 +818,25 @@ class OrderActionHandler {
       orderTpye: '',
       holdQty: '',
       isModify: false,
-      raw: orderData.toJson(),
+      // raw: orderData.toJson(),
+      raw: _repeatRaw(orderData),
     );
+  }
+
+  // TC_171.1: once an SL order triggers, the order book reports it as
+  // LMT (SL-LMT) or MKT (SL-MKT) but keeps trgprc, so Repeat opened it with
+  // Stoploss unticked. A plain LMT/MKT order carries trgprc 0, so a trigger
+  // above 0 marks a triggered SL order.
+  Map<String, dynamic> _repeatRaw(OrderBookModel orderData) {
+    final raw = orderData.toJson();
+    final trigger = double.tryParse(orderData.trgprc ?? '') ?? 0;
+    // The auto SL/target legs of a CO/BO (snonum set) carry the CO's stop as
+    // trgprc; they are not SL orders the client placed.
+    // if (trigger > 0) {
+    if (trigger > 0 && orderData.snonum == null) {
+      if (orderData.prctyp == 'LMT') raw['prctyp'] = 'SL-LMT';
+      if (orderData.prctyp == 'MKT') raw['prctyp'] = 'SL-MKT';
+    }
+    return raw;
   }
 }

@@ -532,16 +532,14 @@ class OrderProvider extends DefaultChangeNotifier {
         break;
     }
 
-    if (tokens.isEmpty) return;
+    if (tokens.isEmpty && !kIsWeb) return;
 
 
     if (kIsWeb) {
-      // On web, use WebSubscriptionManager for smart unsubscription with token protection
-      ref.read(webSubscriptionManagerProvider).unsubscribeTokens(
-        tokensToCheck: tokens,
-        context: context,
-        source: 'orderBook',
-      );
+      // The order book owns its tab's touchline; releasing the owner
+      // unsubscribes only what no other screen still shows. (This used to
+      // send "u" for a feed subscribed as "d", so nothing was ever released.)
+      ref.read(websocketProvider).releaseAllTouchline('orderbook', context);
     } else {
       // On mobile, use direct unsubscription
       requestWSOrderBook(isSubscribe: false, context: context);
@@ -643,6 +641,15 @@ class OrderProvider extends DefaultChangeNotifier {
         }
       });
 
+      if (kIsWeb) {
+        // Owned touchline for the selected basket's legs. The old path sent a
+        // raw "d" once per scrip and remembered it locally, so after any
+        // reconnect the basket LTPs never came back.
+        ref.read(websocketProvider).setOwnedTouchline('basket', [
+          for (final script in _bsktScripList) "${script['exch']}|${script['token']}"
+        ], context);
+      }
+
       // Create input string for WebSocket subscription - only for symbols not already subscribed
       Set<String> symbolsToSubscribe = {};
 
@@ -654,11 +661,11 @@ class OrderProvider extends DefaultChangeNotifier {
         }
       }
 
-      // Only establish new connections if needed
-      if (symbolsToSubscribe.isNotEmpty) {
+      // Only establish new connections if needed (mobile)
+      if (!kIsWeb && symbolsToSubscribe.isNotEmpty) {
         input = symbolsToSubscribe.join("#");
         ref.read(websocketProvider).establishConnection(
-            channelInput: input, task: kIsWeb ? "d" : "t", context: context);
+            channelInput: input, task: "t", context: context);
       }
 
       // Update basket with latest values from socket data
@@ -1678,6 +1685,25 @@ class OrderProvider extends DefaultChangeNotifier {
             }
           }
 
+          // A refresh builds new order objects, which dropped the user's
+          // Cancel ticks while the "Cancel (n)" count kept the old number.
+          // Carry the ticks over to the same orders and recount.
+          final tickedOrderNos = <String>{
+            for (final o in _openOrder ?? <OrderBookModel>[])
+              if ((o.isExitSelection ?? false) && o.norenordno != null)
+                o.norenordno!
+          };
+          var tickedCount = 0;
+          for (final o in tempOpen) {
+            if (o.norenordno != null && tickedOrderNos.contains(o.norenordno)) {
+              o.isExitSelection = true;
+              tickedCount++;
+            }
+          }
+          _exitOrderQty = tickedCount;
+          _isExitAllOrder =
+              tempOpen.isNotEmpty && tickedCount == tempOpen.length;
+
           _executedOrder = tempExecuted;
           _openOrder = tempOpen;
           _allOrder = tempAll;
@@ -1804,8 +1830,11 @@ class OrderProvider extends DefaultChangeNotifier {
       if (_gttOrderBookModel!.isNotEmpty) {
         if (_gttOrderBookModel![0].stat == "Ok") {
           ConstantName.sessCheck = true;
-          if (initLoad != "initLoad") {
-            _selectedTab = 3;
+          // Only re-subscribe when the GTT tab is the one showing. This used to
+          // force `_selectedTab = 3`, and it runs on every order message and
+          // reconnect: the order book's search filter and its subscription
+          // jumped to GTT while the user was on Open or Executed orders.
+          if (initLoad != "initLoad" && _selectedTab == 3) {
             requestWSOrderBook(isSubscribe: true, context: context);
           }
 
@@ -1968,41 +1997,73 @@ class OrderProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// Cancels the ticked orders. Returns how many of them failed, so the
+  /// caller does not report success when the exchange refused some.
   exitOrders(context) async {
+    var failed = 0;
     for (var element in _openOrder!) {
       if (element.isExitSelection ?? false) {
+        // if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
+        //     element.snonum != null) {
+        //   await fetchExitSNOOrd(element.snonum.toString(),
+        //       element.prd.toString(), context, false);
+        // } else {
+        //   await fetchOrderCancel(element.norenordno.toString(), context, false);
+        // }
+        final dynamic result;
         if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
             element.snonum != null) {
-          await fetchExitSNOOrd(element.snonum.toString(),
+          result = await fetchExitSNOOrd(element.snonum.toString(),
               element.prd.toString(), context, false);
         } else {
-          await fetchOrderCancel(element.norenordno.toString(), context, false);
+          result = await fetchOrderCancel(
+              element.norenordno.toString(), context, false);
         }
+        if (result is! CancelOrderModel || result.stat != "Ok") failed++;
       }
+    }
+    // fetchOrderBook now carries ticks across the refresh, so clear them
+    // here along with the count once the cancel run is over.
+    for (var element in _openOrder ?? <OrderBookModel>[]) {
+      element.isExitSelection = false;
     }
     await fetchOrderBook(context, true);
     Navigator.pop(context);
     _exitOrderQty = 0;
     _isExitAllOrder = false;
+    return failed;
   }
 
-  /// Cancel all pending/open orders
-  Future<void> cancelAllPendingOrders(context) async {
-    if (_openOrder == null) return;
+  /// Cancel all pending/open orders. Returns how many of them failed.
+  // Future<void> cancelAllPendingOrders(context) async {
+  Future<int> cancelAllPendingOrders(context) async {
+    if (_openOrder == null) return 0;
+    var failed = 0;
     for (var element in _openOrder!) {
       final status = element.status?.toUpperCase() ?? '';
       if (status == 'PENDING' || status == 'OPEN' || status == 'TRIGGER_PENDING') {
+        // if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
+        //     element.snonum != null) {
+        //   await fetchExitSNOOrd(element.snonum.toString(),
+        //       element.prd.toString(), context, false);
+        // } else {
+        //   await fetchOrderCancel(element.norenordno.toString(), context, false);
+        // }
+        final dynamic result;
         if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
             element.snonum != null) {
-          await fetchExitSNOOrd(element.snonum.toString(),
+          result = await fetchExitSNOOrd(element.snonum.toString(),
               element.prd.toString(), context, false);
         } else {
-          await fetchOrderCancel(element.norenordno.toString(), context, false);
+          result = await fetchOrderCancel(
+              element.norenordno.toString(), context, false);
         }
+        if (result is! CancelOrderModel || result.stat != "Ok") failed++;
       }
     }
     await fetchOrderBook(context, true);
     Navigator.pop(context);
+    return failed;
   }
 
   Future fetchOrderCancel(String orderNum, context, bool loop) async {
@@ -2279,10 +2340,16 @@ class OrderProvider extends DefaultChangeNotifier {
         }
       }
 
-      if (input.isNotEmpty) {
+      if (kIsWeb) {
+        // Owned touchline: tracked, protected from other screens' "u",
+        // restored on every new socket, and replaced as the list changes.
+        // The current tab's LTP column; was a raw "d" released with "u" (never released).
+        ref.read(websocketProvider).setOwnedTouchline(
+            'orderbook', input.split('#'), context);
+      } else if (input.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            task: isSubscribe ? "t" : "u",
             context: context);
       }
     } catch (e) {

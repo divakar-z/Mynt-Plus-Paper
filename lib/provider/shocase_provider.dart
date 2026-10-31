@@ -42,11 +42,15 @@ class ShowCaseProvider extends DefaultChangeNotifier {
       toastDuration: const Duration(minutes: 5),
     );
 
-    if (ref.read(networkStateProvider).connectionStatus != ConnectivityResult.none) {
+    // Web restores its own subscriptions (WebSubscriptionManager + the depth
+    // owner registry). Replaying the legacy globals here re-subscribed the last
+    // TOUCHLINE scrip as DEPTH — an owner-less depth feed nothing released.
+    if (!kIsWeb &&
+        ref.read(networkStateProvider).connectionStatus != ConnectivityResult.none) {
       Future.delayed(const Duration(seconds: 3), () {
         ref.read(websocketProvider).establishConnection(
             channelInput: ConstantName.lastSubscribe,
-            task: kIsWeb ? "d" : "t",
+            task: "t",
             context: context);
         ref.read(websocketProvider).establishConnection(
             channelInput: ConstantName.lastSubscribeDepth,

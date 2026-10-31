@@ -31,9 +31,28 @@ class PositionListBottomSheet extends ConsumerStatefulWidget {
 class _PositionListBottomSheetState
     extends ConsumerState<PositionListBottomSheet> {
   final TextEditingController _searchController = TextEditingController();
+  String _lastSearchText = '';
+
+  // The search field's X button only empties the text box; it never fires
+  // onChanged. Rebuild the list here when the box goes from text to empty.
+  void _onSearchTextChanged() {
+    final text = _searchController.text;
+    final wasNotEmpty = _lastSearchText.isNotEmpty;
+    _lastSearchText = text;
+    if (text.isEmpty && wasNotEmpty && mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_onSearchTextChanged);
+  }
 
   @override
   void dispose() {
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     super.dispose();
   }

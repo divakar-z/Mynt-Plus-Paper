@@ -8,12 +8,31 @@
 //   '1'  → 1-minute candles (used for any target < 60 minutes)
 //   '5'  → 5-minute candles (used for 60 ≤ target < 1440 minutes)
 //   '1D' → daily candles    (used for target ≥ 1440 minutes)
+//   'Ns' → N-second candles (used for targets under a minute)
 //
-// Target minutes is whatever integer the user picked, including custom
-// values like 7m, 45m, 90m.
+// Target minutes is whatever the user picked, including custom values like
+// 7m, 45m, 90m. Second timeframes are FRACTIONAL minutes (5s = 5/60), so
+// every conversion to seconds goes through _tfSec() to stay an integer.
 // ---------------------------------------------------------------------------
 
+// Second intervals the seconds endpoint serves (it lists 1s,3s,5s,10s,30s,45s
+// and also answers 15s). Always ask for the EXACT target when it is served:
+// the server's rows for seconds without a trade are carried forward (open =
+// previous close), so building 15s from 5s rows opened a bar at the carried
+// price where the server's own 15s bar opens at its first trade — 344 of
+// 1,801 opens differed on CRUDEOIL. Session opens (09:00 / 09:15 IST) are
+// multiples of 45s on the epoch grid, so every interval here lines up.
+const SECOND_SOURCE_INTERVALS = [45, 30, 15, 10, 5, 3, 1];
+
+// Target width in whole seconds (5/60 minutes → 5).
+const _tfSec = (mins) => Math.max(1, Math.round(mins * 60));
+
 const SOURCE_INTERVAL_FOR_MINUTES = (mins) => {
+  if (mins < 1) {
+    const sec = _tfSec(mins);
+    for (const n of SECOND_SOURCE_INTERVALS) if (sec % n === 0) return n + 's';
+    return '1s';
+  }
   if (mins < 60) return '1';
   if (mins < 1440) return '5';
   return '1D';
@@ -37,7 +56,7 @@ function bucketCandles(src, targetMinutes, exch) {
   if (targetMinutes >= 1440) {
     return _bucketCalendar(src, targetMinutes);
   }
-  const targetSec = targetMinutes * 60;
+  const targetSec = _tfSec(targetMinutes);
   const openMin = _sessionOpenMinFor(exch);
   const out = [];
   let cur = null;
@@ -240,6 +259,23 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs, exch) {
     if (isDaily && typeof dO === 'number') bar.o = dO;
   };
   let c = candles.length ? candles[candles.length - 1] : null;
+  // Second timeframes need to know whether this tick is a TRADE. `ft` is the
+  // feed time, so a depth frame also carries this second's `ft`, together with
+  // the last trade's price — which may be from an earlier second. Only a trade
+  // (volume moved) may open a second bar, or the bar would open at the previous
+  // close where the server's opens at the first trade. Indices never carry
+  // volume, so for them (`_volSeen` false) every price frame is the trade.
+  const isTrade = !priceOnly || tick._volSeen !== true;
+  // Second timeframes: a trade stamped with its own `ft` that arrives after
+  // the chart already moved on (network latency, or the local clock running
+  // ahead of the exchange's) belongs to an EARLIER bar that still exists.
+  // At 1s that is most ticks, so dropping them (the minute behaviour below)
+  // would starve the chart. Put the tick in its own bar instead.
+  if (c && bucketSec < c.ts && targetSec < 60 && tick._ftFresh === true) {
+    // A late depth frame says nothing the trades did not.
+    if (!isTrade) return 'skipped';
+    return _applyLateTick(candles, bucketSec, raw, cumVol, priceOnly, aggState, tickMs);
+  }
   if (c && bucketSec < c.ts) {
     // Out-of-order tick. In lpOnly mode (indices), the synthesised ft is
     // `Date.now()` which can lag the server-bucketed history by minutes
@@ -251,6 +287,11 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs, exch) {
       if (raw > c.h) c.h = raw;
       if (raw < c.l) c.l = raw;
       applyDayExtremes(c);
+      // Seconds: this is the latest price, not a trade stamped in this second
+      // (its `ft` is an older one), so it must not stop the second's first
+      // real trade from setting the open — but a late tick must not pull the
+      // bar back to an older price either (see _applyLateTick).
+      if (targetSec < 60) c._lp = true;
       aggState.prevPrice = raw;
       aggState.prevMs = tickMs;
       return 'applied';
@@ -267,6 +308,11 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs, exch) {
       c = { ts: bucketSec, o: raw, h: raw, l: raw, c: raw, v: 0 };
     }
     candles.push(c);
+  } else if (targetSec < 60 && isTrade && !c._ticked && (c._synth || c._lp)) {
+    // No trade has landed in this second yet: the filler drew it flat at the
+    // previous close, or a depth frame's price opened it. This trade is the
+    // bar's real open (the server's second candle agrees).
+    c.o = raw; c.h = raw; c.l = raw;
   }
   c.c = raw;
   if (raw > c.h) c.h = raw;
@@ -283,11 +329,45 @@ function ingestTickIntoBucket(candles, tick, aggState, targetMs, exch) {
     aggState.prevPrice = raw;
     aggState.prevMs = tickMs;
   }
+  if (targetSec < 60) {
+    if (isTrade) c._ticked = true; else c._lp = true;
+  }
+  return 'applied';
+}
+
+// Late tick on a second timeframe: apply it to the bar for `bucketSec`, then
+// carry its price into the empty filler bars that follow (they were drawn flat
+// at the previous close, before this trade was known). Stops at the first bar
+// a real tick already touched. Looks back at most ~10 minutes of bars.
+function _applyLateTick(candles, bucketSec, raw, cumVol, priceOnly, aggState, tickMs) {
+  let i = candles.length - 1;
+  const stop = Math.max(0, candles.length - 600);
+  while (i >= stop && candles[i].ts > bucketSec) i--;
+  if (i < stop || candles[i].ts !== bucketSec) return 'skipped';
+  const bar = candles[i];
+  if (!bar._ticked && (bar._synth || bar._lp)) {
+    bar.o = raw; bar.h = raw; bar.l = raw;
+  }
+  bar.c = raw;
+  if (raw > bar.h) bar.h = raw;
+  if (raw < bar.l) bar.l = raw;
+  bar._ticked = true;
+  if (!priceOnly) {
+    bar.v += (cumVol - aggState.prevCumVol);
+    aggState.prevCumVol = cumVol;
+  }
+  aggState.prevPrice = raw;
+  aggState.prevMs = tickMs;
+  for (let j = i + 1; j < candles.length; j++) {
+    const n = candles[j];
+    if (!n._synth || n._ticked || n._lp) break;
+    n.o = raw; n.h = raw; n.l = raw; n.c = raw;
+  }
   return 'applied';
 }
 
 // Expose for browser global scope (no module system in iframe).
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { bucketCandles, ingestTickIntoBucket, SOURCE_INTERVAL_FOR_MINUTES,
+  module.exports = { bucketCandles, ingestTickIntoBucket, SOURCE_INTERVAL_FOR_MINUTES, _tfSec,
     _calendarBucketEnd };
 }

@@ -53,18 +53,48 @@ class _CancelAllOrdersDialogWebState
     try {
       final orderProv = ref.read(orderProvider);
 
+      // if (widget.isCancelAll) {
+      //   // Cancel all pending orders directly
+      //   await orderProv.cancelAllPendingOrders(context);
+      // } else {
+      //   // Cancel only selected orders
+      //   await orderProv.exitOrders(context);
+      // }
+      //
+      // ResponsiveSnackBar.showSuccess(
+      //   context,
+      //   '$orderCount order${orderCount > 1 ? 's' : ''} cancelled successfully',
+      // );
+
+      // Both calls return how many orders the exchange refused, so a partly
+      // failed run no longer reports full success.
+      final dynamic failedResult;
       if (widget.isCancelAll) {
         // Cancel all pending orders directly
-        await orderProv.cancelAllPendingOrders(context);
+        failedResult = await orderProv.cancelAllPendingOrders(context);
       } else {
         // Cancel only selected orders
-        await orderProv.exitOrders(context);
+        failedResult = await orderProv.exitOrders(context);
       }
+      final failed = failedResult is int ? failedResult : 0;
 
-      ResponsiveSnackBar.showSuccess(
-        context,
-        '$orderCount order${orderCount > 1 ? 's' : ''} cancelled successfully',
-      );
+      if (failed == 0) {
+        ResponsiveSnackBar.showSuccess(
+          context,
+          '$orderCount order${orderCount > 1 ? 's' : ''} cancelled successfully',
+        );
+      } else if (failed >= orderCount) {
+        ResponsiveSnackBar.showError(
+          context,
+          'Failed to cancel orders. Please try again.',
+        );
+      } else {
+        final cancelled = orderCount - failed;
+        ResponsiveSnackBar.showError(
+          context,
+          '$cancelled of $orderCount orders cancelled. $failed could not be cancelled.',
+        );
+      }
     } catch (e) {
       ResponsiveSnackBar.showError(
         context,

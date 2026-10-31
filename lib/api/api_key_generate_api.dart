@@ -94,6 +94,26 @@ Future<GenerateApikeyModel> generateapikeynewuser(String month, String apistatus
     }
   }
 
+  /// Global-Login OAuth apps: action is list | create | get | update | delete.
+  /// Returns the raw body; callers check `stat` (HTTP status is always 200).
+  Future<Map<String, dynamic>> oauthAppsCall(
+      String action, Map<String, dynamic> body) async {
+    try {
+      final uri = Uri.parse('${apiLinks.oauthAppsBase}/$action');
+      final res = await apiClient.post(uri,
+          headers: defaultHeaders,
+          body: jsonEncode({
+            'clientid': prefs.clientId,
+            'jKey': prefs.clientSession,
+            'source': 'WEB',
+            ...body,
+          }));
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   Future<GenerateApikeyModel> regenerateapikey(String month) async {
     try {
       final uri = Uri.parse(apiLinks.generateapiKey);

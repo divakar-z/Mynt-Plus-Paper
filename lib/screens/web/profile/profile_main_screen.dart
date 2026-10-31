@@ -33,6 +33,7 @@ import 'package:mynt_plus/sharedWidget/common_text_fields_web.dart';
 import 'package:mynt_plus/sharedWidget/enums.dart';
 import 'Api_key_screen.dart';
 import 'api_key_screen_new.dart';
+import 'api_key_screen_oauth.dart';
 
 /// Callback type for screen navigation from profile dropdown
 typedef OnNavigateToScreenCallback = void Function(ScreenType screenType);
@@ -818,14 +819,7 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
   }
 
   Widget _buildApiKeyContent(ThemesProvider theme) {
-    // Use ConstrainedBox to allow content to grow while maintaining reasonable bounds
-    return ConstrainedBox(
-      constraints: const BoxConstraints(
-        minHeight: 300,
-        maxHeight: 500,
-      ),
-      child: const ApiKeyBottomTabs(),
-    );
+    return const ApiKeyBottomTabs();
   }
 
   /// Kick off a TOTP fetch the first time the user expands the TOTP section.
@@ -4741,7 +4735,7 @@ class _ApiKeyBottomTabsState extends ConsumerState<ApiKeyBottomTabs>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -4753,6 +4747,7 @@ class _ApiKeyBottomTabsState extends ConsumerState<ApiKeyBottomTabs>
   @override
   Widget build(BuildContext context) {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         TabBar(
           controller: _tabController,
@@ -4767,22 +4762,22 @@ class _ApiKeyBottomTabsState extends ConsumerState<ApiKeyBottomTabs>
               fontWeight: MyntFonts.medium),
           dividerColor: Colors.transparent,
           labelPadding: EdgeInsets.all(0),
-          // indicatorPadding: EdgeInsets.all(0),
           indicatorSize: TabBarIndicatorSize.tab,
           tabs: const [
             Tab(text: "Base Key"),
             Tab(text: "OAuth Key"),
+            Tab(text: "App Keys"),
           ],
         ),
         const SizedBox(height: 10),
-        Expanded(
-          child: TabBarView(
-            controller: _tabController,
-            children: const [
-              ApiKeyScreen(),
-              ApiKeyScreenNew(),
-            ],
-          ),
+        // Only the active tab is built, so the height follows its content.
+        AnimatedBuilder(
+          animation: _tabController,
+          builder: (_, __) => const [
+            ApiKeyScreen(),
+            ApiKeyScreenOAuth(),
+            ApiKeyScreenNew(),
+          ][_tabController.index],
         ),
       ],
     );

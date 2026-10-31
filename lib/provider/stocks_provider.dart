@@ -1001,11 +1001,16 @@ class StocksProvider extends DefaultChangeNotifier {
             _topStockData.map((e) => "${e.exch}|${e.token}").toSet().join("#");
       }
 
-      if (input.isNotEmpty) {
-        // ConstantName.lastSubscribe = input;
+      if (kIsWeb) {
+        // Owned touchline: tracked, protected from other screens' "u",
+        // restored on every new socket, and replaced as the list changes.
+        // Top stocks; was a raw "d" that nothing restored.
+        ref.read(websocketProvider).setOwnedTouchline(
+            'trade-action', input.split('#'), context);
+      } else if (input.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            task: isSubscribe ? "t" : "u",
             context: context);
       }
     } catch (e) {}

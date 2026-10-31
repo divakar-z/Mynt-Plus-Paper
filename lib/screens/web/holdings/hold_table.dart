@@ -1121,10 +1121,12 @@ class _TableExample1State extends ConsumerState<TableExample1> {
                                           ),
                                           const SizedBox(width: 4),
                                         ],
-                                        Text(
+                                        Tooltip(
+                                          message: privacy.mask('$qty'),
+                                          child: Text(
                                           privacy.mask('$qty'),
                                           style: _getTextStyle(context),
-                                        ),
+                                        ),),
                                       ],
                                     ),
                                   ),

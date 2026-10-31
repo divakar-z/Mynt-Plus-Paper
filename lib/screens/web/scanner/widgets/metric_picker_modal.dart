@@ -91,9 +91,18 @@ class _MetricPickerState extends State<_MetricPicker> {
   late final Map<String, List<FundamentalField>> _byGroup;
   late final Map<String, List<CatalogIndicator>> _byIndCat;
 
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Reset the query here when the box goes empty.
+  void _onSearchTextChanged() {
+    if (_search.text.isEmpty && _query.isNotEmpty) {
+      setState(() => _query = '');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _search.addListener(_onSearchTextChanged);
     _byGroup = {};
     for (final f in widget.fields) {
       _byGroup
@@ -123,6 +132,7 @@ class _MetricPickerState extends State<_MetricPicker> {
 
   @override
   void dispose() {
+    _search.removeListener(_onSearchTextChanged);
     _search.dispose();
     super.dispose();
   }

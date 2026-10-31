@@ -461,6 +461,9 @@ class _SbSearchField extends StatefulWidget {
   final VoidCallback? onFocus;
   // Solid background instead of the shared field's faint grey tint.
   final Color? fillColor;
+  // The shared field's X button only empties the text box; it never calls
+  // onClear. When true, call onChanged('') when the box goes from text to empty.
+  final bool notifyOnEmpty;
   const _SbSearchField({
     required this.controller,
     required this.hint,
@@ -469,6 +472,7 @@ class _SbSearchField extends StatefulWidget {
     this.inputFormatters,
     this.onFocus,
     this.fillColor,
+    this.notifyOnEmpty = false,
   });
 
   @override
@@ -485,14 +489,38 @@ class _SbSearchFieldState extends State<_SbSearchField> {
     }
   }
 
+  String _lastText = '';
+
+  void _onTextChange() {
+    final text = widget.controller.text;
+    final wasNotEmpty = _lastText.isNotEmpty;
+    _lastText = text;
+    if (widget.notifyOnEmpty && text.isEmpty && wasNotEmpty) {
+      widget.onChanged('');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _focus.addListener(_onFocusChange);
+    _lastText = widget.controller.text;
+    widget.controller.addListener(_onTextChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SbSearchField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onTextChange);
+      _lastText = widget.controller.text;
+      widget.controller.addListener(_onTextChange);
+    }
   }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_onTextChange);
     _focus.removeListener(_onFocusChange);
     _own?.dispose();
     super.dispose();
@@ -1252,6 +1280,7 @@ extension _SbV2 on _StrategyBuilderPanelWebState {
       hint: hint,
       onChanged: (_) => onChanged(),
       fillColor: fillColor,
+      notifyOnEmpty: true,
     );
     return width == null ? field : SizedBox(width: width, child: field);
   }

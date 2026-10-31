@@ -143,14 +143,26 @@ class _TradeActionScreenWebState extends ConsumerState<TradeActionScreenWeb>
             _socketDataMap[key] = Map<String, dynamic>.from(value);
           }
         });
-        // ✅ REMOVED: setState(() {}) - cells read from _socketDataMap directly
-        // Individual stock cards should use isolated widgets that watch specific tokens
+        // The cells read _socketDataMap in build, but nothing rebuilt them:
+        // the table only moved on hover, tab change or sort. Repaint at most
+        // every 500 ms rather than on every tick.
+        _scheduleRepaint();
       }
+    });
+  }
+
+  Timer? _repaintTimer;
+
+  void _scheduleRepaint() {
+    if (_repaintTimer?.isActive ?? false) return;
+    _repaintTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) setState(() {});
     });
   }
 
   @override
   void dispose() {
+    _repaintTimer?.cancel();
     _socketSubscription?.cancel();
     // Remove listener before disposing to prevent memory leaks
     if (_tabControllerListener != null) {
@@ -756,6 +768,17 @@ class _TradeActionScreenWebState extends ConsumerState<TradeActionScreenWeb>
 
   // ─── BUILD DATA ROW ────────────────────────────────────────────
 
+  // The top-stocks API sends volume already formatted ("5.85Cr", "10.52Lk");
+  // the touchline `v` is the raw share count. Format the live count the same
+  // way so the column doesn't switch to "58921805" once ticks repaint it.
+  String _formatVolume(String v) {
+    final n = double.tryParse(v);
+    if (n == null) return v;
+    if (n >= 10000000) return '${(n / 10000000).toStringAsFixed(2)}Cr';
+    if (n >= 100000) return '${(n / 100000).toStringAsFixed(2)}Lk';
+    return n.toStringAsFixed(0);
+  }
+
   shadcn.TableRow _buildDataRow(TopGainers stock, int rowIndex, ThemesProvider theme) {
     final token = stock.token ?? "";
     final socketData = _socketDataMap[token];
@@ -764,7 +787,7 @@ class _TradeActionScreenWebState extends ConsumerState<TradeActionScreenWeb>
     final high = socketData?['h']?.toString() ?? '0.00';
     final low = socketData?['l']?.toString() ?? '0.00';
     final close = socketData?['c']?.toString() ?? stock.c ?? '0.00';
-    final volume = socketData?['v']?.toString() ?? stock.v ?? '0';
+    final volume = _formatVolume(socketData?['v']?.toString() ?? stock.v ?? '0');
 
     // Compute change and percentage from lp and close
     final lpVal = double.tryParse(ltp);
@@ -981,7 +1004,7 @@ class _TradeActionScreenWebState extends ConsumerState<TradeActionScreenWeb>
             cellText = socketData?['c']?.toString() ?? stock.c ?? '0.00';
             break;
           case 9: // Volume
-            cellText = socketData?['v']?.toString() ?? stock.v ?? '0';
+            cellText = _formatVolume(socketData?['v']?.toString() ?? stock.v ?? '0');
             break;
         }
 

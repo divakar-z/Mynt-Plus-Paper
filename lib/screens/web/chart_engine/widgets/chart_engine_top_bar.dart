@@ -56,7 +56,7 @@ class ChartEngineTopBar extends ConsumerWidget {
               Text('Timeframe', style: MyntWebTextStyles.caption(context)),
               const SizedBox(width: 8),
               TimeframePicker(
-                valueMinutes: pane.timeframeMinutes,
+                valueMinutes: pane.timeframeMinutes.round(),
                 onChanged: (m) => notifier.setPaneTimeframe(activeIdx, m),
                 onPopupVisibilityChanged: onPopupVisibilityChanged,
               ),

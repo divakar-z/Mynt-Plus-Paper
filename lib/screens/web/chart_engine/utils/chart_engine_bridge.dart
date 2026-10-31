@@ -11,7 +11,7 @@ String encodeSetTheme(String theme) =>
 String encodeSetPaneSymbol(String paneId, Map<String, dynamic> scrip) =>
     jsonEncode({'type': 'setPaneSymbol', 'value': {'paneId': paneId, 'scrip': scrip}});
 
-String encodeSetPaneTimeframe(String paneId, int minutes) =>
+String encodeSetPaneTimeframe(String paneId, num minutes) =>
     jsonEncode({'type': 'setPaneTimeframe', 'value': {'paneId': paneId, 'minutes': minutes}});
 
 String encodeSetOverlays(String paneId, Map<String, dynamic> overlays) =>
@@ -260,7 +260,7 @@ String encodeSetActiveLayoutId(String id) =>
 /// per-pane controls (Timeframe, Style, Cursor mode, …) in sync — no need
 /// to track per-pane state for the whole grid.
 String encodeSetActivePaneTopBarState({
-  required int timeframeMinutes,
+  required num timeframeMinutes,
   required String candleStyle,
   required bool showCrosshairLines,
   required List<Map<String, dynamic>> indicators,

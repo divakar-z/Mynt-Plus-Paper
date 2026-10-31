@@ -72,11 +72,11 @@ class _SipOrderDetailScreenWebState
               _sipOrder.scrips![i].ltp = lp;
               hasUpdates = true;
             }
-            if (_isValidValue(pc)) {
+            if (_isPresent(pc)) {
               _sipOrder.scrips![i].perChange = pc;
               hasUpdates = true;
             }
-            if (_isValidValue(chng)) {
+            if (_isPresent(chng)) {
               _sipOrder.scrips![i].change = chng;
               hasUpdates = true;
             }
@@ -90,6 +90,15 @@ class _SipOrderDetailScreenWebState
     } catch (e) {
     }
   }
+
+  // Change / % change may legitimately be 0.00 (back to flat); only a zero
+
+  // LTP is a placeholder. Rejecting "0.00" left the last non-zero change.
+
+  bool _isPresent(String? value) =>
+
+      value != null && value != "null" && value.isNotEmpty;
+
 
   bool _isValidValue(String? value) {
     return value != null &&

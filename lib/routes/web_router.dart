@@ -335,7 +335,8 @@ void initializeWebRouter() {
             exch: (q['exch'] ?? '').trim(),
             token: (q['token'] ?? '').trim(),
             tsym: (q['tsym'] ?? '').trim(),
-            timeframeMinutes: int.tryParse((q['tf'] ?? '').trim()) ?? 5,
+            // num: second timeframes arrive fractional (tf=0.0833… = 5s).
+            timeframeMinutes: num.tryParse((q['tf'] ?? '').trim()) ?? 5,
             slot: int.tryParse((q['n'] ?? '').trim()) ?? 1,
           );
         },

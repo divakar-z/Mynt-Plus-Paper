@@ -265,6 +265,8 @@ class _IPODetailsContainer extends StatelessWidget {
   Widget _buildStatusChip() {
     final status = ipostartdate(widget.startdate, widget.enddate);
     final isOpen = status == "Open";
+    // Open green, Pre-open grey, Closed red (same on every IPO screen).
+    final isPreOpen = status == "Pre-open";
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
@@ -273,6 +275,10 @@ class _IPODetailsContainer extends StatelessWidget {
                                   ? theme.isDarkMode
                                       ? colors.profitDark.withOpacity(0.2)
                                       : colors.profitLight.withOpacity(0.2)
+                                  : isPreOpen
+                                      ? (theme.isDarkMode
+                                          ? colors.textSecondaryDark.withOpacity(0.2)
+                                          : colors.textSecondaryLight.withOpacity(0.2))
                                   : theme.isDarkMode
                                       ? colors.lossDark.withOpacity(0.2)
                                       : colors.lossLight.withOpacity(0.2),
@@ -286,6 +292,10 @@ class _IPODetailsContainer extends StatelessWidget {
             ? theme.isDarkMode
                 ? colors.profitDark
                 : colors.profitLight
+            : isPreOpen
+                ? (theme.isDarkMode
+                    ? colors.textSecondaryDark
+                    : colors.textSecondaryLight)
             : theme.isDarkMode
                 ? colors.lossDark
                 : colors.lossLight,

@@ -1,3 +1,5 @@
+import 'ipo_order_book_model.dart';
+
 class MenuData {
   String flow;
   String type;
@@ -6,6 +8,9 @@ class MenuData {
   String name;
   String applicationNumber;
   List<BidReference> respBid;
+  // Bids of the application being cancelled (from My Bids). BSE cancel sends
+  // them in full; the backend rejected the bare {"actioncode": "d"}.
+  List<BidDetail> cancelBids;
 
   MenuData({
     required this.flow,
@@ -15,6 +20,7 @@ class MenuData {
     required this.name,
     required this.applicationNumber,
     required this.respBid,
+    this.cancelBids = const [],
   });
 }
 

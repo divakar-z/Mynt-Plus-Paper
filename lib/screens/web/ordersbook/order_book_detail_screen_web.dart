@@ -17,6 +17,7 @@ import '../../../utils/responsive_snackbar.dart';
 import '../../../sharedWidget/common_buttons_web.dart';
 import '../../../main.dart' show getNavigatorContext;
 import '../order/modify_place_order_web_screen.dart';
+import 'refactored/services/order_action_handler.dart';
 
 class OrderBookDetailScreenWeb extends ConsumerStatefulWidget {
   final OrderBookModel orderBookData;
@@ -137,8 +138,8 @@ class _OrderBookDetailScreenWebState
             final chng = data['chng']?.toString();
 
             if (_isValidValue(lp)) _orderData.ltp = lp;
-            if (_isValidValue(pc)) _orderData.perChange = pc;
-            if (_isValidValue(chng)) _orderData.change = chng;
+            if (_isPresent(pc)) _orderData.perChange = pc;
+            if (_isPresent(chng)) _orderData.change = chng;
           });
         }
       });
@@ -147,6 +148,11 @@ class _OrderBookDetailScreenWebState
   }
 
   // Helper method to check if a value is valid
+  // Change / % change may legitimately be 0.00 (back to flat); only a zero
+  // LTP is a placeholder. Rejecting "0.00" left the last non-zero change.
+  bool _isPresent(String? value) =>
+      value != null && value != "null" && value.isNotEmpty;
+
   bool _isValidValue(String? value) {
     return value != null &&
         value != "null" &&
@@ -277,9 +283,18 @@ class _OrderBookDetailScreenWebState
                         ],
 
                         // Order History Header & Section
+                        // The history list is shared, so it could still hold
+                        // the previously opened order (briefly, or for good if
+                        // this order's fetch failed). Show it only when it
+                        // belongs to this order.
+                        // if (orderHistory != null &&
+                        //     orderHistory.isNotEmpty &&
+                        //     orderHistory[0].stat != "Not_Ok") ...[
                         if (orderHistory != null &&
                             orderHistory.isNotEmpty &&
-                            orderHistory[0].stat != "Not_Ok") ...[
+                            orderHistory[0].stat != "Not_Ok" &&
+                            orderHistory[0].norenordno ==
+                                widget.orderBookData.norenordno) ...[
                           const SizedBox(height: 24),
                           // Center(
                           //     child: TextButton.icon(
@@ -506,7 +521,14 @@ class _OrderBookDetailScreenWebState
           _rowOfInfoData(
               "Type", _orderData.trantype == "B" ? "Buy" : "Sell", theme),
           _rowOfInfoData("Qty", _getQuantityDisplay(_orderData), theme),
-          _rowOfInfoData("Price", _orderData.prc ?? "-", theme),
+          // _rowOfInfoData("Price", _orderData.prc ?? "-", theme),
+          // Market orders show MKT, same as the Open table and download.
+          _rowOfInfoData(
+              "Price",
+              (_orderData.prctyp == "MKT" || _orderData.prctyp == "MARKET")
+                  ? "MKT"
+                  : (_orderData.prc ?? "-"),
+              theme),
           _rowOfInfoData("Avg Price", _orderData.avgprc ?? "0.00", theme),
           _rowOfInfoData("Trigger Price", _orderData.trgprc ?? "0.00", theme),
           _rowOfInfoData("Product / Type",
@@ -516,7 +538,9 @@ class _OrderBookDetailScreenWebState
               "Market Protection", _orderData.mktProtection ?? "-", theme),
           _rowOfInfoData("AMO", _orderData.amo ?? "-", theme),
           _rowOfInfoData("Order Id", _orderData.norenordno ?? "-", theme),
-          _rowOfInfoData("Exchange", _orderData.exchordid ?? "-", theme),
+          // The Exchange row showed the exchange order number, not the exchange.
+          // _rowOfInfoData("Exchange", _orderData.exchordid ?? "-", theme),
+          _rowOfInfoData("Exchange", _orderData.exch ?? "-", theme),
           _rowOfInfoData("Date & Time",
               formatDateTime(value: _orderData.norentm ?? "-"), theme),
         ],
@@ -885,11 +909,22 @@ class _OrderBookDetailScreenWebState
       }
 
       // Use saved provider reference instead of ref.read()
-      await orderProviderRef.fetchOrderCancel(
+      // await orderProviderRef.fetchOrderCancel(
+      //       "$orderNo",
+      //       targetContext,
+      //       true,
+      //     );
+      final result = await orderProviderRef.fetchOrderCancel(
             "$orderNo",
             targetContext,
             true,
           );
+      // A refused cancel used to close silently; show the exchange's reason.
+      final refusal =
+          OrderActionHandler.refusalMessage(result, 'Failed to cancel order');
+      if (refusal != null && targetContext.mounted) {
+        ResponsiveSnackBar.showError(targetContext, refusal);
+      }
     } catch (e) {
       final rootCtx = getNavigatorContext();
       if (rootCtx != null && rootCtx.mounted) {
@@ -950,12 +985,24 @@ class _OrderBookDetailScreenWebState
       }
 
       // Use saved provider reference instead of ref.read()
-      await orderProviderRef.fetchExitSNOOrd(
+      // await orderProviderRef.fetchExitSNOOrd(
+      //   "$snonum",
+      //   "$prd",
+      //   targetContext,
+      //   true,
+      // );
+      final result = await orderProviderRef.fetchExitSNOOrd(
         "$snonum",
         "$prd",
         targetContext,
         true,
       );
+      // A refused exit used to close silently; show the exchange's reason.
+      final refusal =
+          OrderActionHandler.refusalMessage(result, 'Failed to exit order');
+      if (refusal != null && targetContext.mounted) {
+        ResponsiveSnackBar.showError(targetContext, refusal);
+      }
     } catch (e) {
       final rootCtx = getNavigatorContext();
       if (rootCtx != null && rootCtx.mounted) {
@@ -1434,7 +1481,25 @@ class _OrderBookDetailScreenWebState
       orderTpye: '',
       holdQty: '',
       isModify: false,
-      raw: orderData.toJson(),
+      // raw: orderData.toJson(),
+      raw: _repeatRaw(orderData),
     );
+  }
+
+  // TC_171.1: once an SL order triggers, the order book reports it as
+  // LMT (SL-LMT) or MKT (SL-MKT) but keeps trgprc, so Repeat opened it with
+  // Stoploss unticked. A plain LMT/MKT order carries trgprc 0, so a trigger
+  // above 0 marks a triggered SL order.
+  Map<String, dynamic> _repeatRaw(OrderBookModel orderData) {
+    final raw = orderData.toJson();
+    final trigger = double.tryParse(orderData.trgprc ?? '') ?? 0;
+    // The auto SL/target legs of a CO/BO (snonum set) carry the CO's stop as
+    // trgprc; they are not SL orders the client placed.
+    // if (trigger > 0) {
+    if (trigger > 0 && orderData.snonum == null) {
+      if (orderData.prctyp == 'LMT') raw['prctyp'] = 'SL-LMT';
+      if (orderData.prctyp == 'MKT') raw['prctyp'] = 'SL-MKT';
+    }
+    return raw;
   }
 }

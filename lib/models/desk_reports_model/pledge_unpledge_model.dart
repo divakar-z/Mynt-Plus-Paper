@@ -116,6 +116,39 @@ class Data {
   String? margin;
   String? plegeQty;
   String? unPlegeQty;
+  String? mTFPLEDGEDQTY;
+  String? mTFUNPLEDGEQTY;
+
+  static int _qty(String? v) {
+    final n = (double.tryParse(v ?? '') ?? 0).toInt();
+    return n < 0 ? 0 : n;
+  }
+
+  /// Total pledged qty (COLQTY), 0 when missing or negative.
+  int get colQty => _qty(cOLQTY);
+
+  /// Pending MTF unpledge request qty (mtf_unpledge_qty).
+  int get mtfPendingQty => _qty(mTFUNPLEDGEQTY);
+
+  /// Pending Regular unpledge request qty (un_plege_qty).
+  int get regularPendingQty => _qty(unPlegeQty);
+
+  /// MTF pledged qty. MTF_PLEDGED_QTY already drops by the pending MTF
+  /// request, so it is added back; never more than [colQty].
+  int get mtfQty {
+    final mtf = _qty(mTFPLEDGEDQTY) + mtfPendingQty;
+    return mtf > colQty ? colQty : mtf;
+  }
+
+  /// Regular (non-MTF) pledged qty.
+  int get normalQty => colQty - mtfQty;
+
+  /// Pledged qty for an unpledge product: "F" = MTF, "C" = Regular.
+  int pledgedQtyFor(String prd) => prd == 'F' ? mtfQty : normalQty;
+
+  /// Pending request qty for an unpledge product: "F" = MTF, "C" = Regular.
+  int pendingQtyFor(String prd) =>
+      prd == 'F' ? mtfPendingQty : regularPendingQty;
 
   Data(
       {this.aMOUNT,
@@ -204,6 +237,8 @@ class Data {
     margin = json['margin'].toString();
     plegeQty = json['plege_qty'].toString();
     unPlegeQty = json['un_plege_qty'].toString();
+    mTFPLEDGEDQTY = json['MTF_PLEDGED_QTY'].toString();
+    mTFUNPLEDGEQTY = json['mtf_unpledge_qty'].toString();
   }
 
   Map<String, dynamic> toJson() {
@@ -247,6 +282,8 @@ class Data {
     data['margin'] = margin;
     data['plege_qty'] = plegeQty;
     data['un_plege_qty'] = unPlegeQty;
+    data['MTF_PLEDGED_QTY'] = mTFPLEDGEDQTY;
+    data['mtf_unpledge_qty'] = mTFUNPLEDGEQTY;
     return data;
   }
 }

@@ -10,6 +10,7 @@ import '../models/auth_model/totp_model.dart';
 import '../models/profile_model/apikeymodel.dart';
 import '../models/profile_model/generateapikey_model.dart';
 import '../models/profile_model/generatenewapikey_model.dart';
+import '../models/profile_model/oauth_app_model.dart';
 import 'auth_provider.dart';
 import 'core/default_change_notifier.dart';
 import 'index_list_provider.dart';
@@ -42,10 +43,12 @@ class ApikeyProvider extends DefaultChangeNotifier {
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _primaryIpController = TextEditingController();
   final TextEditingController _backupIpController = TextEditingController();
-  
+  final TextEditingController _dnameController = TextEditingController();
+
   TextEditingController get urlController => _urlController;
   TextEditingController get primaryIpController => _primaryIpController;
   TextEditingController get backupIpController => _backupIpController;
+  TextEditingController get dnameController => _dnameController;
 
   // Form Variables
   bool _isHighFrequency = false;
@@ -64,6 +67,11 @@ class ApikeyProvider extends DefaultChangeNotifier {
   // Form Methods
   void toggleSecretVisibility() {
     _hideSecret = !_hideSecret;
+    notifyListeners();
+  }
+
+  void setSecretHidden(bool value) {
+    _hideSecret = value;
     notifyListeners();
   }
 
@@ -123,6 +131,7 @@ class ApikeyProvider extends DefaultChangeNotifier {
     _urlController.dispose();
     _primaryIpController.dispose();
     _backupIpController.dispose();
+    _dnameController.dispose();
     super.dispose();
   }
 
@@ -265,10 +274,179 @@ Future fetchgenerateapikey(BuildContext context, String month, String apistatus)
     _hideSecret = true;
     _isHighFrequency = false;
     _isFetchingTotp = false;
+    _oauthApps = [];
+    _remaining = 0;
+    _selectedIdx = 0;
+    _oauthLoaded = false;
+    _createdKey = null;
+    _dnameController.clear();
     _urlController.clear();
     _primaryIpController.clear();
     _backupIpController.clear();
     notifyListeners();
+  }
+
+  // ---- Global-Login OAuth apps (multi-app) ----
+  List<OAuthApp> _oauthApps = [];
+  int _maxApps = 6;
+  int _remaining = 0;
+  int _selectedIdx = 0;
+  bool _oauthLoading = false;
+  bool _oauthLoaded = false;
+
+  List<OAuthApp> get oauthApps => _oauthApps;
+  int get maxApps => _maxApps;
+  int get remaining => _remaining;
+  int get selectedIdx => _selectedIdx;
+  bool get oauthLoading => _oauthLoading;
+  bool get oauthLoaded => _oauthLoaded;
+  OAuthApp? get selectedApp =>
+      _selectedIdx < _oauthApps.length ? _oauthApps[_selectedIdx] : null;
+
+  // Key of an app just created, to show the "is ready" banner.
+  String? _createdKey;
+  String? get createdKey => _createdKey;
+
+  void dismissCreatedBanner() {
+    _createdKey = null;
+    notifyListeners();
+  }
+
+  /// Key the next create will get: first free letter in U..Z, A..T order.
+  String get nextOauthKey {
+    const order = 'UVWXYZABCDEFGHIJKLMNOPQRST';
+    final used = _oauthApps.map((a) => a.appKey.substring(a.appKey.length - 1));
+    final free = order.split('').firstWhere((c) => !used.contains(c), orElse: () => '');
+    return '${pref.clientId ?? ''}_$free';
+  }
+
+  void startOauthCreate() {
+    _createdKey = null;
+    _dnameController.clear();
+    _urlController.clear();
+    _primaryIpController.clear();
+    _backupIpController.clear();
+    notifyListeners();
+  }
+
+  void _fillFormFromSelected() {
+    final app = selectedApp;
+    _dnameController.text = app?.displayName ?? '';
+    _urlController.text = app?.redirectUrl ?? '';
+    _primaryIpController.text = app?.primaryIp ?? '';
+    _backupIpController.text = app?.backupIp ?? '';
+  }
+
+  /// Returns null on success, otherwise the message to show the user.
+  String? _oauthFailure(BuildContext context, Map<String, dynamic> json) {
+    final emsg = json['emsg'] as String? ?? 'Something went wrong';
+    if (emsg == 'Invalid session') {
+      ref.read(authProvider).ifSessionExpired(context);
+    }
+    return emsg;
+  }
+
+  Future<String?> fetchOauthApps(BuildContext context,
+      {String? selectKey}) async {
+    _oauthLoading = true;
+    notifyListeners();
+    try {
+      final json = await api.oauthAppsCall('list', {});
+      if (json['stat'] != 'Ok') return _oauthFailure(context, json);
+      _oauthApps = (json['apps'] as List<dynamic>? ?? [])
+          .map((e) => OAuthApp.fromJson(e as Map<String, dynamic>))
+          .toList();
+      _maxApps = json['max_apps'] as int? ?? 6;
+      _remaining = json['remaining'] as int? ?? 0;
+      final idx = selectKey == null
+          ? _selectedIdx
+          : _oauthApps.indexWhere((a) => a.appKey == selectKey);
+      _selectedIdx = (idx < 0 || idx >= _oauthApps.length) ? 0 : idx;
+      _oauthLoaded = true;
+      _fillFormFromSelected();
+      return null;
+    } catch (e) {
+      ref.read(indexListProvider).logError.add({"type": "OAuth Apps", "Error": "$e"});
+      return 'Unable to reach server, please try again';
+    } finally {
+      _oauthLoading = false;
+      notifyListeners();
+    }
+  }
+
+  void selectOauthApp(int index) {
+    _selectedIdx = index;
+    _createdKey = null;
+    _hideSecret = true;
+    _fillFormFromSelected();
+    notifyListeners();
+  }
+
+  Future<String?> createOauthApp(BuildContext context) async {
+    try {
+      final json = await api.oauthAppsCall('create', {
+        'red_url': _urlController.text.trim(),
+        'primary_ip': _primaryIpController.text.trim(),
+        'backup_ip': _backupIpController.text.trim(),
+        if (_dnameController.text.trim().isNotEmpty)
+          'dname': _dnameController.text.trim(),
+      });
+      if (json['stat'] != 'Ok') return _oauthFailure(context, json);
+      final key = json['app_key'] as String?;
+      final err = await fetchOauthApps(context, selectKey: key);
+      if (err == null) {
+        _createdKey = key;
+        _hideSecret = false;
+        notifyListeners();
+      }
+      return err;
+    } catch (e) {
+      ref.read(indexListProvider).logError.add({"type": "OAuth Apps", "Error": "$e"});
+      return 'Unable to reach server, please try again';
+    }
+  }
+
+  /// Update the form fields, or only regenerate the secret when [regenerate].
+  /// Both IP fields are always sent: the backend replaces them together.
+  Future<String?> updateOauthApp(BuildContext context,
+      {bool regenerate = false}) async {
+    final app = selectedApp;
+    if (app == null) return 'No app selected';
+    try {
+      final json = await api.oauthAppsCall('update', {
+        'app_key': app.appKey,
+        if (regenerate)
+          'regenerate': true
+        else ...{
+          'red_url': _urlController.text.trim(),
+          'primary_ip': _primaryIpController.text.trim(),
+          'backup_ip': _backupIpController.text.trim(),
+          if (_dnameController.text.trim().isNotEmpty)
+            'dname': _dnameController.text.trim(),
+        },
+      });
+      if (json['stat'] != 'Ok') return _oauthFailure(context, json);
+      _oauthApps[_selectedIdx] = OAuthApp.fromJson(json);
+      notifyListeners();
+      return null;
+    } catch (e) {
+      ref.read(indexListProvider).logError.add({"type": "OAuth Apps", "Error": "$e"});
+      return 'Unable to reach server, please try again';
+    }
+  }
+
+  Future<String?> deleteOauthApp(BuildContext context) async {
+    final app = selectedApp;
+    if (app == null) return 'No app selected';
+    try {
+      final json = await api.oauthAppsCall('delete', {'app_key': app.appKey});
+      if (json['stat'] != 'Ok') return _oauthFailure(context, json);
+      _selectedIdx = 0;
+      return fetchOauthApps(context);
+    } catch (e) {
+      ref.read(indexListProvider).logError.add({"type": "OAuth Apps", "Error": "$e"});
+      return 'Unable to reach server, please try again';
+    }
   }
 
   Future<GenerateNewApiKeyModel?> submitApiKeyNew({

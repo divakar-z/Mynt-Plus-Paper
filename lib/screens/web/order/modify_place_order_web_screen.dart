@@ -22,6 +22,7 @@ import '../../../models/order_book_model/order_book_model.dart';
 import '../../../models/order_book_model/order_margin_model.dart';
 import '../../../provider/network_state_provider.dart';
 import '../../../provider/order_provider.dart';
+import '../../../provider/websocket_provider.dart';
 import '../../../provider/thems.dart';
 import '../../../res/global_font_web.dart';
 import '../../../sharedWidget/common_text_fields_web.dart';
@@ -376,9 +377,24 @@ class _ModifyPlaceOrderScreenState
     return KeyEventResult.handled;
   }
 
+  // Owned touchline for the order's scrip (per window; released on close).
+  // This window read live prices but subscribed nothing — opened from a chart
+  // order line or after leaving the order book, its LTP could be frozen.
+  WebSocketProvider? _ws;
+  late final String _owner = 'modify-order:${identityHashCode(this)}';
+
   @override
   void initState() {
     ref.read(fundProvider).fetchFunds(context);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final exch = widget.scripInfo.exch ?? '';
+      final token = widget.scripInfo.token ?? '';
+      if (exch.isNotEmpty && token.isNotEmpty) {
+        _ws = ref.read(websocketProvider);
+        _ws!.acquireTouchline(_owner, ['$exch|$token'], context);
+      }
+    });
 
     tik = double.parse(widget.scripInfo.ti.toString());
 
@@ -505,6 +521,7 @@ class _ModifyPlaceOrderScreenState
 
   @override
   void dispose() {
+    try { _ws?.releaseAllTouchline(_owner); } catch (_) {}
     _marginUpdateDebounceTimer?.cancel();
     super.dispose();
   }
@@ -3242,8 +3259,10 @@ class _ModifyPlaceOrderScreenState
       }
     }
 
-    // Target — BO only.
-    if (widget.modifyOrderArgs.bpprc != null) {
+    // Target — BO only. Gated on BO like the Target box itself: the backend
+    // can send a 0 target on a CO order, which has no Target box (TC_81.1).
+    if (widget.modifyOrderArgs.sPrdtAli == "BO" &&
+        widget.modifyOrderArgs.bpprc != null) {
       if (targetCtrl.text.isEmpty ||
           SafeParse.toDouble(targetCtrl.text) <= 0) {
         return targetCtrl.text.isEmpty

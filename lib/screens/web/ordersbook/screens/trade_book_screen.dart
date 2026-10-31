@@ -9,6 +9,9 @@ import 'package:mynt_plus/models/order_book_model/trade_book_model.dart';
 import 'package:mynt_plus/provider/order_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
+import 'package:mynt_plus/provider/market_watch_provider.dart';
+import 'package:mynt_plus/utils/responsive_navigation.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:mynt_plus/sharedWidget/no_data_found.dart';
 import 'package:mynt_plus/sharedWidget/mynt_loader.dart';
 import '../refactored/utils/cell_formatters.dart';
@@ -1072,6 +1075,21 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
   // }
 
   // Sort trades based on 8 columns: Trade ID, Fill time, Type, Instrument, Product, Qty., Avg. Price, LTP
+  // The LTP exactly as _TradeLTPCell shows it: socket price, else avgprc.
+  double _shownLtp(TradeBookModel trade) {
+    final socketLtp = ref
+        .read(websocketProvider)
+        .socketDatas[trade.token ?? '']?['lp']
+        ?.toString();
+    final ltp = (socketLtp == null ||
+            socketLtp == 'null' ||
+            socketLtp.isEmpty ||
+            (double.tryParse(socketLtp) ?? 0) == 0)
+        ? (trade.avgprc ?? '0.00')
+        : socketLtp;
+    return double.tryParse(ltp) ?? 0;
+  }
+
   List<TradeBookModel> _getSortedTrades(List<TradeBookModel> trades) {
     if (_sortColumnIndex == null) return trades;
 
@@ -1112,9 +1130,11 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
           comparison = (int.tryParse(a.qty ?? '0') ?? 0)
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
-        case 6: // LTP (using avgprc as fallback since LTP comes from websocket)
-          comparison = (double.tryParse(a.avgprc ?? '0') ?? 0)
-              .compareTo(double.tryParse(b.avgprc ?? '0') ?? 0);
+        case 6: // LTP
+          // Sorted on avgprc, not the LTP the cell shows. Sort on the shown LTP.
+          // comparison = (double.tryParse(a.avgprc ?? '0') ?? 0)
+          //     .compareTo(double.tryParse(b.avgprc ?? '0') ?? 0);
+          comparison = _shownLtp(a).compareTo(_shownLtp(b));
           break;
         case 7: // Avg. Price
           comparison = (double.tryParse(a.avgprc ?? '0') ?? 0)
@@ -1271,6 +1291,9 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
                 onPressed: (ctx) {
                   _closePopover();
                   // TODO: Implement repeat trade functionality
+                  // Was a no-op; now opens the order window like Repeat
+                  // on the Open and Executed tabs.
+                  _repeatTrade(trade);
                 },
               ),
             );
@@ -1384,6 +1407,42 @@ class _TradeBookScreenState extends ConsumerState<TradeBookScreen> {
   //     ),
   //   );
   // }
+
+  // Repeat a trade: same flow as Repeat on the Open / Executed tabs.
+  Future<void> _repeatTrade(TradeBookModel trade) async {
+    try {
+      await ref.read(marketWatchProvider).fetchScripInfo(
+            "${trade.token}",
+            "${trade.exch}",
+            context,
+            true,
+          );
+
+      if (!mounted) return;
+
+      final scripInfo = ref.read(marketWatchProvider).scripInfoModel;
+      if (scripInfo == null) {
+        ResponsiveSnackBar.showError(
+            context, 'Unable to fetch scrip information');
+        return;
+      }
+
+      await ResponsiveNavigation.toPlaceOrderScreen(
+        context: context,
+        arguments: {
+          // "orderArg": tradeRepeatOrderArgs(trade),
+          "orderArg": tradeRepeatOrderArgs(trade,
+              orders: ref.read(orderProvider).allOrder),
+          "scripInfo": scripInfo,
+          "isBskt": "",
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        ResponsiveSnackBar.showError(context, 'Failed to open place order');
+      }
+    }
+  }
 
   // Show trade detail using shadcn sheet
   void _showTradeDetail(TradeBookModel trade) {

@@ -227,7 +227,12 @@ class IndexListProvider extends DefaultChangeNotifier {
             channelInput: _subscr, task: 'u', context: context);
         _subscr = "";
       } else if (kIsWeb) {
-        _subscr = ""; // Just clear the string on web, don't unsubscribe
+        _subscr = "";
+        // The picker's index list is owned; leaving it releases what no other
+        // screen shows (it used to stay subscribed as depth forever).
+        if (exch == "exit") {
+          ref.read(websocketProvider).releaseAllTouchline('index-picker', context);
+        }
       }
       if (exch != "exit") {
         _indValuesList = [];
@@ -261,9 +266,13 @@ class IndexListProvider extends DefaultChangeNotifier {
                   "${_indValuesList[n].exch}|${_indValuesList[n].token}#";
             }
           }
-          if (_subscr.isNotEmpty) {
+          if (kIsWeb) {
+            // Owned touchline (was an untracked "d" that was never released).
+            ref.read(websocketProvider)
+                .setOwnedTouchline('index-picker', _subscr.split('#'), context);
+          } else if (_subscr.isNotEmpty) {
             ref.read(websocketProvider).establishConnection(
-                channelInput: _subscr, task: kIsWeb ? 'd' : 't', context: context);
+                channelInput: _subscr, task: 't', context: context);
           }
         } else {
           if (_indexList!.emsg == "Session Expired :  Invalid Session Key" &&

@@ -160,8 +160,12 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
     }
   }
 
+  // Cached while mounted — ref.read throws in dispose (Riverpod 3).
+  WebSocketProvider? _ws;
+
   @override
   void dispose() {
+    try { _ws?.releaseAllTouchline('alerts'); } catch (_) {}
     _cancelPopoverCloseTimer();
     _hoveredRowToken.removeListener(_onHoverChanged);
     _teardownSocketSubscription();
@@ -247,22 +251,15 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       final manage = ref.read(marketWatchProvider);
       final pendingAlerts = manage.alertPendingModel ?? [];
 
-      if (pendingAlerts.isEmpty) return;
-
-      // Create input string for WebSocket subscription
-      final tokens = pendingAlerts
-          .where((alert) => alert.token != null && alert.token!.isNotEmpty)
-          .map((alert) => "${alert.exch}|${alert.token}")
-          .toSet()
-          .join("#");
-
-      if (tokens.isNotEmpty) {
-        ref.read(websocketProvider).establishConnection(
-              channelInput: tokens,
-              task: "t", // Subscribe with touchline for web (alerts need only LTP)
-              context: context,
-            );
-      }
+      // Owned touchline for the pending alerts' scrips: tracked, restored after
+      // a reconnect, protected from other screens' "u", and replaced as alerts
+      // are added or removed (it was a raw "t" nothing restored).
+      _ws = ref.read(websocketProvider);
+      _ws!.setOwnedTouchline('alerts', [
+        for (final alert in pendingAlerts)
+          if (alert.token != null && alert.token!.isNotEmpty)
+            "${alert.exch}|${alert.token}"
+      ], context);
     } catch (e) {
     }
   }
@@ -350,8 +347,10 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       }
 
       // Update percentage change if available
+      // % change may legitimately be 0.00 (back to flat) — only a zero LTP
+      // is a placeholder.
       final pc = socketData['pc']?.toString();
-      if (isValidNumeric(pc)) {
+      if (pc != null && pc != "null" && double.tryParse(pc) != null) {
         if (alert.perChange != pc) {
           alert.perChange = pc;
           hasUpdates = true;
@@ -433,32 +432,42 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
       int r = 0;
       switch (c) {
         case 0: // Instrument
-          Map<String, String>? aParsed = a is BrokerMessage ? _parseBrokerMessage(a) : null;
-          Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
-          
-          String aInstrument = a is BrokerMessage
-              ? (DerivativeMaster.nameFor(a.exch, a.token) ??
-                  aParsed?['instrument'] ??
-                  'N/A')
-              : (DerivativeMaster.nameFor(a.exch, a.token) ??
-                  a.tsym?.replaceAll("-EQ", "") ??
-                  'N/A');
-          String bInstrument = b is BrokerMessage
-              ? (DerivativeMaster.nameFor(b.exch, b.token) ??
-                  bParsed?['instrument'] ??
-                  'N/A')
-              : (DerivativeMaster.nameFor(b.exch, b.token) ??
-                  b.tsym?.replaceAll("-EQ", "") ??
-                  'N/A');
-          r = cmp<String>(aInstrument, bInstrument);
+          // Sort on the name the cell shows (_buildInstrumentCell) — triggered
+          // rows used the name parsed out of the message text instead.
+          // Map<String, String>? aParsed = a is BrokerMessage ? _parseBrokerMessage(a) : null;
+          // Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
+          //
+          // String aInstrument = a is BrokerMessage
+          //     ? (DerivativeMaster.nameFor(a.exch, a.token) ??
+          //         aParsed?['instrument'] ??
+          //         'N/A')
+          //     : (DerivativeMaster.nameFor(a.exch, a.token) ??
+          //         a.tsym?.replaceAll("-EQ", "") ??
+          //         'N/A');
+          // String bInstrument = b is BrokerMessage
+          //     ? (DerivativeMaster.nameFor(b.exch, b.token) ??
+          //         bParsed?['instrument'] ??
+          //         'N/A')
+          //     : (DerivativeMaster.nameFor(b.exch, b.token) ??
+          //         b.tsym?.replaceAll("-EQ", "") ??
+          //         'N/A');
+          String shownInstrument(dynamic x) =>
+              DerivativeMaster.nameFor(x.exch, x.token) ??
+              (x.tsym?.replaceAll("-EQ", "") ??
+                  (x is BrokerMessage ? '' : 'N/A'));
+          r = cmp<String>(shownInstrument(a).toUpperCase(),
+              shownInstrument(b).toUpperCase());
           break;
         case 1: // Exchange
-          Map<String, String>? aParsed = a is BrokerMessage ? _parseBrokerMessage(a) : null;
-          Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
-          
-          String aExchange = a is BrokerMessage ? (aParsed?['exchange'] ?? 'N/A') : (a.exch ?? '');
-          String bExchange = b is BrokerMessage ? (bParsed?['exchange'] ?? 'N/A') : (b.exch ?? '');
-          r = cmp<String>(aExchange, bExchange);
+          // Sort on the exchange the cell shows (_buildExchangeCell).
+          // Map<String, String>? aParsed = a is BrokerMessage ? _parseBrokerMessage(a) : null;
+          // Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
+          //
+          // String aExchange = a is BrokerMessage ? (aParsed?['exchange'] ?? 'N/A') : (a.exch ?? '');
+          // String bExchange = b is BrokerMessage ? (bParsed?['exchange'] ?? 'N/A') : (b.exch ?? '');
+          String shownExchange(dynamic x) =>
+              x is BrokerMessage ? (x.exch ?? '') : (x.exch ?? 'N/A');
+          r = cmp<String>(shownExchange(a), shownExchange(b));
           break;
         case 2: // Alert Type
           String aType = '';
@@ -507,7 +516,14 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
           r = cmp<String>(aType, bType);
           break;
         case 3: // Target
-          if (a is BrokerMessage || b is BrokerMessage) {
+          // Numeric for every row — a pending/triggered pair used to compare
+          // as text ("1000" before "200").
+          num targetOf(dynamic x) => x is BrokerMessage
+              ? parseNum(_parseBrokerMessage(x)['target'])
+              : parseNum("${x.d ?? 0}");
+          r = targetOf(a).compareTo(targetOf(b));
+          break;
+          /* if (a is BrokerMessage || b is BrokerMessage) {
             Map<String, String>? aParsed = a is BrokerMessage ? _parseBrokerMessage(a) : null;
             Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
             
@@ -527,9 +543,14 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
             num bTarget = parseNum("${b.d ?? 0}");
             r = aTarget.compareTo(bTarget);
           }
-          break;
+          break; */
         case 4: // LTP
-          if (a is BrokerMessage || b is BrokerMessage) {
+          num ltpOf(dynamic x) => x is BrokerMessage
+              ? parseNum(_parseBrokerMessage(x)['ltp'])
+              : parseNum("${x.ltp ?? x.close ?? 0}");
+          r = ltpOf(a).compareTo(ltpOf(b));
+          break;
+          /* if (a is BrokerMessage || b is BrokerMessage) {
             Map<String, String>? aParsed = a is BrokerMessage ? _parseBrokerMessage(a) : null;
             Map<String, String>? bParsed = b is BrokerMessage ? _parseBrokerMessage(b) : null;
             
@@ -543,7 +564,7 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
             num bLtp = parseNum("${b.ltp ?? b.close ?? 0.00}");
             r = aLtp.compareTo(bLtp);
           }
-          break;
+          break; */
         case 5: // Status
           String aStatus = a is BrokerMessage ? 'TRIGGERED' : 'PENDING';
           String bStatus = b is BrokerMessage ? 'TRIGGERED' : 'PENDING';
@@ -1898,11 +1919,21 @@ class _PendingAlertWebState extends ConsumerState<PendingAlertWeb> {
 
     try {
       final String alertId = "${alert.alId}";
-      await ref.read(marketWatchProvider).fetchCancelAlert(alertId, context);
-      await ref.read(marketWatchProvider).fetchPendingAlert(context);
+      final manage = ref.read(marketWatchProvider);
+      // Success only when the broker confirms; otherwise show its reason.
+      // await ref.read(marketWatchProvider).fetchCancelAlert(alertId, context);
+      final cancelled = await manage.fetchCancelAlert(alertId, context);
+      await manage.fetchPendingAlert(context);
 
       if (mounted) {
-        ResponsiveSnackBar.showSuccess(context, 'Alert Cancelled');
+        // ResponsiveSnackBar.showSuccess(context, 'Alert Cancelled');
+        final emsg = manage.cancelalert?.emsg ?? '';
+        if (cancelled) {
+          ResponsiveSnackBar.showSuccess(context, 'Alert Cancelled');
+        } else if (!emsg.contains('Session Expired')) {
+          ResponsiveSnackBar.showError(
+              context, emsg.isNotEmpty ? emsg : 'Failed to cancel alert');
+        }
       }
     } catch (e) {
       if (mounted) {

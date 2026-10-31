@@ -135,7 +135,7 @@ class _ChartEngineShellScreenState
   // see the scrip. Without this, re-selecting a futures/commodity with a
   // lot-less scrip left qty=1 and the order was rejected.
   final Map<String, ({int? ls, double? ti, int? frz})> _scripMetaCache = {};
-  final Map<int, int> _pushedTimeframe = {};
+  final Map<int, num> _pushedTimeframe = {};
   final Map<int, String> _pushedOverlaysJson = {};
   final Map<int, String> _pushedPaneOverlaysJson = {};
   final Map<int, int> _pushedQty = {};
@@ -177,6 +177,19 @@ class _ChartEngineShellScreenState
   // ticks even though our local set still thinks it's subscribed.
   bool _lastWsConnected = false;
   VoidCallback? _wsListener;
+  // Cached while mounted: dispose() must not ref.read (Riverpod 3 throws and
+  // wedges the app), but it has to release this chart's depth claims.
+  WebSocketProvider? _wsCache;
+  // This chart's id in WebSocketProvider's depth-owner registry.
+  String get _depthOwner => 'chart:$_iframeId';
+  String _oiOwner(int pane) => 'chart-oi:$_iframeId:$pane';
+
+  /// Forget a pane's OI strikes and release their touchline (only what no
+  /// other screen shows is unsubscribed).
+  void _dropOiSubs(int pane) {
+    if (_oiSubs.remove(pane) == null) return;
+    try { _wsCache?.releaseAllTouchline(_oiOwner(pane), mounted ? context : null); } catch (_) {}
+  }
   // Stream subscription on `socketDataStream` covers index ticks
   // that the ChangeNotifier `addListener` path doesn't reliably wake on
   // (NIFTY 50 / SENSEX spot updates were stale because their `hasUpdates`
@@ -268,6 +281,7 @@ class _ChartEngineShellScreenState
       // single forward pass. Critical when many panes are open — without
       // coalescing the shell was iterating every subscribed key 5-10×
       // per second, posting 30+ messages/sec to the iframe per pane.
+      _wsCache = ws;
       _wsListener = _wsForwardCoalesced;
       ws.addListener(_wsListener!);
       _wsStreamSub =
@@ -302,8 +316,19 @@ class _ChartEngineShellScreenState
       html.window.removeEventListener('message', _windowMessageRef);
       _windowMessageRef = null;
     }
+    // Release every depth feed this chart claimed. Before the owner registry
+    // the chart never released depth at all, so each scrip it had shown kept
+    // streaming until the socket dropped.
+    if (_wsCache != null && _subscribedKeys.isNotEmpty) {
+      try { _wsCache!.releaseDepth(_depthOwner, _subscribedKeys.toList()); } catch (_) {}
+      // Touchline too — only scrips nothing else shows are unsubscribed.
+      try { _wsCache!.releaseTouchline(_depthOwner, _subscribedKeys.toList()); } catch (_) {}
+    }
+    for (final pane in _oiSubs.keys.toList()) {
+      try { _wsCache?.releaseAllTouchline(_oiOwner(pane)); } catch (_) {}
+    }
     if (_wsListener != null) {
-      try { ref.read(websocketProvider).removeListener(_wsListener!); } catch (_) {}
+      try { _wsCache?.removeListener(_wsListener!); } catch (_) {}
     }
     _wsStreamSub?.cancel();
     _wsStreamSub = null;
@@ -937,7 +962,7 @@ class _ChartEngineShellScreenState
         if (v is Map && v['minutes'] is num) {
           final session = ref.read(chartEngineSessionProvider);
           ref.read(chartEngineSessionProvider.notifier).setPaneTimeframe(
-              session.activePaneIndex, (v['minutes'] as num).toInt());
+              session.activePaneIndex, v['minutes'] as num);
         }
         break;
       }
@@ -1405,6 +1430,29 @@ class _ChartEngineShellScreenState
     }
     try {
       final candles = <Map<String, dynamic>>[];
+      // Kick the in-progress-candle fetch off NOW, in parallel with the
+      // history call below, and await it only after history has been parsed.
+      // Doing it sequentially would add its latency to the history response,
+      // and the engine's onHistoryResult replaces the whole candle array
+      // without checking the request id — so a slower response makes it more
+      // likely that a stale result for the PREVIOUS symbol lands after a fast
+      // symbol switch and overwrites the new one. Parallel keeps the response
+      // time (and that race window) as it is today.
+      //
+      // Only intraday: int.tryParse('1D') is null, so daily/weekly/monthly
+      // skip it. Only when the requested window reaches the current candle —
+      // scroll-back requests ask for older windows that never contain it.
+      final stepSec = (int.tryParse(interval) ?? 0) * 60;
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final candleStart = stepSec > 0 ? (nowSec ~/ stepSec) * stepSec : 0;
+      final liveFuture = (stepSec > 0 && end >= nowSec - stepSec)
+          ? locator<ApiExporter>().getLiveCandle(
+              exchange: exch,
+              token: token,
+              interval: interval,
+              candleStartEpoch: candleStart,
+            )
+          : null;
       // Daily (and anything aggregated from daily — weekly / monthly) uses
       // the EODChartData endpoint; it returns much longer history reliably
       // than tpseries' intraday-tuned 1D path. Intraday (1m / 5m) stays on
@@ -1428,13 +1476,24 @@ class _ChartEngineShellScreenState
           });
         }
       } else {
-        final resp = await locator<ApiExporter>().getTPSeriesChart(
-          exchange: exch,
-          token: token,
-          interval: interval,
-          startEpoch: start,
-          endEpoch: end,
-        );
+        // Second timeframes ('1s', '5s', …) — only the seconds endpoint has
+        // them. The engine asks for one session from its open; live ticks
+        // carry the chart on from there.
+        final resp = interval.endsWith('s')
+            ? await locator<ApiExporter>().getSecondsSeries(
+                exchange: exch,
+                token: token,
+                interval: interval,
+                startEpoch: start,
+                endEpoch: end,
+              )
+            : await locator<ApiExporter>().getTPSeriesChart(
+                exchange: exch,
+                token: token,
+                interval: interval,
+                startEpoch: start,
+                endEpoch: end,
+              );
         final raw = resp.data ?? const [];
         for (final d in raw) {
           final ts = int.tryParse(d.ssboe ?? '');
@@ -1447,6 +1506,32 @@ class _ChartEngineShellScreenState
             continue;
           }
           candles.add({'ts': ts, 'o': o, 'h': h, 'l': l, 'c': c, 'v': v});
+        }
+      }
+      // Merge the in-progress candle (started in parallel above). tpseries
+      // returns only CLOSED candles, so a chart opened at 10:10:10 arrives
+      // missing the 10 seconds already elapsed in the 10:10 candle — a visible
+      // gap until the next tick, and that tick can only set the close (the
+      // elapsed open/high/low are gone).
+      if (liveFuture != null) {
+        final live = await liveFuture;
+        final ts = int.tryParse(live?.ssboe ?? '');
+        final o = double.tryParse(live?.into ?? '');
+        final h = double.tryParse(live?.inth ?? '');
+        final l = double.tryParse(live?.intl ?? '');
+        final c = double.tryParse(live?.intc ?? '');
+        if (ts != null && o != null && h != null && l != null && c != null) {
+          // Replace rather than append — the closed-candle call may already
+          // have returned this slot, and the live copy is the fresher one.
+          candles.removeWhere((e) => e['ts'] == ts);
+          candles.add({
+            'ts': ts,
+            'o': o,
+            'h': h,
+            'l': l,
+            'c': c,
+            'v': double.tryParse(live?.intv ?? '') ?? 0,
+          });
         }
       }
       // Normalize to oldest-first regardless of source.
@@ -1469,10 +1554,11 @@ class _ChartEngineShellScreenState
     // re-sends its own tracked SubSet on every reconnect ack.
     if (widget.popout) return;
     final ws = ref.read(websocketProvider);
-    for (final key in _subscribedKeys) {
-      ws.establishConnection(channelInput: key, task: 't', context: context);
-      ws.establishConnection(channelInput: key, task: 'd', context: context);
-    }
+    // Touchline and depth both come back via WebSocketProvider's owner
+    // registry on connect. Re-claim anyway in case a legacy path released
+    // them meanwhile — a no-op when the feed is already live.
+    ws.acquireTouchline(_depthOwner, _subscribedKeys.toList(), context);
+    ws.acquireDepth(_depthOwner, _subscribedKeys.toList(), context);
   }
 
   void _handleSubscribe(dynamic value) {
@@ -1491,22 +1577,16 @@ class _ChartEngineShellScreenState
     if (_subscribedKeys.contains(key)) return;
     _subscribedKeys.add(key);
     final ws = ref.read(websocketProvider);
-    // Touchline ('t') gives lp/v/ft which the candle aggregator needs.
-    ws.establishConnection(
-      channelInput: key,
-      task: 't',
-      context: context,
-    );
+    // Touchline ('t') gives lp/v/ft which the candle aggregator needs. Owned,
+    // so another screen's "u" cannot cut this chart's feed (and the chart can
+    // release it when the symbol changes).
+    ws.acquireTouchline(_depthOwner, [key], context);
     // Depth ('d') reliably populates bp1/sp1/bq1/sq1 in socketDatas[token].
     // Touchline alone doesn't always carry bid/ask on every broker/exchange,
     // and the bid/ask header strip needs them. Both subs share the same
     // socketDatas entry — fields merge — so the iframe sees both LTP and
     // bid/ask through the existing forwarder.
-    ws.establishConnection(
-      channelInput: key,
-      task: 'd',
-      context: context,
-    );
+    ws.acquireDepth(_depthOwner, [key], context);
     // Phase 18.2 — prime the iframe with whatever the WS already has for
     // this token. The WS listener only fires on FUTURE updates, so a token
     // that the app already had cached (e.g. NIFTY 50 because the watchlist
@@ -1551,13 +1631,20 @@ class _ChartEngineShellScreenState
     final key = '$exch|$token';
     if (!_subscribedKeys.contains(key)) return;
     // Remove from our forwarding set — the WS listener will stop posting ticks
-    // for this token to the iframe. We deliberately do NOT issue 'u' on the
-    // underlying WS: the same token may still be needed by other parts of
-    // the app (watchlists, holdings, ticker bar) which share the single
-    // app-wide subscription. The downside is a tiny per-symbol bandwidth
-    // overhead for symbols the chart no longer needs; the WS-level cleanup
-    // belongs in WebSubscriptionManager, not us.
+    // for this token to the iframe. The chart used to keep the touchline
+    // forever (a raw 'u' could cut the watchlist/holdings/ticker using the same
+    // scrip); the owner registry below only unsubscribes what nothing else shows.
     _subscribedKeys.remove(key);
+    // Depth is different: the registry counts owners, so releasing here drops
+    // the feed only if the depth panel / another chart is not also using it.
+    // Uses the cached provider: the engine posts these unsubscribes while its
+    // iframe unloads, i.e. while this widget is disposing, and ref.read then
+    // throws (Riverpod 3) — the release was swallowed and the key, already
+    // removed above, was never released by dispose either.
+    try {
+      _wsCache?.releaseDepth(_depthOwner, [key], mounted ? context : null);
+      _wsCache?.releaseTouchline(_depthOwner, [key], mounted ? context : null);
+    } catch (_) {}
   }
 
   void _pushAll({bool force = false}) {
@@ -2920,7 +3007,7 @@ class _ChartEngineShellScreenState
         if (expiryCache.nearestByPane.containsKey(i)) {
           expiryNotifier.clearForPane(i);
         }
-        _oiSubs.remove(i);
+        _dropOiSubs(i);
         continue;
       }
       final scrip = pane.scrip;
@@ -2929,7 +3016,7 @@ class _ChartEngineShellScreenState
         if (expiryCache.nearestByPane.containsKey(i)) {
           expiryNotifier.clearForPane(i);
         }
-        _oiSubs.remove(i);
+        _dropOiSubs(i);
         continue;
       }
       // No index-only gate anymore — `getLinkedScrip` decides. If the
@@ -2953,7 +3040,7 @@ class _ChartEngineShellScreenState
         expiryNotifier.clearForPane(i);    // force Step 1 to re-resolve expiry
         _linkedScripCheckedAt.remove(scripKey); // allow an immediate re-link
         _noOptionChainAt.remove(scripKey); // re-check; don't inherit stale "no chain"
-        _oiSubs.remove(i);                 // drop old option-token WS subs
+        _dropOiSubs(i);                    // drop old option-token WS subs
         if (_kOiDebug) debugPrint('[OI] pane=$i $scripKey symbol-change reset');
         continue; // next cycle (ms away) proceeds with clean state
       }
@@ -3066,6 +3153,7 @@ class _ChartEngineShellScreenState
         // Build initial snapshot and subscribe each option token via WS.
         final ws = ref.read(websocketProvider);
         final tokenMap = <String, _OiTokenInfo>{};
+        final oiKeys = <String>[];
         final byStrike = <double, ChartOiStrike>{};
         for (final v in res.optValue!) {
           final strike = double.tryParse(v.strprc ?? '');
@@ -3090,14 +3178,14 @@ class _ChartEngineShellScreenState
           // Subscribe token for WS-based live OI updates.
           if (t != null && ex != null) {
             tokenMap[t] = _OiTokenInfo(strike: strike, isCe: isCe, poi: poi);
-            ws.establishConnection(
-              channelInput: '$ex|$t',
-              task: 't',
-              context: context,
-            );
+            oiKeys.add('$ex|$t');
           }
         }
         _oiSubs[i] = tokenMap;
+        // Owned per pane: restored after a reconnect (they used to come back
+        // only on the next chain refetch, up to 10 minutes later) and
+        // released when the pane's chain is dropped or the chart closes.
+        ws.setOwnedTouchline(_oiOwner(i), oiKeys, context);
         // Push the initial snapshot immediately; WS ticks will refine it.
         final parsed = byStrike.values.toList()
           ..sort((a, b) => a.strike.compareTo(b.strike));
@@ -3562,12 +3650,14 @@ class _IndicatorSettingsDialogState
           widget.indicatorId,
           // CPR and Trend Checker have no length input — keep the period.
           period: (cfg.kind.toLowerCase() == 'cpr' ||
-                  cfg.kind.toLowerCase() == 'tcheck')
+                  cfg.kind.toLowerCase() == 'tcheck' ||
+                  cfg.kind.toLowerCase() == 'ftcheck')
               ? cfg.period
               : nextPeriod.clamp(1, 999),
           color: _color,
           thickness: _thickness,
-          params: cfg.kind.toLowerCase() == 'tcheck'
+          params: (cfg.kind.toLowerCase() == 'tcheck' ||
+                  cfg.kind.toLowerCase() == 'ftcheck')
               ? _changedParams(cfg.kind)
               : Map<String, num>.from(_values),
         );
@@ -3644,12 +3734,18 @@ class _IndicatorSettingsDialogState
     final params = schema?.params ?? const <IndicatorParam>[];
     final isCpr = cfg.kind.toLowerCase() == 'cpr';
     final isTc = cfg.kind.toLowerCase() == 'tcheck';
+    final isFt = cfg.kind.toLowerCase() == 'ftcheck';
     final useGenericPeriod = schema == null &&
         _kKindsWithPeriod.contains(cfg.kind.toLowerCase());
-    final kindLabel =
-        isTc ? 'Trend Checker by GP' : cfg.kind.toUpperCase();
+    final kindLabel = isTc
+        ? 'Trend Checker by GP'
+        : isFt
+            ? 'Future Trend Checker by GP'
+            : cfg.kind.toUpperCase();
     final humanLabel = isTc
         ? 'CPR levels and moving averages'
+        : isFt
+            ? 'Next day, week and month CPR'
         : (schema?.displayName ?? _humanKind(cfg.kind.toLowerCase()));
     // Header value chip: single-param kinds (or legacy ones with a single
     // period) show the value next to the kind label; multi-param kinds drop
@@ -3664,7 +3760,8 @@ class _IndicatorSettingsDialogState
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: isTc ? 640 : isCpr ? 580 : 460),
+        constraints: BoxConstraints(
+            maxWidth: isTc || isFt ? 640 : isCpr ? 580 : 460),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: surface,
@@ -3758,6 +3855,15 @@ class _IndicatorSettingsDialogState
                     onChanged: (k, v) => setState(() => _values[k] = v),
                   ),
                 )
+              else if (isFt)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(context).height * 0.62),
+                  child: _FtSettings(
+                    values: _values,
+                    onChanged: (k, v) => setState(() => _values[k] = v),
+                  ),
+                )
               else if (schema != null)
                 for (final p in params) ...[
                   _SettingsRow(
@@ -3782,7 +3888,7 @@ class _IndicatorSettingsDialogState
                 ),
               ],
 
-              if (!isCpr && !isTc) ...[
+              if (!isCpr && !isTc && !isFt) ...[
               _SettingsRow(
                 label: 'Color',
                 description: 'Line color for this indicator',
@@ -4148,6 +4254,10 @@ class _TcSettingsState extends State<_TcSettings> {
         group('Daily CPR', 'dOn', 'pdOn', 'PDH / PDL'),
         group('Weekly CPR', 'wOn', 'pwOn', 'PWH / PWL'),
         group('Monthly CPR', 'mOn', 'pmOn', 'PMH / PML'),
+        ..._tcExtraInputs(
+            _GpRows(context, 'tcheck', widget.values, widget.onChanged, _open,
+                (k) => setState(() => _open = k)),
+            accent),
         _section('MOVING AVERAGES'),
         for (var i = 1; i <= 5; i++) _maInputRow(i, accent),
         const SizedBox(height: 14),
@@ -4502,10 +4612,14 @@ class _ParamStepperState extends State<_ParamStepper> {
     return (v * stepInv).round() / stepInv;
   }
 
+  // As many decimals as the step has (0.005 -> 3), trailing zeros dropped.
   String _format(num v) {
     if (widget.param.isInt) return v.toInt().toString();
-    final fixed = v.toStringAsFixed(1);
-    return fixed.endsWith('.0') ? fixed.substring(0, fixed.length - 2) : fixed;
+    final step = widget.param.step.toString();
+    final dp = step.contains('.') ? step.split('.').last.length : 1;
+    final fixed = v.toStringAsFixed(dp < 1 ? 1 : dp)
+        .replaceFirst(RegExp(r'0+$'), '');
+    return fixed.endsWith('.') ? fixed.substring(0, fixed.length - 1) : fixed;
   }
 
   void _commit(String raw) {
@@ -4980,6 +5094,213 @@ class _GradientPrimaryButtonState extends State<_GradientPrimaryButton> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── Trend Checker extras + Future Trend Checker settings ───────────────────
+// Rows for the schema params of the two Trend Checker studies: a label with
+// a dropdown / stepper / colour button from the param's own definition.
+class _GpRows {
+  final BuildContext context;
+  final String kind;
+  final Map<String, num> values;
+  final void Function(String key, num value) onChanged;
+  final String? openColor;
+  final void Function(String? key) onOpenColor;
+  _GpRows(this.context, this.kind, this.values, this.onChanged,
+      this.openColor, this.onOpenColor);
+
+  IndicatorParam param(String key) =>
+      schemaFor(kind)!.params.firstWhere((p) => p.key == key);
+  num v(String key) => values[key] ?? param(key).defaultValue;
+
+  Widget section(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
+        child: Text(text,
+            style: MyntWebTextStyles.caption(context,
+                darkColor: MyntColors.textSecondaryDark,
+                lightColor: MyntColors.textSecondary)),
+      );
+
+  Widget check(String key, String label, Color accent) {
+    final on = v(key) >= 1;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 20, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: InkWell(
+          onTap: () => onChanged(key, on ? 0 : 1),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Checkbox(
+                value: on,
+                activeColor: accent,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: (x) => onChanged(key, (x ?? false) ? 1 : 0),
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(label,
+                    overflow: TextOverflow.ellipsis,
+                    style: MyntWebTextStyles.body(context)),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Two switches on one line (a level group and its high / low).
+  Widget checkPair(String a, String aLabel, String b, String bLabel,
+          Color accent) =>
+      Row(children: [
+        SizedBox(width: 230, child: check(a, aLabel, accent)),
+        Expanded(child: check(b, bLabel, accent)),
+      ]);
+
+  Widget row(String key, {String? label}) {
+    final p = param(key);
+    final Widget control = p.isEnum
+        ? _ParamDropdown(
+            param: p, value: v(key), onChanged: (x) => onChanged(key, x))
+        : _ParamStepper(
+            param: p, value: v(key), onChanged: (x) => onChanged(key, x));
+    return _SettingsRow(
+        label: label ?? p.label, description: '', control: control);
+  }
+
+  Widget colorRow(String key, String label) {
+    final hex =
+        '#${(v(key).toInt() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+    final open = openColor == key;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SettingsRow(
+          label: label,
+          description: '',
+          control: _ColorButton(
+              color: hex, open: open, onTap: () => onOpenColor(open ? null : key)),
+        ),
+        if (open)
+          _ColorPaletteRow(
+            selected: hex,
+            palette: _kCprPalette,
+            onPick: (h) => onChanged(
+                key, int.parse(h.replaceFirst('#', ''), radix: 16) & 0xFFFFFF),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> atr(Color accent, String includeLabel) => [
+        section('ATR PHASE'),
+        row('atrLen'),
+        row('atrAvg'),
+        check('atrInc', includeLabel, accent),
+        row('atrLo'),
+        row('atrHi'),
+      ];
+
+  List<Widget> widths(String heading) => [
+        section(heading),
+        for (final g in const [('d', 'Daily'), ('w', 'Weekly'), ('m', 'Monthly')]) ...[
+          row('${g.$1}Un', label: '${g.$2} · Ultra Narrow ≤ %'),
+          row('${g.$1}N', label: '${g.$2} · Narrow ≤ %'),
+          row('${g.$1}M', label: '${g.$2} · Medium ≤ %'),
+        ],
+      ];
+}
+
+/// The Trend Checker's 27 Oct inputs, shown under its CPR settings.
+List<Widget> _tcExtraInputs(_GpRows r, Color accent) => [
+      r.section('CPR SUMMARY (RIGHT EDGE)'),
+      r.check('sumOn', 'Show CPR summary under the pivot label', accent),
+      r.section('BACKTEST TAGS'),
+      r.check('tagOn', 'Show CPR tag at start of each period (backtest mode)',
+          accent),
+      r.check('tagW', 'Add CPR width to tag', accent),
+      r.check('tagA', 'Add ATR phase to tag', accent),
+      r.row('tagPos'),
+      r.row('tagStyle'),
+      r.section('VIRGIN CPR'),
+      r.check('virginOn', 'Show Virgin CPR zone (extends one period)', accent),
+      ...r.atr(accent, 'Include yesterday in the 14-day average'),
+      r.section('MARKET PULSE PANEL'),
+      r.check('pulseOn', 'Show Market Pulse panel', accent),
+      r.row('pulsePos'),
+      r.row('pulseSize'),
+      r.colorRow('pulseBg', 'Panel background'),
+      r.colorRow('pulseTx', 'Text'),
+      r.check('pulseType', 'CPR Type', accent),
+      r.check('pulseWidth', 'Width', accent),
+      r.check('pulseAtr', 'ATR Phase', accent),
+      r.check('pulseRead', 'Read', accent),
+      ...r.widths('CPR WIDTH (% OF PIVOT)'),
+    ];
+
+class _FtSettings extends StatefulWidget {
+  final Map<String, num> values;
+  final void Function(String key, num value) onChanged;
+  const _FtSettings({required this.values, required this.onChanged});
+
+  @override
+  State<_FtSettings> createState() => _FtSettingsState();
+}
+
+class _FtSettingsState extends State<_FtSettings> {
+  String? _open;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = resolveThemeColor(context,
+        dark: MyntColors.secondary, light: MyntColors.primary);
+    final r = _GpRows(context, 'ftcheck', widget.values, widget.onChanged,
+        _open, (k) => setState(() => _open = k));
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          r.section('CPR LEVELS'),
+          r.row('mode'),
+          r.check('autoHl', 'Auto: show previous high / low', accent),
+          r.checkPair('dOn', 'Manual: Day CPR', 'pdOn', 'PDH / PDL', accent),
+          r.checkPair('wOn', 'Manual: Week CPR', 'pwOn', 'PWH / PWL', accent),
+          r.checkPair('mOn', 'Manual: Month CPR', 'pmOn', 'PMH / PML', accent),
+          r.row('todayW'),
+          r.row('nextW'),
+          r.section('NEXT CPR PLACEMENT'),
+          r.check('nextOn', 'Draw next CPR on its next trading date', accent),
+          r.check('namesOn', 'Show level names and prices', accent),
+          r.section('TREND TABLE'),
+          r.check('tableOn', 'Show Trend Table', accent),
+          r.row('tablePos'),
+          r.row('tableSize'),
+          r.check('pctOn', 'Show % values in table', accent),
+          ...r.atr(accent, 'Include the latest period in the average'),
+          for (final g in const [('d', 'DAILY'), ('w', 'WEEKLY'), ('m', 'MONTHLY')]) ...[
+            r.section('${g.$2} LEVELS (%)'),
+            r.row('${g.$1}Un', label: 'Width: Ultra Narrow ≤'),
+            r.row('${g.$1}N', label: 'Narrow ≤'),
+            r.row('${g.$1}M', label: 'Width: Medium ≤'),
+            r.row('${g.$1}Zn', label: 'CPR → Zone: Narrow ≤'),
+            r.row('${g.$1}Zm', label: 'Normal ≤'),
+            r.row('${g.$1}Gn', label: g.$1 == 'd'
+                ? 'R1↔PDH / S1↔PDL: Narrow ≤'
+                : g.$1 == 'w'
+                    ? 'R1↔PWH / S1↔PWL: Narrow ≤'
+                    : 'R1↔PMH / S1↔PML: Narrow ≤'),
+            r.row('${g.$1}Gm', label: 'Normal ≤'),
+          ],
+          const SizedBox(height: 14),
+        ],
       ),
     );
   }

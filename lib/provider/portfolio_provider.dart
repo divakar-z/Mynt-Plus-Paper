@@ -824,7 +824,10 @@ changeHoldingsTabIndex(int index) {
                 sorting: _currentHoldingSortOption, context: context);
           }
 
-          if (initail == "Refresh") {
+          // Web: every successful fetch (re)claims the holdings — Equity P&L in
+          // the global strip needs them whichever screen is open, and the owner
+          // registry makes this a no-op when they are already live.
+          if (initail == "Refresh" || kIsWeb) {
             await requestWSHoldings(isSubscribe: true, context: context);
             // timerfunc();
           }
@@ -947,7 +950,7 @@ changeHoldingsTabIndex(int index) {
 
         _totMtfInvest = invest.toStringAsFixed(2);
 
-        if (initail == "Refresh") {
+        if (initail == "Refresh" || kIsWeb) {
           await requestWSMtfHoldings(isSubscribe: true, context: context);
         }
       } else if (_mtfHoldingsModel!.isNotEmpty &&
@@ -988,10 +991,16 @@ changeHoldingsTabIndex(int index) {
               "${_mtfHoldingsModel![i].exchTsym![0].exch}|${_mtfHoldingsModel![i].exchTsym![0].token}#";
         }
       }
-      if (input.isNotEmpty) {
+      if (kIsWeb) {
+        // Owned touchline: tracked, protected from other screens' "u",
+        // restored on every new socket, and replaced as the list changes.
+        // Was a raw "d": never restored after a reconnect, so the MTF tab froze.
+        ref.read(websocketProvider).setOwnedTouchline(
+            'mtf-holdings', input.split('#'), context);
+      } else if (input.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            task: isSubscribe ? "t" : "u",
             context: context);
       }
     } catch (e) {}
@@ -1044,11 +1053,14 @@ changeHoldingsTabIndex(int index) {
       holding.exchTsym![0].lp = newLp;
       hasUpdates = true;
     }
-    if (_isValidValue(newPc)) {
+    // Change / % change may legitimately be zero (back to flat) — only a
+    // zero LTP is a placeholder. Rejecting "0.00" here left a holding showing
+    // its last non-zero change after it returned to the previous close.
+    if (_isPresent(newPc)) {
       holding.exchTsym![0].perChange = newPc;
       hasUpdates = true;
     }
-    if (_isValidValue(newChng)) {
+    if (_isPresent(newChng)) {
       holding.exchTsym![0].change = newChng;
       hasUpdates = true;
     }
@@ -1625,11 +1637,16 @@ changeHoldingsTabIndex(int index) {
           }
         }
       }
-      if (input.isNotEmpty) {
-        // ConstantName.lastSubscribe = input;
+      if (kIsWeb) {
+        // Owned touchline: tracked, protected from other screens' "u",
+        // restored on every new socket, and replaced as the list changes.
+        // Feeds Position P&L in the global strip, PiP, Scalper and Option Flash.
+        ref.read(websocketProvider).setOwnedTouchline(
+            'positions', input.split('#'), context);
+      } else if (input.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            task: isSubscribe ? "t" : "u",
             context: context);
       }
     } catch (e) {}
@@ -1656,11 +1673,17 @@ changeHoldingsTabIndex(int index) {
           }
         }
       }
-      if (input.isNotEmpty) {
-        // ConstantName.lastSubscribe = input;
+      if (kIsWeb) {
+        // Owned touchline: tracked, protected from other screens' "u",
+        // restored on every new socket, and replaced as the list changes.
+        // Feeds Equity P&L in the global strip on every screen; was a raw "d"
+          // that no reconnect path restored.
+        ref.read(websocketProvider).setOwnedTouchline(
+            'holdings', input.split('#'), context);
+      } else if (input.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
             channelInput: input,
-            task: isSubscribe ? (kIsWeb ? "d" : "t") : "u",
+            task: isSubscribe ? "t" : "u",
             context: context);
       }
     } catch (e) {}
@@ -1669,9 +1692,13 @@ changeHoldingsTabIndex(int index) {
   requestallHoldings(
       {required bool isSubscribe, required BuildContext context}) {
     try {
-      if (_subscr.isNotEmpty) {
+      if (kIsWeb) {
+        // Owned touchline (was an untracked "d" nothing restored).
+        ref.read(websocketProvider).setOwnedTouchline(
+            'all-holdings', _subscr.split('#'), context);
+      } else if (_subscr.isNotEmpty) {
         ref.read(websocketProvider).establishConnection(
-            channelInput: _subscr, task: kIsWeb ? 'd' : 't', context: context);
+            channelInput: _subscr, task: 't', context: context);
       }
     } catch (e) {}
   }
@@ -2441,12 +2468,15 @@ changeHoldingsTabIndex(int index) {
       hasUpdates = true;
     }
 
-    if (_isValidValue(newPc)) {
+    // Change / % change may legitimately be zero (back to flat) — only a
+    // zero LTP is a placeholder. Rejecting "0.00" here left a holding showing
+    // its last non-zero change after it returned to the previous close.
+    if (_isPresent(newPc)) {
       holding.exchTsym![0].perChange = newPc;
       hasUpdates = true;
     }
 
-    if (_isValidValue(newChng)) {
+    if (_isPresent(newChng)) {
       holding.exchTsym![0].change = newChng;
       hasUpdates = true;
     }
@@ -2463,6 +2493,8 @@ changeHoldingsTabIndex(int index) {
   }
 
   // Helper method to check if a value is valid
+  bool _isPresent(String? value) => value != null && value != "null" && value.isNotEmpty;
+
   bool _isValidValue(String? value) {
     return value != null &&
         value != "null" &&
@@ -2584,50 +2616,37 @@ changeHoldingsTabIndex(int index) {
     // Early return if no token or data
     if (token.isEmpty || socketData.isEmpty || _postionBookModel == null) return;
 
-    // Find the position by token
-    var positionIndex = -1;
-    for (int i = 0; i < _postionBookModel!.length; i++) {
-      if (_postionBookModel![i].token == token) {
-        positionIndex = i;
-        break;
-      }
-    }
-
-    if (positionIndex == -1) return; // Not found, nothing to update
-
-    var position = _postionBookModel![positionIndex];
-    bool hasUpdates = false;
-
-    // Get new values from socket data
+    // Only update if a valid lp value is received
     final newLp = socketData['lp']?.toString();
-
-    // Only update if valid lp value is received
-    if (newLp != null && newLp != "null" && newLp != "0" && newLp != "0.0" && newLp != "0.00") {
-      final oldLp = position.lp;
-      if (oldLp != newLp) {
-        position.lp = newLp;
-        hasUpdates = true;
-      }
+    if (newLp == null || newLp == "null" || newLp == "0" || newLp == "0.0" || newLp == "0.00") {
+      return;
     }
+
+    // EVERY row for this token: the same scrip can appear more than once
+    // (e.g. MIS and NRML, or day and carry-forward). This used to stop at the
+    // first match, so while neither the dashboard nor the positions screen
+    // was mounted (they recompute everything themselves), the other rows kept
+    // a stale lp — and the global Position P&L, PiP, Scalper and Option Flash
+    // P&L drifted.
+    var hasUpdates = false;
+    final symbols = <String>{};
+    void apply(PositionBookModel position) {
+      if (position.token != token || position.lp == newLp) return;
+      position.lp = newLp;
+      _updatePositionDerivedValues(position);
+      hasUpdates = true;
+      if (position.symbol != null) symbols.add(position.symbol!);
+    }
+    _postionBookModel!.forEach(apply);
+    // _allPostionList may hold separate copies of the same rows.
+    _allPostionList.forEach(apply);
 
     // Only recalculate if we've actually updated any values
     if (hasUpdates) {
-      _updatePositionDerivedValues(position);
-
-      // Also update in _allPostionList if it exists
-      for (int i = 0; i < _allPostionList.length; i++) {
-        if (_allPostionList[i].token == token) {
-          _allPostionList[i].lp = position.lp;
-          _allPostionList[i].mTm = position.mTm;
-          _allPostionList[i].profitNloss = position.profitNloss;
-          break;
-        }
-      }
-
       // Always update group P&L for ticker header (regardless of selection mode)
       // The ticker displays grouped positions and needs real-time P&L updates
-      if (position.symbol != null) {
-        _updateGroupPnlForSymbol(position.symbol!);
+      for (final symbol in symbols) {
+        _updateGroupPnlForSymbol(symbol);
       }
 
       // Recalculate totals
@@ -2636,7 +2655,7 @@ changeHoldingsTabIndex(int index) {
       // Update chart provider if chart dialog is open
       try {
         final chartProv = ref.read(groupPnlChartProvider);
-        if (chartProv.isOpen && newLp != null) {
+        if (chartProv.isOpen) {
           chartProv.onTickUpdate(
             token: token,
             ltp: newLp,

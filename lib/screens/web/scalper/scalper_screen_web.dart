@@ -142,11 +142,11 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
         .map((idx) => "${idx.exch}|${idx.token}")
         .join('#');
 
-    websocket.establishConnection(
-      channelInput: allIndicesTokens,
-      task: "t",
-      context: context,
-    );
+    // Owned ('scalper-tabs', released in deactivate): restored after a
+    // reconnect and protected while Scalper is open. Separate from the
+    // 'scalper' owner, which is released on every index / expiry change.
+    websocket.acquireTouchline(
+        'scalper-tabs', allIndicesTokens.split('#'), context);
 
     // Load expiry data (this also fetches initial LTP via API)
     await scalper.loadIndexData(context);
@@ -251,6 +251,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
   @override
   void deactivate() {
     ref.read(scalperProvider).unsubscribeFromWebSocket(context);
+    ref.read(websocketProvider).releaseAllTouchline('scalper-tabs', context);
     super.deactivate();
   }
 
@@ -1046,11 +1047,8 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
 
     // Subscribe custom index token for tab LTP display (persists across tab switches)
     if (scalper.customIndex != null) {
-      ref.read(websocketProvider).establishConnection(
-        channelInput: "${scalper.customIndex!.exch}|${scalper.customIndex!.token}",
-        task: "t",
-        context: context,
-      );
+      ref.read(websocketProvider).acquireTouchline('scalper-tabs',
+          ["${scalper.customIndex!.exch}|${scalper.customIndex!.token}"], context);
     }
   }
 

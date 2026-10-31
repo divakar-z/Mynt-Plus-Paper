@@ -2662,10 +2662,23 @@ class _FundSearchDialogContentState
     extends ConsumerState<_FundSearchDialogContent> {
   final FocusNode _searchFocusNode = FocusNode();
   final TextEditingController _searchController = TextEditingController();
+  String _lastSearchText = '';
+
+  // The search field's X button only empties the text box; it never calls
+  // onClear. Run the clear here when the box goes from text to empty.
+  void _onSearchTextChanged() {
+    final text = _searchController.text;
+    final wasNotEmpty = _lastSearchText.isNotEmpty;
+    _lastSearchText = text;
+    if (text.isEmpty && wasNotEmpty) {
+      ref.read(dashboardProvider).clearBasketSearchResults();
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(_onSearchTextChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _searchFocusNode.requestFocus();
     });
@@ -2674,6 +2687,7 @@ class _FundSearchDialogContentState
   @override
   void dispose() {
     _searchFocusNode.dispose();
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     super.dispose();
   }
