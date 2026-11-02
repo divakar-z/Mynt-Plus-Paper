@@ -528,12 +528,8 @@ class _ScripDepthInfoWebState extends ConsumerState<ScripDepthInfoWeb>
 
     // Check holdings
     final holdings = portfolio.holdingsModel ?? [];
-    final hasHolding = holdings.any((hold) {
-      if (hold.exchTsym != null && hold.exchTsym!.isNotEmpty) {
-        return hold.exchTsym!.any((exch) => exch.token == token);
-      }
-      return false;
-    });
+    final hasHolding =
+        holdings.any((hold) => holdingShownOnToken(hold, token));
 
     // Check open orders
     final openOrders = orderProv.openOrder ?? [];
