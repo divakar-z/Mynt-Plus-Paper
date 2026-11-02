@@ -106,9 +106,9 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
   }
 
   // Non-breaking space keeps ₹ on the same line as the amount when wrapped.
-  String _money(double v) => ref.read(privacyProvider).mask(
-      getFormatter(value: v, v4d: false, noDecimal: false),
-      prefix: '₹ ');
+  String _money(double v) => ref
+      .read(privacyProvider)
+      .mask(getFormatter(value: v, v4d: false, noDecimal: false), prefix: '₹ ');
 
   /// Null when the amount is fine (or untouched); otherwise the message.
   String? _amountError(double? withdrawable) {
@@ -447,7 +447,10 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
                 ],
               ),
               const Spacer(),
-              if (withdrawable != null && withdrawable > 0 && !busy)
+              if (withdrawable != null &&
+                  withdrawable > 0 &&
+                  !busy &&
+                  wp.activeRequests.isEmpty)
                 MyntOutlinedButton(
                   label: 'Withdraw All',
                   onPressed: () {
@@ -471,7 +474,12 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
 
   // ── Left column: amount form ───────────────────────────────────
 
+  static const _activeRequestMsg =
+      'You have a withdrawal request in progress. Cancel it to place a new request.';
+
   Widget _buildForm(WithdrawProvider wp, TranctionProvider trans) {
+    final active = wp.activeRequests;
+    final pending = active.isEmpty ? null : active.first;
     final withdrawable = wp.withdrawable;
     final balanceFailed = wp.maxPayoutError != null && !wp.maxPayoutLoading;
     final hasBalance = withdrawable != null && withdrawable > 0;
@@ -488,9 +496,8 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
         !wp.cooldown &&
         companyCode != null &&
         _enteredAmount != null &&
-        amountError == null;
-
-    final pending = wp.pendingRequest;
+        amountError == null &&
+        pending == null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -503,51 +510,71 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
               lightColor: MyntColors.textSecondary),
         ),
         const SizedBox(height: 12),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: MyntTextField(
-                controller: _amountCtrl,
-                focusNode: _amountFocus,
-                enabled: hasBalance && !busy,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                textInputAction: TextInputAction.done,
-                inputFormatters: [
-                  TextInputFormatter.withFunction((oldValue, newValue) =>
-                      _amountPattern.hasMatch(newValue.text)
-                          ? newValue
-                          : oldValue),
-                ],
-                placeholder: '0.00',
-                leadingWidget: Center(
-                  widthFactor: 1,
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 12),
-                    child: Text(
-                      '₹',
-                      style: MyntWebTextStyles.body(context,
-                          fontWeight: MyntFonts.medium,
-                          darkColor: MyntColors.textSecondaryDark,
-                          lightColor: MyntColors.textSecondary),
+        // With a request in flight the controls are dimmed and locked; a click
+        // on them explains why.
+        MouseRegion(
+          cursor: pending != null
+              ? SystemMouseCursors.forbidden
+              : MouseCursor.defer,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: pending != null
+                ? () => showResponsiveWarning(context, _activeRequestMsg)
+                : null,
+            child: AbsorbPointer(
+              absorbing: pending != null,
+              child: Opacity(
+                opacity: pending != null ? 0.5 : 1,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: MyntTextField(
+                        controller: _amountCtrl,
+                        focusNode: _amountFocus,
+                        enabled: hasBalance && !busy && pending == null,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        textInputAction: TextInputAction.done,
+                        inputFormatters: [
+                          TextInputFormatter.withFunction(
+                              (oldValue, newValue) =>
+                                  _amountPattern.hasMatch(newValue.text)
+                                      ? newValue
+                                      : oldValue),
+                        ],
+                        placeholder: '0.00',
+                        leadingWidget: Center(
+                          widthFactor: 1,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 12),
+                            child: Text(
+                              '₹',
+                              style: MyntWebTextStyles.body(context,
+                                  fontWeight: MyntFonts.medium,
+                                  darkColor: MyntColors.textSecondaryDark,
+                                  lightColor: MyntColors.textSecondary),
+                            ),
+                          ),
+                        ),
+                        onChanged: (_) => setState(() => _touched = true),
+                        onSubmitted: (_) {
+                          if (canWithdraw) _onWithdraw();
+                        },
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    MyntPrimaryButton(
+                      label: 'Withdraw',
+                      isFullWidth: false,
+                      isLoading: busy,
+                      onPressed: canWithdraw ? _onWithdraw : null,
+                    ),
+                  ],
                 ),
-                onChanged: (_) => setState(() => _touched = true),
-                onSubmitted: (_) {
-                  if (canWithdraw) _onWithdraw();
-                },
               ),
             ),
-            const SizedBox(width: 12),
-            MyntPrimaryButton(
-              label: 'Withdraw',
-              isFullWidth: false,
-              isLoading: busy,
-              onPressed: canWithdraw ? _onWithdraw : null,
-            ),
-          ],
+          ),
         ),
         if (amountError != null)
           _caption(amountError, _loss)
@@ -558,12 +585,17 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
         if (wp.cooldown)
           _caption('Another request is being processed. Refreshing shortly…',
               _textSecondary),
-        if (pending != null) ...[
-          const SizedBox(height: 12),
-          _banner(
-              'Placing a new request will replace your pending request of ${_money(pending.amount)}',
-              info: true),
-        ],
+        if (pending != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              _activeRequestMsg,
+              style: MyntWebTextStyles.bodySmall(context,
+                  fontWeight: MyntFonts.medium,
+                  darkColor: MyntColors.textSecondaryDark,
+                  lightColor: MyntColors.textSecondary),
+            ),
+          ),
       ],
     );
   }
