@@ -26,6 +26,16 @@ import 'tv_chart/chart_iframe_guard.dart';
 
 /// A card that displays position or holdings information for the current symbol
 /// at the top of the depth screen. Shows P&L, quantity, and exit buttons.
+/// A holding is shown on one exchange only: NSE when it is listed there,
+/// otherwise the first exchange listed.
+bool holdingShownOnToken(HoldingsModel holding, String token) {
+  final exchanges = holding.exchTsym;
+  if (exchanges == null || exchanges.isEmpty) return false;
+  final shown = exchanges.firstWhere((e) => e.exch == 'NSE',
+      orElse: () => exchanges.first);
+  return shown.token == token;
+}
+
 class PositionHoldingsCardWeb extends ConsumerStatefulWidget {
   final String token;
   final String exchange;
@@ -217,11 +227,8 @@ class _PositionHoldingsCardWebState
       PortfolioProvider provider, String token) {
     final holdings = provider.holdingsModel ?? [];
     for (final hold in holdings) {
-      if (hold.exchTsym != null && hold.exchTsym!.isNotEmpty) {
-        final holdToken = hold.exchTsym![0].token;
-        if (holdToken == token) {
-          return hold;
-        }
+      if (holdingShownOnToken(hold, token)) {
+        return hold;
       }
     }
     return null;

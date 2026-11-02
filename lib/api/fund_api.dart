@@ -26,13 +26,15 @@ mixin FundApi on ApiCore {
 
 // Get Client fund details from kambala
 
-  Future<FundDetailModel> getFunds() async {
+  /// [prd] limits the response to one product; "F" returns the MTF limits.
+  Future<FundDetailModel> getFunds({String? prd}) async {
     try {
       final uri = Uri.parse(apiLinks.getlimits);
+      final prdField = prd == null ? '' : ',"prd":"$prd"';
       final res = await apiClient.post(uri,
           headers: defaultHeaders,
           body:
-              '''jData={"uid":"${prefs.clientId}","actid":"${prefs.clientId}"}&jKey=${prefs.clientSession}''');
+              '''jData={"uid":"${prefs.clientId}","actid":"${prefs.clientId}"$prdField}&jKey=${prefs.clientSession}''');
 
       final json = jsonDecode(res.body);
       //  print(res.body);

@@ -10,6 +10,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
 import '../../../locator/locator.dart';
 import '../../../locator/preference.dart';
+import '../../../models/profile_model/fund_detial_model.dart';
 import '../../../provider/fund_provider.dart';
 import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
@@ -41,6 +42,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadMtf());
     if (widget.initialAction != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (widget.initialAction == 'addMoney') {
@@ -50,6 +52,11 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         }
       });
     }
+  }
+
+  Future<void> _loadMtf() async {
+    if (!mounted) return;
+    await ref.read(fundProvider).fetchMtfFunds(context);
   }
 
   void _openAddMoney() {
@@ -152,6 +159,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
           setState(() {
             _showMtf = false;
           });
+          _loadMtf();
         },
       );
     }
@@ -354,6 +362,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
 
   Widget _buildFinancialInfoCards(
       funds, ThemesProvider theme, bool isSmallScreen) {
+    final FundDetailModel? mtf = funds.mtfFundDetail;
     final content = isSmallScreen
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -382,6 +391,20 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                 context: context,
                 onTap: () => _showSegmentBreakdown(funds),
               ),
+              if (mtf != null) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Divider(
+                    color: resolveThemeColor(
+                      context,
+                      dark: MyntColors.dividerDark,
+                      light: MyntColors.divider,
+                    ),
+                    height: 1,
+                  ),
+                ),
+                _buildMtfSection(mtf, theme),
+              ],
             ],
           )
         : Row(
@@ -413,6 +436,18 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                   onTap: () => _showSegmentBreakdown(funds),
                 ),
               ),
+              if (mtf != null) ...[
+                Container(
+                  width: 0.5,
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  color: resolveThemeColor(
+                    context,
+                    dark: MyntColors.dividerDark,
+                    light: MyntColors.divider,
+                  ),
+                ),
+                Expanded(child: _buildMtfSection(mtf, theme)),
+              ],
             ],
           );
 
@@ -436,6 +471,29 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         ),
         padding: const EdgeInsets.all(12),
         child: content,
+      ),
+    );
+  }
+
+  /// Values come from `Limits` with prd=F (MTF_FUNDS_SECTION_MIGRATION.md 2.3).
+  Widget _buildMtfSection(FundDetailModel mtf, ThemesProvider theme) {
+    double parse(String? value) => _safeParseDouble("${value ?? 0.00}");
+    String format(String? value) =>
+        getFormatter(value: parse(value), v4d: false, noDecimal: false);
+    final total =
+        (parse(mtf.cash) + parse(mtf.brkcollamt)) - parse(mtf.unclearedcash);
+
+    return _buildSection(
+      title: "MTF",
+      value: "$total",
+      context: context,
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildInfoRow("Cash", format(mtf.cash), theme),
+          _buildInfoRow("MTF Collateral", format(mtf.collateral), theme),
+          _buildInfoRow("Unused Cash", format(mtf.unclearedcash), theme),
+        ],
       ),
     );
   }
