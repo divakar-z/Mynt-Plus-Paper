@@ -265,6 +265,22 @@ class Preferences {
 
   String? get showRiskDis => _prefInstance?.getString("rist_dis");
 
+  /// SEBI investor message (web): "<date>|<version>" ack, language, last Strapi copy
+  Future setSebiAck(String value) async =>
+      await _prefInstance!.setString('zebu:complianceAck', value);
+
+  String? get sebiAck => _prefInstance?.getString('zebu:complianceAck');
+
+  Future setSebiLang(String value) async =>
+      await _prefInstance!.setString('zebu:sebiLang', value);
+
+  String? get sebiLang => _prefInstance?.getString('zebu:sebiLang');
+
+  Future setSebiCopy(String value) async =>
+      await _prefInstance!.setString('zebu:sebiCopy', value);
+
+  String? get sebiCopy => _prefInstance?.getString('zebu:sebiCopy');
+
   /// ORDER BOOK Filter
   bool? get isObScripname => _prefInstance?.getBool(_isObScripName) ?? true;
   bool? get isObPrice => _prefInstance?.getBool(_isObPrice) ?? true;
