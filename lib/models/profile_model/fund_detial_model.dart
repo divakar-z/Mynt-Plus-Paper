@@ -215,7 +215,9 @@ class FundDetailModel {
     pendordval = json['pendordval'];
     collateral = json['collateral'];
     cashcoll = json['cash_coll'];
-    cobomargin = json['marprt'];
+    // The API docs name this `marprt`, but the live Limits response sends
+    // `mrgprt`. Read both until the vendor confirms which one is correct.
+    cobomargin = json['mrgprt'] ?? json['marprt'];
     deliverySellBenefit = json['csc'];
   }
 
