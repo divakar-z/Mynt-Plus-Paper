@@ -1054,51 +1054,49 @@ class _MarginBreakdownDialogState
     // Material default surface shows through and the dialog looks grey.
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: Center(
-        child: shadcn.Card(
-          borderRadius: BorderRadius.circular(8),
-          padding: EdgeInsets.zero,
-          child: ConstrainedBox(
-            constraints:
-                BoxConstraints(maxWidth: 460, maxHeight: maxDialogHeight),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _header(),
-                _summary(),
-                Flexible(
-                  // Always-on scrollbar, same treatment as the Market Info
-                  // panel: the platform bar is suppressed and a RawScrollbar
-                  // with thumbVisibility draws in its place. The wider right
-                  // padding keeps the thumb clear of the segment cards.
-                  child: ScrollConfiguration(
-                    behavior: const MaterialScrollBehavior()
-                        .copyWith(scrollbars: false),
-                    child: RawScrollbar(
+      child: shadcn.Card(
+        borderRadius: BorderRadius.circular(8),
+        padding: EdgeInsets.zero,
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxWidth: 460, maxHeight: maxDialogHeight),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _header(),
+              _summary(),
+              Flexible(
+                // Always-on scrollbar, same treatment as the Market Info
+                // panel: the platform bar is suppressed and a RawScrollbar
+                // with thumbVisibility draws in its place. The wider right
+                // padding keeps the thumb clear of the segment cards.
+                child: ScrollConfiguration(
+                  behavior: const MaterialScrollBehavior()
+                      .copyWith(scrollbars: false),
+                  child: RawScrollbar(
+                    controller: _scrollController,
+                    thumbVisibility: true,
+                    thickness: 6,
+                    radius: const Radius.circular(0),
+                    thumbColor: resolveThemeColor(context,
+                            dark: MyntColors.textSecondaryDark,
+                            light: MyntColors.textSecondary)
+                        .withValues(alpha: 0.4),
+                    child: SingleChildScrollView(
                       controller: _scrollController,
-                      thumbVisibility: true,
-                      thickness: 6,
-                      radius: const Radius.circular(0),
-                      thumbColor: resolveThemeColor(context,
-                              dark: MyntColors.textSecondaryDark,
-                              light: MyntColors.textSecondary)
-                          .withValues(alpha: 0.4),
-                      child: SingleChildScrollView(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.fromLTRB(10, 10, 20, 10),
-                        child: Column(
-                          children: [
-                            for (final s in widget.segments) _segmentCard(s),
-                          ],
-                        ),
+                      padding: const EdgeInsets.fromLTRB(10, 10, 20, 10),
+                      child: Column(
+                        children: [
+                          for (final s in widget.segments) _segmentCard(s),
+                        ],
                       ),
                     ),
                   ),
                 ),
-                _unrealized(),
-              ],
-            ),
+              ),
+              _unrealized(),
+            ],
           ),
         ),
       ),
