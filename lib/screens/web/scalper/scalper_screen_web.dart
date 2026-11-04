@@ -255,6 +255,28 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     super.deactivate();
   }
 
+  /// The element came back into the tree in the same frame (opening the option
+  /// chain sheet moves it), so nothing else will undo what [deactivate] released
+  /// and the call/put charts would freeze on their last price.
+  @override
+  void activate() {
+    super.activate();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final scalper = ref.read(scalperProvider);
+      ref.read(websocketProvider).acquireTouchline(
+        'scalper-tabs',
+        [
+          for (final idx in ScalperProvider.indices) "${idx.exch}|${idx.token}",
+          if (scalper.customIndex != null)
+            "${scalper.customIndex!.exch}|${scalper.customIndex!.token}",
+        ],
+        context,
+      );
+      scalper.subscribeToWebSocket(context);
+    });
+  }
+
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
