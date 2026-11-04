@@ -427,6 +427,7 @@ class ProfileProvider extends DefaultChangeNotifier {
         proofFileName: proofFileName,
         passwordRequired: passwordRequired,
         password: password,
+        equityStatus: clientData?.equityStatus ?? 'YES',
       );
       await fetchMobEmailStatus();
       return result;
