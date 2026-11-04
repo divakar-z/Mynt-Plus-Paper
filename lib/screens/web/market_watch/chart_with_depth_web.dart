@@ -156,8 +156,40 @@ class _ChartWithDepthWebState extends ConsumerState<ChartWithDepthWeb>
             tsym: widget.wlValue.tsym,
           );
         }
+        if (!widget.followChartSymbolSearch) _loadDataForOwnHost();
       }
     });
+  }
+
+  /// Hosts outside the main panel (Scanner) mount this page directly, so nothing
+  /// has loaded the scrip's data and the shared `getQuotes` still holds the last
+  /// opened scrip. Loads what `calldepthApis` loads, without its
+  /// `openScripInWebPanel`, which would pull the main panel to this scrip.
+  Future<void> _loadDataForOwnHost() async {
+    final mw = ref.read(marketWatchProvider);
+    final token = widget.wlValue.token;
+    final exch = widget.wlValue.exch;
+    if (mw.getQuotes?.token?.toString() == token) return;
+
+    mw.clearFundamentalDataSilent();
+    await mw.fetchScripQuote(token, exch, context);
+    if (!mounted) return;
+    // `calldepthApis` skips reloading a scrip it takes for the active one, so
+    // the previous scrip must not stay active once `getQuotes` has moved on.
+    mw.setChartScript(exch, token, widget.wlValue.tsym);
+    await mw.fetchScripInfo(token, exch, context, true);
+    if (!mounted) return;
+    await mw.fetchLinkeScrip(token, exch, context);
+    if (!mounted) return;
+    if (exch == "NSE" || exch == "BSE") {
+      mw.fetchFundamentalData(
+          tradeSym: "$exch:${widget.wlValue.tsym}", token: token);
+      await mw.fetchTechData(
+          context: context,
+          exch: exch,
+          tradeSym: widget.wlValue.tsym,
+          lastPrc: "${mw.getQuotes?.lp ?? mw.getQuotes?.c ?? 0.00}");
+    }
   }
 
   @override
