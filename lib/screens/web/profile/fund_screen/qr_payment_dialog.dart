@@ -7,6 +7,13 @@ import '../../../../../res/mynt_web_color_styles.dart';
 import '../../../../../res/mynt_web_text_styles.dart';
 
 
+/// What a user's cancel returns: a final status stays as it is, anything else
+/// (PENDING, FAILURE and so on, or no status) closes as 'CANCELLED'.
+String paymentCancelResult(String? status) {
+  const finalStatuses = {'SUCCESS', 'FAILED', 'REJECTED', 'EXPIRED'};
+  return finalStatuses.contains(status) ? status! : 'CANCELLED';
+}
+
 class QrPaymentDialog extends ConsumerStatefulWidget {
   const QrPaymentDialog({super.key});
 
@@ -221,7 +228,7 @@ class _QrPaymentDialogState extends ConsumerState<QrPaymentDialog> {
                   final result = await fund.checkQrStatusOnce();
                   if (mounted) {
                     Navigator.of(context)
-                        .pop(result?.data?.status ?? 'CANCELLED');
+                        .pop(paymentCancelResult(result?.data?.status));
                   }
                 },
                 style: ElevatedButton.styleFrom(
