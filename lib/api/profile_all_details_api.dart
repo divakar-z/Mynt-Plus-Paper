@@ -357,6 +357,7 @@ mixin ProfileAllDetailsApi on ApiCore {
     String? proofFileName,
     required String passwordRequired,
     required String password,
+    required String equityStatus,
   }) async {
     try {
       final uri = Uri.parse(apiLinks.addSegmentURL);
@@ -387,6 +388,7 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.fields['address'] = address;
       request.fields['password_required'] = passwordRequired;
       request.fields['password'] = password;
+      request.fields['equity_status'] = equityStatus;
 
       if (proofBytes != null && proofFileName != null) {
         request.files.add(http.MultipartFile.fromBytes(

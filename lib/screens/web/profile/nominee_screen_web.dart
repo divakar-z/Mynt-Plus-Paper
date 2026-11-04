@@ -599,6 +599,7 @@ class _NomineeScreenWebState extends ConsumerState<NomineeScreenWeb> {
       'Nominee2_name': _nomineeCount >= 2 ? _name2.text : '',
       'dp_code': clientJson['CLIENT_DP_CODE'] ?? '',
       'nominee_req': _yesOrNo ?? 'no',
+      'nominee_optout': clientData.nomineeOptOut ?? '',
       'client_name': clientJson['CLIENT_NAME'] ?? '',
       'Nominee2_PAN': _nomineeCount >= 2 ? _proofValue2.text : '',
       'Nominee2_DOB': _nomineeCount >= 2 ? dob(_dob2) : '',
