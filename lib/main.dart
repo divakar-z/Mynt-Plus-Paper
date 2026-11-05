@@ -34,6 +34,7 @@ import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 // Web URL strategy - enables path-based URLs instead of hash-based
 import 'package:flutter_web_plugins/url_strategy.dart';
+import 'api/paper/paper_guard_check.dart';
 import 'api/paper/paper_order_engine.dart';
 import 'api/paper/virtual_wallet.dart';
 import 'locator/locator.dart';
@@ -317,6 +318,17 @@ void main() async {
   final bool isPublicRoute = _isPublicWebRoute();
 
   // Initialize preferences and notifications in parallel for faster startup.
+  // Paper mode must not start without the browser guard (web/paper_guard.js).
+  if (kIsWeb && !isPaperGuardLoaded) {
+    runApp(const Directionality(
+      textDirection: TextDirection.ltr,
+      child: Center(
+        child: Text('Safety check failed. Please reload the page.'),
+      ),
+    ));
+    return;
+  }
+
   // Public viewer skips notification init — visitors shouldn't see permission prompts.
   final Preferences pref = locator<Preferences>();
   await Future.wait([

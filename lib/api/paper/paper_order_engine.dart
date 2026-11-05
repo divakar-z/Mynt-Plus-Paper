@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/order_book_model/cancel_order_model.dart';
+import '../../models/order_book_model/gtt_order_book.dart';
 import '../../models/order_book_model/modify_order_model.dart';
 import '../../models/order_book_model/order_book_model.dart';
 import '../../models/order_book_model/order_history_model.dart';
+import '../../models/order_book_model/place_gtt_order.dart';
 import '../../models/order_book_model/place_order_model.dart';
 import '../../models/order_book_model/trade_book_model.dart';
 import 'virtual_wallet.dart';
@@ -17,6 +20,7 @@ class PaperOrderEngine {
   static const String _ordersKey = 'paper_orders';
   static const String _tradesKey = 'paper_trades';
   static const String _orderCounterKey = 'paper_order_counter';
+  static const String _gttsKey = 'paper_gtts';
 
   static PaperOrderEngine? _instance;
   static PaperOrderEngine get instance {
@@ -29,6 +33,18 @@ class PaperOrderEngine {
   final List<OrderBookModel> _orders = [];
   final List<TradeBookModel> _trades = [];
   int _orderCounter = 0;
+
+  /// Stoploss / target triggers on open positions, as GTT book JSON.
+  final List<Map<String, dynamic>> _gtts = [];
+
+  /// Orders being filled, so a tick arriving mid-fill cannot fill them twice.
+  final Set<String> _filling = {};
+
+  final StreamController<void> _fillsController =
+      StreamController<void>.broadcast();
+
+  /// Fires when a tick fills a pending order or triggers a stoploss / target.
+  Stream<void> get fills => _fillsController.stream;
 
   List<OrderBookModel> get orders => List.unmodifiable(_orders);
   List<TradeBookModel> get trades => List.unmodifiable(_trades);
@@ -56,6 +72,13 @@ class PaperOrderEngine {
         _trades.add(TradeBookModel.fromJson(item));
       }
     }
+
+    final gttsJson = prefs.getString(_gttsKey);
+    if (gttsJson != null) {
+      _gtts
+        ..clear()
+        ..addAll((jsonDecode(gttsJson) as List).cast<Map<String, dynamic>>());
+    }
   }
 
   Future<void> _save() async {
@@ -65,6 +88,7 @@ class PaperOrderEngine {
         _ordersKey, jsonEncode(_orders.map((e) => e.toJson()).toList()));
     await prefs.setString(
         _tradesKey, jsonEncode(_trades.map((e) => e.toJson()).toList()));
+    await prefs.setString(_gttsKey, jsonEncode(_gtts));
   }
 
   // ── Order ID Generation ─────────────────────────────────────────
@@ -211,7 +235,7 @@ class PaperOrderEngine {
     // SL-MKT / SL-LMT: check if trigger already met
     else if (input.prctype == 'SL-MKT' || input.prctype == 'SL-LMT') {
       final double triggerPrice = double.tryParse(input.trgprc) ?? 0.0;
-      if (triggerPrice > 0) {
+      if (triggerPrice > 0 && ltp > 0) {
         bool triggered = false;
         if (input.trantype == 'B' && ltp >= triggerPrice) triggered = true;
         if (input.trantype == 'S' && ltp <= triggerPrice) triggered = true;
@@ -225,13 +249,14 @@ class PaperOrderEngine {
     }
     // LIMIT: check if can fill immediately
     else if (input.prctype == 'LMT') {
-      if (price > 0) {
+      if (price > 0 && ltp > 0) {
         bool canFill = false;
         if (input.trantype == 'B' && ltp <= price) canFill = true;
         if (input.trantype == 'S' && ltp >= price) canFill = true;
 
         if (canFill) {
-          await _executeOrder(order, price);
+          // A marketable limit fills at the market, not at its limit.
+          await _executeOrder(order, ltp);
         }
       }
     }
@@ -249,6 +274,16 @@ class PaperOrderEngine {
   // ── Execute Order (fill) ────────────────────────────────────────
 
   Future<void> _executeOrder(OrderBookModel order, double fillPrice) async {
+    final orderId = order.norenordno ?? '';
+    if (!_filling.add(orderId)) return;
+    try {
+      await _fillOrder(order, fillPrice);
+    } finally {
+      _filling.remove(orderId);
+    }
+  }
+
+  Future<void> _fillOrder(OrderBookModel order, double fillPrice) async {
     final now = _nowTimestamp();
     final int qty = int.tryParse(order.qty ?? '0') ?? 0;
     final double totalValue = fillPrice * qty;
@@ -317,6 +352,11 @@ class PaperOrderEngine {
     );
 
     _trades.insert(0, trade);
+
+    // A stoploss / target must not outlive its position, or it would open a
+    // new one when it triggers.
+    _gtts.removeWhere((g) =>
+        !_closesPosition(g['exch'], g['tsym'], g['prd'], g['trantype']));
   }
 
   // ── Cancel Order ────────────────────────────────────────────────
@@ -386,6 +426,157 @@ class PaperOrderEngine {
       result: input.orderNum,
       requestTime: _nowTimestamp(),
     );
+  }
+
+  // ── Stoploss / Target (GTT) ─────────────────────────────────────
+
+  /// Token of [tsym] from its trades; the GTT input does not carry one.
+  String? tokenForSymbol(String exch, String tsym) {
+    for (final t in _trades) {
+      if (t.exch == exch && t.tsym == tsym && (t.token ?? '').isNotEmpty) {
+        return t.token;
+      }
+    }
+    return null;
+  }
+
+  /// Places a stoploss / target on an open position. Standalone GTT entries
+  /// are refused: paper GTTs only ever reduce a position.
+  PlaceGttOrderModel placeGtt(PlaceGTTOrderInput input, double? ltp) {
+    final error = _validateGtt(input, ltp);
+    if (error != null) return PlaceGttOrderModel(stat: 'Not_Ok', emsg: error);
+
+    final token = tokenForSymbol(input.exch, input.tsym);
+    if (token == null) {
+      return PlaceGttOrderModel(
+          stat: 'Not_Ok', emsg: 'Live price not available for this position');
+    }
+
+    final alId = _generateOrderId();
+    _gtts.insert(0, {
+      'stat': 'Ok',
+      'al_id': alId,
+      'ai_t': input.ait,
+      'tsym': input.tsym,
+      'exch': input.exch,
+      'token': token,
+      'validity': input.validity,
+      'norentm': _nowTimestamp(),
+      'pp': '2',
+      'ls': '1',
+      'ti': '0.05',
+      'actid': 'PAPER',
+      'trantype': input.trantype,
+      'prctyp': 'MKT',
+      'qty': int.tryParse(input.qty) ?? 0,
+      'prc': '0',
+      'prd': input.prd,
+      'd': input.d,
+      'remarks': input.remarks,
+    });
+    _save();
+    return PlaceGttOrderModel(
+        stat: 'OI created', alId: alId, requestTime: _nowTimestamp());
+  }
+
+  PlaceGttOrderModel modifyGtt(PlaceGTTOrderInput input, double? ltp) {
+    final idx = _gtts.indexWhere((g) => g['al_id'] == input.alid);
+    if (idx == -1) return PlaceGttOrderModel(stat: 'Invalid Oi');
+
+    final error = _validateGtt(input, ltp);
+    if (error != null) return PlaceGttOrderModel(stat: 'Not_Ok', emsg: error);
+
+    _gtts[idx]['d'] = input.d;
+    _gtts[idx]['ai_t'] = input.ait;
+    _gtts[idx]['qty'] = int.tryParse(input.qty) ?? _gtts[idx]['qty'];
+    _save();
+    return PlaceGttOrderModel(
+        stat: 'OI replaced', alId: input.alid, requestTime: _nowTimestamp());
+  }
+
+  PlaceGttOrderModel cancelGtt(String alId) {
+    final before = _gtts.length;
+    _gtts.removeWhere((g) => g['al_id'] == alId);
+    if (_gtts.length == before) return PlaceGttOrderModel(stat: 'Invalid Oi');
+    _save();
+    return PlaceGttOrderModel(
+        stat: 'OI deleted', alId: alId, requestTime: _nowTimestamp());
+  }
+
+  Map<String, dynamic> getGttBook() {
+    if (_gtts.isEmpty) return {"stat": "no data", "data": <GttOrderBookModel>[]};
+    return {
+      "stat": "success",
+      "data": _gtts.map(GttOrderBookModel.fromJson).toList(),
+    };
+  }
+
+  String? _validateGtt(PlaceGTTOrderInput input, double? ltp) {
+    final trigger = double.tryParse(input.d) ?? 0;
+    if (trigger <= 0) return 'Enter a valid trigger price';
+    if (input.ait != 'LTP_A_O' && input.ait != 'LTP_B_O') {
+      return 'Only price triggers are available in paper trading mode';
+    }
+    if (!_closesPosition(input.exch, input.tsym, input.prd, input.trantype)) {
+      return 'Stoploss and target need an open position';
+    }
+    if (ltp != null && _gttHit(input.ait, trigger, ltp)) {
+      return 'Trigger price is already crossed (LTP ${ltp.toStringAsFixed(2)})';
+    }
+    return null;
+  }
+
+  bool _gttHit(String? ait, double trigger, double ltp) =>
+      ait == 'LTP_A_O' ? ltp >= trigger : ltp <= trigger;
+
+  /// True when [trantype] reduces the current position on this symbol.
+  bool _closesPosition(String? exch, String? tsym, String? prd, String? trantype) {
+    final net = _getNetPosition(exch ?? '', tsym ?? '', prd ?? '');
+    return trantype == 'S' ? net > 0 : net < 0;
+  }
+
+  /// Fires triggers hit by [ltp] as market orders. Exiting the position also
+  /// removes the opposite trigger (see [_fillOrder]), so SL and target act as
+  /// one-cancels-the-other.
+  Future<bool> _checkGtts(String tsym, double ltp) async {
+    var fired = false;
+    for (final gtt in List.of(_gtts)) {
+      if (gtt['tsym'] != tsym || !_gtts.contains(gtt)) continue;
+      if (!_gttHit(gtt['ai_t'], double.tryParse('${gtt['d']}') ?? 0, ltp)) {
+        continue;
+      }
+      // Removed before the first await so the next tick cannot fire it again.
+      _gtts.remove(gtt);
+      fired = true;
+
+      final net = _getNetPosition(gtt['exch'], tsym, gtt['prd']).abs();
+      final qty = min(gtt['qty'] as int, net);
+      if (qty <= 0) continue;
+
+      await placeOrder(
+        PlaceOrderInput(
+          amo: 'No',
+          exch: gtt['exch'],
+          tsym: tsym,
+          qty: qty.toString(),
+          trgprc: '',
+          trailprc: '',
+          blprc: '',
+          bpprc: '',
+          prc: '0',
+          dscqty: '0',
+          prd: gtt['prd'],
+          trantype: gtt['trantype'],
+          prctype: 'MKT',
+          ret: 'DAY',
+          mktProt: '',
+          channel: 'WEB',
+          token: gtt['token'],
+        ),
+        ltp.toString(),
+      );
+    }
+    return fired;
   }
 
   // ── Order History ───────────────────────────────────────────────
@@ -501,7 +692,8 @@ class PaperOrderEngine {
   Future<bool> onLtpUpdate(String tsym, double ltp) async {
     bool anyFilled = false;
 
-    for (final order in _orders) {
+    // A copy: a user order can be inserted while a fill below is awaiting.
+    for (final order in List.of(_orders)) {
       if (order.status != 'PENDING') continue;
       if (order.tsym != tsym) continue;
 
@@ -546,18 +738,31 @@ class PaperOrderEngine {
       }
     }
 
-    if (anyFilled) await _save();
+    if (await _checkGtts(tsym, ltp)) anyFilled = true;
+
+    if (anyFilled) {
+      await _save();
+      _fillsController.add(null);
+    }
     return anyFilled;
   }
 
   /// Token-based variant for real WebSocket ticks. No-op unless a PENDING
-  /// order exists for the token.
+  /// order or stoploss / target exists for the token.
   Future<bool> onLtpUpdateByToken(String token, double ltp) async {
     String? tsym;
     for (final o in _orders) {
       if (o.status == 'PENDING' && o.token == token) {
         tsym = o.tsym;
         break;
+      }
+    }
+    if (tsym == null) {
+      for (final g in _gtts) {
+        if (g['token'] == token) {
+          tsym = g['tsym'] as String;
+          break;
+        }
       }
     }
     if (tsym == null) return false;
@@ -575,6 +780,7 @@ class PaperOrderEngine {
   Future<void> reset() async {
     _orders.clear();
     _trades.clear();
+    _gtts.clear();
     _orderCounter = 0;
     await _save();
   }

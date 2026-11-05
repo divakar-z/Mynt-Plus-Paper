@@ -47,18 +47,7 @@ mixin PaperSafetyGuard on ApiExporter {
   Never _block(String action) => throw PaperTradingUnsupportedException(action);
 
   // ── GTT / OCO ──────────────────────────────────────────────────────────
-  @override
-  Future<PlaceGttOrderModel> placeGTTOrderAPI(PlaceGTTOrderInput input) async =>
-      _block('GTT order');
-
-  @override
-  Future<PlaceGttOrderModel> modifyGTTOrderAPI(PlaceGTTOrderInput input) async =>
-      _block('GTT order modify');
-
-  @override
-  Future<PlaceGttOrderModel> cancelGTTOrderAPI(String cancelId) async =>
-      _block('GTT order cancel');
-
+  // Single GTTs are simulated by PaperApiExporter (stoploss / target).
   @override
   Future<PlaceGttOrderModel> placeOCOOrderAPI(PlaceOcoOrderInput input) async =>
       _block('OCO order');
@@ -69,10 +58,6 @@ mixin PaperSafetyGuard on ApiExporter {
 
   // ── Live-account books ─────────────────────────────────────────────────
   // The paper app must never show the user's REAL GTT / SIP orders.
-  @override
-  Future<Map<String, dynamic>> getGTTOrderBook() async =>
-      {"stat": "no data", "data": []};
-
   @override
   Future<Map<String, dynamic>> getTriggeredGTTOrders() async =>
       {"stat": "no data", "data": []};

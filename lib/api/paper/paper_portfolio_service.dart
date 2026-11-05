@@ -19,7 +19,8 @@ class PaperPortfolioService {
   /// Returns holdings in the same Map shape that PortfolioAPI.getHolding() returns.
   /// Provider checks result['stat'] and result['data'].
   Map<String, dynamic> getHoldings() {
-    final trades = PaperOrderEngine.instance.trades;
+    // The engine keeps newest first; averages need oldest first.
+    final trades = PaperOrderEngine.instance.trades.reversed;
 
     // Filter only CNC/delivery trades (prd == 'C')
     final deliveryTrades = trades.where((t) => t.prd == 'C').toList();
@@ -108,7 +109,8 @@ class PaperPortfolioService {
 
   /// Returns positions in the same Map shape that PortfolioAPI.getPositionBook() returns.
   Map<String, dynamic> getPositionBook() {
-    final trades = PaperOrderEngine.instance.trades;
+    // The engine keeps newest first; averages need oldest first.
+    final trades = PaperOrderEngine.instance.trades.reversed;
 
     // Filter intraday trades (prd != 'C')
     final intradayTrades = trades.where((t) => t.prd != 'C').toList();
@@ -147,6 +149,7 @@ class PaperPortfolioService {
         aggMap[key]!.daySellQty += qty;
         aggMap[key]!.daySellAmt += price * qty;
       }
+      aggMap[key]!.applyFill(trade.trantype == 'B' ? qty : -qty, price);
     }
 
     // Build PositionBookModel list
@@ -155,13 +158,8 @@ class PaperPortfolioService {
       final int netQty = agg.dayBuyQty - agg.daySellQty;
       final double dayBuyAvg = agg.dayBuyQty > 0 ? agg.dayBuyAmt / agg.dayBuyQty : 0;
       final double daySellAvg = agg.daySellQty > 0 ? agg.daySellAmt / agg.daySellQty : 0;
-      final double netAvgPrice = netQty != 0
-          ? ((agg.dayBuyAmt - agg.daySellAmt) / netQty).abs()
-          : 0;
-
-      // Realized P&L: min(buyQty, sellQty) * (sellAvg - buyAvg)
-      final int closedQty = agg.dayBuyQty < agg.daySellQty ? agg.dayBuyQty : agg.daySellQty;
-      final double rpnl = closedQty > 0 ? closedQty * (daySellAvg - dayBuyAvg) : 0;
+      final double netAvgPrice = netQty != 0 ? agg.openAvg : 0;
+      final double rpnl = agg.realized;
 
       positions.add(PositionBookModel(
         stat: 'Ok',
@@ -261,6 +259,30 @@ class _PositionAgg {
   double dayBuyAmt = 0;
   int daySellQty = 0;
   double daySellAmt = 0;
+
+  /// Signed open quantity, its average cost, and profit already booked.
+  int openQty = 0;
+  double openAvg = 0;
+  double realized = 0;
+
+  /// [signedQty] is positive for a buy. Closing fills book P&L against the
+  /// average cost; anything beyond the open quantity starts a new position.
+  void applyFill(int signedQty, double price) {
+    final bool closes = openQty != 0 && (openQty > 0) != (signedQty > 0);
+    if (closes) {
+      final int closing =
+          signedQty.abs() < openQty.abs() ? signedQty.abs() : openQty.abs();
+      realized += closing * (price - openAvg) * (openQty > 0 ? 1 : -1);
+      openQty += openQty > 0 ? -closing : closing;
+      signedQty += signedQty > 0 ? -closing : closing;
+      if (openQty == 0) openAvg = 0;
+    }
+    if (signedQty != 0) {
+      final int total = openQty.abs() + signedQty.abs();
+      openAvg = (openAvg * openQty.abs() + price * signedQty.abs()) / total;
+      openQty += signedQty;
+    }
+  }
 
   _PositionAgg({
     required this.exch,

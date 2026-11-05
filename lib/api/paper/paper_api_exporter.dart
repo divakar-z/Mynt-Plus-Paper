@@ -11,6 +11,7 @@ import '../../models/order_book_model/get_brokerage.dart';
 import '../../models/order_book_model/modify_order_model.dart';
 import '../../models/order_book_model/order_history_model.dart';
 import '../../models/order_book_model/order_margin_model.dart';
+import '../../models/order_book_model/place_gtt_order.dart';
 import '../../models/order_book_model/place_order_model.dart';
 import '../../models/portfolio_model/position_convertion_model.dart';
 import '../../models/profile_model/fund_detial_model.dart';
@@ -92,34 +93,24 @@ class PaperApiExporter extends ApiExporter with PaperSafetyGuard {
   @override
   Future<PlaceOrderModel> getPlaceOrder(
       PlaceOrderInput placeOrderInput, String ip) async {
-    // For market orders, determine a reasonable fill price.
-    // The prc field may be "0" (standard for MKT orders in real API).
-    // We need actual LTP from the input or a fallback.
-    String currentLtp = placeOrderInput.prc;
-    if (placeOrderInput.prctype == 'MKT' ||
-        placeOrderInput.prctype == 'SL-MKT') {
-      if (placeOrderInput.prc.isEmpty ||
-          placeOrderInput.prc == '0' ||
-          placeOrderInput.prc == '0.00') {
-        // Use the LTP from PaperLtpService if available
-        if (placeOrderInput.token != null &&
-            placeOrderInput.token!.isNotEmpty) {
-          final simLtp =
-              PaperLtpService.instance.getLtp(placeOrderInput.token!);
-          if (simLtp != null && simLtp != '0' && simLtp != '0.00') {
-            currentLtp = simLtp;
-          }
-        }
-        // No live price: reject rather than filling at a made-up price
-        if (currentLtp == '0' || currentLtp == '0.00' || currentLtp.isEmpty) {
-          return PlaceOrderModel.fromJson({
-            'stat': 'Not_Ok',
-            'emsg': 'Live price not available. Please try again.',
-          });
-        }
-      }
+    // The order's own price is not the market price: it holds the limit, or the
+    // protection price on a market order, so only the live LTP can decide a fill.
+    final token = placeOrderInput.token ?? '';
+    final liveLtp =
+        token.isEmpty ? null : PaperLtpService.instance.getLtp(token);
+    final hasLiveLtp = (double.tryParse(liveLtp ?? '') ?? 0) > 0;
+
+    if (!hasLiveLtp &&
+        (placeOrderInput.prctype == 'MKT' ||
+            placeOrderInput.prctype == 'SL-MKT')) {
+      return PlaceOrderModel.fromJson({
+        'stat': 'Not_Ok',
+        'emsg': 'Live price not available. Please try again.',
+      });
     }
-    return PaperOrderEngine.instance.placeOrder(placeOrderInput, currentLtp);
+    // No LTP yet on a limit / SL order: it stays pending until the first tick.
+    return PaperOrderEngine.instance
+        .placeOrder(placeOrderInput, hasLiveLtp ? liveLtp! : '0');
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -176,6 +167,33 @@ class PaperApiExporter extends ApiExporter with PaperSafetyGuard {
       ModifyOrderInput input, String ip) async {
     return PaperOrderEngine.instance.modifyOrder(input);
   }
+
+  // ════════════════════════════════════════════════════════════════
+  //  STOPLOSS / TARGET — GTT triggers held in the local engine
+  // ════════════════════════════════════════════════════════════════
+
+  double? _gttLtp(PlaceGTTOrderInput input) {
+    final token =
+        PaperOrderEngine.instance.tokenForSymbol(input.exch, input.tsym);
+    final ltp = token == null ? null : PaperLtpService.instance.getLtp(token);
+    return ltp == null ? null : double.tryParse(ltp);
+  }
+
+  @override
+  Future<PlaceGttOrderModel> placeGTTOrderAPI(PlaceGTTOrderInput input) async =>
+      PaperOrderEngine.instance.placeGtt(input, _gttLtp(input));
+
+  @override
+  Future<PlaceGttOrderModel> modifyGTTOrderAPI(PlaceGTTOrderInput input) async =>
+      PaperOrderEngine.instance.modifyGtt(input, _gttLtp(input));
+
+  @override
+  Future<PlaceGttOrderModel> cancelGTTOrderAPI(String cancelId) async =>
+      PaperOrderEngine.instance.cancelGtt(cancelId);
+
+  @override
+  Future<Map<String, dynamic>> getGTTOrderBook() async =>
+      PaperOrderEngine.instance.getGttBook();
 
   // ════════════════════════════════════════════════════════════════
   //  ORDER MARGIN — return simulated margin from wallet

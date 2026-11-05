@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 
+import '../../../api/paper/paper_order_engine.dart';
+import '../../../locator/locator.dart';
 import '../../../models/marketwatch_model/search_scrip_model.dart';
 import '../../../models/order_book_model/place_order_model.dart';
 import '../../../provider/order_provider.dart';
@@ -45,6 +48,7 @@ class ScalperScreenWeb extends ConsumerStatefulWidget {
 }
 
 class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
+  StreamSubscription<void>? _paperFills;
   bool _isInitialized = false;
   bool _hasLoadedOptionChain = false;
 
@@ -104,10 +108,23 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
     scalperChartManager.initialize();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     _searchFocusNode.addListener(_onSearchFocusChange);
+    if (isPaperTrading) {
+      _paperFills = PaperOrderEngine.instance.fills.listen((_) => _onPaperFill());
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeScreen();
     });
+  }
+
+  /// PAPER TRADING ONLY: there is no exchange order feed, so refresh the panel
+  /// when a tick triggers a stoploss / target.
+  void _onPaperFill() {
+    if (!mounted) return;
+    ref.read(portfolioProvider).fetchPositionBook(context, false);
+    ref.read(orderProvider).fetchOrderBook(context, true);
+    ref.read(orderProvider).fetchTradeBook(context);
+    ref.read(scalperProvider).fetchGttOrders(context);
   }
 
   Future<void> _initializeScreen() async {
@@ -279,6 +296,7 @@ class _ScalperScreenWebState extends ConsumerState<ScalperScreenWeb> {
 
   @override
   void dispose() {
+    _paperFills?.cancel();
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _searchFocusNode.removeListener(_onSearchFocusChange);
     _searchFocusNode.dispose();

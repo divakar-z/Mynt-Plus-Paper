@@ -379,6 +379,13 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
       return;
     }
 
+    // Paper mode: never hand the session to the real funds site.
+    if (isPaperTrading) {
+      showResponsiveWarningMessage(
+          context, "Not available in paper trading mode");
+      return;
+    }
+
     try {
       final pref = locator<Preferences>();
       String? uid = pref.clientId;

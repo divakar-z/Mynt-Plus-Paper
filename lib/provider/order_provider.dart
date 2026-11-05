@@ -2893,6 +2893,10 @@ class OrderProvider extends DefaultChangeNotifier {
                 "Session Expired :  Invalid Session Key" &&
             _modifyGttOrderModel!.stat == "Not_Ok") {
           ref.read(authProvider).ifSessionExpired(context);
+        } else if (isPaperTrading && kIsWeb) {
+          // The paper engine refuses a trigger the LTP has already crossed.
+          ResponsiveSnackBar.showWarning(context,
+              _modifyGttOrderModel!.emsg ?? "Failed to modify GTT order");
         }
       }
     } catch (e) {

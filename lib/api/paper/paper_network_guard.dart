@@ -23,6 +23,32 @@ class PaperNetworkGuard {
     'rekycbe.mynt.in/pledge', // pledge / unpledge requests
   ];
 
+  /// Paths on rekycbe.mynt.in that change the real account. Status and read
+  /// calls on the same host stay open.
+  static const List<String> _blockedAccountPaths = [
+    '/mail_otpsend',
+    '/mail_otpverify',
+    '/file_write_email',
+    '/mob_otp_req',
+    '/mob_otp_ver',
+    '/file_write_mob',
+    '/adr_chn',
+    '/bank',
+    '/DDPI',
+    '/mtf',
+    '/income_otp_req',
+    '/income_otp_ver',
+    '/income',
+    '/pdf_lock',
+    '/nominee',
+    '/add_segment',
+    '/manual_cancel_request',
+    '/img_upload',
+    '/cdsl/signature_upload',
+    '/send_link_request',
+    '/closure',
+  ];
+
   /// Path endings that place, modify or cancel real orders / move money.
   static const List<String> _blockedPathSuffixes = [
     // Noren order endpoints
@@ -53,9 +79,30 @@ class PaperNetworkGuard {
     '/order/all_payment',
     '/order/mandate_creation',
     '/mf/xsip_cancel',
+    '/mf/xsip_pause',
+    '/mf/xsip_purchase',
+    '/mf/lumsum_purchase',
+    '/mf/lumsum_purchase_mob',
+    '/mf/lumsum_redemption_mob',
+    '/mf/lumsum_redemption_cancel',
+    '/mfapi/mandate_creation',
     // Fund transfer between segments
     '/FundTransfer',
+    // API keys, TOTP secrets and OAuth apps on the real account
+    '/UserApiKeyRenReq',
+    '/GetUserApiKey',
+    '/AppKeyStore',
+    '/GenSecretKey',
+    '/oauth-apps/create',
+    '/oauth-apps/update',
+    '/oauth-apps/delete',
   ];
+
+  /// Catches order endpoints added by a future sync under a new name, any case.
+  static final RegExp _orderPattern = RegExp(
+    r'/(place|modify|cancel|exit)[a-z]*order$',
+    caseSensitive: false,
+  );
 
   /// Returns true when [url] must never be called in paper mode.
   static bool isBlocked(Uri url) {
@@ -65,8 +112,13 @@ class PaperNetworkGuard {
     final hostPath = '$host${url.path}';
     if (_blockedPrefixes.any(hostPath.startsWith)) return true;
 
-    final path = url.path.replaceAll(RegExp(r'/+$'), '');
-    return _blockedPathSuffixes.any(path.endsWith);
+    final path =
+        url.path.replaceAll(RegExp(r'/+'), '/').replaceAll(RegExp(r'/$'), '');
+    if (host == 'rekycbe.mynt.in' && _blockedAccountPaths.contains(path)) {
+      return true;
+    }
+    return _orderPattern.hasMatch(path) ||
+        _blockedPathSuffixes.any(path.endsWith);
   }
 
   /// A local "failed" response in the common broker shape, so callers that
