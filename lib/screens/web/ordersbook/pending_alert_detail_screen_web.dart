@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,7 @@ import 'package:shadcn_flutter/shadcn_flutter.dart' as shadcn;
 import '../../../models/marketwatch_model/alert_model/alert_pending_model.dart';
 import '../../../provider/market_watch_provider.dart';
 import '../../../provider/thems.dart';
+import '../../../provider/websocket_provider.dart';
 import '../../../res/mynt_web_text_styles.dart';
 import '../../../res/mynt_web_color_styles.dart';
 import '../../../sharedWidget/functions.dart';
@@ -41,9 +44,52 @@ class _PendingAlertDetailScreenWebState
   bool _valueTouched = false;
   static const int _maxValueLength = 15;
 
+  // Live price shown in the sheet — kept local (as the Order Details sheet
+  // does) and updated from the socket while the sheet is open.
+  String? _ltp;
+  String? _change;
+  String? _perChange;
+  StreamSubscription? _socketSubscription;
+
+  // Change / % change may legitimately be 0.00; only a zero LTP is a
+  // placeholder.
+  bool _isPresent(String? value) =>
+      value != null && value != "null" && value.isNotEmpty;
+
+  bool _isValidLtp(String? value) =>
+      _isPresent(value) &&
+      value != "0" &&
+      value != "0.0" &&
+      value != "0.00";
+
+  void _setupSocketSubscription() {
+    try {
+      _socketSubscription =
+          ref.read(websocketProvider).socketDataStream.listen((socketData) {
+        if (!mounted) return;
+        final data = socketData[widget.alert.token];
+        if (data == null) return;
+        final lp = data['lp']?.toString();
+        final chng = data['chng']?.toString();
+        final pc = data['pc']?.toString();
+        if (lp == _ltp && chng == _change && pc == _perChange) return;
+        setState(() {
+          if (_isValidLtp(lp)) _ltp = lp;
+          if (_isPresent(chng)) _change = chng;
+          if (_isPresent(pc)) _perChange = pc;
+        });
+      });
+    } catch (e) {
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _ltp = widget.alert.ltp;
+    _change = widget.alert.change;
+    _perChange = widget.alert.perChange;
+    _setupSocketSubscription();
     valueCtrl = TextEditingController(text: widget.alert.d);
     _valueFocusNode = FocusNode();
     modifiedValue = widget.alert.d ?? "";
@@ -158,6 +204,7 @@ class _PendingAlertDetailScreenWebState
 
   @override
   void dispose() {
+    _socketSubscription?.cancel();
     valueCtrl.dispose();
     _valueFocusNode.dispose();
     super.dispose();
@@ -301,18 +348,20 @@ class _PendingAlertDetailScreenWebState
         // Price and Change
         Row(
           children: [
+            // Live values (_ltp/_change/_perChange) replace the open-time
+            // snapshot from widget.alert.
             Text(
-              "${widget.alert.ltp != "null" ? widget.alert.ltp ?? widget.alert.close ?? 0.00 : '0.00'}",
+              // "${widget.alert.ltp != "null" ? widget.alert.ltp ?? widget.alert.close ?? 0.00 : '0.00'}",
+              "${_ltp != "null" ? _ltp ?? widget.alert.close ?? 0.00 : '0.00'}",
               style: MyntWebTextStyles.title(
                 context,
-                color: (widget.alert.change == "null" ||
-                            widget.alert.change == null) ||
-                        widget.alert.change == "0.00"
+                color: (_change == "null" || _change == null) ||
+                        _change == "0.00"
                     ? resolveThemeColor(context,
                         dark: MyntColors.textSecondaryDark,
                         light: MyntColors.textSecondary)
-                    : (widget.alert.change?.startsWith("-") == true ||
-                            widget.alert.perChange?.startsWith("-") == true)
+                    : (_change?.startsWith("-") == true ||
+                            _perChange?.startsWith("-") == true)
                         ? resolveThemeColor(context,
                             dark: MyntColors.lossDark, light: MyntColors.loss)
                         : resolveThemeColor(context,
@@ -323,7 +372,7 @@ class _PendingAlertDetailScreenWebState
             ),
             const SizedBox(width: 4),
             Text(
-              "${(double.tryParse(widget.alert.change ?? '0.00') ?? 0.00).toStringAsFixed(2)} (${(double.tryParse(widget.alert.perChange ?? '0.00') ?? 0.00).toStringAsFixed(2)}%)",
+              "${(double.tryParse(_change ?? '0.00') ?? 0.00).toStringAsFixed(2)} (${(double.tryParse(_perChange ?? '0.00') ?? 0.00).toStringAsFixed(2)}%)",
               style: MyntWebTextStyles.bodySmall(
                 context,
                 color: resolveThemeColor(context,
@@ -459,14 +508,30 @@ class _PendingAlertDetailScreenWebState
 
                       // Perform cancel operation
                       try {
-                        await marketWatchProviderRef.fetchCancelAlert(
-                            alertId, navigatorContext);
+                        // Success only when the broker confirms; otherwise
+                        // show its reason.
+                        // await marketWatchProviderRef.fetchCancelAlert(
+                        //     alertId, navigatorContext);
+                        final cancelled = await marketWatchProviderRef
+                            .fetchCancelAlert(alertId, navigatorContext);
                         await marketWatchProviderRef
                             .fetchPendingAlert(navigatorContext);
 
                         if (navigatorContext.mounted) {
-                          showResponsiveSuccess(
-                              navigatorContext, "Alert Cancelled");
+                          // showResponsiveSuccess(
+                          //     navigatorContext, "Alert Cancelled");
+                          final emsg =
+                              marketWatchProviderRef.cancelalert?.emsg ?? '';
+                          if (cancelled) {
+                            showResponsiveSuccess(
+                                navigatorContext, "Alert Cancelled");
+                          } else if (!emsg.contains('Session Expired')) {
+                            showResponsiveErrorMessage(
+                                navigatorContext,
+                                emsg.isNotEmpty
+                                    ? emsg
+                                    : "Failed to cancel alert");
+                          }
                         }
                       } catch (e) {
                         if (navigatorContext.mounted) {
@@ -538,7 +603,8 @@ class _PendingAlertDetailScreenWebState
           ),
           _rowOfInfoData(
             "LTP",
-            "${widget.alert.ltp ?? widget.alert.close ?? '0.00'}",
+            // "${widget.alert.ltp ?? widget.alert.close ?? '0.00'}",
+            "${_ltp ?? widget.alert.close ?? '0.00'}",
             theme,
           ),
           _rowOfInfoData(

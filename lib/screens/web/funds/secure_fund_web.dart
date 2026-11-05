@@ -13,6 +13,7 @@ import '../../../api/paper/paper_order_engine.dart';
 import '../../../api/paper/virtual_wallet.dart';
 import '../../../locator/locator.dart';
 import '../../../locator/preference.dart';
+import '../../../models/profile_model/fund_detial_model.dart';
 import '../../../provider/fund_provider.dart';
 import '../../../provider/privacy_provider.dart';
 import '../../../provider/thems.dart';
@@ -44,6 +45,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadMtf());
     if (widget.initialAction != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (widget.initialAction == 'addMoney') {
@@ -53,6 +55,11 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         }
       });
     }
+  }
+
+  Future<void> _loadMtf() async {
+    if (!mounted) return;
+    await ref.read(fundProvider).fetchMtfFunds(context);
   }
 
   void _openAddMoney() {
@@ -73,32 +80,14 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
     });
   }
 
-  void _openWithdraw() async {
+  void _openWithdraw() {
     if (isPaperTrading) {
       _showPaperWalletDialog(isDeposit: false);
       return;
     }
-    final trancation = ref.read(transcationProvider);
-    // Ensure bank details and client data are fetched
-    if (trancation.bankdetails == null) {
-      trancation.fetchfundbanks(context);
-    }
-    if (trancation.decryptclientcheck == null) {
-      trancation.fetchc(context);
-    }
-    await trancation.fetchValidateToken(context);
-    Future.delayed(
-      const Duration(milliseconds: 100),
-      () async {
-        await trancation.ip();
-        await trancation.fetchupiIdView(
-          trancation.bankdetails!.dATA![trancation.indexss][1],
-          trancation.bankdetails!.dATA![trancation.indexss][2],
-        );
-        await trancation.fetchcwithdraw(context);
-      },
-    );
-    trancation.changebool(false);
+    // The withdraw screen loads its own balance, limits, requests and IP on
+    // open.
+    ref.read(transcationProvider).changebool(false);
     setState(() {
       _showWithdraw = true;
     });
@@ -442,10 +431,6 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
 
     if (_showWithdraw) {
       return WithdrawScreen(
-        withdarw: trancation,
-        foucs: trancation.focusNode,
-        theme: theme,
-        segment: trancation.textValue,
         onBack: () {
           setState(() {
             _showWithdraw = false;
@@ -460,6 +445,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
           setState(() {
             _showMtf = false;
           });
+          _loadMtf();
         },
       );
     }
@@ -660,6 +646,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
 
   Widget _buildFinancialInfoCards(
       funds, ThemesProvider theme, bool isSmallScreen) {
+    final FundDetailModel? mtf = funds.mtfFundDetail;
     final content = isSmallScreen
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -688,6 +675,20 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                 context: context,
                 onTap: () => _showSegmentBreakdown(funds),
               ),
+              if (mtf != null) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Divider(
+                    color: resolveThemeColor(
+                      context,
+                      dark: MyntColors.dividerDark,
+                      light: MyntColors.divider,
+                    ),
+                    height: 1,
+                  ),
+                ),
+                _buildMtfSection(mtf, theme),
+              ],
             ],
           )
         : Row(
@@ -719,6 +720,18 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
                   onTap: () => _showSegmentBreakdown(funds),
                 ),
               ),
+              if (mtf != null) ...[
+                Container(
+                  width: 0.5,
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  color: resolveThemeColor(
+                    context,
+                    dark: MyntColors.dividerDark,
+                    light: MyntColors.divider,
+                  ),
+                ),
+                Expanded(child: _buildMtfSection(mtf, theme)),
+              ],
             ],
           );
 
@@ -742,6 +755,29 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         ),
         padding: const EdgeInsets.all(12),
         child: content,
+      ),
+    );
+  }
+
+  /// Values come from `Limits` with prd=F (MTF_FUNDS_SECTION_MIGRATION.md 2.3).
+  Widget _buildMtfSection(FundDetailModel mtf, ThemesProvider theme) {
+    double parse(String? value) => _safeParseDouble("${value ?? 0.00}");
+    String format(String? value) =>
+        getFormatter(value: parse(value), v4d: false, noDecimal: false);
+    final total =
+        (parse(mtf.cash) + parse(mtf.brkcollamt)) - parse(mtf.unclearedcash);
+
+    return _buildSection(
+      title: "MTF",
+      value: "$total",
+      context: context,
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildInfoRow("Cash", format(mtf.cash), theme),
+          _buildInfoRow("MTF Collateral", format(mtf.collateral), theme),
+          _buildInfoRow("Unused Cash", format(mtf.unclearedcash), theme),
+        ],
       ),
     );
   }
@@ -833,15 +869,12 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
   }
 
   Widget _buildAvailableCashContent(funds, theme) {
-    final filteredCredits = funds.listOfCredits.length > 1
-        ? funds.listOfCredits
-            .sublist(1)
-            .where((item) =>
-                item["name"] != "Collateral" &&
-                item["name"] != "Opening Balance" &&
-                item["name"] != "Payin")
-            .toList()
-        : [];
+    final filteredCredits = funds.listOfCredits
+        .where((item) =>
+            item["name"] != "Collateral" &&
+            item["name"] != "Opening Balance" &&
+            item["name"] != "Payin")
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -850,9 +883,7 @@ class _SecureFundWebState extends ConsumerState<SecureFundWeb> {
         _buildInfoRow(
           "Cash Balance",
           getFormatter(
-            value: funds.listOfCredits.isNotEmpty
-                ? double.parse("${funds.listOfCredits[0]["value"]}")
-                : 0.00,
+            value: _safeParseDouble("${funds.fundDetailModel?.cash ?? 0.00}"),
             v4d: false,
             noDecimal: false,
           ),
@@ -1365,51 +1396,49 @@ class _MarginBreakdownDialogState
     // Material default surface shows through and the dialog looks grey.
     return Dialog(
       backgroundColor: Colors.transparent,
-      child: Center(
-        child: shadcn.Card(
-          borderRadius: BorderRadius.circular(8),
-          padding: EdgeInsets.zero,
-          child: ConstrainedBox(
-            constraints:
-                BoxConstraints(maxWidth: 460, maxHeight: maxDialogHeight),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _header(),
-                _summary(),
-                Flexible(
-                  // Always-on scrollbar, same treatment as the Market Info
-                  // panel: the platform bar is suppressed and a RawScrollbar
-                  // with thumbVisibility draws in its place. The wider right
-                  // padding keeps the thumb clear of the segment cards.
-                  child: ScrollConfiguration(
-                    behavior: const MaterialScrollBehavior()
-                        .copyWith(scrollbars: false),
-                    child: RawScrollbar(
+      child: shadcn.Card(
+        borderRadius: BorderRadius.circular(8),
+        padding: EdgeInsets.zero,
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxWidth: 460, maxHeight: maxDialogHeight),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _header(),
+              _summary(),
+              Flexible(
+                // Always-on scrollbar, same treatment as the Market Info
+                // panel: the platform bar is suppressed and a RawScrollbar
+                // with thumbVisibility draws in its place. The wider right
+                // padding keeps the thumb clear of the segment cards.
+                child: ScrollConfiguration(
+                  behavior: const MaterialScrollBehavior()
+                      .copyWith(scrollbars: false),
+                  child: RawScrollbar(
+                    controller: _scrollController,
+                    thumbVisibility: true,
+                    thickness: 6,
+                    radius: const Radius.circular(0),
+                    thumbColor: resolveThemeColor(context,
+                            dark: MyntColors.textSecondaryDark,
+                            light: MyntColors.textSecondary)
+                        .withValues(alpha: 0.4),
+                    child: SingleChildScrollView(
                       controller: _scrollController,
-                      thumbVisibility: true,
-                      thickness: 6,
-                      radius: const Radius.circular(0),
-                      thumbColor: resolveThemeColor(context,
-                              dark: MyntColors.textSecondaryDark,
-                              light: MyntColors.textSecondary)
-                          .withValues(alpha: 0.4),
-                      child: SingleChildScrollView(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.fromLTRB(10, 10, 20, 10),
-                        child: Column(
-                          children: [
-                            for (final s in widget.segments) _segmentCard(s),
-                          ],
-                        ),
+                      padding: const EdgeInsets.fromLTRB(10, 10, 20, 10),
+                      child: Column(
+                        children: [
+                          for (final s in widget.segments) _segmentCard(s),
+                        ],
                       ),
                     ),
                   ),
                 ),
-                _unrealized(),
-              ],
-            ),
+              ),
+              _unrealized(),
+            ],
           ),
         ),
       ),

@@ -1242,6 +1242,11 @@ class _ChartIndicatorsMixin {
               firstAbs, firstAbs + visible.length - 1);
           continue;
         }
+        if (ind.kind === 'ftcheck') {
+          this._drawFtcheckIndicator(ind, plot, lo, hi, priceToY,
+              firstAbs, firstAbs + visible.length - 1);
+          continue;
+        }
         if (ind.kind === 'bb') {
           const bands = this._computeBB(ind);
           const drawSeries = (values, lineW) => {

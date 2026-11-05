@@ -304,7 +304,10 @@ class PaperApiExporter extends ApiExporter with PaperSafetyGuard {
   // ════════════════════════════════════════════════════════════════
 
   @override
-  Future<FundDetailModel> getFunds() async {
+  Future<FundDetailModel> getFunds({String? prd}) async {
+    // Product-specific limits (MTF) are live-account data; "Not_Ok" hides them.
+    if (prd != null) return FundDetailModel.fromJson({"stat": "Not_Ok"});
+
     final balance = VirtualWallet.instance.balance;
     final trades = PaperOrderEngine.instance.trades;
 

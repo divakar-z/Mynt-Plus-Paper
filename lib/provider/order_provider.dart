@@ -1769,6 +1769,25 @@ class OrderProvider extends DefaultChangeNotifier {
             }
           }
 
+          // A refresh builds new order objects, which dropped the user's
+          // Cancel ticks while the "Cancel (n)" count kept the old number.
+          // Carry the ticks over to the same orders and recount.
+          final tickedOrderNos = <String>{
+            for (final o in _openOrder ?? <OrderBookModel>[])
+              if ((o.isExitSelection ?? false) && o.norenordno != null)
+                o.norenordno!
+          };
+          var tickedCount = 0;
+          for (final o in tempOpen) {
+            if (o.norenordno != null && tickedOrderNos.contains(o.norenordno)) {
+              o.isExitSelection = true;
+              tickedCount++;
+            }
+          }
+          _exitOrderQty = tickedCount;
+          _isExitAllOrder =
+              tempOpen.isNotEmpty && tickedCount == tempOpen.length;
+
           _executedOrder = tempExecuted;
           _openOrder = tempOpen;
           _allOrder = tempAll;
@@ -2062,41 +2081,73 @@ class OrderProvider extends DefaultChangeNotifier {
     notifyListeners();
   }
 
+  /// Cancels the ticked orders. Returns how many of them failed, so the
+  /// caller does not report success when the exchange refused some.
   exitOrders(context) async {
+    var failed = 0;
     for (var element in _openOrder!) {
       if (element.isExitSelection ?? false) {
+        // if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
+        //     element.snonum != null) {
+        //   await fetchExitSNOOrd(element.snonum.toString(),
+        //       element.prd.toString(), context, false);
+        // } else {
+        //   await fetchOrderCancel(element.norenordno.toString(), context, false);
+        // }
+        final dynamic result;
         if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
             element.snonum != null) {
-          await fetchExitSNOOrd(element.snonum.toString(),
+          result = await fetchExitSNOOrd(element.snonum.toString(),
               element.prd.toString(), context, false);
         } else {
-          await fetchOrderCancel(element.norenordno.toString(), context, false);
+          result = await fetchOrderCancel(
+              element.norenordno.toString(), context, false);
         }
+        if (result is! CancelOrderModel || result.stat != "Ok") failed++;
       }
+    }
+    // fetchOrderBook now carries ticks across the refresh, so clear them
+    // here along with the count once the cancel run is over.
+    for (var element in _openOrder ?? <OrderBookModel>[]) {
+      element.isExitSelection = false;
     }
     await fetchOrderBook(context, true);
     Navigator.pop(context);
     _exitOrderQty = 0;
     _isExitAllOrder = false;
+    return failed;
   }
 
-  /// Cancel all pending/open orders
-  Future<void> cancelAllPendingOrders(context) async {
-    if (_openOrder == null) return;
+  /// Cancel all pending/open orders. Returns how many of them failed.
+  // Future<void> cancelAllPendingOrders(context) async {
+  Future<int> cancelAllPendingOrders(context) async {
+    if (_openOrder == null) return 0;
+    var failed = 0;
     for (var element in _openOrder!) {
       final status = element.status?.toUpperCase() ?? '';
       if (status == 'PENDING' || status == 'OPEN' || status == 'TRIGGER_PENDING') {
+        // if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
+        //     element.snonum != null) {
+        //   await fetchExitSNOOrd(element.snonum.toString(),
+        //       element.prd.toString(), context, false);
+        // } else {
+        //   await fetchOrderCancel(element.norenordno.toString(), context, false);
+        // }
+        final dynamic result;
         if ((element.sPrdtAli == "BO" || element.sPrdtAli == "CO") &&
             element.snonum != null) {
-          await fetchExitSNOOrd(element.snonum.toString(),
+          result = await fetchExitSNOOrd(element.snonum.toString(),
               element.prd.toString(), context, false);
         } else {
-          await fetchOrderCancel(element.norenordno.toString(), context, false);
+          result = await fetchOrderCancel(
+              element.norenordno.toString(), context, false);
         }
+        if (result is! CancelOrderModel || result.stat != "Ok") failed++;
       }
     }
     await fetchOrderBook(context, true);
     Navigator.pop(context);
+    return failed;
   }
 
   Future fetchOrderCancel(String orderNum, context, bool loop) async {

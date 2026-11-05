@@ -523,6 +523,26 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
   //   return textPainter.width;
   // }
 
+  // The instrument text exactly as the Instrument cell shows it.
+  String _instrumentSortText(OrderBookModel order) =>
+      (order.masterName ?? (order.tsym ?? '')).replaceAll("-EQ", "").trim();
+
+  // The LTP exactly as _OrderLTPCell shows it: socket price, else the
+  // order's LTP / close fallback.
+  double _shownLtp(OrderBookModel order) {
+    final socketLtp = ref
+        .read(websocketProvider)
+        .socketDatas[order.token ?? '']?['lp']
+        ?.toString();
+    final ltp = (socketLtp == null ||
+            socketLtp == 'null' ||
+            socketLtp.isEmpty ||
+            (double.tryParse(socketLtp) ?? 0) == 0)
+        ? CellFormatters.getValidLTP(order)
+        : socketLtp;
+    return double.tryParse(ltp) ?? 0;
+  }
+
   // Sort orders based on 8 columns: Time, Type, Instrument, Product, Qty., LTP, Price, Status
   List<OrderBookModel> _getSortedOrders(List<OrderBookModel> orders) {
     if (_sortColumnIndex == null) return orders;
@@ -550,7 +570,10 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
           comparison = (a.trantype ?? '').compareTo(b.trantype ?? '');
           break;
         case 3: // Instrument
-          comparison = (a.tsym ?? '').compareTo(b.tsym ?? '');
+          // Sorted on the raw trading symbol, so F&O rows (shown by their
+          // display name) did not come out alphabetical. Sort on the shown name.
+          // comparison = (a.tsym ?? '').compareTo(b.tsym ?? '');
+          comparison = _instrumentSortText(a).compareTo(_instrumentSortText(b));
           break;
         case 4: // Product
           comparison =
@@ -561,8 +584,11 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               .compareTo(int.tryParse(b.qty ?? '0') ?? 0);
           break;
         case 6: // LTP
-          comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
-              .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
+          // order.ltp is never filled on web (the cell shows the socket
+          // price), so every row compared as 0. Sort on the shown LTP.
+          // comparison = (double.tryParse(a.ltp ?? '0') ?? 0)
+          //     .compareTo(double.tryParse(b.ltp ?? '0') ?? 0);
+          comparison = _shownLtp(a).compareTo(_shownLtp(b));
           break;
         case 7: // Price
           comparison = (double.tryParse(a.prc ?? '0') ?? 0)
@@ -706,7 +732,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                             buildHeaderCell('Type', 2),
                             buildHeaderCell('Instrument', 3),
                             buildHeaderCell('Product', 4, true),
-                            buildHeaderCell('Qty.', 5, true),
+                            buildHeaderCell('Qty', 5, true),
                             buildHeaderCell('LTP', 6, true),
                             buildHeaderCell('Price', 7, true),
                             buildHeaderCell('Status', 8, true),
@@ -988,6 +1014,11 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     // derivatives, else the tsym; remove "-EQ" and don't include exchange.
     final symbol = order.masterName ?? (order.tsym ?? '');
     final displayText = symbol.replaceAll("-EQ", "").trim();
+    // TC_58: AMO orders come back as OPEN / PENDING with amo = "Yes"; tag them
+    // next to the exchange so the Status badge keeps the real status.
+    final isAmo = (order.amo ?? '').toUpperCase() == 'YES';
+    // final amoColor = resolveThemeColor(context,
+    //     dark: MyntColors.textSecondaryDark, light: MyntColors.textSecondary);
 
     return GestureDetector(
       onTap: () => actionHandler.openOrderDetail(order),
@@ -1003,33 +1034,101 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               alignment: Alignment.centerLeft,
               child: Tooltip(
                 message:
-                    '$displayText${order.exch != null && order.exch!.isNotEmpty ? ' ${order.exch}' : ''}',
+                    '$displayText${order.exch != null && order.exch!.isNotEmpty ? ' ${order.exch}' : ''}${isAmo ? ' AMO' : ''}',
                 child: Padding(
                   padding: EdgeInsets.only(right: isHovered ? 105.0 : 0.0),
-                  child: RichText(
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                    softWrap: false,
-                    text: TextSpan(
-                      children: [
-                        // Symbol (14px, 500)
-                        TextSpan(
-                          text: displayText,
-                          style: _getTextStyle(context),
+                  // TC_250: AMO tag sat inside the RichText, so a long name's
+                  // ellipsis hid it (MCX/F&O). Name now shrinks; tag stays.
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: RichText(
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          softWrap: false,
+                          text: TextSpan(
+                            children: [
+                              // Symbol (14px, 500)
+                              TextSpan(
+                                text: displayText,
+                                style: _getTextStyle(context),
+                              ),
+                              // Exchange (10px, 500, muted color) - matching positions table style
+                              if (order.exch != null && order.exch!.isNotEmpty)
+                                TextSpan(
+                                  text: ' ${order.exch}',
+                                  style: MyntWebTextStyles.para(
+                                    context,
+                                    darkColor: MyntColors.textSecondaryDark,
+                                    lightColor: MyntColors.textSecondary,
+                                    fontWeight: MyntFonts.medium,
+                                  ).copyWith(fontSize: 10),
+                                ),
+                              // AMO tag (TC_58) — moved out of the RichText (TC_250)
+                              // if (isAmo)
+                              //   WidgetSpan(
+                              //     alignment: PlaceholderAlignment.middle,
+                              //     // child: Container(
+                              //     //   margin: const EdgeInsets.only(left: 6),
+                              //     //   padding: const EdgeInsets.symmetric(
+                              //     //       horizontal: 4, vertical: 1),
+                              //     //   decoration: BoxDecoration(
+                              //     //     color: amoColor.withValues(alpha: 0.12),
+                              //     //     borderRadius: BorderRadius.circular(3),
+                              //     //   ),
+                              //     //   child: Text(
+                              //     //     'AMO',
+                              //     //     style: MyntWebTextStyles.para(
+                              //     //       context,
+                              //     //       color: amoColor,
+                              //     //       fontWeight: MyntFonts.medium,
+                              //     //     ).copyWith(fontSize: 10),
+                              //     //   ),
+                              //     // ),
+                              //     child: Container(
+                              //       margin: const EdgeInsets.only(left: 6),
+                              //       padding: const EdgeInsets.symmetric(
+                              //           horizontal: 6, vertical: 2),
+                              //       decoration: BoxDecoration(
+                              //         color: const Color(0xFFB7791F),
+                              //         borderRadius: BorderRadius.circular(3),
+                              //       ),
+                              //       child: Text(
+                              //         'AMO',
+                              //         style: MyntWebTextStyles.para(
+                              //           context,
+                              //           color: MyntColors.textWhite,
+                              //           fontWeight: MyntFonts.semiBold,
+                              //         ),
+                              //       ),
+                              //     ),
+                              //   ),
+                            ],
+                          ),
                         ),
-                        // Exchange (10px, 500, muted color) - matching positions table style
-                        if (order.exch != null && order.exch!.isNotEmpty)
-                          TextSpan(
-                            text: ' ${order.exch}',
+                      ),
+                      // AMO tag (TC_58). Same badge as the place order
+                      // screen's AMO banner.
+                      if (isAmo)
+                        Container(
+                          margin: const EdgeInsets.only(left: 6),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFB7791F),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            'AMO',
                             style: MyntWebTextStyles.para(
                               context,
-                              darkColor: MyntColors.textSecondaryDark,
-                              lightColor: MyntColors.textSecondary,
-                              fontWeight: MyntFonts.medium,
-                            ).copyWith(fontSize: 10),
+                              color: MyntColors.textWhite,
+                              fontWeight: MyntFonts.semiBold,
+                            ),
                           ),
-                      ],
-                    ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -1084,7 +1183,10 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     final isProcessing = _processingOrderToken == uniqueId &&
         (isBOCO ? _isProcessingExit : _isProcessingCancel);
 
-    return GestureDetector(
+    return Tooltip(
+      // X exits CO/BO orders, cancels the rest.
+      message: isBOCO ? 'Exit' : 'Cancel',
+      child: GestureDetector(
       onTap: isProcessing
           ? null
           : () async {
@@ -1140,6 +1242,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
               dark: MyntColors.lossDark, light: MyntColors.loss),
         ),
       ),
+      ),
     );
   }
 
@@ -1152,7 +1255,9 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
     final isProcessing =
         _processingOrderToken == uniqueId && _isProcessingModify;
 
-    return GestureDetector(
+    return Tooltip(
+      message: 'Modify',
+      child: GestureDetector(
       onTap: isProcessing
           ? null
           : () async {
@@ -1198,6 +1303,7 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
           color: resolveThemeColor(context,
               dark: MyntColors.primaryDark, light: MyntColors.primary),
         ),
+      ),
       ),
     );
   }
@@ -1395,14 +1501,42 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
       child: ClipRect(
         child: Consumer(
           builder: (context, ref, child) {
-            final isExitAllOrder =
-                ref.watch(orderProvider.select((p) => p.isExitAllOrder));
+            // final isExitAllOrder =
+            //     ref.watch(orderProvider.select((p) => p.isExitAllOrder));
             final hasPendingOrders = filteredOrders.any((o) {
               final status = o.status?.toUpperCase() ?? '';
               return status == 'PENDING' ||
                   status == 'OPEN' ||
                   status == 'TRIGGER_PENDING';
             });
+            // Select-all ticked every open order, including the ones a search
+            // hides, so "Cancel (n)" cancelled orders the user could not see.
+            // It now works on the rows on screen that can be cancelled.
+            final liveOrders = ref.watch(orderProvider).openOrder ?? [];
+            bool isTicked(OrderBookModel o) {
+              final i =
+                  liveOrders.indexWhere((x) => x.norenordno == o.norenordno);
+              return i >= 0
+                  ? (liveOrders[i].isExitSelection ?? false)
+                  : (o.isExitSelection ?? false);
+            }
+
+            final visiblePending = filteredOrders.where((o) {
+              final status = o.status?.toUpperCase() ?? '';
+              return status == 'PENDING' ||
+                  status == 'OPEN' ||
+                  status == 'TRIGGER_PENDING';
+            }).toList();
+            final allVisibleTicked =
+                visiblePending.isNotEmpty && visiblePending.every(isTicked);
+            void setVisibleTicks(bool tick) {
+              for (final o in visiblePending) {
+                if (isTicked(o) == tick) continue;
+                final i =
+                    liveOrders.indexWhere((x) => x.norenordno == o.norenordno);
+                if (i >= 0) orderBook.selectExitOrder(i);
+              }
+            }
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               alignment: Alignment.centerLeft,
@@ -1424,14 +1558,20 @@ class _OpenOrdersScreenState extends ConsumerState<OpenOrdersScreen> {
                   },
                 ),
                 child: shadcn.Checkbox(
-                  state: isExitAllOrder
+                  // state: isExitAllOrder
+                  //     ? shadcn.CheckboxState.checked
+                  //     : shadcn.CheckboxState.unchecked,
+                  // onChanged: hasPendingOrders
+                  //     ? (state) {
+                  //         orderBook.selectExitAllOrders(
+                  //             state == shadcn.CheckboxState.checked);
+                  //       }
+                  //     : null,
+                  state: allVisibleTicked
                       ? shadcn.CheckboxState.checked
                       : shadcn.CheckboxState.unchecked,
                   onChanged: hasPendingOrders
-                      ? (state) {
-                          orderBook.selectExitAllOrders(
-                              state == shadcn.CheckboxState.checked);
-                        }
+                      ? (state) => setVisibleTicks(!allVisibleTicked)
                       : null,
                   enabled: hasPendingOrders,
                   activeColor: resolveThemeColor(

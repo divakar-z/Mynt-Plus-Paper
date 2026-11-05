@@ -12,6 +12,7 @@ import '../screens/Mobile/profile_screen/profile_main_screen.dart';
 String globalcurrmail = '';
 String globalNewEmail = '';
 String globaldpcode = '';
+String globalpan = '';
 var globalfulldata;
 String globalnewmob = '';
 
@@ -39,10 +40,11 @@ mixin ProfileAllDetailsApi on ApiCore {
   }
 
   sendOTPtoChangeEmailApi(String newEmail, String oldEmail, String clientName,
-      String dpcode) async {
+      String dpcode, {String pan = ''}) async {
     globalcurrmail = oldEmail;
     globalNewEmail = newEmail;
     globaldpcode = dpcode;
+    globalpan = pan;
     try {
       final uri = Uri.parse(apiLinks.sendOTPEmailURL);
 
@@ -125,6 +127,7 @@ mixin ProfileAllDetailsApi on ApiCore {
             "present_email": globalNewEmail,
             "previous_email": globalcurrmail,
             "client_name": "${prefs.clientName}",
+            "pan": globalpan,
           }));
 
       // // print(jsonEncode({
@@ -354,6 +357,7 @@ mixin ProfileAllDetailsApi on ApiCore {
     String? proofFileName,
     required String passwordRequired,
     required String password,
+    required String equityStatus,
   }) async {
     try {
       final uri = Uri.parse(apiLinks.addSegmentURL);
@@ -384,6 +388,7 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.fields['address'] = address;
       request.fields['password_required'] = passwordRequired;
       request.fields['password'] = password;
+      request.fields['equity_status'] = equityStatus;
 
       if (proofBytes != null && proofFileName != null) {
         request.files.add(http.MultipartFile.fromBytes(
@@ -395,6 +400,42 @@ mixin ProfileAllDetailsApi on ApiCore {
         request.fields['proff'] = '';
       }
 
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+      return jsonDecode(response.body);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// CDSL needs the client's signature on record before Equity is opened for
+  /// the first time. Returns the decoded body, e.g. {"stat":"Ok","signature":true}.
+  Future<Map<String, dynamic>> signatureCheckApi(String clientId) async {
+    try {
+      final uri = Uri.parse('${apiLinks.cdslSignatureCheckURL}/$clientId');
+      final res = await apiClient.get(uri, headers: razorpaytHeaders);
+      return jsonDecode(res.body);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Multipart with ONLY client_id + signature; the encoder sets the boundary.
+  Future<Map<String, dynamic>> signatureUploadApi({
+    required String clientId,
+    required Uint8List signatureBytes,
+    required String signatureFileName,
+  }) async {
+    try {
+      final uri = Uri.parse(apiLinks.cdslSignatureUploadURL);
+      var request = http.MultipartRequest('POST', uri);
+      request.headers.addAll(razorpaytHeaders);
+      request.fields['client_id'] = clientId;
+      request.files.add(http.MultipartFile.fromBytes(
+        'signature',
+        signatureBytes,
+        filename: signatureFileName,
+      ));
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
       return jsonDecode(response.body);
@@ -508,7 +549,8 @@ mixin ProfileAllDetailsApi on ApiCore {
             "client_name": "${prefs.clientName}",
             "client_email": "${globalfulldata.toJson()['CLIENT_ID_MAIL']}",
             "dp_code": "${globalfulldata.toJson()['CLIENT_DP_CODE']}",
-            "date_time": formattedDateUtc
+            "date_time": formattedDateUtc,
+            "pan": "${globalfulldata.toJson()['PAN_NO']}"
           }));
       final json = jsonDecode((res.body));
 
@@ -548,6 +590,7 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.fields['state'] = '';
       request.fields['client_email'] =
           "${fulldataprf.toJson()['CLIENT_ID_MAIL']}";
+      request.fields['pan'] = "${fulldataprf.toJson()['PAN_NO']}";
 
       // // print("proff: ${request.fields['proff']}");
       // // print("cur_address: ${request.fields['cur_address']}");
@@ -919,6 +962,7 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.fields['state'] = state;
       request.fields['client_email'] =
           "${clientData.toJson()['CLIENT_ID_MAIL']}";
+      request.fields['pan'] = "${clientData.toJson()['PAN_NO']}";
 
       if (proofBytes != null && proofFileName != null) {
         request.files.add(http.MultipartFile.fromBytes(
@@ -965,6 +1009,7 @@ mixin ProfileAllDetailsApi on ApiCore {
       request.fields['adr_manual'] = 'aadhar';
       request.fields['code'] = code;
       request.fields['state'] = state;
+      request.fields['pan'] = "${clientData.toJson()['PAN_NO']}";
 
       var response = await request.send();
       if (response.statusCode == 200) {
@@ -1398,7 +1443,8 @@ mixin ProfileAllDetailsApi on ApiCore {
             "client_name": "${prefs.clientName}",
             "client_email": "${clientData.toJson()['CLIENT_ID_MAIL']}",
             "dp_code": "${clientData.toJson()['CLIENT_DP_CODE']}",
-            "date_time": formattedDateUtc
+            "date_time": formattedDateUtc,
+            "pan": "${clientData.toJson()['PAN_NO']}"
           }));
       final json = jsonDecode(res.body);
       return json as Map<String, dynamic>;
@@ -1408,7 +1454,7 @@ mixin ProfileAllDetailsApi on ApiCore {
   }
 
   // ─── Web: Email file write (callable separately) ───
-  Future<Map<String, dynamic>?> emailFileWriteWebApi(String newEmail, String oldEmail, String dpCode) async {
+  Future<Map<String, dynamic>?> emailFileWriteWebApi(String newEmail, String oldEmail, String dpCode, String pan) async {
     try {
       DateTime nowUtc = DateTime.now().toUtc();
       String formattedDateUtc =
@@ -1425,6 +1471,7 @@ mixin ProfileAllDetailsApi on ApiCore {
             "present_email": newEmail,
             "previous_email": oldEmail,
             "client_name": "${prefs.clientName}",
+            "pan": pan,
           }));
       final json = jsonDecode(res.body);
       return json as Map<String, dynamic>;

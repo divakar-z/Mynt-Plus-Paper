@@ -22,6 +22,7 @@ import '../sharedWidget/functions.dart';
 import 'auth_provider.dart';
 import 'core/default_change_notifier.dart';
 import 'index_list_provider.dart';
+import 'profile_all_details_provider.dart';
 
 final fundProvider = ChangeNotifierProvider((ref) => FundProvider(ref));
 
@@ -155,6 +156,41 @@ class FundProvider extends DefaultChangeNotifier {
 
   clearFunds() {
     _fundDetailModel = null;
+    _mtfFundDetail = null;
+    notifyListeners();
+  }
+
+  /// MTF limits (`Limits` with prd=F). Null hides the Funds screen MTF section.
+  FundDetailModel? _mtfFundDetail;
+  FundDetailModel? get mtfFundDetail =>
+      _mtfFundDetail?.stat == "Ok" ? _mtfFundDetail : null;
+
+  /// Skipped unless the client's profile has `MTFCl == "Y"`.
+  Future<void> fetchMtfFunds(BuildContext context) async {
+    final clientId = pref.clientId;
+    try {
+      final profile = ref.read(profileAllDetailsProvider);
+      if (profile.clientAllDetailsSafe == null) {
+        await profile.fetchClientProfileAllDetails();
+      }
+      FundDetailModel? result;
+      if (profile.clientAllDetailsSafe?.clientData?.mTFCl == "Y") {
+        result = await api.getFunds(prd: "F");
+      }
+      // Ignore a late response from the previous account.
+      if (pref.clientId != clientId) return;
+      _mtfFundDetail = result;
+      if (result?.emsg == "Session Expired :  Invalid Session Key" &&
+          context.mounted) {
+        ref.read(authProvider).ifSessionExpired(context);
+      }
+    } catch (e) {
+      if (pref.clientId == clientId) _mtfFundDetail = null;
+      ref
+          .read(indexListProvider)
+          .logError
+          .add({"type": "API MTF Funds", "Error": "$e"});
+    }
     notifyListeners();
   }
 

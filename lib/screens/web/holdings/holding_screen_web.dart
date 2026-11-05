@@ -266,11 +266,20 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
   void _openPledgeView() {
     setState(() => _showPledge = true);
 
+    // Always reload: pledged qty may have changed since the last visit.
     final ledger = ref.read(ledgerProvider);
-    if (ledger.pledgeandunpledge == null) {
-      ledger.getCurrentDate('pandu');
-      ledger.fetchpledgeandunpledge(context);
-    }
+    if (ledger.pledgeandunpledge == null) ledger.getCurrentDate('pandu');
+    ledger.fetchpledgeandunpledge(context, showLoadErrors: true);
+  }
+
+  // Back from Pledge: a pledge / unpledge request changes the pledged qty
+  // on both tables, so reload equity and MTF holdings in the background.
+  void _closePledgeView() {
+    setState(() => _showPledge = false);
+
+    final portfolio = ref.read(portfolioProvider);
+    portfolio.fetchHoldings(context, "Refresh", isRefresh: true);
+    portfolio.fetchMtfHoldings(context, "Refresh", isRefresh: true);
   }
 
   @override
@@ -294,7 +303,7 @@ class _HoldingScreenContentState extends ConsumerState<_HoldingScreenContent> {
               light: MyntColors.backgroundColor),
           child: PledgenUnpledge(
             ddd: "DDDDD",
-            onBack: () => setState(() => _showPledge = false),
+            onBack: _closePledgeView,
           ),
         ),
       );

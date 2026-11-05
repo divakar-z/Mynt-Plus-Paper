@@ -166,6 +166,7 @@ class _IpoCancelAlertState extends ConsumerState<IpoCancelAlert> {
         name: widget.ipocancel.companyName.toString(),
         applicationNumber: widget.ipocancel.applicationNumber.toString(),
         respBid: [BidReference(bidReferenceNumber: '67890')],
+        cancelBids: widget.ipocancel.bidDetail ?? const [],
       );
 
       const List<IposBid> iposbids = [];

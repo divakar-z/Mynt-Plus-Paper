@@ -427,6 +427,7 @@ class ProfileProvider extends DefaultChangeNotifier {
         proofFileName: proofFileName,
         passwordRequired: passwordRequired,
         password: password,
+        equityStatus: clientData?.equityStatus ?? 'YES',
       );
       await fetchMobEmailStatus();
       return result;
@@ -435,6 +436,38 @@ class ProfileProvider extends DefaultChangeNotifier {
     } finally {
       _segmentSubmitting = false;
       notifyListeners();
+    }
+  }
+
+  /// true / false from CDSL, or null when the check failed or the body was
+  /// unexpected (caller shows "Unable to verify signature").
+  Future<bool?> checkCdslSignature() async {
+    try {
+      final result = await api.signatureCheckApi(pref.clientId ?? '');
+      final signature = result['signature'];
+      if (result['stat'] == 'Ok' && signature is bool) return signature;
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Returns null on success, otherwise the error message to show.
+  Future<String?> uploadCdslSignature({
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    try {
+      final result = await api.signatureUploadApi(
+        clientId: pref.clientId ?? '',
+        signatureBytes: bytes,
+        signatureFileName: fileName,
+      );
+      if (result['stat'] == 'Ok') return null;
+      return (result['msg'] ?? result['emsg'] ?? 'Unable to upload signature')
+          .toString();
+    } catch (e) {
+      return 'Unable to upload signature, please try again later';
     }
   }
 
@@ -462,7 +495,8 @@ class ProfileProvider extends DefaultChangeNotifier {
       String clientName, String dpcode) async {
     try {
       final response = await api.sendOTPtoChangeEmailApi(
-          newEmail, oldEmail, clientName, dpcode);
+          newEmail, oldEmail, clientName, dpcode,
+          pan: clientAllDetails.clientData?.pANNO ?? '');
       notifyListeners();
       return response?.toString();
     } catch (e) {
@@ -649,7 +683,8 @@ class ProfileProvider extends DefaultChangeNotifier {
   // ─── Web: Email file write ───
   Future<Map<String, dynamic>?> emailFileWriteWeb(String newEmail, String oldEmail, String dpCode) async {
     try {
-      final result = await api.emailFileWriteWebApi(newEmail, oldEmail, dpCode);
+      final result = await api.emailFileWriteWebApi(
+          newEmail, oldEmail, dpCode, clientAllDetails.clientData?.pANNO ?? '');
       if (result != null && result['fileid'] != null) {
         await fetchMobEmailStatus();
       }

@@ -378,7 +378,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
                         buildHeaderCell('Product', 2),
                         buildHeaderCell('Type', 3),
                         buildHeaderCell('LTP', 4),
-                        buildHeaderCell('Qty.', 5),
+                        buildHeaderCell('Qty', 5),
                         buildHeaderCell('Trigger', 6),
                         buildHeaderCell('Price', 7),
                         if (showTriggered)
@@ -797,7 +797,7 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
       'Instrument',
       'Product',
       'Type',
-      'Qty.',
+      'Qty',
       'LTP',
       'Trigger',
       'Price',
@@ -917,6 +917,22 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
   }
 
   // Sort GTT orders based on 9 columns: Created on, Instrument, Product, Type, LTP, Qty., Trigger, Price, Status
+  // The LTP exactly as _GttLTPCell shows it: socket price, else
+  // getValidLTPForGtt.
+  double _shownLtp(GttOrderBookModel order) {
+    final socketLtp = ref
+        .read(websocketProvider)
+        .socketDatas[order.token ?? '']?['lp']
+        ?.toString();
+    final ltp = (socketLtp == null ||
+            socketLtp == 'null' ||
+            socketLtp.isEmpty ||
+            (double.tryParse(socketLtp) ?? 0) == 0)
+        ? CellFormatters.getValidLTPForGtt(order)
+        : socketLtp;
+    return double.tryParse(ltp) ?? 0;
+  }
+
   List<GttOrderBookModel> _getSortedGttOrders(List<GttOrderBookModel> orders) {
     if (_sortColumnIndex == null) return orders;
 
@@ -949,9 +965,12 @@ class _GttOrdersScreenState extends ConsumerState<GttOrdersScreen> {
           }
           break;
         case 4: // LTP - numeric comparison
-          final aLtp = double.tryParse(a.ltp ?? '0') ?? 0.0;
-          final bLtp = double.tryParse(b.ltp ?? '0') ?? 0.0;
-          comparison = aLtp.compareTo(bLtp);
+          // ltp is never filled on web (the cell shows the socket price),
+          // so every row compared as 0. Sort on the shown LTP.
+          // final aLtp = double.tryParse(a.ltp ?? '0') ?? 0.0;
+          // final bLtp = double.tryParse(b.ltp ?? '0') ?? 0.0;
+          // comparison = aLtp.compareTo(bLtp);
+          comparison = _shownLtp(a).compareTo(_shownLtp(b));
           break;
         case 5: // Qty.
           comparison = (a.qty ?? 0).compareTo(b.qty ?? 0);

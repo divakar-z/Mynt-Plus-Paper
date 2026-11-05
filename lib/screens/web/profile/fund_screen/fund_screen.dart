@@ -45,6 +45,51 @@ import 'upi_id_screens/upi_id_cancel_alert.dart';
 import 'qr_payment_dialog.dart';
 import 'withdraw/withdraw_screen.dart';
 
+/// Groups a digit string the Indian way: 100001 becomes 1,00,001.
+/// Works on the string, so long values keep every digit.
+String _groupIndianDigits(String digits) {
+  if (digits.length <= 3) return digits;
+  final lastThree = digits.substring(digits.length - 3);
+  var rest = digits.substring(0, digits.length - 3);
+  final groups = <String>[];
+  while (rest.length > 2) {
+    groups.insert(0, rest.substring(rest.length - 2));
+    rest = rest.substring(0, rest.length - 2);
+  }
+  if (rest.isNotEmpty) groups.insert(0, rest);
+  return '${groups.join(',')},$lastThree';
+}
+
+/// Adds Indian commas while typing and keeps the cursor after the same digit.
+/// Refuses any edit above ₹50,00,000, typed or pasted, and reports the amount.
+class _IndianAmountFormatter extends TextInputFormatter {
+  _IndianAmountFormatter({required this.onOverLimit});
+
+  final ValueChanged<String> onOverLimit;
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final value = newValue.text.replaceFirst(RegExp(r'^0+'), '');
+    if (value.length > 7 || (value.isNotEmpty && int.parse(value) > 5000000)) {
+      onOverLimit(value);
+      return oldValue;
+    }
+    final formatted = _groupIndianDigits(newValue.text);
+    final end = newValue.selection.end.clamp(0, newValue.text.length);
+    var digitsLeft = end;
+    var offset = 0;
+    while (digitsLeft > 0 && offset < formatted.length) {
+      if (formatted[offset] != ',') digitsLeft--;
+      offset++;
+    }
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: offset),
+    );
+  }
+}
+
 class FundScreen extends ConsumerStatefulWidget {
   final TranctionProvider dd;
   final VoidCallback? onBack;
@@ -61,9 +106,37 @@ class _FundScreenState extends ConsumerState<FundScreen> {
   int _selectedPaymentMethod = -1; // -1 = none, 0 = Scan QR, 1 = UPI ID, 2 = Net Banking
   String _selectedGateway = 'RAZORPAY'; // 'RAZORPAY' or 'ATOM'
 
+  // The field shows 1,00,001 while fund.amount keeps plain digits (100001),
+  // because the payment calls and the provider read fund.amount.text directly.
+  final TextEditingController _amountDisplay = TextEditingController();
+  late final TextEditingController _amountSource;
+
+  // The digits of a typed or pasted amount refused for being above ₹50,00,000.
+  String? _refusedAmount;
+
+  void _setRefusedAmount(String? digits) {
+    if (_refusedAmount != digits && mounted) {
+      setState(() => _refusedAmount = digits);
+    }
+  }
+
+  void _syncAmountDisplay() {
+    final formatted = _groupIndianDigits(_amountSource.text);
+    if (_amountDisplay.text != formatted) {
+      _setRefusedAmount(null);
+      _amountDisplay.value = TextEditingValue(
+        text: formatted,
+        selection: TextSelection.collapsed(offset: formatted.length),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _amountSource = ref.read(transcationProvider).amount;
+    _amountSource.addListener(_syncAmountDisplay);
+    _syncAmountDisplay();
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       checkIosAvailableApps();
     }
@@ -105,6 +178,8 @@ class _FundScreenState extends ConsumerState<FundScreen> {
   @override
   void dispose() {
     _isDisposedIos = true;
+    _amountSource.removeListener(_syncAmountDisplay);
+    _amountDisplay.dispose();
     super.dispose();
   }
 
@@ -482,7 +557,7 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                       fund.stopUpiCollectStatusPolling();
                                       final result = await fund.checkUpiCollectStatusOnce();
                                       if (context.mounted) {
-                                        Navigator.of(context).pop(result?.data?.status ?? 'CANCELLED');
+                                        Navigator.of(context).pop(paymentCancelResult(result?.data?.status));
                                         fund.focusNode.unfocus();
                                       }
                                     },
@@ -539,7 +614,7 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                         fund.stopUpiCollectStatusPolling();
                                         final result = await fund.checkUpiCollectStatusOnce();
                                         if (context.mounted) {
-                                          Navigator.of(context).pop(result?.data?.status ?? 'CANCELLED');
+                                          Navigator.of(context).pop(paymentCancelResult(result?.data?.status));
                                           fund.focusNode.unfocus();
                                         }
                                       },
@@ -576,6 +651,8 @@ class _FundScreenState extends ConsumerState<FundScreen> {
             ref.read(fundProvider).fetchFunds(context);
           });
           ref.read(fundProvider).fetchFunds(context);
+        } else if (upiIdStatus == 'CANCELLED') {
+          _showPaymentCancelled(context);
         } else if (upiIdStatus != null) {
           final collectData = await fund.checkUpiCollectStatusOnce();
           if (!mounted) return;
@@ -634,7 +711,12 @@ class _FundScreenState extends ConsumerState<FundScreen> {
           },
           onError: (code, description, paymentId) {
             if (mounted) {
-              _handleWebPaymentError();
+              // Razorpay reports its page being closed by the user this way.
+              if (code == 'MODAL_CLOSED') {
+                _showPaymentCancelled(context);
+              } else {
+                _handleWebPaymentError();
+              }
             }
           },
         );
@@ -685,6 +767,64 @@ class _FundScreenState extends ConsumerState<FundScreen> {
     }
   }
 
+  /// Shown when the user cancels a Scan QR or UPI ID payment that is not final.
+  void _showPaymentCancelled(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: resolveThemeColor(
+          dialogContext,
+          dark: MyntColors.cardDark,
+          light: MyntColors.card,
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.cancel_outlined,
+                  size: 64,
+                  color: resolveThemeColor(
+                    dialogContext,
+                    dark: MyntColors.iconSecondaryDark,
+                    light: MyntColors.iconSecondary,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  "Payment cancelled",
+                  style: MyntWebTextStyles.title(
+                    dialogContext,
+                    color: resolveThemeColor(
+                      dialogContext,
+                      dark: MyntColors.textPrimaryDark,
+                      light: MyntColors.textPrimary,
+                    ),
+                    fontWeight: MyntFonts.semiBold,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                MyntPrimaryButton(
+                  label: "Done",
+                  size: MyntButtonSize.large,
+                  isFullWidth: true,
+                  onPressed: () => Navigator.pop(dialogContext),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ).then((_) {
+      if (mounted) ref.read(fundProvider).fetchFunds(context);
+    });
+  }
+
   Future<void> _handleScanQrPayment(
       BuildContext context, TranctionProvider fund) async {
     fund.resetBottomSheetState();
@@ -726,7 +866,9 @@ class _FundScreenState extends ConsumerState<FundScreen> {
       ).then((_) {
         ref.read(fundProvider).fetchFunds(context);
       });
-    } else if (status != null && status != 'CANCELLED') {
+    } else if (status == 'CANCELLED') {
+      _showPaymentCancelled(context);
+    } else if (status != null) {
       ref.read(fundProvider).fetchFunds(context);
       final qrData = fund.qrCheckStatusResponse?.data;
       showDialog(
@@ -894,11 +1036,28 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                         prefix: "₹ "),
                                     style: MyntWebTextStyles.head(
                                       context,
-                                      color: resolveThemeColor(
-                                        context,
-                                        dark: MyntColors.textPrimaryDark,
-                                        light: MyntColors.textPrimary,
-                                      ),
+                                      // color: resolveThemeColor(
+                                      //   context,
+                                      //   dark: MyntColors.textPrimaryDark,
+                                      //   light: MyntColors.textPrimary,
+                                      // ),
+                                      // TC_14: negative balance in red, same
+                                      // as the Funds page Available Margin card.
+                                      color: !ref.watch(privacyProvider).isPrivate &&
+                                              (double.tryParse(
+                                                          '${funds.fundDetailModel?.avlMrg ?? 0}') ??
+                                                      0) <
+                                                  0
+                                          ? resolveThemeColor(
+                                              context,
+                                              dark: MyntColors.errorDark,
+                                              light: MyntColors.tertiary,
+                                            )
+                                          : resolveThemeColor(
+                                              context,
+                                              dark: MyntColors.textPrimaryDark,
+                                              light: MyntColors.textPrimary,
+                                            ),
                                       fontWeight: MyntFonts.medium,
                                     ),
                                   ),
@@ -995,12 +1154,15 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                             fund.hasActiveSegments ? 1.0 : 0.5,
                                         child: MyntTextField(
                                           focusNode: fund.focusNode,
-                                          controller: fund.amount,
+                                          controller: _amountDisplay,
                                           placeholder: "0.00",
                                           keyboardType: TextInputType.number,
                                           inputFormatters: [
                                             FilteringTextInputFormatter
                                                 .digitsOnly,
+                                            _IndianAmountFormatter(
+                                              onOverLimit: _setRefusedAmount,
+                                            ),
                                           ],
                                           leadingWidget: Center(
                                             widthFactor: 1,
@@ -1021,7 +1183,18 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                             ),
                                           ),
                                           onChanged: (value) {
-                                            fund.textFiledonChange(value);
+                                            final digits =
+                                                value.replaceAll(',', '');
+                                            // A refused edit can report the
+                                            // same text; keep the message then.
+                                            if (digits != fund.amount.text) {
+                                              _setRefusedAmount(null);
+                                            }
+                                            fund.amount.text = digits;
+                                            fund.textFiledonChange(digits);
+                                            if (digits.isEmpty) {
+                                              fund.resetAmountValue();
+                                            }
                                           },
                                         ),
                                       ),
@@ -1113,11 +1286,15 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                                           ),
                                         ),
                                       ),
-                                    if (fund.intValue > 5000000)
+                                    if (_refusedAmount != null ||
+                                        fund.intValue > 5000000)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 8),
                                         child: Text(
-                                          fund.maxfunderror,
+                                          // fund.maxfunderror,
+                                          _refusedAmount == null
+                                              ? "Max amount ₹50,00,000"
+                                              : "Max amount ₹50,00,000. You entered ₹${_groupIndianDigits(_refusedAmount!)}",
                                           style: MyntWebTextStyles.caption(
                                             context,
                                             color: resolveThemeColor(
@@ -1717,7 +1894,8 @@ class _FundScreenState extends ConsumerState<FundScreen> {
     required List<String> badges,
     required bool isDisabled,
   }) {
-    final bool isSelected = _selectedPaymentMethod == index;
+    // A disabled card never looks selected; the choice itself is kept.
+    final bool isSelected = _selectedPaymentMethod == index && !isDisabled;
     return Opacity(
       opacity: isDisabled ? 0.5 : 1.0,
       child: InkWell(
@@ -1922,7 +2100,8 @@ class _FundScreenState extends ConsumerState<FundScreen> {
   Widget _buildUpiIdCard(
       TranctionProvider fund, dynamic theme, BuildContext context) {
     final bool isDisabled = fund.intValue > 100000;
-    final bool isSelected = _selectedPaymentMethod == 1;
+    // A disabled card never looks selected; the choice itself is kept.
+    final bool isSelected = _selectedPaymentMethod == 1 && !isDisabled;
     return Opacity(
       opacity: isDisabled ? 0.5 : 1.0,
       child: InkWell(
@@ -2033,6 +2212,21 @@ class _FundScreenState extends ConsumerState<FundScreen> {
                               ),
                             ],
                           ),
+                          if (isDisabled)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                "Not available for amount above ₹1,00,000",
+                                style: MyntWebTextStyles.caption(
+                                  context,
+                                  color: resolveThemeColor(
+                                    context,
+                                    dark: MyntColors.errorDark,
+                                    light: MyntColors.error,
+                                  ),
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),

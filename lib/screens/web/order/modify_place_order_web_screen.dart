@@ -3259,8 +3259,10 @@ class _ModifyPlaceOrderScreenState
       }
     }
 
-    // Target — BO only.
-    if (widget.modifyOrderArgs.bpprc != null) {
+    // Target — BO only. Gated on BO like the Target box itself: the backend
+    // can send a 0 target on a CO order, which has no Target box (TC_81.1).
+    if (widget.modifyOrderArgs.sPrdtAli == "BO" &&
+        widget.modifyOrderArgs.bpprc != null) {
       if (targetCtrl.text.isEmpty ||
           SafeParse.toDouble(targetCtrl.text) <= 0) {
         return targetCtrl.text.isEmpty

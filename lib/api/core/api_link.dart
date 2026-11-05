@@ -69,6 +69,7 @@ class ApiLinks {
   String get generateapiKeynewuser => '$goMyntURL/GetUserApiKey';
   String get getapikeynew => '$goMyntURL/GetAppKeyData';
   String get appkeystore => '$goMyntURL/AppKeyStore';
+  String get oauthAppsBase => '$oauthBase/oauth-apps';
   String get gettotp => "$goMyntURL/GetSecretKey";
   String get gentotp => "$goMyntURL/GenSecretKey";
 
@@ -271,6 +272,7 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get iposinglepage => "${ipourlendpoint}get_single_ipo_data_new";
   String get ipoprecloseurl => "${ipourlendpoint}precloseipo";
   String get ipoupcomingurl => "${ipourlendpoint}getupcomingdetails";
+  String get appliedipolist => "${ipourlendpoint}appliedIPOList";
 
 // Mutual Fund
   String get bestMf => "$dashBoardURL/mf/z_data_1";
@@ -324,6 +326,15 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get withdrawstatus => 'https://fundapi.mynt.in/withdraw/status';
   String get upiIdUpdate => 'https://fundapi.mynt.in/withdraw/upi_id_update';
 
+  // Withdraw backend (WITHDRAW_SCREEN_FRONTEND.md).
+  String get withdrawBackendURL => 'https://fundapi.mynt.in';
+  String get withdrawPayment => '$withdrawBackendURL/withdraw/payment';
+  String get withdrawCancel => '$withdrawBackendURL/withdraw/cancel';
+  String get withdrawRequests => '$withdrawBackendURL/withdraw/requests';
+
+  /// The most the client can withdraw right now.
+  String get withdrawMaxPayout => '$withdrawBackendURL/withdraw/max_payout';
+
   String fundvalidatetoken = "https://ws.mynt.in/login/validate_session";
 
   /////
@@ -376,6 +387,8 @@ String get searchScripNew => 'https://ws.mynt.in/search/SearchScrip';
   String get fetctfileidURLnominee => '$profileDetailsURL/nom_stat';
   String get nomineeSubmitURL => '$profileDetailsURL/nominee';
   String get addSegmentURL => '${profileDetailsURL}add_segment';
+  String get cdslSignatureCheckURL => '${profileDetailsURL}cdsl/signature_check';
+  String get cdslSignatureUploadURL => '${profileDetailsURL}cdsl/signature_upload';
   String get filedownloadURL => '${profileDetailsURL}filedownload';
 
   // email change

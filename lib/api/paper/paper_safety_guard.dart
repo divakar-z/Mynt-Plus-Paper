@@ -7,6 +7,7 @@ import '../../models/fund_model_testing_copy/fund_razorpay_model.dart';
 import '../../models/fund_model_testing_copy/indent_upi_request_model.dart';
 import '../../models/fund_model_testing_copy/mtf_limits_model.dart';
 import '../../models/fund_model_testing_copy/view_upi_id.dart';
+import '../../models/fund_model_testing_copy/withdraw_request_model.dart';
 import '../../models/ipo_model/ipo_order_res_model.dart';
 import '../../models/ipo_model/ipo_place_order_model.dart';
 import '../../models/mf_model/mf_create_mandate.dart';
@@ -175,6 +176,18 @@ mixin PaperSafetyGuard on ApiExporter {
   Future<PaymentWithdraw> getpayemntwithdraw(
           String ip, String amount, String segment) async =>
       _block('Withdraw funds');
+
+  @override
+  Future<WithdrawActionResponse> placeWithdraw(
+          {required String amount,
+          required String companyCode,
+          String? ip}) async =>
+      _block('Withdraw funds');
+
+  @override
+  Future<WithdrawActionResponse> cancelWithdraw(
+          {required int requestId, String? remarks}) async =>
+      _block('Withdraw cancel');
 
   @override
   Future<IndentUpiResponse> indentUpiRequest({

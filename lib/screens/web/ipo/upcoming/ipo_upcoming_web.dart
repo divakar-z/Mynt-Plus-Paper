@@ -90,7 +90,7 @@ class _UpcomingIpoState extends ConsumerState<UpcomingIpo> {
                       cells: [
                         _buildHeaderCell("Stock name", 0, theme),
                         _buildHeaderCell("Issue Size", 1, theme),
-                        _buildHeaderCell("Last Updated", 2, theme),
+                        _buildHeaderCell("DRHP Filed", 2, theme),
                         _buildHeaderCell("Stock Exchanges", 3, theme),
                         // _buildHeaderCell("DRHP", -1, theme),
                         // Link column: no header label (the link itself reads DRHP).

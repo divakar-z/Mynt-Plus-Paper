@@ -246,7 +246,12 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
           // Ladder
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Column(
+            // Price columns take the width of the longest price on screen;
+            // quantity columns share the rest (equal columns wrapped long
+            // prices like 23102.60 onto two lines).
+            child: LayoutBuilder(builder: (context, constraints) {
+            final priceW = _priceColumnWidth(context, constraints.maxWidth);
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
@@ -258,12 +263,14 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
                         Text('Bid',
                             style: MyntWebTextStyles.para(context,
                                 fontWeight: MyntFonts.medium, color: bidColor)),
+                        width: priceW,
                         align: Alignment.centerRight,
                         padding: const EdgeInsets.only(right: 12)),
                     _cell(
                         Text('Ask',
                             style: MyntWebTextStyles.para(context,
                                 fontWeight: MyntFonts.medium, color: askColor)),
+                        width: priceW,
                         padding: const EdgeInsets.only(left: 12)),
                     _cell(
                         Text('Quantity',
@@ -307,6 +314,7 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
                                 _cell(
                                     Text(_price('bp$i'),
                                         style: _numStyle(context, bidColor)),
+                                    width: priceW,
                                     align: Alignment.centerRight,
                                     padding: const EdgeInsets.only(right: 12)),
                               ],
@@ -322,6 +330,7 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
                                 _cell(
                                     Text(_price('sp$i'),
                                         style: _numStyle(context, askColor)),
+                                    width: priceW,
                                     padding: const EdgeInsets.only(left: 12)),
                                 _cell(_qtyText(_qty('sq$i'), secondary),
                                     align: Alignment.centerRight,
@@ -334,7 +343,8 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
                     ),
                   ),
               ],
-            ),
+            );
+            }),
           ),
 
           // Totals + buy/sell bar (same as the Overview)
@@ -395,15 +405,55 @@ class _OrderDepthPanelWebState extends ConsumerState<OrderDepthPanelWeb> {
     );
   }
 
+  // Old equal-width cells; long prices wrapped onto a second line.
+  // Widget _cell(Widget child,
+  //     {Alignment align = Alignment.centerLeft,
+  //     EdgeInsets padding = EdgeInsets.zero}) {
+  //   return Expanded(
+  //     child: Padding(
+  //       padding: padding,
+  //       child: Align(alignment: align, child: child),
+  //     ),
+  //   );
+  // }
+
+  /// A ladder cell: fixed [width] (price columns) or the remaining space
+  /// (quantity columns). Never wraps; text shrinks if it still can't fit.
   Widget _cell(Widget child,
-      {Alignment align = Alignment.centerLeft,
+      {double? width,
+      Alignment align = Alignment.centerLeft,
       EdgeInsets padding = EdgeInsets.zero}) {
-    return Expanded(
-      child: Padding(
-        padding: padding,
-        child: Align(alignment: align, child: child),
+    final cell = Padding(
+      padding: padding,
+      child: Align(
+        alignment: align,
+        child: FittedBox(
+            fit: BoxFit.scaleDown, alignment: align, child: child),
       ),
     );
+    return width == null ? Expanded(child: cell) : SizedBox(width: width, child: cell);
+  }
+
+  /// Width of a price column (longest bid/ask price + its 12px gap), capped
+  /// so each quantity column keeps at least 44px of a half row.
+  double _priceColumnWidth(BuildContext context, double ladderWidth) {
+    final style = _numStyle(context, Colors.black);
+    final scaler = MediaQuery.textScalerOf(context);
+    double widest = 0;
+    for (int i = 1; i <= _levels; i++) {
+      for (final price in [_price('bp$i'), _price('sp$i')]) {
+        final tp = TextPainter(
+          text: TextSpan(text: price, style: style),
+          textDirection: TextDirection.ltr,
+          textScaler: scaler,
+          maxLines: 1,
+        )..layout();
+        if (tp.width > widest) widest = tp.width;
+        tp.dispose();
+      }
+    }
+    final maxW = ladderWidth / 2 - 44;
+    return (widest.ceilToDouble() + 12 + 2).clamp(0.0, maxW).toDouble();
   }
 
   TextStyle _numStyle(BuildContext context, Color color) =>

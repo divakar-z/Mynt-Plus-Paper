@@ -83,6 +83,9 @@ class ClientData {
   
   bool get isIndividual => cATEGORY == 'I';
 
+  /// NRI accounts are allowed to request DDPI like individuals.
+  bool get isNri => cATEGORY == 'NRI';
+
   /// True when BIRTH_DATE shows the holder is under 18.
   /// Accepts yyyy-MM-dd[...], dd/MM/yyyy, dd-MM-yyyy and dd-MMM-yyyy;
   /// an unparseable date is treated as not minor.
@@ -125,6 +128,15 @@ class ClientData {
       }
     }
     return false;
+  }
+
+  /// "NO" only when NSE_CASH / BSE_CASH are present and all are "NOT OPEN".
+  String get equityStatus {
+    final equity = (segmentsData ?? const <SegmentsData>[]).where(
+        (s) => s.cOMPANYCODE == 'NSE_CASH' || s.cOMPANYCODE == 'BSE_CASH');
+    final notOpen = equity.isNotEmpty &&
+        equity.every((s) => s.exchangeACTIVEINACTIVE == 'NOT OPEN');
+    return notOpen ? 'NO' : 'YES';
   }
 
   ClientData(
@@ -197,7 +209,7 @@ class ClientData {
     nomineePhone = json['Nominee_phone'].toString();
     nomineeRelation = json['Nominee_Relation'].toString();
     nomineeAddress = json['Nominee_address'].toString();
-    nomineeOptOut = json['NomineeOptOut'].toString();
+    nomineeOptOut = json['NomineeOptOut']?.toString();
     dDPI = json['DDPI'].toString();
     ddpiMarginPledge = json['ddpi_margin_pledge'].toString();
     ddpiBuyBack = json['ddpi_buy_back'].toString();

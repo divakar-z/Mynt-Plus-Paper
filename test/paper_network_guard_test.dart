@@ -28,8 +28,10 @@ void main() {
   test('blocks money, IPO, bond, MF and pledge endpoints', () {
     expect(blocked('https://fundapi.mynt.in/razorpay/razorpay?amount=1'), isTrue);
     expect(blocked('https://fundapi.mynt.in/withdraw/payment'), isTrue);
+    expect(blocked('https://fundapi.mynt.in/withdraw/cancel'), isTrue);
     expect(blocked('https://fundapi.mynt.in/wrapper/IndentUPIRequest'), isTrue);
     expect(blocked('https://rekycbe.mynt.in/pledge/response'), isTrue);
+    expect(blocked('https://rekycbe.mynt.in/pledge//del_pledge'), isTrue);
     expect(blocked('https://v3.mynt.in/mfapi/order/PlaceLumpsumOrder'), isTrue);
     expect(blocked('https://v3.mynt.in/mfapi/order/xsip_purchase'), isTrue);
     expect(blocked('https://v3.mynt.in/ipo/addCorporateAction'), isTrue);

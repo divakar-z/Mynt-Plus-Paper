@@ -9,9 +9,11 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:mynt_plus/models/desk_reports_model/contract_note_model.dart';
 import 'package:mynt_plus/models/desk_reports_model/pdf_download_model.dart';
 import 'package:mynt_plus/models/desk_reports_model/pnl_seg_charges_model.dart';
+import 'package:mynt_plus/provider/auth_provider.dart';
 import 'package:mynt_plus/provider/thems.dart';
 import 'package:mynt_plus/provider/websocket_provider.dart';
 import 'package:mynt_plus/sharedWidget/snack_bar.dart';
+import 'package:mynt_plus/utils/responsive_snackbar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
@@ -1067,12 +1069,14 @@ class LDProvider extends DefaultChangeNotifier {
       notifyListeners();
 
       _unPledgeHistoryData = await api.getunpledgehistory();
+      if (_unPledgeHistoryData?.data?.isEmpty ?? true) {
+        warningMessage(context, 'UnPledge History no data found');
+      }
       //  _ledgerAllData = new LedgerModelData();
     } catch (e) {
       _pledgehistory = false;
-      // ScaffoldMessenger.of(context).showSnackBar(
-      //   warningMessage(context, 'Error occurred try again later'),
-      // );
+      notifyListeners();
+      _showPledgeErrorSnack(context, _pledgeExceptionText(e));
     }
   }
 
@@ -1082,6 +1086,9 @@ class LDProvider extends DefaultChangeNotifier {
       _historyalterlist = [];
       notifyListeners();
       _pledgeHistoryData = await api.getpledgehistory();
+      if (_pledgeHistoryData?.data?.isEmpty ?? true) {
+        warningMessage(context, 'Pledge History no data found');
+      }
       if (_pledgeHistoryData?.data?.isNotEmpty ?? false) {
         for (var i = 0; i < _pledgeHistoryData!.data!.length; i++) {
           final dataItem = _pledgeHistoryData!.data![i];
@@ -1101,9 +1108,8 @@ class LDProvider extends DefaultChangeNotifier {
       notifyListeners();
     } catch (e) {
       _pledgehistory = false;
-      // ScaffoldMessenger.of(context).showSnackBar(
-      //   warningMessage(context, 'Error occurred try again later'),
-      // );
+      notifyListeners();
+      _showPledgeErrorSnack(context, _pledgeExceptionText(e));
     }
   }
 
@@ -1860,11 +1866,17 @@ class LDProvider extends DefaultChangeNotifier {
     }
   }
 
-  Future fetchpledgeandunpledge(BuildContext context) async {
+  /// [showLoadErrors] is set by the pledge screen itself; background prefetches
+  /// (holdings, portfolio) stay silent.
+  Future fetchpledgeandunpledge(BuildContext context,
+      {bool showLoadErrors = false}) async {
     try {
       _pledgeloader = true;
       notifyListeners();
       _pledgeandunpledge = await api.getpledgeandunpledge();
+      if (showLoadErrors && (_pledgeandunpledge?.data?.isEmpty ?? true)) {
+        warningMessage(context, 'no data found');
+      }
       _pledgesegmentcheck = await api.getsegforpledge();
       _listforpledge = [];
       if (_pledgesegmentcheck?.str != null) {}
@@ -1882,9 +1894,10 @@ class LDProvider extends DefaultChangeNotifier {
       notifyListeners();
     } catch (e) {
       _pledgeloader = false;
-      // ScaffoldMessenger.of(context).showSnackBar(
-      //   warningMessage(context, 'Error occurred try again later'),
-      // );
+      notifyListeners();
+      if (showLoadErrors) {
+        _showPledgeErrorSnack(context, _pledgeExceptionText(e));
+      }
     }
   }
 
@@ -2130,6 +2143,250 @@ class LDProvider extends DefaultChangeNotifier {
 
         warningMessage(context, 'Error occurred try again later'
       );
+    }
+  }
+
+  // ============================================================
+  // Pledge / unpledge — response handling (spec section 6)
+  // ============================================================
+
+  /// Loader on the Send Request / Submit / Delete buttons.
+  bool _deployLoading = false;
+  bool get deployLoading => _deployLoading;
+
+  /// Error dialog waiting to be shown by the pledge screen.
+  ({String title, String reason})? _pledgeErr;
+  bool get pledgeErrDialog => _pledgeErr != null;
+
+  /// Hands the pending error dialog to the screen once, then clears it.
+  ({String title, String reason})? takePledgeError() {
+    final err = _pledgeErr;
+    _pledgeErr = null;
+    return err;
+  }
+
+  static const _pledgeAuthErrors = [
+    'authorization required',
+    'token expired',
+    'invalid token',
+  ];
+
+  bool _isPledgeAuthError(Map res) => _pledgeAuthErrors
+      .contains(res['emsg']?.toString().trim().toLowerCase());
+
+  bool _isPledgeError(Map res) {
+    final stat =
+        res['stat']?.toString().trim().toLowerCase().replaceAll(' ', '_');
+    final emsg = res['emsg']?.toString().trim() ?? '';
+    return stat == 'not_ok' ||
+        (emsg.isNotEmpty && emsg != 'null' && !_isPledgeAuthError(res));
+  }
+
+  /// Pledge API rejected the token: hand off to the app's own
+  /// session-expired flow (logout → Mynt login), like every other API.
+  void _redirectToPledgeSso(BuildContext context) {
+    ref.read(authProvider).ifSessionExpired(context);
+  }
+
+  String _pledgeField(Map res, List<String> keys) {
+    for (final key in keys) {
+      final v = res[key]?.toString().trim() ?? '';
+      if (v.isNotEmpty && v != 'null') return v;
+    }
+    return '';
+  }
+
+  String _pledgeMsg(Map res, String fallback) {
+    final msg = _pledgeField(res, const ['msg']);
+    return _pledgeTitleCase(msg.isEmpty ? fallback : msg);
+  }
+
+  /// "request deleted" → "Request Deleted"; ALL-CAPS words stay as they are.
+  String _pledgeTitleCase(String s) => s
+      .split(' ')
+      .map((w) => w.isEmpty || w == w.toUpperCase()
+          ? w
+          : w[0].toUpperCase() + w.substring(1).toLowerCase())
+      .join(' ');
+
+  String _pledgeExceptionText(Object e) {
+    final text = e.toString().trim();
+    return text.isEmpty ? 'Network error, please try again.' : text;
+  }
+
+  void _showPledgeErrorSnack(BuildContext context, String message) {
+    ResponsiveSnackBar.showError(context, message,
+        duration: const Duration(seconds: 5));
+  }
+
+  String _pledgeSymbolForIsin(String isin) {
+    for (final row in _pledgeandunpledge?.data ?? const []) {
+      if (row.iSIN == isin) {
+        final sym = row.nSESYMBOL ?? '';
+        if (sym.isNotEmpty && sym != 'null') return sym;
+      }
+    }
+    return isin;
+  }
+
+  /// Shows a failed pledge / unpledge / delete response: an error dialog when
+  /// the server gave a reason, otherwise an error snackbar.
+  void _showPledgeError(BuildContext context, Map res, String fallbackTitle) {
+    var title = _pledgeField(res, const ['emsg', 'msg', 'message']);
+    if (title.isEmpty) title = fallbackTitle;
+    title = _pledgeTitleCase(title);
+    final baseTitle = title;
+    final isin = _pledgeField(res, const ['isin']);
+    if (isin.isNotEmpty) title = '$title (${_pledgeSymbolForIsin(isin)})';
+
+    var reason =
+        cleanPledgeReason(_pledgeField(res, const ['reason', 'error', 'remarks']));
+    String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[.\s]+$'), '');
+    if (norm(reason) == norm(baseTitle) || norm(reason) == norm(title)) {
+      reason = '';
+    }
+
+    if (reason.isEmpty) {
+      _showPledgeErrorSnack(context, title);
+    } else {
+      _pledgeErr = (title: title, reason: reason);
+      notifyListeners();
+    }
+  }
+
+  /// Turns a raw backend reason into one plain sentence, e.g.
+  /// `Error Occurred : RED:Unpledged Holding Qty(0.000000) cannot exceed ...`
+  /// → `Unpledged holding qty (0) cannot exceed ...`.
+  static String cleanPledgeReason(String input) {
+    var s = input.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    // Drop leading short labels ("Error Occurred :", "RED:", "ERR-101:").
+    final label = RegExp(r'^[\w-]+(?: [\w-]+)?\s*:\s*');
+    while (true) {
+      final m = label.firstMatch(s);
+      if (m == null || m.end >= s.length) break;
+      s = s.substring(m.end);
+    }
+
+    // 0.000000 → 0, -1.000000 → -1, 2.500000 → 2.5
+    s = s.replaceAllMapped(RegExp(r'-?\d+\.\d+'), (m) {
+      final v = double.parse(m[0]!);
+      return v == v.truncateToDouble() ? '${v.toInt()}' : '$v';
+    });
+
+    // Qty(0) → Qty (0)
+    s = s.replaceAllMapped(RegExp(r'(\w)\('), (m) => '${m[1]} (');
+
+    // Sentence case: lowercase Title-Case words after the first, keep ALL-CAPS.
+    final words = s.split(' ');
+    for (var i = 1; i < words.length; i++) {
+      final w = words[i];
+      if (RegExp(r'^[A-Z][a-z]').hasMatch(w)) {
+        words[i] = w[0].toLowerCase() + w.substring(1);
+      }
+    }
+    s = words.join(' ');
+
+    if (s.isEmpty) return s;
+    s = s[0].toUpperCase() + s.substring(1);
+    if (!RegExp(r'[.!?]$').hasMatch(s)) s = '$s.';
+    return s;
+  }
+
+  // ============================================================
+  // Unpledge — single stock, sent straight from the dialog
+  // ============================================================
+
+  /// Unpledge being sent: drives the one-at-a-time lock and the payload.
+  ({String isin, String prd, int qty})? _activeUnpledge;
+
+  /// Product of the open unpledge dialog: "C" = Regular, "F" = MTF.
+  String _unpledgePrd = 'C';
+  String get unpledgePrd => _unpledgePrd;
+  void setUnpledgePrd(String prd) => _unpledgePrd = prd;
+
+  /// True when another stock, or the other product of this stock, is
+  /// being unpledged.
+  bool unpledgeLocked(String isin, String prd) {
+    final active = _activeUnpledge;
+    return active != null && (active.isin != isin || active.prd != prd);
+  }
+
+  /// Sends one unpledge request for [row] under [unpledgePrd]. [closeDialog]
+  /// runs before any message is shown so the error dialog never stacks on
+  /// the Unpledge dialog.
+  Future<void> sendSingleUnpledge(BuildContext context, dynamic row, int qty,
+      {required VoidCallback closeDialog}) async {
+    final holdings = _pledgeandunpledge;
+    if (holdings == null || _deployLoading) return;
+    final prd = _unpledgePrd;
+    if (qty < 1 || qty > row.pledgedQtyFor(prd)) return;
+
+    _activeUnpledge = (isin: row.iSIN.toString(), prd: prd, qty: qty);
+    _deployLoading = true;
+    notifyListeners();
+
+    final res = await api.sendunpledgeapi(
+      holdings.cLIENTCODE.toString(),
+      holdings.bOID.toString(),
+      holdings.cLIENTNAME.toString(),
+      [
+        {
+          "NSE_SYMBOL": row.nSESYMBOL.toString(),
+          "ISIN": row.iSIN.toString(),
+          "NET": row.nET.toString(),
+          "COLQTY": '${row.colQty}',
+          "unplege_qty": '$qty',
+          "prd": prd,
+        }
+      ],
+    );
+    _deployLoading = false;
+    _activeUnpledge = null;
+
+    if (_isPledgeAuthError(res)) {
+      notifyListeners();
+      _redirectToPledgeSso(context);
+      return;
+    }
+
+    closeDialog();
+    notifyListeners();
+    if (!_isPledgeError(res) && res['msg'] == 'data updated successfully') {
+      successMessage(context, _pledgeMsg(res, 'Unpledged successfully'));
+      await fetchpledgeandunpledge(context, showLoadErrors: true);
+    } else {
+      _showPledgeError(context, res, 'Unpledge failed');
+    }
+  }
+
+  /// Deletes the already-sent unpledge request for [prd] on [row].
+  Future<void> deleteUnpledgeRequest(
+      BuildContext context, dynamic row, String prd,
+      {required VoidCallback closeDialog}) async {
+    if (_deployLoading) return;
+    _deployLoading = true;
+    notifyListeners();
+
+    final res = await api.sendunpledgedeleteapi(
+        _pledgeandunpledge?.cLIENTCODE?.toString() ?? '', [row.iSIN.toString()],
+        prd: prd);
+    _deployLoading = false;
+
+    if (_isPledgeAuthError(res)) {
+      notifyListeners();
+      _redirectToPledgeSso(context);
+      return;
+    }
+
+    closeDialog();
+    if (!_isPledgeError(res) && res['msg'] == 'request deleted') {
+      notifyListeners();
+      successMessage(context, _pledgeMsg(res, 'Request deleted'));
+      await fetchpledgeandunpledge(context, showLoadErrors: true);
+    } else {
+      notifyListeners();
+      _showPledgeError(context, res, 'Delete failed');
     }
   }
 
@@ -3206,12 +3463,63 @@ class LDProvider extends DefaultChangeNotifier {
 
   Future beforecdsl(BuildContext context, String ccode, String boid,
       String cname, List list) async {
+    bool popped = false;
+    void popOnce() {
+      if (popped) return;
+      popped = true;
+      Navigator.pop(context);
+    }
+
     try {
       _pledgeloader = true;
       notifyListeners();
 
-      final res = await api.geturlforcdsl(ccode, boid, cname, list);
-      Navigator.pop(context);
+      // Rows with qty 0 are not pledged; their ISINs go to del_pledge.
+      bool zeroQty(dynamic item) =>
+          (double.tryParse('${item['quantity']}') ?? 0) <= 0;
+      final deleteIsins =
+          list.where(zeroQty).map((item) => '${item['isin']}').toList();
+      final pledgeList = list.where((item) => !zeroQty(item)).toList();
+      if (deleteIsins.isNotEmpty) {
+        final delRes = await api.sendpledgedeleteapi(ccode, deleteIsins);
+        if (_isPledgeAuthError(delRes)) {
+          _redirectToPledgeSso(context);
+          return;
+        }
+        if (_isPledgeError(delRes)) {
+          popOnce();
+          _pledgeloader = false;
+          notifyListeners();
+          _showPledgeError(context, delRes, 'Delete failed');
+          return;
+        }
+      }
+      if (pledgeList.isEmpty) {
+        popOnce();
+        cancelpledgetotal('pledge');
+        _pledgeloader = false;
+        notifyListeners();
+        return;
+      }
+
+      final res = await api.geturlforcdsl(ccode, boid, cname, pledgeList);
+      final resMap = res is Map ? res : <String, dynamic>{};
+      if (_isPledgeAuthError(resMap)) {
+        _redirectToPledgeSso(context);
+        return;
+      }
+      popOnce();
+
+      // Redirect to CDSL only on a valid response.
+      final valid = !_isPledgeError(resMap) &&
+          _pledgeField(resMap, const ['dpid']).isNotEmpty &&
+          _pledgeField(resMap, const ['pledgedtls']).isNotEmpty;
+      if (!valid) {
+        _pledgeloader = false;
+        notifyListeners();
+        _showPledgeError(context, resMap, 'Pledge failed');
+        return;
+      }
 
       if (kIsWeb) {
         // On web, open CDSL in popup and auto-detect when done
@@ -3227,9 +3535,10 @@ class LDProvider extends DefaultChangeNotifier {
       _pledgeloader = false;
       notifyListeners();
     } catch (e) {
+      popOnce();
       _pledgeloader = false;
-
       notifyListeners();
+      _showPledgeErrorSnack(context, _pledgeExceptionText(e));
     } finally {
       toggleLoad(false);
     }

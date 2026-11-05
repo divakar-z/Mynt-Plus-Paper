@@ -133,6 +133,7 @@ class IpoCancelAlert extends ConsumerWidget {
       name: ipocancel.companyName.toString(),
       applicationNumber: ipocancel.applicationNumber.toString(),
       respBid: [BidReference(bidReferenceNumber: '67890')],
+      cancelBids: ipocancel.bidDetail ?? const [],
     );
 
     const List<IposBid> iposbids = [];
